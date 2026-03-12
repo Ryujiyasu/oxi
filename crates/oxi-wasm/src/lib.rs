@@ -13,6 +13,20 @@ pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&doc).map_err(|e| JsError::new(&e.to_string()))
 }
 
+#[wasm_bindgen]
+pub fn parse_spreadsheet(data: &[u8]) -> Result<JsValue, JsError> {
+    let workbook = oxicells_core::parse_xlsx(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&workbook).map_err(|e| JsError::new(&e.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn parse_presentation(data: &[u8]) -> Result<JsValue, JsError> {
+    let pres = oxislides_core::parse_pptx(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&pres).map_err(|e| JsError::new(&e.to_string()))
+}
+
 #[derive(Serialize)]
 struct LayoutElementJs {
     x: f32,

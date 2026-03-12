@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Oxi - Word Document Viewer</title>
+<title>Oxi - Document Viewer</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -22,7 +22,7 @@ header {
 header h1 { font-size: 20px; font-weight: 600; }
 header span { font-size: 13px; opacity: 0.7; }
 .container {
-    max-width: 900px;
+    max-width: 1100px;
     margin: 32px auto;
     padding: 0 16px;
 }
@@ -64,18 +64,101 @@ input[type="file"] { display: none; }
     display: inline-block;
 }
 canvas { display: block; }
+
+/* Spreadsheet styles */
+.sheet-tabs {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 0;
+    padding: 0 4px;
+}
+.sheet-tab {
+    padding: 8px 16px;
+    background: #e8e8e8;
+    border: 1px solid #ccc;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+    color: #555;
+}
+.sheet-tab.active {
+    background: white;
+    color: #1a73e8;
+    font-weight: 600;
+}
+.spreadsheet-wrapper {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    border-radius: 0 8px 8px 8px;
+    overflow-x: auto;
+    max-width: 100%;
+}
+.spreadsheet-wrapper table {
+    border-collapse: collapse;
+    font-size: 13px;
+    font-family: 'Calibri', 'Segoe UI', sans-serif;
+}
+.spreadsheet-wrapper th {
+    background: #f3f3f3;
+    border: 1px solid #d0d0d0;
+    padding: 4px 8px;
+    font-weight: 600;
+    color: #555;
+    min-width: 30px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.spreadsheet-wrapper th.row-header {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 40px;
+    text-align: center;
+}
+.spreadsheet-wrapper td {
+    border: 1px solid #e0e0e0;
+    padding: 4px 8px;
+    min-width: 80px;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Slide styles */
+.slide-wrapper {
+    background: white;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    position: relative;
+    overflow: hidden;
+}
+.slide-shape {
+    position: absolute;
+    overflow: hidden;
+}
+.slide-shape p {
+    margin: 0;
+}
+.slide-counter {
+    text-align: center;
+    font-size: 13px;
+    color: #888;
+    margin-top: 4px;
+}
 </style>
 </head>
 <body>
 
 <header>
     <h1>Oxi</h1>
-    <span>Word-compatible document viewer (Rust + Wasm)</span>
+    <span>Document viewer — .docx / .xlsx / .pptx (Rust + Wasm)</span>
 </header>
 
 <div class="container">
     <div class="drop-zone" id="dropZone">
-        <p>Drop a .docx file here or click to browse</p>
+        <p>Drop a .docx, .xlsx, or .pptx file here — or click to browse</p>
         <p class="hint">Parsed and rendered entirely in your browser via WebAssembly</p>
     </div>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx">
@@ -84,28 +167,16 @@ canvas { display: block; }
 </div>
 
 <script type="module">
-import init, { layout_document } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+import init, { layout_document, parse_spreadsheet, parse_presentation } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
 
 let wasmReady = false;
 
-// Word highlight color name -> CSS color mapping
 const HIGHLIGHT_COLORS = {
-    yellow: '#FFFF00',
-    green: '#00FF00',
-    cyan: '#00FFFF',
-    magenta: '#FF00FF',
-    blue: '#0000FF',
-    red: '#FF0000',
-    darkBlue: '#000080',
-    darkCyan: '#008080',
-    darkGreen: '#008000',
-    darkMagenta: '#800080',
-    darkRed: '#800000',
-    darkYellow: '#808000',
-    darkGray: '#808080',
-    lightGray: '#C0C0C0',
-    black: '#000000',
-    white: '#FFFFFF',
+    yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF',
+    blue: '#0000FF', red: '#FF0000', darkBlue: '#000080', darkCyan: '#008080',
+    darkGreen: '#008000', darkMagenta: '#800080', darkRed: '#800000',
+    darkYellow: '#808000', darkGray: '#808080', lightGray: '#C0C0C0',
+    black: '#000000', white: '#FFFFFF',
 };
 
 async function initialize() {
@@ -124,39 +195,32 @@ function showStatus(msg, type) {
     el.className = type;
 }
 
-// Cache for loaded images
+// === IMAGE CACHE (for docx) ===
 const imageCache = new Map();
-
 function loadImage(dataUrl) {
-    if (imageCache.has(dataUrl)) {
-        return Promise.resolve(imageCache.get(dataUrl));
-    }
+    if (imageCache.has(dataUrl)) return Promise.resolve(imageCache.get(dataUrl));
     return new Promise((resolve) => {
         const img = new Image();
-        img.onload = () => {
-            imageCache.set(dataUrl, img);
-            resolve(img);
-        };
+        img.onload = () => { imageCache.set(dataUrl, img); resolve(img); };
         img.onerror = () => resolve(null);
         img.src = dataUrl;
     });
 }
 
-async function renderPages(layoutResult) {
+// === DOCX RENDERER ===
+async function renderDocx(layoutResult) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
 
     const scale = window.devicePixelRatio || 1;
     const displayScale = Math.min(1, (window.innerWidth - 64) / layoutResult.pages[0].width);
 
-    // Pre-load all images
     const imagePromises = [];
     for (const page of layoutResult.pages) {
         for (const elem of page.elements) {
             if (elem.kind === 'image' && elem.image_data) {
                 const ct = elem.content_type || 'image/png';
-                const dataUrl = `data:${ct};base64,${elem.image_data}`;
-                imagePromises.push(loadImage(dataUrl));
+                imagePromises.push(loadImage(`data:${ct};base64,${elem.image_data}`));
             }
         }
     }
@@ -165,17 +229,13 @@ async function renderPages(layoutResult) {
     for (const page of layoutResult.pages) {
         const wrapper = document.createElement('div');
         wrapper.className = 'page-wrapper';
-
         const canvas = document.createElement('canvas');
         canvas.width = page.width * scale;
         canvas.height = page.height * scale;
         canvas.style.width = (page.width * displayScale) + 'px';
         canvas.style.height = (page.height * displayScale) + 'px';
-
         const ctx = canvas.getContext('2d');
         ctx.scale(scale, scale);
-
-        // White background
         ctx.fillStyle = 'white';
         ctx.fillRect(0, 0, page.width, page.height);
 
@@ -186,43 +246,30 @@ async function renderPages(layoutResult) {
                 if (elem.italic) fontStyle += 'italic ';
                 if (elem.bold) fontStyle += 'bold ';
                 ctx.font = fontStyle + fontSize + 'px Calibri, "Yu Gothic", "Noto Sans JP", sans-serif';
-
-                // Highlight background
                 if (elem.highlight) {
-                    const hlColor = HIGHLIGHT_COLORS[elem.highlight] || elem.highlight;
-                    ctx.fillStyle = hlColor;
+                    ctx.fillStyle = HIGHLIGHT_COLORS[elem.highlight] || elem.highlight;
                     ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
                 }
-
-                // Text color
                 ctx.fillStyle = elem.color ? '#' + elem.color : '#000';
-
-                // Baseline approximation
                 const baseline = elem.y + fontSize * 0.82;
                 ctx.fillText(elem.text, elem.x, baseline);
-
-                // Underline
                 if (elem.underline) {
                     ctx.strokeStyle = elem.color ? '#' + elem.color : '#000';
                     ctx.lineWidth = Math.max(0.5, fontSize * 0.05);
                     ctx.beginPath();
-                    const underlineY = baseline + fontSize * 0.12;
-                    ctx.moveTo(elem.x, underlineY);
-                    ctx.lineTo(elem.x + elem.width, underlineY);
+                    ctx.moveTo(elem.x, baseline + fontSize * 0.12);
+                    ctx.lineTo(elem.x + elem.width, baseline + fontSize * 0.12);
                     ctx.stroke();
                 }
-
-                // Strikethrough
                 if (elem.strikethrough) {
                     ctx.strokeStyle = elem.color ? '#' + elem.color : '#000';
                     ctx.lineWidth = Math.max(0.5, fontSize * 0.05);
                     ctx.beginPath();
-                    const strikeY = elem.y + elem.height * 0.45;
-                    ctx.moveTo(elem.x, strikeY);
-                    ctx.lineTo(elem.x + elem.width, strikeY);
+                    const sy = elem.y + elem.height * 0.45;
+                    ctx.moveTo(elem.x, sy);
+                    ctx.lineTo(elem.x + elem.width, sy);
                     ctx.stroke();
                 }
-
             } else if (elem.kind === 'border') {
                 ctx.strokeStyle = '#000';
                 ctx.lineWidth = 0.5;
@@ -233,19 +280,14 @@ async function renderPages(layoutResult) {
             } else if (elem.kind === 'image') {
                 if (elem.image_data) {
                     const ct = elem.content_type || 'image/png';
-                    const dataUrl = `data:${ct};base64,${elem.image_data}`;
-                    const img = imageCache.get(dataUrl);
-                    if (img) {
-                        ctx.drawImage(img, elem.x, elem.y, elem.width, elem.height);
-                    } else {
-                        drawImagePlaceholder(ctx, elem);
-                    }
+                    const img = imageCache.get(`data:${ct};base64,${elem.image_data}`);
+                    if (img) ctx.drawImage(img, elem.x, elem.y, elem.width, elem.height);
+                    else drawImagePlaceholder(ctx, elem);
                 } else {
                     drawImagePlaceholder(ctx, elem);
                 }
             }
         }
-
         wrapper.appendChild(canvas);
         container.appendChild(wrapper);
     }
@@ -261,9 +303,172 @@ function drawImagePlaceholder(ctx, elem) {
     ctx.fillText('[image]', elem.x + 4, elem.y + 14);
 }
 
+// === XLSX RENDERER ===
+function colName(idx) {
+    let name = '';
+    let n = idx;
+    while (n >= 0) {
+        name = String.fromCharCode(65 + (n % 26)) + name;
+        n = Math.floor(n / 26) - 1;
+    }
+    return name;
+}
+
+function renderXlsx(workbook) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    // Sheet tabs
+    const tabs = document.createElement('div');
+    tabs.className = 'sheet-tabs';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'spreadsheet-wrapper';
+
+    function showSheet(idx) {
+        for (const t of tabs.children) t.classList.remove('active');
+        tabs.children[idx].classList.add('active');
+
+        const sheet = workbook.sheets[idx];
+        const colCount = sheet.col_count || 1;
+
+        let html = '<table><thead><tr><th class="row-header"></th>';
+        for (let c = 0; c < colCount; c++) {
+            html += `<th>${colName(c)}</th>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        for (const row of sheet.rows) {
+            html += `<tr><th class="row-header">${row.index}</th>`;
+            const cellMap = {};
+            for (const cell of row.cells) cellMap[cell.col] = cell;
+            for (let c = 0; c < colCount; c++) {
+                const cell = cellMap[c];
+                if (cell) {
+                    const val = cell.value;
+                    let display = '';
+                    if (typeof val === 'object' && val !== null) {
+                        if ('String' in val) display = val.String;
+                        else if ('Number' in val) display = String(val.Number);
+                        else if ('Boolean' in val) display = val.Boolean ? 'TRUE' : 'FALSE';
+                        else if ('Error' in val) display = val.Error;
+                    } else if (typeof val === 'string') {
+                        display = val;
+                    }
+                    let style = '';
+                    if (cell.style) {
+                        if (cell.style.bold) style += 'font-weight:bold;';
+                        if (cell.style.italic) style += 'font-style:italic;';
+                        if (cell.style.font_color) style += `color:#${cell.style.font_color};`;
+                        if (cell.style.bg_color) style += `background:#${cell.style.bg_color};`;
+                    }
+                    html += `<td${style ? ` style="${style}"` : ''}>${escapeHtml(display)}</td>`;
+                } else {
+                    html += '<td></td>';
+                }
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        wrapper.innerHTML = html;
+    }
+
+    workbook.sheets.forEach((sheet, i) => {
+        const tab = document.createElement('div');
+        tab.className = 'sheet-tab';
+        tab.textContent = sheet.name || `Sheet ${i + 1}`;
+        tab.onclick = () => showSheet(i);
+        tabs.appendChild(tab);
+    });
+
+    container.appendChild(tabs);
+    container.appendChild(wrapper);
+    if (workbook.sheets.length > 0) showSheet(0);
+}
+
+function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// === PPTX RENDERER ===
+function renderPptx(presentation) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    const maxWidth = Math.min(900, window.innerWidth - 64);
+    const scale = maxWidth / presentation.slide_width;
+
+    for (const slide of presentation.slides) {
+        const outerWrapper = document.createElement('div');
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'slide-wrapper';
+        wrapper.style.width = (presentation.slide_width * scale) + 'px';
+        wrapper.style.height = (presentation.slide_height * scale) + 'px';
+        wrapper.style.background = 'white';
+
+        for (const shape of slide.shapes) {
+            const div = document.createElement('div');
+            div.className = 'slide-shape';
+            div.style.left = (shape.x * scale) + 'px';
+            div.style.top = (shape.y * scale) + 'px';
+            div.style.width = (shape.width * scale) + 'px';
+            div.style.height = (shape.height * scale) + 'px';
+
+            const content = shape.content;
+            if (content && content.TextBox) {
+                for (const para of content.TextBox.paragraphs) {
+                    const p = document.createElement('p');
+                    const align = para.alignment;
+                    if (align === 'Center') p.style.textAlign = 'center';
+                    else if (align === 'Right') p.style.textAlign = 'right';
+                    else if (align === 'Justify') p.style.textAlign = 'justify';
+
+                    for (const run of para.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        const fontSize = run.font_size || 18;
+                        span.style.fontSize = (fontSize * scale) + 'px';
+                        if (run.bold) span.style.fontWeight = 'bold';
+                        if (run.italic) span.style.fontStyle = 'italic';
+                        if (run.color) span.style.color = '#' + run.color;
+                        if (run.font_family) span.style.fontFamily = run.font_family + ', sans-serif';
+                        p.appendChild(span);
+                    }
+                    div.appendChild(p);
+                }
+            } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
+                const img = document.createElement('img');
+                const bytes = content.Image.data;
+                const ct = content.Image.content_type || 'image/png';
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                img.src = `data:${ct};base64,${btoa(binary)}`;
+                img.style.width = '100%';
+                img.style.height = '100%';
+                img.style.objectFit = 'contain';
+                div.appendChild(img);
+            }
+
+            wrapper.appendChild(div);
+        }
+
+        outerWrapper.appendChild(wrapper);
+
+        const counter = document.createElement('div');
+        counter.className = 'slide-counter';
+        counter.textContent = `Slide ${slide.index}`;
+        outerWrapper.appendChild(counter);
+
+        container.appendChild(outerWrapper);
+    }
+}
+
+// === FILE HANDLER ===
 async function handleFile(file) {
-    if (!file.name.endsWith('.docx')) {
-        showStatus('Currently only .docx files are supported', 'error');
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['docx', 'xlsx', 'pptx'].includes(ext)) {
+        showStatus('Supported formats: .docx, .xlsx, .pptx', 'error');
         return;
     }
     if (!wasmReady) {
@@ -277,17 +482,29 @@ async function handleFile(file) {
         const buffer = await file.arrayBuffer();
         const data = new Uint8Array(buffer);
         const t0 = performance.now();
-        const result = layout_document(data);
-        const elapsed = (performance.now() - t0).toFixed(1);
 
-        let totalElements = 0;
-        for (const p of result.pages) totalElements += p.elements.length;
-
-        showStatus(
-            `Rendered ${result.pages.length} page(s), ${totalElements} elements in ${elapsed}ms`,
-            'info'
-        );
-        await renderPages(result);
+        if (ext === 'docx') {
+            const result = layout_document(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            let totalElements = 0;
+            for (const p of result.pages) totalElements += p.elements.length;
+            showStatus(`Rendered ${result.pages.length} page(s), ${totalElements} elements in ${elapsed}ms`, 'info');
+            await renderDocx(result);
+        } else if (ext === 'xlsx') {
+            const workbook = parse_spreadsheet(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            let totalRows = 0;
+            for (const s of workbook.sheets) totalRows += s.rows.length;
+            showStatus(`Parsed ${workbook.sheets.length} sheet(s), ${totalRows} rows in ${elapsed}ms`, 'info');
+            renderXlsx(workbook);
+        } else if (ext === 'pptx') {
+            const pres = parse_presentation(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            let totalShapes = 0;
+            for (const s of pres.slides) totalShapes += s.shapes.length;
+            showStatus(`Parsed ${pres.slides.length} slide(s), ${totalShapes} shapes in ${elapsed}ms`, 'info');
+            renderPptx(pres);
+        }
     } catch(e) {
         showStatus('Error: ' + e.message, 'error');
         console.error(e);
@@ -299,20 +516,16 @@ const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 
 dropZone.addEventListener('click', () => fileInput.click());
-
 dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropZone.classList.add('dragover');
 });
-dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('dragover');
-});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
     if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
-
 fileInput.addEventListener('change', () => {
     if (fileInput.files.length) handleFile(fileInput.files[0]);
 });
