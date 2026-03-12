@@ -85,8 +85,6 @@ input[type="file"] { display: none; }
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     display: inline-block;
 }
-canvas { display: block; }
-
 /* Toolbar */
 .toolbar {
     margin-top: 16px;
@@ -361,12 +359,68 @@ canvas { display: block; }
     white-space: nowrap;
 }
 .spreadsheet-wrapper td[contenteditable="true"]:focus {
-    outline: 2px solid #4a6cf7;
+    outline: 2px solid #217346;
     outline-offset: -1px;
-    background: #f8f9ff;
+    box-shadow: inset 0 0 0 1px #217346;
+}
+.spreadsheet-wrapper td.cell-selected {
+    outline: 2px solid #217346;
+    outline-offset: -1px;
 }
 
 /* Slide styles */
+.pptx-layout {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    align-items: flex-start;
+}
+.slide-thumbnails {
+    width: 160px;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+.slide-thumb {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 4px;
+    transition: background 0.1s;
+}
+.slide-thumb:hover { background: #e8e8e8; }
+.slide-thumb.active { background: #dde4f0; }
+.slide-thumb-num {
+    font-size: 11px;
+    color: #888;
+    min-width: 18px;
+    text-align: right;
+}
+.slide-thumb-preview {
+    border: 1px solid #d0d0d0;
+    border-radius: 2px;
+    overflow: hidden;
+    background: white;
+    position: relative;
+    width: 120px;
+}
+.slide-thumb.active .slide-thumb-preview {
+    border-color: #d24726;
+    border-width: 2px;
+}
+.slide-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
 .slide-wrapper {
     background: white;
     box-shadow: 0 4px 16px rgba(0,0,0,0.2);
@@ -411,7 +465,7 @@ canvas { display: block; }
 </div>
 
 <script type="module">
-import init, { layout_document, parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx } from './oxi_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx } from './oxi_wasm.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', or 'pptx'
@@ -749,115 +803,7 @@ function downloadEdited() {
     }
 }
 
-// === IMAGE CACHE (for docx) ===
-const imageCache = new Map();
-function loadImage(dataUrl) {
-    if (imageCache.has(dataUrl)) return Promise.resolve(imageCache.get(dataUrl));
-    return new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => { imageCache.set(dataUrl, img); resolve(img); };
-        img.onerror = () => resolve(null);
-        img.src = dataUrl;
-    });
-}
-
-// === DOCX RENDERER (canvas — view mode) ===
-async function renderDocx(layoutResult) {
-    const container = document.getElementById('pages-container');
-    container.innerHTML = '';
-
-    const scale = window.devicePixelRatio || 1;
-    const displayScale = Math.min(1, (window.innerWidth - 64) / layoutResult.pages[0].width);
-
-    const imagePromises = [];
-    for (const page of layoutResult.pages) {
-        for (const elem of page.elements) {
-            if (elem.kind === 'image' && elem.image_data) {
-                const ct = elem.content_type || 'image/png';
-                imagePromises.push(loadImage(`data:${ct};base64,${elem.image_data}`));
-            }
-        }
-    }
-    await Promise.all(imagePromises);
-
-    for (const page of layoutResult.pages) {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'page-wrapper';
-        const canvas = document.createElement('canvas');
-        canvas.width = page.width * scale;
-        canvas.height = page.height * scale;
-        canvas.style.width = (page.width * displayScale) + 'px';
-        canvas.style.height = (page.height * displayScale) + 'px';
-        const ctx = canvas.getContext('2d');
-        ctx.scale(scale, scale);
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, page.width, page.height);
-
-        for (const elem of page.elements) {
-            if (elem.kind === 'text') {
-                const fontSize = elem.font_size || 11;
-                let fontStyle = '';
-                if (elem.italic) fontStyle += 'italic ';
-                if (elem.bold) fontStyle += 'bold ';
-                ctx.font = fontStyle + fontSize + 'px Calibri, "Yu Gothic", "Noto Sans JP", sans-serif';
-                if (elem.highlight) {
-                    ctx.fillStyle = HIGHLIGHT_COLORS[elem.highlight] || elem.highlight;
-                    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
-                }
-                ctx.fillStyle = elem.color ? '#' + elem.color : '#000';
-                const baseline = elem.y + fontSize * 0.82;
-                ctx.fillText(elem.text, elem.x, baseline);
-                if (elem.underline) {
-                    ctx.strokeStyle = elem.color ? '#' + elem.color : '#000';
-                    ctx.lineWidth = Math.max(0.5, fontSize * 0.05);
-                    ctx.beginPath();
-                    ctx.moveTo(elem.x, baseline + fontSize * 0.12);
-                    ctx.lineTo(elem.x + elem.width, baseline + fontSize * 0.12);
-                    ctx.stroke();
-                }
-                if (elem.strikethrough) {
-                    ctx.strokeStyle = elem.color ? '#' + elem.color : '#000';
-                    ctx.lineWidth = Math.max(0.5, fontSize * 0.05);
-                    ctx.beginPath();
-                    const sy = elem.y + elem.height * 0.45;
-                    ctx.moveTo(elem.x, sy);
-                    ctx.lineTo(elem.x + elem.width, sy);
-                    ctx.stroke();
-                }
-            } else if (elem.kind === 'border') {
-                ctx.strokeStyle = '#000';
-                ctx.lineWidth = 0.5;
-                ctx.beginPath();
-                ctx.moveTo(elem.x1, elem.y1);
-                ctx.lineTo(elem.x2, elem.y2);
-                ctx.stroke();
-            } else if (elem.kind === 'image') {
-                if (elem.image_data) {
-                    const ct = elem.content_type || 'image/png';
-                    const img = imageCache.get(`data:${ct};base64,${elem.image_data}`);
-                    if (img) ctx.drawImage(img, elem.x, elem.y, elem.width, elem.height);
-                    else drawImagePlaceholder(ctx, elem);
-                } else {
-                    drawImagePlaceholder(ctx, elem);
-                }
-            }
-        }
-        wrapper.appendChild(canvas);
-        container.appendChild(wrapper);
-    }
-}
-
-function drawImagePlaceholder(ctx, elem) {
-    ctx.fillStyle = '#f5f5f5';
-    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
-    ctx.strokeStyle = '#ddd';
-    ctx.strokeRect(elem.x, elem.y, elem.width, elem.height);
-    ctx.fillStyle = '#bbb';
-    ctx.font = '10px sans-serif';
-    ctx.fillText('[image]', elem.x + 4, elem.y + 14);
-}
-
-// === DOCX EDITABLE RENDERER (DOM — edit mode) ===
+// === DOCX RENDERER (DOM) ===
 function renderEditableDocx(doc) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
@@ -1117,123 +1063,6 @@ function getRowHeightPx(row, defaultRowHeight) {
     return Math.round((defaultRowHeight || 15) * 1.333);
 }
 
-function cellStyleStr(cell) {
-    let style = '';
-    if (cell && cell.style) {
-        const s = cell.style;
-        if (s.bold) style += 'font-weight:bold;';
-        if (s.italic) style += 'font-style:italic;';
-        if (s.font_color) style += `color:#${s.font_color};`;
-        if (s.bg_color) style += `background:#${s.bg_color};`;
-        if (s.horizontal_align) style += `text-align:${s.horizontal_align};`;
-        if (s.border_top) style += 'border-top:1px solid #333;';
-        if (s.border_bottom) style += 'border-bottom:1px solid #333;';
-        if (s.border_left) style += 'border-left:1px solid #333;';
-        if (s.border_right) style += 'border-right:1px solid #333;';
-        if (s.font_size) style += `font-size:${s.font_size}pt;`;
-    }
-    // Numbers default right-align
-    if (cell && cell.value && typeof cell.value === 'object' && 'Number' in cell.value) {
-        if (!cell.style || !cell.style.horizontal_align) {
-            style += 'text-align:right;';
-        }
-    }
-    return style;
-}
-
-function renderXlsx(workbook) {
-    const container = document.getElementById('pages-container');
-    container.innerHTML = '';
-
-    // Formula bar
-    const formulaBar = document.createElement('div');
-    formulaBar.className = 'formula-bar';
-    formulaBar.innerHTML = '<div class="cell-ref">A1</div><div class="fx-label">fx</div><input class="formula-input" readonly>';
-
-    const tabs = document.createElement('div');
-    tabs.className = 'sheet-tabs';
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'spreadsheet-wrapper';
-
-    function showSheet(idx) {
-        for (const t of tabs.children) t.classList.remove('active');
-        tabs.children[idx].classList.add('active');
-
-        const sheet = workbook.sheets[idx];
-        const dataColCount = sheet.col_count || 1;
-        const colCount = Math.max(dataColCount, 26); // At least A-Z
-        const { covered, origins } = buildMergeInfo(sheet.merge_cells);
-
-        const rowMap = {};
-        let maxRow = 0;
-        for (const row of sheet.rows) {
-            rowMap[row.index] = row;
-            if (row.index > maxRow) maxRow = row.index;
-        }
-        const minRows = 50;
-        if (maxRow < minRows) maxRow = minRows;
-
-        let html = '<table><colgroup><col style="width:40px">';
-        for (let c = 0; c < colCount; c++) {
-            html += `<col style="width:${getColWidthPx(sheet, c)}px">`;
-        }
-        html += '</colgroup><thead><tr><th class="row-header"></th>';
-        for (let c = 0; c < colCount; c++) {
-            html += `<th>${colName(c)}</th>`;
-        }
-        html += '</tr></thead><tbody>';
-
-        for (let r = 1; r <= maxRow; r++) {
-            const row = rowMap[r];
-            const rowH = getRowHeightPx(row, sheet.default_row_height);
-            html += `<tr style="height:${rowH}px"><th class="row-header">${r}</th>`;
-
-            const cellMap = {};
-            if (row) {
-                for (const cell of row.cells) cellMap[cell.col] = cell;
-            }
-
-            for (let c = 0; c < colCount; c++) {
-                const key = `${r},${c}`;
-                if (covered.has(key)) continue;
-
-                const cell = cellMap[c];
-                const merge = origins.get(key);
-                let attrs = '';
-                if (merge) {
-                    if (merge.rowspan > 1) attrs += ` rowspan="${merge.rowspan}"`;
-                    if (merge.colspan > 1) attrs += ` colspan="${merge.colspan}"`;
-                }
-
-                const style = cellStyleStr(cell);
-                const display = cell ? formatCellValue(cell.value, cell.style) : '';
-                html += `<td${attrs}${style ? ` style="${style}"` : ''}>${escapeHtml(display)}</td>`;
-            }
-            html += '</tr>';
-        }
-        html += '</tbody></table>';
-        wrapper.innerHTML = html;
-    }
-
-    workbook.sheets.forEach((sheet, i) => {
-        const tab = document.createElement('div');
-        tab.className = 'sheet-tab';
-        tab.textContent = sheet.name || `Sheet ${i + 1}`;
-        tab.onclick = () => showSheet(i);
-        tabs.appendChild(tab);
-    });
-
-    container.appendChild(formulaBar);
-    container.appendChild(wrapper);
-    container.appendChild(tabs);
-    if (workbook.sheets.length > 0) showSheet(0);
-}
-
-function escapeHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 // === XLSX EDITABLE RENDERER ===
 function renderEditableXlsx(workbook) {
     const container = document.getElementById('pages-container');
@@ -1372,7 +1201,31 @@ function renderEditableXlsx(workbook) {
                     formulaInput.value = td.textContent;
                 });
                 td.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') e.preventDefault();
+                    function moveTo(dr, dc) {
+                        const nr = r + dr, nc = c + dc;
+                        const next = wrapper.querySelector(
+                            `td.edit-cell[data-row="${nr}"][data-col="${nc}"]`
+                        );
+                        if (next) { e.preventDefault(); next.focus(); }
+                    }
+                    if (e.key === 'Tab') {
+                        e.preventDefault();
+                        moveTo(0, e.shiftKey ? -1 : 1);
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        moveTo(e.shiftKey ? -1 : 1, 0);
+                    } else if (e.key === 'ArrowDown' && !e.shiftKey) {
+                        moveTo(1, 0);
+                    } else if (e.key === 'ArrowUp' && !e.shiftKey) {
+                        moveTo(-1, 0);
+                    } else if (e.key === 'ArrowRight' && window.getSelection().focusOffset >= td.textContent.length) {
+                        moveTo(0, 1);
+                    } else if (e.key === 'ArrowLeft' && window.getSelection().focusOffset === 0) {
+                        moveTo(0, -1);
+                    } else if (e.key === 'Escape') {
+                        td.textContent = td.dataset.original;
+                        td.blur();
+                    }
                 });
 
                 tr.appendChild(td);
@@ -1402,174 +1255,142 @@ function renderEditablePptx(presentation) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
 
-    const maxWidth = Math.min(900, window.innerWidth - 64);
+    const layout = document.createElement('div');
+    layout.className = 'pptx-layout';
+
+    // Thumbnail panel
+    const thumbPanel = document.createElement('div');
+    thumbPanel.className = 'slide-thumbnails';
+
+    // Main slide area
+    const mainArea = document.createElement('div');
+    mainArea.className = 'slide-main';
+
+    const maxWidth = Math.min(900, window.innerWidth - 64 - 180);
     const scale = maxWidth / presentation.slide_width;
+    const thumbScale = 120 / presentation.slide_width;
+
+    // Build slide wrappers
+    const slideWrappers = [];
 
     presentation.slides.forEach((slide, slideIdx) => {
-        const outerWrapper = document.createElement('div');
+        // Main editable slide
         const wrapper = document.createElement('div');
         wrapper.className = 'slide-wrapper';
+        wrapper.dataset.slideIdx = slideIdx;
         wrapper.style.width = (presentation.slide_width * scale) + 'px';
         wrapper.style.height = (presentation.slide_height * scale) + 'px';
         wrapper.style.background = slide.background_color ? '#' + slide.background_color : 'white';
+        wrapper.style.display = slideIdx === 0 ? '' : 'none';
 
-        slide.shapes.forEach((shape, shapeIdx) => {
-            const div = document.createElement('div');
-            div.className = 'slide-shape';
-            div.style.left = (shape.x * scale) + 'px';
-            div.style.top = (shape.y * scale) + 'px';
-            div.style.width = (shape.width * scale) + 'px';
-            div.style.height = (shape.height * scale) + 'px';
-            if (shape.fill_color) {
-                div.style.backgroundColor = '#' + shape.fill_color;
-            }
-            if (shape.border_color) {
-                const bw = shape.border_width || 1;
-                div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
-                div.style.boxSizing = 'border-box';
-            }
+        buildSlideContent(wrapper, slide, slideIdx, scale, true);
+        slideWrappers.push(wrapper);
+        mainArea.appendChild(wrapper);
 
-            const content = shape.content;
-            if (content && content.TextBox) {
-                content.TextBox.paragraphs.forEach((para, paraIdx) => {
-                    const p = document.createElement('p');
-                    const align = para.alignment;
-                    if (align === 'Center') p.style.textAlign = 'center';
-                    else if (align === 'Right') p.style.textAlign = 'right';
-                    else if (align === 'Justify') p.style.textAlign = 'justify';
+        // Thumbnail
+        const thumb = document.createElement('div');
+        thumb.className = 'slide-thumb' + (slideIdx === 0 ? ' active' : '');
+        const numEl = document.createElement('div');
+        numEl.className = 'slide-thumb-num';
+        numEl.textContent = slideIdx + 1;
+        const preview = document.createElement('div');
+        preview.className = 'slide-thumb-preview';
+        preview.style.width = '120px';
+        preview.style.height = (presentation.slide_height * thumbScale) + 'px';
+        preview.style.position = 'relative';
+        preview.style.overflow = 'hidden';
+        preview.style.background = slide.background_color ? '#' + slide.background_color : 'white';
 
-                    para.runs.forEach((run, runIdx) => {
-                        const span = document.createElement('span');
+        buildSlideContent(preview, slide, slideIdx, thumbScale, false);
+
+        thumb.appendChild(numEl);
+        thumb.appendChild(preview);
+        thumb.addEventListener('click', () => {
+            thumbPanel.querySelectorAll('.slide-thumb').forEach(t => t.classList.remove('active'));
+            thumb.classList.add('active');
+            slideWrappers.forEach((w, i) => w.style.display = i === slideIdx ? '' : 'none');
+            counter.textContent = `Slide ${slideIdx + 1} / ${presentation.slides.length}`;
+        });
+        thumbPanel.appendChild(thumb);
+    });
+
+    const counter = document.createElement('div');
+    counter.className = 'slide-counter';
+    counter.textContent = `Slide 1 / ${presentation.slides.length}`;
+    mainArea.appendChild(counter);
+
+    layout.appendChild(thumbPanel);
+    layout.appendChild(mainArea);
+    container.appendChild(layout);
+}
+
+function buildSlideContent(container, slide, slideIdx, scale, editable) {
+    slide.shapes.forEach((shape, shapeIdx) => {
+        const div = document.createElement('div');
+        div.className = 'slide-shape';
+        div.style.left = (shape.x * scale) + 'px';
+        div.style.top = (shape.y * scale) + 'px';
+        div.style.width = (shape.width * scale) + 'px';
+        div.style.height = (shape.height * scale) + 'px';
+        if (shape.fill_color) div.style.backgroundColor = '#' + shape.fill_color;
+        if (shape.border_color) {
+            const bw = shape.border_width || 1;
+            div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
+            div.style.boxSizing = 'border-box';
+        }
+
+        const content = shape.content;
+        if (content && content.TextBox) {
+            content.TextBox.paragraphs.forEach((para, paraIdx) => {
+                const p = document.createElement('p');
+                const align = para.alignment;
+                if (align === 'Center') p.style.textAlign = 'center';
+                else if (align === 'Right') p.style.textAlign = 'right';
+                else if (align === 'Justify') p.style.textAlign = 'justify';
+
+                para.runs.forEach((run, runIdx) => {
+                    const span = document.createElement('span');
+                    span.textContent = run.text;
+                    const fontSize = run.font_size || 18;
+                    span.style.fontSize = (fontSize * scale) + 'px';
+                    if (run.bold) span.style.fontWeight = 'bold';
+                    if (run.italic) span.style.fontStyle = 'italic';
+                    if (run.color) span.style.color = '#' + run.color;
+                    if (run.font_family) span.style.fontFamily = run.font_family + ', sans-serif';
+
+                    if (editable) {
                         span.className = 'edit-slide-run';
                         span.contentEditable = 'true';
-                        span.textContent = run.text;
                         span.dataset.slide = slideIdx;
                         span.dataset.shape = shapeIdx;
                         span.dataset.para = paraIdx;
                         span.dataset.run = runIdx;
                         span.dataset.original = run.text;
-
-                        const fontSize = run.font_size || 18;
-                        span.style.fontSize = (fontSize * scale) + 'px';
-                        if (run.bold) span.style.fontWeight = 'bold';
-                        if (run.italic) span.style.fontStyle = 'italic';
-                        if (run.color) span.style.color = '#' + run.color;
-                        if (run.font_family) span.style.fontFamily = run.font_family + ', sans-serif';
                         span.style.outline = 'none';
                         span.style.borderBottom = '1px solid transparent';
                         span.addEventListener('focus', () => { span.style.borderBottomColor = '#4a6cf7'; });
                         span.addEventListener('blur', () => { span.style.borderBottomColor = 'transparent'; });
                         span.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
-
-                        p.appendChild(span);
-                    });
-                    div.appendChild(p);
-                });
-            } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
-                const img = document.createElement('img');
-                const bytes = content.Image.data;
-                const ct = content.Image.content_type || 'image/png';
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                img.src = `data:${ct};base64,${btoa(binary)}`;
-                img.style.width = '100%';
-                img.style.height = '100%';
-                img.style.objectFit = 'contain';
-                div.appendChild(img);
-            }
-
-            wrapper.appendChild(div);
-        });
-
-        outerWrapper.appendChild(wrapper);
-        const counter = document.createElement('div');
-        counter.className = 'slide-counter';
-        counter.textContent = `Slide ${slide.index}`;
-        outerWrapper.appendChild(counter);
-        container.appendChild(outerWrapper);
-    });
-}
-
-// === PPTX RENDERER ===
-function renderPptx(presentation) {
-    const container = document.getElementById('pages-container');
-    container.innerHTML = '';
-
-    const maxWidth = Math.min(900, window.innerWidth - 64);
-    const scale = maxWidth / presentation.slide_width;
-
-    for (const slide of presentation.slides) {
-        const outerWrapper = document.createElement('div');
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'slide-wrapper';
-        wrapper.style.width = (presentation.slide_width * scale) + 'px';
-        wrapper.style.height = (presentation.slide_height * scale) + 'px';
-        wrapper.style.background = slide.background_color ? '#' + slide.background_color : 'white';
-
-        for (const shape of slide.shapes) {
-            const div = document.createElement('div');
-            div.className = 'slide-shape';
-            div.style.left = (shape.x * scale) + 'px';
-            div.style.top = (shape.y * scale) + 'px';
-            div.style.width = (shape.width * scale) + 'px';
-            div.style.height = (shape.height * scale) + 'px';
-            if (shape.fill_color) {
-                div.style.backgroundColor = '#' + shape.fill_color;
-            }
-            if (shape.border_color) {
-                const bw = shape.border_width || 1;
-                div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
-                div.style.boxSizing = 'border-box';
-            }
-
-            const content = shape.content;
-            if (content && content.TextBox) {
-                for (const para of content.TextBox.paragraphs) {
-                    const p = document.createElement('p');
-                    const align = para.alignment;
-                    if (align === 'Center') p.style.textAlign = 'center';
-                    else if (align === 'Right') p.style.textAlign = 'right';
-                    else if (align === 'Justify') p.style.textAlign = 'justify';
-
-                    for (const run of para.runs) {
-                        const span = document.createElement('span');
-                        span.textContent = run.text;
-                        const fontSize = run.font_size || 18;
-                        span.style.fontSize = (fontSize * scale) + 'px';
-                        if (run.bold) span.style.fontWeight = 'bold';
-                        if (run.italic) span.style.fontStyle = 'italic';
-                        if (run.color) span.style.color = '#' + run.color;
-                        if (run.font_family) span.style.fontFamily = run.font_family + ', sans-serif';
-                        p.appendChild(span);
                     }
-                    div.appendChild(p);
-                }
-            } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
-                const img = document.createElement('img');
-                const bytes = content.Image.data;
-                const ct = content.Image.content_type || 'image/png';
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                img.src = `data:${ct};base64,${btoa(binary)}`;
-                img.style.width = '100%';
-                img.style.height = '100%';
-                img.style.objectFit = 'contain';
-                div.appendChild(img);
-            }
-
-            wrapper.appendChild(div);
+                    p.appendChild(span);
+                });
+                div.appendChild(p);
+            });
+        } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
+            const img = document.createElement('img');
+            const bytes = content.Image.data;
+            const ct = content.Image.content_type || 'image/png';
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            img.src = `data:${ct};base64,${btoa(binary)}`;
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'contain';
+            div.appendChild(img);
         }
 
-        outerWrapper.appendChild(wrapper);
-
-        const counter = document.createElement('div');
-        counter.className = 'slide-counter';
-        counter.textContent = `Slide ${slide.index}`;
-        outerWrapper.appendChild(counter);
-
-        container.appendChild(outerWrapper);
-    }
+        container.appendChild(div);
+    });
 }
 
 // === FILE HANDLER ===
