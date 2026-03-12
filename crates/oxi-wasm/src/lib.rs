@@ -65,6 +65,78 @@ pub fn edit_docx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// A single cell edit operation from JavaScript.
+#[derive(Deserialize)]
+struct JsCellEdit {
+    sheet_index: usize,
+    row: u32,
+    col: u32,
+    new_value: String,
+}
+
+/// Edit a .xlsx file and return the modified bytes.
+#[wasm_bindgen]
+pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
+    let js_edits: Vec<JsCellEdit> = serde_wasm_bindgen::from_value(edits)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let mut editor = oxicells_core::XlsxEditor::new(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let edits: Vec<oxicells_core::editor::CellEdit> = js_edits
+        .into_iter()
+        .map(|e| oxicells_core::editor::CellEdit {
+            sheet_index: e.sheet_index,
+            row: e.row,
+            col: e.col,
+            new_value: e.new_value,
+        })
+        .collect();
+
+    editor.apply_edits(&edits);
+
+    editor
+        .save()
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A single slide text edit operation from JavaScript.
+#[derive(Deserialize)]
+struct JsSlideTextEdit {
+    slide_index: usize,
+    shape_index: usize,
+    paragraph_index: usize,
+    run_index: usize,
+    new_text: String,
+}
+
+/// Edit a .pptx file and return the modified bytes.
+#[wasm_bindgen]
+pub fn edit_pptx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
+    let js_edits: Vec<JsSlideTextEdit> = serde_wasm_bindgen::from_value(edits)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let mut editor = oxislides_core::PptxEditor::new(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let edits: Vec<oxislides_core::editor::SlideTextEdit> = js_edits
+        .into_iter()
+        .map(|e| oxislides_core::editor::SlideTextEdit {
+            slide_index: e.slide_index,
+            shape_index: e.shape_index,
+            paragraph_index: e.paragraph_index,
+            run_index: e.run_index,
+            new_text: e.new_text,
+        })
+        .collect();
+
+    editor.apply_edits(&edits);
+
+    editor
+        .save()
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 #[derive(Serialize)]
 struct LayoutElementJs {
     x: f32,

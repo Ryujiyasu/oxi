@@ -1,6 +1,8 @@
+pub mod editor;
 pub mod ir;
 pub mod parser;
 
+pub use editor::XlsxEditor;
 pub use parser::parse_xlsx;
 
 #[cfg(test)]

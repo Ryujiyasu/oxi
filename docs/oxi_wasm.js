@@ -23,6 +23,42 @@ export function edit_docx(data, edits) {
     return v2;
 }
 
+/**
+ * Edit a .pptx file and return the modified bytes.
+ * @param {Uint8Array} data
+ * @param {any} edits
+ * @returns {Uint8Array}
+ */
+export function edit_pptx(data, edits) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.edit_pptx(ptr0, len0, edits);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Edit a .xlsx file and return the modified bytes.
+ * @param {Uint8Array} data
+ * @param {any} edits
+ * @returns {Uint8Array}
+ */
+export function edit_xlsx(data, edits) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.edit_xlsx(ptr0, len0, edits);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
 export function init() {
     wasm.init();
 }

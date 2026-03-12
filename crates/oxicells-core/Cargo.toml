@@ -8,9 +8,7 @@ description = "Core spreadsheet processing engine for OxiCells (.xlsx)"
 [dependencies]
 oxi-common = { path = "../oxi-common" }
 quick-xml = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 log = "0.4"
-
-[dev-dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }

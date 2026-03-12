@@ -234,6 +234,11 @@ canvas { display: block; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.spreadsheet-wrapper td[contenteditable="true"]:focus {
+    outline: 2px solid #4a6cf7;
+    outline-offset: -1px;
+    background: #f8f9ff;
+}
 
 /* Slide styles */
 .slide-wrapper {
@@ -274,18 +279,19 @@ canvas { display: block; }
     <div class="toolbar" id="toolbar">
         <button id="btnView" class="active">View</button>
         <button id="btnEdit">Edit</button>
-        <button id="btnDownload" class="primary" style="display:none">Download .docx</button>
+        <button id="btnDownload" class="primary" style="display:none">Download</button>
     </div>
     <div id="status"></div>
     <div id="pages-container"></div>
 </div>
 
 <script type="module">
-import init, { layout_document, parse_document, parse_spreadsheet, parse_presentation, edit_docx } from './oxi_wasm.js';
+import init, { layout_document, parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx } from './oxi_wasm.js';
 
 let wasmReady = false;
 let currentMode = 'view'; // 'view' or 'edit'
-let currentDocxBytes = null; // original file bytes for editing
+let currentFileType = null; // 'docx', 'xlsx', or 'pptx'
+let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
 
 const HIGHLIGHT_COLORS = {
@@ -320,7 +326,7 @@ const btnDownload = document.getElementById('btnDownload');
 
 btnView.addEventListener('click', () => switchMode('view'));
 btnEdit.addEventListener('click', () => switchMode('edit'));
-btnDownload.addEventListener('click', downloadEditedDocx);
+btnDownload.addEventListener('click', downloadEdited);
 
 function switchMode(mode) {
     if (mode === currentMode) return;
@@ -328,24 +334,42 @@ function switchMode(mode) {
     btnView.classList.toggle('active', mode === 'view');
     btnEdit.classList.toggle('active', mode === 'edit');
     btnDownload.style.display = mode === 'edit' ? '' : 'none';
+    if (mode === 'edit' && currentFileType) {
+        const ext = currentFileType;
+        btnDownload.textContent = `Download .${ext}`;
+    }
 
-    if (mode === 'view' && currentDocxBytes) {
+    if (!currentFileBytes) return;
+    const data = new Uint8Array(currentFileBytes);
+
+    if (mode === 'view') {
         showStatus('Rendering...', 'info');
         try {
-            const data = new Uint8Array(currentDocxBytes);
-            const result = layout_document(data);
-            renderDocx(result);
+            if (currentFileType === 'docx') {
+                const result = layout_document(data);
+                renderDocx(result);
+            } else if (currentFileType === 'xlsx') {
+                renderXlsx(currentDocIR);
+            } else if (currentFileType === 'pptx') {
+                renderPptx(currentDocIR);
+            }
             showStatus('View mode', 'info');
         } catch(e) {
             showStatus('Error: ' + e.message, 'error');
         }
     } else if (mode === 'edit' && currentDocIR) {
-        renderEditableDocx(currentDocIR);
+        if (currentFileType === 'docx') {
+            renderEditableDocx(currentDocIR);
+        } else if (currentFileType === 'xlsx') {
+            renderEditableXlsx(currentDocIR);
+        } else if (currentFileType === 'pptx') {
+            renderEditablePptx(currentDocIR);
+        }
         showStatus('Edit mode — click on text to edit, then download', 'info');
     }
 }
 
-function collectEdits() {
+function collectDocxEdits() {
     const edits = [];
     const runs = document.querySelectorAll('.edit-run[data-para][data-run]');
     for (const el of runs) {
@@ -354,35 +378,77 @@ function collectEdits() {
         const originalText = el.dataset.original;
         const currentText = el.textContent;
         if (currentText !== originalText) {
-            edits.push({
-                paragraph_index: paraIdx,
-                run_index: runIdx,
-                new_text: currentText,
-            });
+            edits.push({ paragraph_index: paraIdx, run_index: runIdx, new_text: currentText });
         }
     }
     return edits;
 }
 
-function downloadEditedDocx() {
-    if (!currentDocxBytes) return;
+function collectXlsxEdits() {
+    const edits = [];
+    const cells = document.querySelectorAll('.edit-cell[data-sheet][data-row][data-col]');
+    for (const el of cells) {
+        const sheetIdx = parseInt(el.dataset.sheet);
+        const row = parseInt(el.dataset.row);
+        const col = parseInt(el.dataset.col);
+        const original = el.dataset.original;
+        const current = el.textContent;
+        if (current !== original) {
+            edits.push({ sheet_index: sheetIdx, row, col, new_value: current });
+        }
+    }
+    return edits;
+}
 
-    const edits = collectEdits();
+function collectPptxEdits() {
+    const edits = [];
+    const runs = document.querySelectorAll('.edit-slide-run[data-slide][data-shape][data-para][data-run]');
+    for (const el of runs) {
+        const slideIdx = parseInt(el.dataset.slide);
+        const shapeIdx = parseInt(el.dataset.shape);
+        const paraIdx = parseInt(el.dataset.para);
+        const runIdx = parseInt(el.dataset.run);
+        const original = el.dataset.original;
+        const current = el.textContent;
+        if (current !== original) {
+            edits.push({ slide_index: slideIdx, shape_index: shapeIdx, paragraph_index: paraIdx, run_index: runIdx, new_text: current });
+        }
+    }
+    return edits;
+}
+
+const MIME_TYPES = {
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+function downloadEdited() {
+    if (!currentFileBytes || !currentFileType) return;
+
+    let edits;
+    if (currentFileType === 'docx') edits = collectDocxEdits();
+    else if (currentFileType === 'xlsx') edits = collectXlsxEdits();
+    else if (currentFileType === 'pptx') edits = collectPptxEdits();
+    else return;
+
     if (edits.length === 0) {
         showStatus('No changes to save', 'info');
         return;
     }
 
     try {
-        const data = new Uint8Array(currentDocxBytes);
-        const editedBytes = edit_docx(data, edits);
-        const blob = new Blob([editedBytes], {
-            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        });
+        const data = new Uint8Array(currentFileBytes);
+        let editedBytes;
+        if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
+        else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
+        else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
+
+        const blob = new Blob([editedBytes], { type: MIME_TYPES[currentFileType] });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'edited.docx';
+        a.download = `edited.${currentFileType}`;
         a.click();
         URL.revokeObjectURL(url);
         showStatus(`Downloaded with ${edits.length} edit(s)`, 'info');
@@ -710,6 +776,188 @@ function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// === XLSX EDITABLE RENDERER ===
+function renderEditableXlsx(workbook) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    const tabs = document.createElement('div');
+    tabs.className = 'sheet-tabs';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'spreadsheet-wrapper';
+
+    function showSheet(idx) {
+        for (const t of tabs.children) t.classList.remove('active');
+        tabs.children[idx].classList.add('active');
+
+        const sheet = workbook.sheets[idx];
+        const colCount = sheet.col_count || 1;
+
+        wrapper.innerHTML = '';
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headerRow.innerHTML = '<th class="row-header"></th>';
+        for (let c = 0; c < colCount; c++) {
+            const th = document.createElement('th');
+            th.textContent = colName(c);
+            headerRow.appendChild(th);
+        }
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        for (const row of sheet.rows) {
+            const tr = document.createElement('tr');
+            const th = document.createElement('th');
+            th.className = 'row-header';
+            th.textContent = row.index;
+            tr.appendChild(th);
+
+            const cellMap = {};
+            for (const cell of row.cells) cellMap[cell.col] = cell;
+
+            for (let c = 0; c < colCount; c++) {
+                const td = document.createElement('td');
+                td.contentEditable = 'true';
+                td.className = 'edit-cell';
+                td.dataset.sheet = idx;
+                td.dataset.row = row.index;
+                td.dataset.col = c;
+
+                const cell = cellMap[c];
+                let display = '';
+                if (cell) {
+                    const val = cell.value;
+                    if (typeof val === 'object' && val !== null) {
+                        if ('String' in val) display = val.String;
+                        else if ('Number' in val) display = String(val.Number);
+                        else if ('Boolean' in val) display = val.Boolean ? 'TRUE' : 'FALSE';
+                        else if ('Error' in val) display = val.Error;
+                    } else if (typeof val === 'string') {
+                        display = val;
+                    }
+                    if (cell.style) {
+                        if (cell.style.bold) td.style.fontWeight = 'bold';
+                        if (cell.style.italic) td.style.fontStyle = 'italic';
+                        if (cell.style.font_color) td.style.color = '#' + cell.style.font_color;
+                        if (cell.style.bg_color) td.style.background = '#' + cell.style.bg_color;
+                    }
+                }
+                td.textContent = display;
+                td.dataset.original = display;
+
+                td.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') e.preventDefault();
+                });
+
+                tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+    }
+
+    workbook.sheets.forEach((sheet, i) => {
+        const tab = document.createElement('div');
+        tab.className = 'sheet-tab';
+        tab.textContent = sheet.name || `Sheet ${i + 1}`;
+        tab.onclick = () => showSheet(i);
+        tabs.appendChild(tab);
+    });
+
+    container.appendChild(tabs);
+    container.appendChild(wrapper);
+    if (workbook.sheets.length > 0) showSheet(0);
+}
+
+// === PPTX EDITABLE RENDERER ===
+function renderEditablePptx(presentation) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    const maxWidth = Math.min(900, window.innerWidth - 64);
+    const scale = maxWidth / presentation.slide_width;
+
+    presentation.slides.forEach((slide, slideIdx) => {
+        const outerWrapper = document.createElement('div');
+        const wrapper = document.createElement('div');
+        wrapper.className = 'slide-wrapper';
+        wrapper.style.width = (presentation.slide_width * scale) + 'px';
+        wrapper.style.height = (presentation.slide_height * scale) + 'px';
+        wrapper.style.background = 'white';
+
+        slide.shapes.forEach((shape, shapeIdx) => {
+            const div = document.createElement('div');
+            div.className = 'slide-shape';
+            div.style.left = (shape.x * scale) + 'px';
+            div.style.top = (shape.y * scale) + 'px';
+            div.style.width = (shape.width * scale) + 'px';
+            div.style.height = (shape.height * scale) + 'px';
+
+            const content = shape.content;
+            if (content && content.TextBox) {
+                content.TextBox.paragraphs.forEach((para, paraIdx) => {
+                    const p = document.createElement('p');
+                    const align = para.alignment;
+                    if (align === 'Center') p.style.textAlign = 'center';
+                    else if (align === 'Right') p.style.textAlign = 'right';
+                    else if (align === 'Justify') p.style.textAlign = 'justify';
+
+                    para.runs.forEach((run, runIdx) => {
+                        const span = document.createElement('span');
+                        span.className = 'edit-slide-run';
+                        span.contentEditable = 'true';
+                        span.textContent = run.text;
+                        span.dataset.slide = slideIdx;
+                        span.dataset.shape = shapeIdx;
+                        span.dataset.para = paraIdx;
+                        span.dataset.run = runIdx;
+                        span.dataset.original = run.text;
+
+                        const fontSize = run.font_size || 18;
+                        span.style.fontSize = (fontSize * scale) + 'px';
+                        if (run.bold) span.style.fontWeight = 'bold';
+                        if (run.italic) span.style.fontStyle = 'italic';
+                        if (run.color) span.style.color = '#' + run.color;
+                        if (run.font_family) span.style.fontFamily = run.font_family + ', sans-serif';
+                        span.style.outline = 'none';
+                        span.style.borderBottom = '1px solid transparent';
+                        span.addEventListener('focus', () => { span.style.borderBottomColor = '#4a6cf7'; });
+                        span.addEventListener('blur', () => { span.style.borderBottomColor = 'transparent'; });
+                        span.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+
+                        p.appendChild(span);
+                    });
+                    div.appendChild(p);
+                });
+            } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
+                const img = document.createElement('img');
+                const bytes = content.Image.data;
+                const ct = content.Image.content_type || 'image/png';
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                img.src = `data:${ct};base64,${btoa(binary)}`;
+                img.style.width = '100%';
+                img.style.height = '100%';
+                img.style.objectFit = 'contain';
+                div.appendChild(img);
+            }
+
+            wrapper.appendChild(div);
+        });
+
+        outerWrapper.appendChild(wrapper);
+        const counter = document.createElement('div');
+        counter.className = 'slide-counter';
+        counter.textContent = `Slide ${slide.index}`;
+        outerWrapper.appendChild(counter);
+        container.appendChild(outerWrapper);
+    });
+}
+
 // === PPTX RENDERER ===
 function renderPptx(presentation) {
     const container = document.getElementById('pages-container');
@@ -798,23 +1046,22 @@ async function handleFile(file) {
 
     showStatus('Parsing and rendering...', 'info');
     currentMode = 'view';
+    currentFileType = ext;
     btnView.classList.add('active');
     btnEdit.classList.remove('active');
     btnDownload.style.display = 'none';
+    btnDownload.textContent = `Download .${ext}`;
 
-    // Show toolbar only for docx
-    toolbar.classList.toggle('visible', ext === 'docx');
+    toolbar.classList.add('visible');
 
     try {
         const buffer = await file.arrayBuffer();
+        currentFileBytes = buffer;
         const data = new Uint8Array(buffer);
         const t0 = performance.now();
 
         if (ext === 'docx') {
-            // Store bytes for editing
-            currentDocxBytes = buffer;
             currentDocIR = parse_document(data);
-
             const result = layout_document(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalElements = 0;
@@ -822,23 +1069,19 @@ async function handleFile(file) {
             showStatus(`Rendered ${result.pages.length} page(s), ${totalElements} elements in ${elapsed}ms`, 'info');
             await renderDocx(result);
         } else if (ext === 'xlsx') {
-            currentDocxBytes = null;
-            currentDocIR = null;
-            const workbook = parse_spreadsheet(data);
+            currentDocIR = parse_spreadsheet(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;
-            for (const s of workbook.sheets) totalRows += s.rows.length;
-            showStatus(`Parsed ${workbook.sheets.length} sheet(s), ${totalRows} rows in ${elapsed}ms`, 'info');
-            renderXlsx(workbook);
+            for (const s of currentDocIR.sheets) totalRows += s.rows.length;
+            showStatus(`Parsed ${currentDocIR.sheets.length} sheet(s), ${totalRows} rows in ${elapsed}ms`, 'info');
+            renderXlsx(currentDocIR);
         } else if (ext === 'pptx') {
-            currentDocxBytes = null;
-            currentDocIR = null;
-            const pres = parse_presentation(data);
+            currentDocIR = parse_presentation(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalShapes = 0;
-            for (const s of pres.slides) totalShapes += s.shapes.length;
-            showStatus(`Parsed ${pres.slides.length} slide(s), ${totalShapes} shapes in ${elapsed}ms`, 'info');
-            renderPptx(pres);
+            for (const s of currentDocIR.slides) totalShapes += s.shapes.length;
+            showStatus(`Parsed ${currentDocIR.slides.length} slide(s), ${totalShapes} shapes in ${elapsed}ms`, 'info');
+            renderPptx(currentDocIR);
         }
     } catch(e) {
         showStatus('Error: ' + e.message, 'error');
