@@ -1,0 +1,8 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for Oxi Desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

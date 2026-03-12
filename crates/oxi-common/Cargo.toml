@@ -1,0 +1,12 @@
+[package]
+name = "oxi-common"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared OOXML utilities for Oxi suite (ZIP, XML, relationships)"
+
+[dependencies]
+quick-xml = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+thiserror = "1"
+log = "0.4"
