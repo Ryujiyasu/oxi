@@ -1,8 +1,10 @@
+pub mod editor;
 pub mod font;
 pub mod ir;
 pub mod layout;
 pub mod parser;
 
+pub use editor::DocxEditor;
 pub use ir::Document;
 pub use parser::parse_docx;
 

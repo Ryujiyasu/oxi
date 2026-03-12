@@ -65,6 +65,96 @@ input[type="file"] { display: none; }
 }
 canvas { display: block; }
 
+/* Toolbar */
+.toolbar {
+    margin-top: 16px;
+    display: none;
+    gap: 8px;
+    align-items: center;
+}
+.toolbar.visible { display: flex; }
+.toolbar button {
+    padding: 8px 16px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: white;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s, border-color 0.15s;
+}
+.toolbar button:hover {
+    background: #f0f0f0;
+    border-color: #999;
+}
+.toolbar button.active {
+    background: #1a1a2e;
+    color: white;
+    border-color: #1a1a2e;
+}
+.toolbar button.primary {
+    background: #4a6cf7;
+    color: white;
+    border-color: #4a6cf7;
+}
+.toolbar button.primary:hover {
+    background: #3a5ce7;
+}
+
+/* Editable document view */
+.edit-page {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    padding: 72px;
+    max-width: 800px;
+    width: 100%;
+    min-height: 600px;
+}
+.edit-page .edit-para {
+    margin-bottom: 4px;
+    line-height: 1.5;
+    min-height: 1.2em;
+}
+.edit-page .edit-para.heading1 {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 12px;
+}
+.edit-page .edit-para.heading2 {
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+.edit-page .edit-para.heading3 {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+.edit-page .edit-para.align-center { text-align: center; }
+.edit-page .edit-para.align-right { text-align: right; }
+.edit-page .edit-para.align-justify { text-align: justify; }
+.edit-page .edit-run {
+    outline: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+    cursor: text;
+}
+.edit-page .edit-run:focus {
+    border-bottom-color: #4a6cf7;
+}
+.edit-page .edit-table {
+    border-collapse: collapse;
+    margin: 12px 0;
+    width: 100%;
+}
+.edit-page .edit-table td {
+    border: 1px solid #ccc;
+    padding: 6px 8px;
+    min-width: 60px;
+}
+.edit-page .edit-table .edit-run {
+    display: inline;
+}
+
 /* Spreadsheet styles */
 .sheet-tabs {
     display: flex;
@@ -153,23 +243,31 @@ canvas { display: block; }
 
 <header>
     <h1>Oxi</h1>
-    <span>Document viewer — .docx / .xlsx / .pptx (Rust + Wasm)</span>
+    <span>Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
 </header>
 
 <div class="container">
     <div class="drop-zone" id="dropZone">
         <p>Drop a .docx, .xlsx, or .pptx file here — or click to browse</p>
-        <p class="hint">Parsed and rendered entirely in your browser via WebAssembly</p>
+        <p class="hint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx">
+    <div class="toolbar" id="toolbar">
+        <button id="btnView" class="active">View</button>
+        <button id="btnEdit">Edit</button>
+        <button id="btnDownload" class="primary" style="display:none">Download .docx</button>
+    </div>
     <div id="status"></div>
     <div id="pages-container"></div>
 </div>
 
 <script type="module">
-import init, { layout_document, parse_spreadsheet, parse_presentation } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+import init, { layout_document, parse_document, parse_spreadsheet, parse_presentation, edit_docx } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
 
 let wasmReady = false;
+let currentMode = 'view'; // 'view' or 'edit'
+let currentDocxBytes = null; // original file bytes for editing
+let currentDocIR = null; // parsed IR for edit mode
 
 const HIGHLIGHT_COLORS = {
     yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF',
@@ -195,6 +293,86 @@ function showStatus(msg, type) {
     el.className = type;
 }
 
+// === TOOLBAR ===
+const toolbar = document.getElementById('toolbar');
+const btnView = document.getElementById('btnView');
+const btnEdit = document.getElementById('btnEdit');
+const btnDownload = document.getElementById('btnDownload');
+
+btnView.addEventListener('click', () => switchMode('view'));
+btnEdit.addEventListener('click', () => switchMode('edit'));
+btnDownload.addEventListener('click', downloadEditedDocx);
+
+function switchMode(mode) {
+    if (mode === currentMode) return;
+    currentMode = mode;
+    btnView.classList.toggle('active', mode === 'view');
+    btnEdit.classList.toggle('active', mode === 'edit');
+    btnDownload.style.display = mode === 'edit' ? '' : 'none';
+
+    if (mode === 'view' && currentDocxBytes) {
+        showStatus('Rendering...', 'info');
+        try {
+            const data = new Uint8Array(currentDocxBytes);
+            const result = layout_document(data);
+            renderDocx(result);
+            showStatus('View mode', 'info');
+        } catch(e) {
+            showStatus('Error: ' + e.message, 'error');
+        }
+    } else if (mode === 'edit' && currentDocIR) {
+        renderEditableDocx(currentDocIR);
+        showStatus('Edit mode — click on text to edit, then download', 'info');
+    }
+}
+
+function collectEdits() {
+    const edits = [];
+    const runs = document.querySelectorAll('.edit-run[data-para][data-run]');
+    for (const el of runs) {
+        const paraIdx = parseInt(el.dataset.para);
+        const runIdx = parseInt(el.dataset.run);
+        const originalText = el.dataset.original;
+        const currentText = el.textContent;
+        if (currentText !== originalText) {
+            edits.push({
+                paragraph_index: paraIdx,
+                run_index: runIdx,
+                new_text: currentText,
+            });
+        }
+    }
+    return edits;
+}
+
+function downloadEditedDocx() {
+    if (!currentDocxBytes) return;
+
+    const edits = collectEdits();
+    if (edits.length === 0) {
+        showStatus('No changes to save', 'info');
+        return;
+    }
+
+    try {
+        const data = new Uint8Array(currentDocxBytes);
+        const editedBytes = edit_docx(data, edits);
+        const blob = new Blob([editedBytes], {
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'edited.docx';
+        a.click();
+        URL.revokeObjectURL(url);
+        showStatus(`Downloaded with ${edits.length} edit(s)`, 'info');
+    } catch(e) {
+        showStatus('Save error: ' + e.message, 'error');
+        console.error(e);
+    }
+}
+
 // === IMAGE CACHE (for docx) ===
 const imageCache = new Map();
 function loadImage(dataUrl) {
@@ -207,7 +385,7 @@ function loadImage(dataUrl) {
     });
 }
 
-// === DOCX RENDERER ===
+// === DOCX RENDERER (canvas — view mode) ===
 async function renderDocx(layoutResult) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
@@ -303,6 +481,130 @@ function drawImagePlaceholder(ctx, elem) {
     ctx.fillText('[image]', elem.x + 4, elem.y + 14);
 }
 
+// === DOCX EDITABLE RENDERER (DOM — edit mode) ===
+function renderEditableDocx(doc) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    // We only track body-level paragraphs (not inside tables) for editing
+    let bodyParaIdx = 0;
+
+    for (const page of doc.pages) {
+        const pageDiv = document.createElement('div');
+        pageDiv.className = 'edit-page';
+
+        for (const block of page.blocks) {
+            if (block.Paragraph) {
+                const para = block.Paragraph;
+                const paraDiv = document.createElement('div');
+                paraDiv.className = 'edit-para';
+
+                // Heading level
+                if (para.style && para.style.heading_level) {
+                    paraDiv.classList.add('heading' + para.style.heading_level);
+                }
+
+                // Alignment
+                const align = para.alignment;
+                if (align === 'Center') paraDiv.classList.add('align-center');
+                else if (align === 'Right') paraDiv.classList.add('align-right');
+                else if (align === 'Justify') paraDiv.classList.add('align-justify');
+
+                for (let ri = 0; ri < para.runs.length; ri++) {
+                    const run = para.runs[ri];
+                    const span = document.createElement('span');
+                    span.className = 'edit-run';
+                    span.contentEditable = 'true';
+                    span.textContent = run.text;
+                    span.dataset.para = bodyParaIdx;
+                    span.dataset.run = ri;
+                    span.dataset.original = run.text;
+
+                    // Preserve visual styling
+                    if (run.style) {
+                        if (run.style.bold) span.style.fontWeight = 'bold';
+                        if (run.style.italic) span.style.fontStyle = 'italic';
+                        if (run.style.underline) span.style.textDecoration = 'underline';
+                        if (run.style.strikethrough) {
+                            span.style.textDecoration = span.style.textDecoration
+                                ? span.style.textDecoration + ' line-through'
+                                : 'line-through';
+                        }
+                        if (run.style.color) span.style.color = '#' + run.style.color;
+                        if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                        if (run.style.font_family) span.style.fontFamily = run.style.font_family + ', sans-serif';
+                        if (run.style.highlight) {
+                            span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
+                        }
+                    }
+
+                    // Prevent Enter from creating new DOM nodes inside span
+                    span.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') e.preventDefault();
+                    });
+
+                    paraDiv.appendChild(span);
+                }
+
+                // Empty paragraph — show placeholder
+                if (para.runs.length === 0) {
+                    const span = document.createElement('span');
+                    span.className = 'edit-run';
+                    span.innerHTML = '&nbsp;';
+                    paraDiv.appendChild(span);
+                }
+
+                pageDiv.appendChild(paraDiv);
+                bodyParaIdx++;
+
+            } else if (block.Table) {
+                const table = block.Table;
+                const tableEl = document.createElement('table');
+                tableEl.className = 'edit-table';
+
+                for (const row of table.rows) {
+                    const tr = document.createElement('tr');
+                    for (const cell of row.cells) {
+                        const td = document.createElement('td');
+                        // Table cells contain blocks — render text but not editable (for now)
+                        for (const cellBlock of cell.blocks) {
+                            if (cellBlock.Paragraph) {
+                                for (const run of cellBlock.Paragraph.runs) {
+                                    const span = document.createElement('span');
+                                    span.textContent = run.text;
+                                    if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                                    if (run.style && run.style.italic) span.style.fontStyle = 'italic';
+                                    td.appendChild(span);
+                                }
+                            }
+                        }
+                        tr.appendChild(td);
+                    }
+                    tableEl.appendChild(tr);
+                }
+                pageDiv.appendChild(tableEl);
+                // Tables don't increment bodyParaIdx (they are separate blocks)
+
+            } else if (block.Image) {
+                const img = block.Image;
+                if (img.data && img.data.length > 0) {
+                    const imgEl = document.createElement('img');
+                    const ct = img.content_type || 'image/png';
+                    let binary = '';
+                    for (let i = 0; i < img.data.length; i++) binary += String.fromCharCode(img.data[i]);
+                    imgEl.src = `data:${ct};base64,${btoa(binary)}`;
+                    imgEl.style.maxWidth = '100%';
+                    imgEl.style.height = 'auto';
+                    imgEl.style.margin = '8px 0';
+                    pageDiv.appendChild(imgEl);
+                }
+            }
+        }
+
+        container.appendChild(pageDiv);
+    }
+}
+
 // === XLSX RENDERER ===
 function colName(idx) {
     let name = '';
@@ -318,7 +620,6 @@ function renderXlsx(workbook) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
 
-    // Sheet tabs
     const tabs = document.createElement('div');
     tabs.className = 'sheet-tabs';
 
@@ -477,6 +778,13 @@ async function handleFile(file) {
     }
 
     showStatus('Parsing and rendering...', 'info');
+    currentMode = 'view';
+    btnView.classList.add('active');
+    btnEdit.classList.remove('active');
+    btnDownload.style.display = 'none';
+
+    // Show toolbar only for docx
+    toolbar.classList.toggle('visible', ext === 'docx');
 
     try {
         const buffer = await file.arrayBuffer();
@@ -484,6 +792,10 @@ async function handleFile(file) {
         const t0 = performance.now();
 
         if (ext === 'docx') {
+            // Store bytes for editing
+            currentDocxBytes = buffer;
+            currentDocIR = parse_document(data);
+
             const result = layout_document(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalElements = 0;
@@ -491,6 +803,8 @@ async function handleFile(file) {
             showStatus(`Rendered ${result.pages.length} page(s), ${totalElements} elements in ${elapsed}ms`, 'info');
             await renderDocx(result);
         } else if (ext === 'xlsx') {
+            currentDocxBytes = null;
+            currentDocIR = null;
             const workbook = parse_spreadsheet(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;
@@ -498,6 +812,8 @@ async function handleFile(file) {
             showStatus(`Parsed ${workbook.sheets.length} sheet(s), ${totalRows} rows in ${elapsed}ms`, 'info');
             renderXlsx(workbook);
         } else if (ext === 'pptx') {
+            currentDocxBytes = null;
+            currentDocIR = null;
             const pres = parse_presentation(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalShapes = 0;

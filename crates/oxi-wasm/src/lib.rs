@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -25,6 +25,44 @@ pub fn parse_presentation(data: &[u8]) -> Result<JsValue, JsError> {
     let pres = oxislides_core::parse_pptx(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
     serde_wasm_bindgen::to_value(&pres).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A single text edit operation from JavaScript.
+#[derive(Deserialize)]
+struct JsTextEdit {
+    paragraph_index: usize,
+    run_index: usize,
+    new_text: String,
+}
+
+/// Edit a .docx file and return the modified bytes.
+///
+/// `data`: original .docx bytes
+/// `edits`: JS array of `{paragraph_index, run_index, new_text}` objects
+///
+/// Returns the modified .docx as `Uint8Array`.
+#[wasm_bindgen]
+pub fn edit_docx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
+    let js_edits: Vec<JsTextEdit> = serde_wasm_bindgen::from_value(edits)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let mut editor = oxidocs_core::DocxEditor::new(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let edits: Vec<oxidocs_core::editor::TextEdit> = js_edits
+        .into_iter()
+        .map(|e| oxidocs_core::editor::TextEdit {
+            paragraph_index: e.paragraph_index,
+            run_index: e.run_index,
+            new_text: e.new_text,
+        })
+        .collect();
+
+    editor.apply_edits(&edits);
+
+    editor
+        .save()
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 #[derive(Serialize)]
