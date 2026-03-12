@@ -44,6 +44,10 @@ header span { font-size: 13px; opacity: 0.7; }
     margin: 32px auto;
     padding: 0 16px;
 }
+.container.xlsx-active {
+    max-width: 100%;
+    padding: 0 16px;
+}
 .drop-zone {
     border: 2px dashed #aaa;
     border-radius: 12px;
@@ -118,6 +122,132 @@ canvas { display: block; }
     background: #3a5ce7;
 }
 
+/* Ribbon menu bar */
+.ribbon {
+    display: none;
+    background: #f3f3f3;
+    border-bottom: 1px solid #d0d0d0;
+    padding: 0;
+    margin-top: 12px;
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+}
+.ribbon.visible { display: block; }
+.ribbon-tabs {
+    display: flex;
+    gap: 0;
+    background: #e6e6e6;
+    border-bottom: 1px solid #d0d0d0;
+}
+.ribbon-tab {
+    padding: 6px 18px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    color: #555;
+    border: none;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+}
+.ribbon-tab:hover { background: #ddd; }
+.ribbon-tab.active {
+    color: #333;
+    background: #f3f3f3;
+    border-bottom-color: #4a6cf7;
+    font-weight: 600;
+}
+.ribbon-content {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 12px;
+    min-height: 44px;
+    flex-wrap: wrap;
+}
+.ribbon-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 10px;
+    border-right: 1px solid #d8d8d8;
+}
+.ribbon-group:last-child { border-right: none; }
+.ribbon-group-label {
+    font-size: 10px;
+    color: #888;
+    text-align: center;
+    margin-top: 2px;
+}
+.ribbon-btn {
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 13px;
+    color: #444;
+    transition: all 0.1s;
+    min-width: 28px;
+    text-align: center;
+}
+.ribbon-btn:hover {
+    background: #dde4f0;
+    border-color: #b0bdd4;
+}
+.ribbon-btn.active {
+    background: #cdd6ea;
+    border-color: #a0b0d0;
+}
+.ribbon-btn svg { width: 16px; height: 16px; vertical-align: middle; }
+.ribbon-sep {
+    width: 1px;
+    height: 28px;
+    background: #d0d0d0;
+    margin: 0 4px;
+}
+/* Format-specific ribbon colors */
+.ribbon.docx { border-top: 3px solid #2b579a; }
+.ribbon.docx .ribbon-tab.active { border-bottom-color: #2b579a; }
+.ribbon.xlsx { border-top: 3px solid #217346; }
+.ribbon.xlsx .ribbon-tab.active { border-bottom-color: #217346; }
+.ribbon.pptx { border-top: 3px solid #d24726; }
+.ribbon.pptx .ribbon-tab.active { border-bottom-color: #d24726; }
+
+/* Excel formula bar */
+.formula-bar {
+    display: flex;
+    align-items: center;
+    background: white;
+    border: 1px solid #d0d0d0;
+    border-top: none;
+    font-family: 'Calibri', 'Segoe UI', sans-serif;
+    font-size: 13px;
+}
+.formula-bar .cell-ref {
+    width: 80px;
+    padding: 4px 8px;
+    border-right: 1px solid #d0d0d0;
+    text-align: center;
+    font-weight: 600;
+    color: #333;
+    background: #f8f8f8;
+}
+.formula-bar .fx-label {
+    padding: 4px 8px;
+    color: #888;
+    border-right: 1px solid #d0d0d0;
+    font-style: italic;
+}
+.formula-bar .formula-input {
+    flex: 1;
+    padding: 4px 8px;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: inherit;
+}
+
 /* Editable document view */
 .edit-page {
     background: white;
@@ -177,30 +307,35 @@ canvas { display: block; }
 .sheet-tabs {
     display: flex;
     gap: 2px;
-    margin-bottom: 0;
+    margin-top: 0;
     padding: 0 4px;
+    background: #e0e0e0;
+    border-top: 1px solid #ccc;
 }
 .sheet-tab {
-    padding: 8px 16px;
-    background: #e8e8e8;
+    padding: 6px 16px;
+    background: #d8d8d8;
     border: 1px solid #ccc;
-    border-bottom: none;
-    border-radius: 6px 6px 0 0;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
     color: #555;
 }
 .sheet-tab.active {
     background: white;
-    color: #1a73e8;
+    color: #217346;
     font-weight: 600;
+    border-top: 2px solid white;
+    margin-top: -1px;
 }
 .spreadsheet-wrapper {
     background: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    border-radius: 0 8px 8px 8px;
-    overflow-x: auto;
+    border-radius: 0;
+    overflow: auto;
     max-width: 100%;
+    max-height: 70vh;
 }
 .spreadsheet-wrapper table {
     border-collapse: collapse;
@@ -281,6 +416,7 @@ canvas { display: block; }
         <button id="btnEdit">Edit</button>
         <button id="btnDownload" class="primary" style="display:none">Download</button>
     </div>
+    <div class="ribbon" id="ribbon"></div>
     <div id="status"></div>
     <div id="pages-container"></div>
 </div>
@@ -367,6 +503,183 @@ function switchMode(mode) {
         }
         showStatus('Edit mode — click on text to edit, then download', 'info');
     }
+}
+
+// === RIBBON MENU ===
+const ribbon = document.getElementById('ribbon');
+
+function buildRibbon(format) {
+    ribbon.className = 'ribbon visible ' + format;
+    ribbon.innerHTML = '';
+
+    const tabs = document.createElement('div');
+    tabs.className = 'ribbon-tabs';
+    const contentArea = document.createElement('div');
+    contentArea.className = 'ribbon-content';
+
+    let tabDefs;
+    if (format === 'docx') {
+        tabDefs = [
+            { name: 'Home', groups: [
+                { label: 'Clipboard', items: [
+                    { icon: '📋', title: 'Paste' }, { icon: '✂️', title: 'Cut' }, { icon: '📄', title: 'Copy' }
+                ]},
+                { label: 'Font', items: [
+                    { text: 'B', title: 'Bold', style: 'font-weight:bold' },
+                    { text: 'I', title: 'Italic', style: 'font-style:italic' },
+                    { text: 'U', title: 'Underline', style: 'text-decoration:underline' },
+                    { text: 'S', title: 'Strikethrough', style: 'text-decoration:line-through' },
+                ]},
+                { label: 'Paragraph', items: [
+                    { text: '≡', title: 'Align Left' }, { text: '≡', title: 'Center', style: 'text-align:center' },
+                    { text: '≡', title: 'Align Right' }, { text: '≡', title: 'Justify' },
+                ]},
+                { label: 'Styles', items: [
+                    { text: 'Normal', title: 'Normal' }, { text: 'Heading 1', title: 'Heading 1', style: 'font-weight:bold' },
+                ]},
+            ]},
+            { name: 'Insert', groups: [
+                { label: 'Tables', items: [{ text: '⊞', title: 'Table' }] },
+                { label: 'Illustrations', items: [{ text: '🖼', title: 'Picture' }] },
+                { label: 'Links', items: [{ text: '🔗', title: 'Link' }] },
+            ]},
+            { name: 'Layout', groups: [
+                { label: 'Page Setup', items: [
+                    { text: '▯', title: 'Margins' }, { text: '↔', title: 'Orientation' }, { text: '📐', title: 'Size' },
+                ]},
+            ]},
+            { name: 'View', groups: [
+                { label: 'Views', items: [
+                    { text: '📖', title: 'Read Mode' }, { text: '📝', title: 'Print Layout' },
+                ]},
+            ]},
+        ];
+    } else if (format === 'xlsx') {
+        tabDefs = [
+            { name: 'Home', groups: [
+                { label: 'Clipboard', items: [
+                    { icon: '📋', title: 'Paste' }, { icon: '✂️', title: 'Cut' }, { icon: '📄', title: 'Copy' }
+                ]},
+                { label: 'Font', items: [
+                    { text: 'B', title: 'Bold', style: 'font-weight:bold' },
+                    { text: 'I', title: 'Italic', style: 'font-style:italic' },
+                    { text: 'U', title: 'Underline', style: 'text-decoration:underline' },
+                ]},
+                { label: 'Alignment', items: [
+                    { text: '⬅', title: 'Align Left' }, { text: '⬌', title: 'Center' }, { text: '➡', title: 'Align Right' },
+                ]},
+                { label: 'Number', items: [
+                    { text: '%', title: 'Percent Style' }, { text: ',', title: 'Comma Style' },
+                    { text: '.0', title: 'Increase Decimal' }, { text: '.', title: 'Decrease Decimal' },
+                ]},
+            ]},
+            { name: 'Insert', groups: [
+                { label: 'Charts', items: [{ text: '📊', title: 'Chart' }] },
+                { label: 'Tables', items: [{ text: '⊞', title: 'Table' }] },
+            ]},
+            { name: 'Formulas', groups: [
+                { label: 'Function Library', items: [
+                    { text: 'fx', title: 'Insert Function' },
+                    { text: 'Σ', title: 'AutoSum' },
+                ]},
+            ]},
+            { name: 'Data', groups: [
+                { label: 'Sort & Filter', items: [
+                    { text: '↕', title: 'Sort' }, { text: '▼', title: 'Filter' },
+                ]},
+            ]},
+            { name: 'View', groups: [
+                { label: 'Show', items: [
+                    { text: '⊞', title: 'Gridlines' }, { text: 'H', title: 'Headings' },
+                ]},
+            ]},
+        ];
+    } else if (format === 'pptx') {
+        tabDefs = [
+            { name: 'Home', groups: [
+                { label: 'Clipboard', items: [
+                    { icon: '📋', title: 'Paste' }, { icon: '✂️', title: 'Cut' }, { icon: '📄', title: 'Copy' }
+                ]},
+                { label: 'Font', items: [
+                    { text: 'B', title: 'Bold', style: 'font-weight:bold' },
+                    { text: 'I', title: 'Italic', style: 'font-style:italic' },
+                    { text: 'U', title: 'Underline', style: 'text-decoration:underline' },
+                ]},
+                { label: 'Paragraph', items: [
+                    { text: '≡', title: 'Align Left' }, { text: '≡', title: 'Center' }, { text: '≡', title: 'Align Right' },
+                ]},
+                { label: 'Drawing', items: [
+                    { text: '□', title: 'Shape' }, { text: '⬜', title: 'Shape Fill' }, { text: '▢', title: 'Shape Outline' },
+                ]},
+            ]},
+            { name: 'Insert', groups: [
+                { label: 'Images', items: [{ text: '🖼', title: 'Picture' }] },
+                { label: 'Text', items: [{ text: 'A', title: 'Text Box' }] },
+                { label: 'Slides', items: [{ text: '+', title: 'New Slide' }] },
+            ]},
+            { name: 'Design', groups: [
+                { label: 'Themes', items: [
+                    { text: '🎨', title: 'Themes' }, { text: '🖌', title: 'Variants' },
+                ]},
+            ]},
+            { name: 'Transitions', groups: [
+                { label: 'Transition', items: [
+                    { text: '▶', title: 'None' }, { text: '↝', title: 'Fade' }, { text: '→', title: 'Slide' },
+                ]},
+            ]},
+            { name: 'Slide Show', groups: [
+                { label: 'Start', items: [
+                    { text: '▶', title: 'From Beginning' }, { text: '▷', title: 'From Current Slide' },
+                ]},
+            ]},
+        ];
+    }
+
+    function showTab(idx) {
+        for (const t of tabs.children) t.classList.remove('active');
+        tabs.children[idx].classList.add('active');
+        contentArea.innerHTML = '';
+        const def = tabDefs[idx];
+        for (const group of def.groups) {
+            const g = document.createElement('div');
+            g.className = 'ribbon-group';
+            const itemsRow = document.createElement('div');
+            itemsRow.style.display = 'flex';
+            itemsRow.style.gap = '1px';
+            itemsRow.style.alignItems = 'center';
+            for (const item of group.items) {
+                const btn = document.createElement('button');
+                btn.className = 'ribbon-btn';
+                btn.title = item.title;
+                btn.textContent = item.icon || item.text;
+                if (item.style) btn.style.cssText = item.style;
+                itemsRow.appendChild(btn);
+            }
+            g.appendChild(itemsRow);
+            const label = document.createElement('div');
+            label.className = 'ribbon-group-label';
+            label.textContent = group.label;
+            g.appendChild(label);
+            contentArea.appendChild(g);
+        }
+    }
+
+    tabDefs.forEach((def, i) => {
+        const tab = document.createElement('button');
+        tab.className = 'ribbon-tab';
+        tab.textContent = def.name;
+        tab.onclick = () => showTab(i);
+        tabs.appendChild(tab);
+    });
+
+    ribbon.appendChild(tabs);
+    ribbon.appendChild(contentArea);
+    showTab(0);
+}
+
+function hideRibbon() {
+    ribbon.className = 'ribbon';
+    ribbon.innerHTML = '';
 }
 
 function collectDocxEdits() {
@@ -854,6 +1167,11 @@ function renderXlsx(workbook) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
 
+    // Formula bar
+    const formulaBar = document.createElement('div');
+    formulaBar.className = 'formula-bar';
+    formulaBar.innerHTML = '<div class="cell-ref">A1</div><div class="fx-label">fx</div><input class="formula-input" readonly>';
+
     const tabs = document.createElement('div');
     tabs.className = 'sheet-tabs';
 
@@ -865,7 +1183,8 @@ function renderXlsx(workbook) {
         tabs.children[idx].classList.add('active');
 
         const sheet = workbook.sheets[idx];
-        const colCount = sheet.col_count || 1;
+        const dataColCount = sheet.col_count || 1;
+        const colCount = Math.max(dataColCount, 26); // At least A-Z
         const { covered, origins } = buildMergeInfo(sheet.merge_cells);
 
         const rowMap = {};
@@ -874,7 +1193,8 @@ function renderXlsx(workbook) {
             rowMap[row.index] = row;
             if (row.index > maxRow) maxRow = row.index;
         }
-        if (maxRow < 20) maxRow = 20;
+        const minRows = 50;
+        if (maxRow < minRows) maxRow = minRows;
 
         let html = '<table><colgroup><col style="width:40px">';
         for (let c = 0; c < colCount; c++) {
@@ -926,8 +1246,9 @@ function renderXlsx(workbook) {
         tabs.appendChild(tab);
     });
 
-    container.appendChild(tabs);
+    container.appendChild(formulaBar);
     container.appendChild(wrapper);
+    container.appendChild(tabs);
     if (workbook.sheets.length > 0) showSheet(0);
 }
 
@@ -940,6 +1261,21 @@ function renderEditableXlsx(workbook) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
 
+    // Formula bar
+    const formulaBar = document.createElement('div');
+    formulaBar.className = 'formula-bar';
+    const cellRefEl = document.createElement('div');
+    cellRefEl.className = 'cell-ref';
+    cellRefEl.textContent = 'A1';
+    const fxLabel = document.createElement('div');
+    fxLabel.className = 'fx-label';
+    fxLabel.textContent = 'fx';
+    const formulaInput = document.createElement('input');
+    formulaInput.className = 'formula-input';
+    formulaBar.appendChild(cellRefEl);
+    formulaBar.appendChild(fxLabel);
+    formulaBar.appendChild(formulaInput);
+
     const tabs = document.createElement('div');
     tabs.className = 'sheet-tabs';
 
@@ -951,7 +1287,8 @@ function renderEditableXlsx(workbook) {
         tabs.children[idx].classList.add('active');
 
         const sheet = workbook.sheets[idx];
-        const colCount = sheet.col_count || 1;
+        const dataColCount = sheet.col_count || 1;
+        const colCount = Math.max(dataColCount, 26);
         const { covered, origins } = buildMergeInfo(sheet.merge_cells);
 
         const rowMap = {};
@@ -960,7 +1297,8 @@ function renderEditableXlsx(workbook) {
             rowMap[row.index] = row;
             if (row.index > maxRow) maxRow = row.index;
         }
-        if (maxRow < 20) maxRow = 20;
+        const minRows = 50;
+        if (maxRow < minRows) maxRow = minRows;
 
         wrapper.innerHTML = '';
         const table = document.createElement('table');
@@ -1048,6 +1386,13 @@ function renderEditableXlsx(workbook) {
                 td.textContent = display;
                 td.dataset.original = display;
 
+                td.addEventListener('focus', () => {
+                    cellRefEl.textContent = colName(c) + r;
+                    formulaInput.value = td.textContent;
+                });
+                td.addEventListener('input', () => {
+                    formulaInput.value = td.textContent;
+                });
                 td.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') e.preventDefault();
                 });
@@ -1068,8 +1413,9 @@ function renderEditableXlsx(workbook) {
         tabs.appendChild(tab);
     });
 
-    container.appendChild(tabs);
+    container.appendChild(formulaBar);
     container.appendChild(wrapper);
+    container.appendChild(tabs);
     if (workbook.sheets.length > 0) showSheet(0);
 }
 
@@ -1269,6 +1615,8 @@ async function handleFile(file) {
     btnDownload.textContent = `Download .${ext}`;
 
     toolbar.classList.add('visible');
+    buildRibbon(ext);
+    document.querySelector('.container').classList.toggle('xlsx-active', ext === 'xlsx');
 
     try {
         const buffer = await file.arrayBuffer();
