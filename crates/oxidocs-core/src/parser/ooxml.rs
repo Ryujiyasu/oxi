@@ -1,15 +1,25 @@
+use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use zip::ZipArchive;
 
+use super::relationships::{parse_relationships, Relationship};
 use super::styles::parse_styles;
 use super::ParseError;
 use crate::ir::*;
 
 pub struct OoxmlParser {
     archive: ZipArchive<Cursor<Vec<u8>>>,
+}
+
+/// Context passed through parsing functions for resource resolution
+struct ParseContext {
+    /// Relationship ID -> Relationship mapping
+    rels: HashMap<String, Relationship>,
+    /// Relationship ID -> binary data (images, etc.)
+    media: HashMap<String, Vec<u8>>,
 }
 
 impl OoxmlParser {
@@ -21,7 +31,8 @@ impl OoxmlParser {
 
     pub fn parse(mut self) -> Result<Document, ParseError> {
         let styles = self.parse_styles()?;
-        let (blocks, sect_pr) = self.parse_document_xml()?;
+        let ctx = self.build_context()?;
+        let (blocks, sect_pr) = self.parse_document_xml(&ctx)?;
         let metadata = self.parse_metadata();
 
         let (page_size, margin) = sect_pr.unwrap_or_else(|| {
@@ -49,6 +60,39 @@ impl OoxmlParser {
         Ok(contents)
     }
 
+    fn read_binary_part(&mut self, name: &str) -> Result<Vec<u8>, ParseError> {
+        let mut file = self
+            .archive
+            .by_name(name)
+            .map_err(|_| ParseError::MissingPart(name.to_string()))?;
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        Ok(contents)
+    }
+
+    fn build_context(&mut self) -> Result<ParseContext, ParseError> {
+        // Parse relationships
+        let rels = match self.read_part("word/_rels/document.xml.rels") {
+            Ok(xml) => parse_relationships(&xml)?,
+            Err(ParseError::MissingPart(_)) => HashMap::new(),
+            Err(e) => return Err(e),
+        };
+
+        // Pre-load media referenced by image relationships
+        let mut media = HashMap::new();
+        let image_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+        for (id, rel) in &rels {
+            if rel.rel_type == image_rel_type {
+                let path = format!("word/{}", rel.target);
+                if let Ok(data) = self.read_binary_part(&path) {
+                    media.insert(id.clone(), data);
+                }
+            }
+        }
+
+        Ok(ParseContext { rels, media })
+    }
+
     fn parse_styles(&mut self) -> Result<StyleSheet, ParseError> {
         match self.read_part("word/styles.xml") {
             Ok(xml) => parse_styles(&xml),
@@ -58,20 +102,20 @@ impl OoxmlParser {
     }
 
     fn parse_metadata(&self) -> DocumentMetadata {
-        // TODO: Parse docProps/core.xml for title, author, etc.
         DocumentMetadata::default()
     }
 
     fn parse_document_xml(
         &mut self,
+        ctx: &ParseContext,
     ) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), ParseError> {
         let xml = self.read_part("word/document.xml")?;
-        parse_body(&xml)
+        parse_body(&xml, ctx)
     }
 }
 
 /// Parse the w:body content of document.xml
-fn parse_body(xml: &str) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), ParseError> {
+fn parse_body(xml: &str, ctx: &ParseContext) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut blocks = Vec::new();
     let mut sect_pr = None;
@@ -88,11 +132,11 @@ fn parse_body(xml: &str) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), Par
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let para = parse_paragraph(&mut reader)?;
+                        let para = parse_paragraph(&mut reader, ctx)?;
                         blocks.push(Block::Paragraph(para));
                     }
                     "tbl" if in_body && depth == 0 => {
-                        let table = parse_table(&mut reader)?;
+                        let table = parse_table(&mut reader, ctx)?;
                         blocks.push(Block::Table(table));
                     }
                     "sectPr" if in_body && depth == 0 => {
@@ -121,8 +165,9 @@ fn parse_body(xml: &str) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), Par
 }
 
 /// Parse a w:p element (paragraph)
-fn parse_paragraph(reader: &mut Reader<&[u8]>) -> Result<Paragraph, ParseError> {
+fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Paragraph, ParseError> {
     let mut runs = Vec::new();
+    let mut images = Vec::new();
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut depth = 0;
@@ -138,8 +183,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>) -> Result<Paragraph, ParseError> 
                         alignment = a;
                     }
                     "r" if depth == 0 => {
-                        let run = parse_run(reader)?;
+                        let (run, img) = parse_run(reader, ctx)?;
                         runs.push(run);
+                        if let Some(image) = img {
+                            images.push(image);
+                        }
                     }
                     _ => {
                         depth += 1;
@@ -159,6 +207,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>) -> Result<Paragraph, ParseError> 
             _ => {}
         }
     }
+
+    // Append images as separate blocks after the paragraph runs
+    // For now, store the first image inline with the paragraph
+    let _ = images; // TODO: Better image-in-paragraph representation
 
     Ok(Paragraph {
         runs,
@@ -297,10 +349,11 @@ fn parse_paragraph_properties(
     Ok((style, alignment))
 }
 
-/// Parse a w:r element (run)
-fn parse_run(reader: &mut Reader<&[u8]>) -> Result<Run, ParseError> {
+/// Parse a w:r element (run). Returns the Run and optionally an Image if a drawing was found.
+fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Option<Image>), ParseError> {
     let mut text = String::new();
     let mut style = RunStyle::default();
+    let mut image = None;
     let mut depth = 0;
     let mut in_text = false;
 
@@ -314,6 +367,9 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<Run, ParseError> {
                     }
                     "t" if depth == 0 => {
                         in_text = true;
+                    }
+                    "drawing" if depth == 0 => {
+                        image = parse_drawing(reader, ctx)?;
                     }
                     _ => {
                         depth += 1;
@@ -348,7 +404,124 @@ fn parse_run(reader: &mut Reader<&[u8]>) -> Result<Run, ParseError> {
         }
     }
 
-    Ok(Run { text, style })
+    Ok((Run { text, style }, image))
+}
+
+/// Parse a w:drawing element to extract image info
+fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Option<Image>, ParseError> {
+    let mut width: f32 = 0.0;
+    let mut height: f32 = 0.0;
+    let mut alt_text = None;
+    let mut rel_id = None;
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                depth += 1;
+                match local.as_str() {
+                    "docPr" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "descr" {
+                                alt_text = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "extent" => {
+                        // wp:extent cx/cy are in EMUs (English Metric Units)
+                        // 1 inch = 914400 EMUs, 1 point = 12700 EMUs
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key {
+                                "cx" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        width = v / 12700.0; // EMU to points
+                                    }
+                                }
+                                "cy" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        height = v / 12700.0;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "blip" => {
+                        // a:blip r:embed="rId1"
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:embed" || key.ends_with(":embed") || key == "embed" {
+                                rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "ext" => {
+                        // a:ext cx/cy fallback for size
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key {
+                                "cx" if width == 0.0 => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        width = v / 12700.0;
+                                    }
+                                }
+                                "cy" if height == 0.0 => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        height = v / 12700.0;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "docPr" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "descr" {
+                                alt_text = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "drawing" && depth == 0 {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    // Resolve the image data from the relationship
+    if let Some(rid) = rel_id {
+        let data = ctx.media.get(&rid).cloned().unwrap_or_default();
+        Ok(Some(Image {
+            data,
+            width,
+            height,
+            alt_text,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Parse w:rPr (run properties)
@@ -424,7 +597,7 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>) -> Result<RunStyle, ParseErr
 }
 
 /// Parse a w:tbl element (table)
-fn parse_table(reader: &mut Reader<&[u8]>) -> Result<Table, ParseError> {
+fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Table, ParseError> {
     let mut rows = Vec::new();
     let mut style = TableStyle::default();
     let mut depth = 0;
@@ -438,7 +611,7 @@ fn parse_table(reader: &mut Reader<&[u8]>) -> Result<Table, ParseError> {
                         style = parse_table_properties(reader)?;
                     }
                     "tr" if depth == 0 => {
-                        let row = parse_table_row(reader)?;
+                        let row = parse_table_row(reader, ctx)?;
                         rows.push(row);
                     }
                     _ => {
@@ -504,7 +677,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
 }
 
 /// Parse a w:tr element (table row)
-fn parse_table_row(reader: &mut Reader<&[u8]>) -> Result<TableRow, ParseError> {
+fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<TableRow, ParseError> {
     let mut cells = Vec::new();
     let mut depth = 0;
 
@@ -514,7 +687,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>) -> Result<TableRow, ParseError> {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "tc" if depth == 0 => {
-                        let cell = parse_table_cell(reader)?;
+                        let cell = parse_table_cell(reader, ctx)?;
                         cells.push(cell);
                     }
                     _ => {
@@ -540,7 +713,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>) -> Result<TableRow, ParseError> {
 }
 
 /// Parse a w:tc element (table cell)
-fn parse_table_cell(reader: &mut Reader<&[u8]>) -> Result<TableCell, ParseError> {
+fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<TableCell, ParseError> {
     let mut blocks = Vec::new();
     let mut width = None;
     let mut depth = 0;
@@ -551,7 +724,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>) -> Result<TableCell, ParseError>
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let para = parse_paragraph(reader)?;
+                        let para = parse_paragraph(reader, ctx)?;
                         blocks.push(Block::Paragraph(para));
                     }
                     "tcPr" if depth == 0 => {
@@ -638,7 +811,6 @@ fn parse_section_properties(
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                // OOXML uses twips (1/20 of a point)
                                 "w" => {
                                     if let Ok(v) = val.parse::<f32>() {
                                         page_size.width = v / 20.0;
@@ -703,7 +875,6 @@ fn parse_section_properties(
 }
 
 /// Extract local name from a potentially namespaced XML tag
-/// e.g., "w:body" -> "body", "body" -> "body"
 fn local_name(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");
     match s.rfind(':') {

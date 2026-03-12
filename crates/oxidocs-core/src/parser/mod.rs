@@ -1,4 +1,5 @@
 mod ooxml;
+mod relationships;
 mod styles;
 
 use crate::ir::Document;

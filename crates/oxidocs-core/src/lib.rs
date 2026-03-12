@@ -89,4 +89,54 @@ mod tests {
         assert_eq!(h1.space_before, Some(12.0)); // 240 twips / 20 = 12pt
         assert_eq!(h1.space_after, Some(6.0));    // 120 twips / 20 = 6pt
     }
+
+    #[test]
+    fn test_layout_basic() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.docx");
+        let doc = parse_docx(data).expect("should parse");
+        let engine = layout::LayoutEngine::new();
+        let result = engine.layout(&doc);
+
+        // Should produce at least 1 page
+        assert!(!result.pages.is_empty());
+        let page = &result.pages[0];
+
+        // Page should have elements
+        assert!(!page.elements.is_empty());
+
+        // Check page dimensions match A4
+        assert!((page.width - 595.3).abs() < 0.1);
+        assert!((page.height - 841.9).abs() < 0.1);
+
+        // First element should be text starting at margin position
+        let first = &page.elements[0];
+        assert!((first.x - 72.0).abs() < 1.0); // left margin
+        assert!((first.y - 72.0).abs() < 1.0); // top margin
+    }
+
+    #[test]
+    fn test_parse_docx_with_image() {
+        let data = include_bytes!("../../../tests/fixtures/with_image.docx");
+        let doc = parse_docx(data).expect("should parse docx with image");
+
+        let page = &doc.pages[0];
+        // 3 paragraphs: "Before image", image paragraph, "After image"
+        assert_eq!(page.blocks.len(), 3);
+
+        // First paragraph: "Before image"
+        match &page.blocks[0] {
+            ir::Block::Paragraph(p) => {
+                assert_eq!(p.runs[0].text, "Before image");
+            }
+            _ => panic!("expected paragraph"),
+        }
+
+        // Third paragraph: "After image"
+        match &page.blocks[2] {
+            ir::Block::Paragraph(p) => {
+                assert_eq!(p.runs[0].text, "After image");
+            }
+            _ => panic!("expected paragraph"),
+        }
+    }
 }
