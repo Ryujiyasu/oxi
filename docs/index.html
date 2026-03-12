@@ -93,30 +93,21 @@ canvas { display: block; }
     display: none;
     gap: 8px;
     align-items: center;
+    justify-content: flex-end;
 }
 .toolbar.visible { display: flex; }
 .toolbar button {
-    padding: 8px 16px;
-    border: 1px solid #ccc;
+    padding: 8px 20px;
+    border: none;
     border-radius: 6px;
-    background: white;
     cursor: pointer;
     font-size: 13px;
-    transition: background 0.15s, border-color 0.15s;
-}
-.toolbar button:hover {
-    background: #f0f0f0;
-    border-color: #999;
-}
-.toolbar button.active {
-    background: #1a1a2e;
-    color: white;
-    border-color: #1a1a2e;
+    font-weight: 600;
+    transition: background 0.15s;
 }
 .toolbar button.primary {
     background: #4a6cf7;
     color: white;
-    border-color: #4a6cf7;
 }
 .toolbar button.primary:hover {
     background: #3a5ce7;
@@ -412,9 +403,7 @@ canvas { display: block; }
     </div>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx">
     <div class="toolbar" id="toolbar">
-        <button id="btnView" class="active">View</button>
-        <button id="btnEdit">Edit</button>
-        <button id="btnDownload" class="primary" style="display:none">Download</button>
+        <button id="btnDownload" class="primary">Download</button>
     </div>
     <div class="ribbon" id="ribbon"></div>
     <div id="status"></div>
@@ -425,7 +414,6 @@ canvas { display: block; }
 import init, { layout_document, parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx } from './oxi_wasm.js';
 
 let wasmReady = false;
-let currentMode = 'view'; // 'view' or 'edit'
 let currentFileType = null; // 'docx', 'xlsx', or 'pptx'
 let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
@@ -456,54 +444,9 @@ function showStatus(msg, type) {
 
 // === TOOLBAR ===
 const toolbar = document.getElementById('toolbar');
-const btnView = document.getElementById('btnView');
-const btnEdit = document.getElementById('btnEdit');
 const btnDownload = document.getElementById('btnDownload');
 
-btnView.addEventListener('click', () => switchMode('view'));
-btnEdit.addEventListener('click', () => switchMode('edit'));
 btnDownload.addEventListener('click', downloadEdited);
-
-function switchMode(mode) {
-    if (mode === currentMode) return;
-    currentMode = mode;
-    btnView.classList.toggle('active', mode === 'view');
-    btnEdit.classList.toggle('active', mode === 'edit');
-    btnDownload.style.display = mode === 'edit' ? '' : 'none';
-    if (mode === 'edit' && currentFileType) {
-        const ext = currentFileType;
-        btnDownload.textContent = `Download .${ext}`;
-    }
-
-    if (!currentFileBytes) return;
-    const data = new Uint8Array(currentFileBytes);
-
-    if (mode === 'view') {
-        showStatus('Rendering...', 'info');
-        try {
-            if (currentFileType === 'docx') {
-                const result = layout_document(data);
-                renderDocx(result);
-            } else if (currentFileType === 'xlsx') {
-                renderXlsx(currentDocIR);
-            } else if (currentFileType === 'pptx') {
-                renderPptx(currentDocIR);
-            }
-            showStatus('View mode', 'info');
-        } catch(e) {
-            showStatus('Error: ' + e.message, 'error');
-        }
-    } else if (mode === 'edit' && currentDocIR) {
-        if (currentFileType === 'docx') {
-            renderEditableDocx(currentDocIR);
-        } else if (currentFileType === 'xlsx') {
-            renderEditableXlsx(currentDocIR);
-        } else if (currentFileType === 'pptx') {
-            renderEditablePptx(currentDocIR);
-        }
-        showStatus('Edit mode — click on text to edit, then download', 'info');
-    }
-}
 
 // === RIBBON MENU ===
 const ribbon = document.getElementById('ribbon');
@@ -517,25 +460,37 @@ function buildRibbon(format) {
     const contentArea = document.createElement('div');
     contentArea.className = 'ribbon-content';
 
+    // Ribbon button action: execCommand for formatting, or custom handler
+    function ribbonAction(cmd) {
+        return () => {
+            if (['bold', 'italic', 'underline', 'strikeThrough',
+                 'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull',
+                 'copy', 'cut', 'paste'].includes(cmd)) {
+                document.execCommand(cmd, false, null);
+            }
+        };
+    }
+
     let tabDefs;
     if (format === 'docx') {
         tabDefs = [
             { name: 'Home', groups: [
                 { label: 'Clipboard', items: [
-                    { icon: '📋', title: 'Paste' }, { icon: '✂️', title: 'Cut' }, { icon: '📄', title: 'Copy' }
+                    { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
+                    { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
+                    { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
                 { label: 'Font', items: [
-                    { text: 'B', title: 'Bold', style: 'font-weight:bold' },
-                    { text: 'I', title: 'Italic', style: 'font-style:italic' },
-                    { text: 'U', title: 'Underline', style: 'text-decoration:underline' },
-                    { text: 'S', title: 'Strikethrough', style: 'text-decoration:line-through' },
+                    { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
+                    { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
+                    { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
+                    { text: 'S', title: 'Strikethrough', style: 'text-decoration:line-through', action: ribbonAction('strikeThrough') },
                 ]},
                 { label: 'Paragraph', items: [
-                    { text: '≡', title: 'Align Left' }, { text: '≡', title: 'Center', style: 'text-align:center' },
-                    { text: '≡', title: 'Align Right' }, { text: '≡', title: 'Justify' },
-                ]},
-                { label: 'Styles', items: [
-                    { text: 'Normal', title: 'Normal' }, { text: 'Heading 1', title: 'Heading 1', style: 'font-weight:bold' },
+                    { text: '≡', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '≡', title: 'Center', action: ribbonAction('justifyCenter') },
+                    { text: '≡', title: 'Align Right', action: ribbonAction('justifyRight') },
+                    { text: '≡', title: 'Justify', action: ribbonAction('justifyFull') },
                 ]},
             ]},
             { name: 'Insert', groups: [
@@ -558,15 +513,19 @@ function buildRibbon(format) {
         tabDefs = [
             { name: 'Home', groups: [
                 { label: 'Clipboard', items: [
-                    { icon: '📋', title: 'Paste' }, { icon: '✂️', title: 'Cut' }, { icon: '📄', title: 'Copy' }
+                    { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
+                    { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
+                    { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
                 { label: 'Font', items: [
-                    { text: 'B', title: 'Bold', style: 'font-weight:bold' },
-                    { text: 'I', title: 'Italic', style: 'font-style:italic' },
-                    { text: 'U', title: 'Underline', style: 'text-decoration:underline' },
+                    { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
+                    { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
+                    { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
                 ]},
                 { label: 'Alignment', items: [
-                    { text: '⬅', title: 'Align Left' }, { text: '⬌', title: 'Center' }, { text: '➡', title: 'Align Right' },
+                    { text: '⬅', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '⬌', title: 'Center', action: ribbonAction('justifyCenter') },
+                    { text: '➡', title: 'Align Right', action: ribbonAction('justifyRight') },
                 ]},
                 { label: 'Number', items: [
                     { text: '%', title: 'Percent Style' }, { text: ',', title: 'Comma Style' },
@@ -598,15 +557,19 @@ function buildRibbon(format) {
         tabDefs = [
             { name: 'Home', groups: [
                 { label: 'Clipboard', items: [
-                    { icon: '📋', title: 'Paste' }, { icon: '✂️', title: 'Cut' }, { icon: '📄', title: 'Copy' }
+                    { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
+                    { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
+                    { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
                 { label: 'Font', items: [
-                    { text: 'B', title: 'Bold', style: 'font-weight:bold' },
-                    { text: 'I', title: 'Italic', style: 'font-style:italic' },
-                    { text: 'U', title: 'Underline', style: 'text-decoration:underline' },
+                    { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
+                    { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
+                    { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
                 ]},
                 { label: 'Paragraph', items: [
-                    { text: '≡', title: 'Align Left' }, { text: '≡', title: 'Center' }, { text: '≡', title: 'Align Right' },
+                    { text: '≡', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '≡', title: 'Center', action: ribbonAction('justifyCenter') },
+                    { text: '≡', title: 'Align Right', action: ribbonAction('justifyRight') },
                 ]},
                 { label: 'Drawing', items: [
                     { text: '□', title: 'Shape' }, { text: '⬜', title: 'Shape Fill' }, { text: '▢', title: 'Shape Outline' },
@@ -653,6 +616,12 @@ function buildRibbon(format) {
                 btn.title = item.title;
                 btn.textContent = item.icon || item.text;
                 if (item.style) btn.style.cssText = item.style;
+                if (item.action) {
+                    btn.addEventListener('mousedown', (e) => {
+                        e.preventDefault(); // Prevent losing selection
+                    });
+                    btn.addEventListener('click', item.action);
+                }
                 itemsRow.appendChild(btn);
             }
             g.appendChild(itemsRow);
@@ -681,6 +650,15 @@ function hideRibbon() {
     ribbon.className = 'ribbon';
     ribbon.innerHTML = '';
 }
+
+// Keyboard shortcuts for formatting (Ctrl/Cmd+B, I, U)
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'b') { e.preventDefault(); document.execCommand('bold'); }
+        else if (e.key === 'i') { e.preventDefault(); document.execCommand('italic'); }
+        else if (e.key === 'u') { e.preventDefault(); document.execCommand('underline'); }
+    }
+});
 
 function collectDocxEdits() {
     const edits = [];
@@ -1607,11 +1585,7 @@ async function handleFile(file) {
     }
 
     showStatus('Parsing and rendering...', 'info');
-    currentMode = 'view';
     currentFileType = ext;
-    btnView.classList.add('active');
-    btnEdit.classList.remove('active');
-    btnDownload.style.display = 'none';
     btnDownload.textContent = `Download .${ext}`;
 
     toolbar.classList.add('visible');
@@ -1626,26 +1600,23 @@ async function handleFile(file) {
 
         if (ext === 'docx') {
             currentDocIR = parse_document(data);
-            const result = layout_document(data);
             const elapsed = (performance.now() - t0).toFixed(1);
-            let totalElements = 0;
-            for (const p of result.pages) totalElements += p.elements.length;
-            showStatus(`Rendered ${result.pages.length} page(s), ${totalElements} elements in ${elapsed}ms`, 'info');
-            await renderDocx(result);
+            renderEditableDocx(currentDocIR);
+            showStatus(`Parsed in ${elapsed}ms — click text to edit`, 'info');
         } else if (ext === 'xlsx') {
             currentDocIR = parse_spreadsheet(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;
             for (const s of currentDocIR.sheets) totalRows += s.rows.length;
             showStatus(`Parsed ${currentDocIR.sheets.length} sheet(s), ${totalRows} rows in ${elapsed}ms`, 'info');
-            renderXlsx(currentDocIR);
+            renderEditableXlsx(currentDocIR);
         } else if (ext === 'pptx') {
             currentDocIR = parse_presentation(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalShapes = 0;
             for (const s of currentDocIR.slides) totalShapes += s.shapes.length;
             showStatus(`Parsed ${currentDocIR.slides.length} slide(s), ${totalShapes} shapes in ${elapsed}ms`, 'info');
-            renderPptx(currentDocIR);
+            renderEditablePptx(currentDocIR);
         }
     } catch(e) {
         showStatus('Error: ' + e.message, 'error');
