@@ -1,29 +1,60 @@
-# oxidocs
+# Oxidocs
 
-Word-compatible OSS document engine (Rust + Wasm)
+Word-compatible OSS document processing engine built with Rust + WebAssembly.
 
-## Overview
+## Vision
 
-oxidocs is an open-source document engine that generates Word-compatible `.docx` files with pixel-accurate layout. Built in Rust with WebAssembly support for browser-based rendering.
+Microsoft Word (.docx) compatibility for the browser — without Microsoft.
+Built as a base by one developer, grown by the community.
+
+## Status
+
+Early development
+
+## Goals (Phase 1)
+
+- [ ] .docx parser
+- [ ] Language-agnostic IR
+- [ ] Basic layout engine (paragraph, table, image)
+- [ ] Japanese typography (kinsoku)
+- [ ] Wasm build
+- [ ] Web demo
 
 ## Project Structure
 
 ```
 crates/
-  oxidocs-core/   # Core document model and OOXML generation
-  oxidocs-wasm/   # WebAssembly bindings for browser usage
+  oxidocs-core/       # Core engine (Rust)
+    src/
+      parser/          # .docx parser (OOXML)
+      ir/              # Intermediate Representation
+      layout/          # Layout engine
+      font/            # Font metrics
+  oxidocs-wasm/        # Wasm bindings
+web/                   # Web demo (React + Canvas)
+tests/
+  fixtures/            # Test .docx files
 ```
 
-## Key Design Decisions
+## Why Rust + Wasm?
 
-- **Font metrics only**: Font files are NOT included in the repository. Only pre-computed metrics tables are bundled.
-- **License**: MIT. All third-party crate licenses are verified to be MIT-compatible.
+- **Rust**: memory safety, performance, modern tooling
+- **Wasm**: runs natively in the browser, no install required
 
 ## Building
 
 ```bash
+# Build core
 cargo build
+
+# Build Wasm
+cd crates/oxidocs-wasm
+wasm-pack build --target web
 ```
+
+## Contributing
+
+All contributions welcome. See CONTRIBUTING.md.
 
 ## License
 
