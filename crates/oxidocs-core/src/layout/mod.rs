@@ -1,0 +1,2258 @@
+mod kinsoku;
+
+use crate::font::{FontMetrics, FontMetricsRegistry};
+use crate::ir::*;
+
+/// Characters that allow a line break AFTER them (English punctuation).
+/// Word treats these as breakable opportunities similar to spaces.
+fn is_break_after(ch: char) -> bool {
+    matches!(ch, '-' | '/' | '\\' | ')' | ']' | '}' | '>' | '!' | '?' | ';' | ':' | ',')
+}
+
+/// Result of layout: positioned elements across pages
+pub struct LayoutResult {
+    pub pages: Vec<LayoutPage>,
+}
+
+pub struct LayoutPage {
+    pub width: f32,
+    pub height: f32,
+    pub elements: Vec<LayoutElement>,
+}
+
+pub struct LayoutElement {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub content: LayoutContent,
+}
+
+pub enum LayoutContent {
+    Text {
+        text: String,
+        font_size: f32,
+        font_family: Option<String>,
+        bold: bool,
+        italic: bool,
+        underline: bool,
+        underline_style: Option<String>,
+        strikethrough: bool,
+        color: Option<String>,
+        highlight: Option<String>,
+        field_type: Option<FieldType>,
+        /// Pixel-snapped character spacing in points (0.0 = no extra spacing)
+        character_spacing: f32,
+    },
+    Image {
+        data: Vec<u8>,
+        content_type: Option<String>,
+    },
+    TableBorder {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        color: Option<String>,
+        width: f32,
+    },
+    CellShading {
+        color: String,
+    },
+    /// A filled/stroked rectangle, optionally with rounded corners.
+    BoxRect {
+        fill: Option<String>,
+        stroke_color: Option<String>,
+        stroke_width: f32,
+        corner_radius: f32,
+    },
+    /// Begin a clipping region. All subsequent elements until ClipEnd are clipped to this rect.
+    ClipStart,
+    /// End the current clipping region (restore graphics state).
+    ClipEnd,
+}
+
+pub struct LayoutEngine {
+    default_font_size: f32,
+    default_font_family: Option<String>,
+    registry: FontMetricsRegistry,
+    /// Compatibility: adjustLineHeightInTable=true disables grid snap in table cells.
+    adjust_line_height_in_table: bool,
+}
+
+/// Word's default heading font sizes (in points)
+fn heading_default_font_size(level: u8) -> f32 {
+    // Word default heading sizes (half-points in styles.xml → points)
+    match level {
+        1 => 14.0,  // sz=28
+        2 => 13.0,  // sz=26
+        3 => 11.0,  // sz=22 (default body)
+        4 => 11.0,
+        _ => 11.0,
+    }
+}
+
+/// Snap character spacing to pixel grid (DPI=96 fixed).
+/// Word rounds to integer pixels at 96 DPI.
+/// cs_pt is in points; convert to twips, snap, convert back.
+fn snap_character_spacing(cs_pt: f32) -> f32 {
+    let cs_twips = (cs_pt * 20.0).round() as i64;
+    // Pixel-rounded division: numer = a*b, then (numer + c/2) / c (positive) or (numer - c/2) / c (negative)
+    let numer = cs_twips * 96;
+    let cs_px = if numer >= 0 {
+        (numer + 720) / 1440
+    } else {
+        (numer - 720) / 1440
+    };
+    cs_px as f32 * 72.0 / 96.0
+}
+
+impl LayoutEngine {
+    pub fn new() -> Self {
+        Self {
+            default_font_size: 11.0,
+            default_font_family: None,
+            registry: FontMetricsRegistry::load(),
+            adjust_line_height_in_table: false,
+        }
+    }
+
+    /// Create a LayoutEngine with document-specific defaults from docDefaults
+    pub fn for_document(doc: &Document) -> Self {
+        let default_font_size = doc.styles.doc_default_run_style
+            .as_ref()
+            .and_then(|s| s.font_size)
+            .unwrap_or(11.0);
+        let default_font_family = doc.styles.doc_default_run_style
+            .as_ref()
+            .and_then(|s| s.font_family.clone());
+        Self {
+            default_font_size,
+            default_font_family,
+            registry: FontMetricsRegistry::load(),
+            adjust_line_height_in_table: doc.adjust_line_height_in_table,
+        }
+    }
+
+    pub fn layout(&self, doc: &Document) -> LayoutResult {
+        let mut pages = Vec::new();
+
+        for page in &doc.pages {
+            let laid_out = self.layout_page(page);
+            pages.extend(laid_out);
+        }
+
+        // Post-layout pass: substitute PAGE and NUMPAGES field placeholders
+        let total_pages = pages.len();
+        for (page_idx, page) in pages.iter_mut().enumerate() {
+            for elem in &mut page.elements {
+                if let LayoutContent::Text { text, field_type: Some(ft), .. } = &mut elem.content {
+                    match ft {
+                        FieldType::Page => *text = format!("{}", page_idx + 1),
+                        FieldType::NumPages => *text = format!("{}", total_pages),
+                    }
+                }
+            }
+        }
+
+        LayoutResult { pages }
+    }
+
+    /// Resolve font size for a run, considering paragraph style defaults and heading level
+    fn resolve_font_size(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> f32 {
+        if let Some(fs) = run_style.font_size {
+            return fs;
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if let Some(fs) = drs.font_size {
+                return fs;
+            }
+        }
+        if let Some(level) = para_style.heading_level {
+            return heading_default_font_size(level);
+        }
+        self.default_font_size
+    }
+
+    /// Resolve font family for a run.
+    /// For CJK text, prefer font_family_east_asia over font_family.
+    fn resolve_font_family<'a>(&'a self, run_style: &'a RunStyle, para_style: &'a ParagraphStyle) -> Option<&'a str> {
+        if let Some(ref ff) = run_style.font_family {
+            return Some(ff.as_str());
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if let Some(ref ff) = drs.font_family {
+                return Some(ff.as_str());
+            }
+        }
+        // Fallback to document default font (docDefaults rPrDefault)
+        self.default_font_family.as_deref()
+    }
+
+    /// Resolve font family considering East Asian font for CJK characters.
+    fn resolve_font_family_for_text<'a>(&'a self, text: &str, run_style: &'a RunStyle, para_style: &'a ParagraphStyle) -> Option<&'a str> {
+        let has_cjk = text.chars().any(|c| kinsoku::is_cjk(c));
+        if has_cjk {
+            // Prefer East Asian font for CJK text
+            if let Some(ref ff) = run_style.font_family_east_asia {
+                return Some(ff.as_str());
+            }
+            if let Some(ref drs) = para_style.default_run_style {
+                if let Some(ref ff) = drs.font_family_east_asia {
+                    return Some(ff.as_str());
+                }
+            }
+        }
+        self.resolve_font_family(run_style, para_style)
+    }
+
+    /// Get font metrics for a run (uses registry with font-family resolution)
+    fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        match self.resolve_font_family(run_style, para_style) {
+            Some(family) => self.registry.get(family),
+            None => self.registry.default_metrics(),
+        }
+    }
+
+    /// Get font metrics considering East Asian font for CJK text.
+    fn metrics_for_text(&self, text: &str, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        match self.resolve_font_family_for_text(text, run_style, para_style) {
+            Some(family) => self.registry.get(family),
+            None => self.registry.default_metrics(),
+        }
+    }
+
+    /// Get font metrics for a single character, using East Asian font for CJK.
+    fn metrics_for_char(&self, ch: char, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        if kinsoku::is_cjk(ch) {
+            if let Some(ref ff) = run_style.font_family_east_asia {
+                return self.registry.get(ff.as_str());
+            }
+            if let Some(ref drs) = para_style.default_run_style {
+                if let Some(ref ff) = drs.font_family_east_asia {
+                    return self.registry.get(ff.as_str());
+                }
+            }
+        }
+        self.metrics_for(run_style, para_style)
+    }
+
+    /// Resolve bold for a run, considering paragraph style defaults
+    fn resolve_bold(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> bool {
+        if run_style.bold {
+            return true;
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if drs.bold {
+                return true;
+            }
+        }
+        if let Some(level) = para_style.heading_level {
+            return level <= 2;
+        }
+        false
+    }
+
+    fn resolve_color<'a>(&self, run_style: &'a RunStyle, para_style: &'a ParagraphStyle) -> Option<&'a str> {
+        if let Some(ref c) = run_style.color {
+            return Some(c.as_str());
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if let Some(ref c) = drs.color {
+                return Some(c.as_str());
+            }
+        }
+        None
+    }
+
+    fn resolve_italic(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> bool {
+        if run_style.italic {
+            return true;
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if drs.italic {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Default font metrics for the document (uses docDefaults font if set, otherwise Calibri).
+    fn doc_default_metrics(&self) -> &FontMetrics {
+        match self.default_font_family.as_deref() {
+            Some(ff) => self.registry.get(ff),
+            None => self.registry.default_metrics(),
+        }
+    }
+
+    fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
+        let content_width = page.size.width - page.margin.left - page.margin.right;
+        let content_height = page.size.height - page.margin.top - page.margin.bottom;
+        let start_x = page.margin.left;
+        let start_y = page.margin.top;
+
+        let mut pages: Vec<LayoutPage> = Vec::new();
+        let mut elements: Vec<LayoutElement> = Vec::new();
+        let mut cursor_y = start_y;
+        let mut prev_para_style_id: Option<String> = None;
+        // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
+        let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
+        let mut block_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
+        let mut current_page_idx: usize = 0;
+
+        let grid_pitch = page.grid_line_pitch;
+
+        for (block_idx, block) in page.blocks.iter().enumerate() {
+            // wrapTopAndBottom: for TABLE blocks, push below overlapping TextBoxes
+            if matches!(block, Block::Table(_)) {
+                for tb in &page.text_boxes {
+                    if tb.anchor_block_index < block_idx {
+                        if let Some(ref pos) = tb.position {
+                            let anchor_y = block_y_positions.get(tb.anchor_block_index).copied().unwrap_or(0.0);
+                            let tb_top = match pos.v_relative.as_deref() {
+                                Some("paragraph") | Some("line") => anchor_y + pos.y,
+                                Some("margin") => page.margin.top + pos.y,
+                                Some("page") => pos.y,
+                                _ => anchor_y + pos.y,
+                            };
+                            let tb_bottom = tb_top + tb.height;
+                            if cursor_y >= tb_top && cursor_y < tb_bottom {
+                                cursor_y = tb_bottom;
+                            }
+                        }
+                    }
+                }
+            }
+            block_y_positions.push(cursor_y);
+            block_page_indices.push(current_page_idx);
+            match block {
+                Block::Paragraph(para) => {
+                    // pageBreakBefore: force a new page before this paragraph
+                    if para.style.page_break_before && !elements.is_empty() {
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        cursor_y = start_y;
+                        current_page_idx += 1;
+                        // Update this block's page index since it moved to next page
+                        *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        *block_y_positions.last_mut().unwrap() = cursor_y;
+                    }
+
+                    // keepLines: estimate paragraph height; if it doesn't fit
+                    // on the current page but would fit on a fresh page, push
+                    // the entire paragraph to the next page.
+                    if para.style.keep_lines && !elements.is_empty() {
+                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
+                        let remaining = (start_y + content_height) - cursor_y;
+                        if est_h > remaining && est_h <= content_height {
+                            pages.push(LayoutPage {
+                                width: page.size.width,
+                                height: page.size.height,
+                                elements: std::mem::take(&mut elements),
+                            });
+                            cursor_y = start_y;
+                            current_page_idx += 1;
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                        }
+                    }
+
+                    // keepNext: if this paragraph has keepNext AND the next block
+                    // is a paragraph that won't fit together with this one, push
+                    // both to the next page.
+                    if para.style.keep_next && !elements.is_empty() {
+                        if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
+                            let this_h = self.estimate_para_height(para, content_width, grid_pitch, None);
+                            let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None);
+                            let remaining = (start_y + content_height) - cursor_y;
+                            if this_h + next_h > remaining && this_h + next_h <= content_height {
+                                pages.push(LayoutPage {
+                                    width: page.size.width,
+                                    height: page.size.height,
+                                    elements: std::mem::take(&mut elements),
+                                });
+                                cursor_y = start_y;
+                                current_page_idx += 1;
+                                *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                *block_y_positions.last_mut().unwrap() = cursor_y;
+                            }
+                        }
+                    }
+
+                    let pages_before = pages.len();
+                    let para_elements = self.layout_paragraph(
+                        para,
+                        start_x,
+                        &mut cursor_y,
+                        content_width,
+                        content_height,
+                        start_y,
+                        page,
+                        &mut pages,
+                        &mut elements,
+                        grid_pitch,
+                        prev_para_style_id.as_deref(), false,
+                    );
+                    elements.extend(para_elements);
+                    // Track page breaks that happened inside layout_paragraph
+                    let pages_added = pages.len() - pages_before;
+                    if pages_added > 0 {
+                        current_page_idx += pages_added;
+                    }
+                    prev_para_style_id = para.style.style_id.clone();
+                }
+                Block::Table(table) => {
+                    let pages_before = pages.len();
+                    let table_elements = self.layout_table(
+                        table,
+                        start_x,
+                        &mut cursor_y,
+                        content_width,
+                        grid_pitch,
+                        start_y,
+                        content_height,
+                        page.size.width,
+                        page.size.height,
+                        &mut pages,
+                        &mut elements,
+                    );
+                    elements.extend(table_elements);
+                    let pages_added = pages.len() - pages_before;
+                    if pages_added > 0 {
+                        current_page_idx += pages_added;
+                        *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        *block_y_positions.last_mut().unwrap() = cursor_y;
+                    }
+                    prev_para_style_id = None;
+                }
+                Block::Image(img) => {
+                    if cursor_y + img.height > start_y + content_height {
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        cursor_y = start_y;
+                        current_page_idx += 1;
+                        *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        *block_y_positions.last_mut().unwrap() = cursor_y;
+                    }
+                    elements.push(LayoutElement {
+                        x: start_x,
+                        y: cursor_y,
+                        width: img.width,
+                        height: img.height,
+                        content: LayoutContent::Image {
+                            data: img.data.clone(),
+                            content_type: img.content_type.clone(),
+                        },
+                    });
+                    cursor_y += img.height;
+                    prev_para_style_id = None;
+                }
+                Block::UnsupportedElement(_) => {
+                    // Skip unsupported elements in layout
+                }
+            }
+        }
+
+        // Final page
+        pages.push(LayoutPage {
+            width: page.size.width,
+            height: page.size.height,
+            elements,
+        });
+
+        // Layout text boxes and add to the correct layout page
+        // The current_page_idx tracking tells us which layout page each anchor block ended up on
+        for text_box in &page.text_boxes {
+            let target_page = block_page_indices
+                .get(text_box.anchor_block_index)
+                .copied()
+                .unwrap_or(0);
+            let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
+            if let Some(lp) = pages.get_mut(target_page) {
+                lp.elements.extend(tb_elements);
+            }
+        }
+
+        // Layout header/footer on each layout page
+        // Header y = headerDistance (from page top edge), default 36pt (0.5in)
+        // Footer y = pageHeight - footerDistance - footerContentHeight
+        let header_y = page.header_distance.unwrap_or(36.0);
+        let footer_dist = page.footer_distance.unwrap_or(36.0);
+        let hdr_x = page.margin.left;
+        let hdr_width = content_width;
+        for lp in pages.iter_mut() {
+            if !page.header.is_empty() {
+                let mut cy = header_y;
+                for block in &page.header {
+                    if let Block::Paragraph(para) = block {
+                        let hdr_elements = self.layout_paragraph(
+                            para, hdr_x, &mut cy, hdr_width, page.size.height,
+                            header_y, page, &mut Vec::new(), &mut Vec::new(),
+                            grid_pitch, None,
+                            false,
+                        );
+                        lp.elements.extend(hdr_elements);
+                    }
+                }
+            }
+            if !page.footer.is_empty() {
+                // Estimate footer content height first
+                let mut footer_h: f32 = 0.0;
+                for block in &page.footer {
+                    if let Block::Paragraph(para) = block {
+                        footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None);
+                    }
+                }
+                let footer_top = page.size.height - footer_dist - footer_h;
+                let mut cy = footer_top;
+                for block in &page.footer {
+                    if let Block::Paragraph(para) = block {
+                        let ftr_elements = self.layout_paragraph(
+                            para, hdr_x, &mut cy, hdr_width, page.size.height,
+                            footer_top, page, &mut Vec::new(), &mut Vec::new(),
+                            grid_pitch, None,
+                            false,
+                        );
+                        lp.elements.extend(ftr_elements);
+                    }
+                }
+            }
+        }
+
+        pages
+    }
+
+    /// Resolve absolute (x, y) position for a text box based on its anchor references.
+    fn resolve_textbox_position(&self, text_box: &TextBox, page: &Page, block_y_positions: &[f32]) -> (f32, f32) {
+        let pos = match &text_box.position {
+            Some(p) => p,
+            None => return (page.margin.left, page.margin.top),
+        };
+
+        let content_width = page.size.width - page.margin.left - page.margin.right;
+
+        // Horizontal: alignment takes precedence over offset
+        let abs_x = if let Some(ref align) = pos.h_align {
+            let ref_left;
+            let ref_width;
+            match pos.h_relative.as_deref() {
+                Some("page") => { ref_left = 0.0; ref_width = page.size.width; }
+                Some("margin") | Some("column") | _ => { ref_left = page.margin.left; ref_width = content_width; }
+            }
+            match align.as_str() {
+                "left" => ref_left,
+                "center" => ref_left + (ref_width - text_box.width) / 2.0,
+                "right" => ref_left + ref_width - text_box.width,
+                _ => ref_left,
+            }
+        } else {
+            match pos.h_relative.as_deref() {
+                Some("page") => pos.x,
+                Some("margin") | Some("column") | Some("character") => page.margin.left + pos.x,
+                Some("leftMarginArea") => pos.x,
+                Some("rightMarginArea") => (page.size.width - page.margin.right) + pos.x,
+                _ | None => page.margin.left + pos.x,
+            }
+        };
+
+        // Vertical: paragraph-relative uses anchor block Y position
+        let abs_y = if let Some(ref align) = pos.v_align {
+            let ref_top;
+            let ref_height;
+            match pos.v_relative.as_deref() {
+                Some("page") => { ref_top = 0.0; ref_height = page.size.height; }
+                Some("margin") | _ => { ref_top = page.margin.top; ref_height = page.size.height - page.margin.top - page.margin.bottom; }
+            }
+            match align.as_str() {
+                "top" => ref_top,
+                "center" => ref_top + (ref_height - text_box.height) / 2.0,
+                "bottom" => ref_top + ref_height - text_box.height,
+                _ => ref_top,
+            }
+        } else {
+            match pos.v_relative.as_deref() {
+                Some("page") => pos.y,
+                Some("paragraph") | Some("line") => {
+                    let anchor_y = block_y_positions
+                        .get(text_box.anchor_block_index)
+                        .copied()
+                        .unwrap_or(page.margin.top);
+                    anchor_y + pos.y
+                }
+                Some("margin") => page.margin.top + pos.y,
+                Some("topMarginArea") => pos.y,
+                Some("bottomMarginArea") => (page.size.height - page.margin.bottom) + pos.y,
+                _ | None => page.margin.top + pos.y,
+            }
+        };
+
+        // Clamp to page boundaries: TextBox should not overflow beyond content area bottom
+        let content_bottom = page.size.height - page.margin.bottom;
+        let abs_y = if abs_y + text_box.height > content_bottom {
+            (content_bottom - text_box.height).max(page.margin.top)
+        } else {
+            abs_y
+        };
+
+        (abs_x, abs_y)
+    }
+
+    /// Layout a single text box: background, borders, and inner content.
+    fn layout_text_box(&self, text_box: &TextBox, page: &Page, block_y_positions: &[f32]) -> Vec<LayoutElement> {
+        let mut elements = Vec::new();
+
+        // 1. Calculate absolute position
+        let (abs_x, abs_y) = self.resolve_textbox_position(text_box, page, block_y_positions);
+
+        // 2. Background fill + border as a single BoxRect (supports corner radius)
+        let has_fill = text_box.fill.is_some();
+        let has_border = text_box.border;
+        if has_fill || has_border {
+            let fill_hex = text_box.fill.as_ref().map(|f| {
+                if f.starts_with('#') { f.clone() } else { format!("#{}", f) }
+            });
+            let cr = text_box.corner_radius.unwrap_or(0.0);
+            elements.push(LayoutElement {
+                x: abs_x,
+                y: abs_y,
+                width: text_box.width,
+                height: text_box.height,
+                content: LayoutContent::BoxRect {
+                    fill: fill_hex,
+                    stroke_color: if has_border { Some("#000000".to_string()) } else { None },
+                    stroke_width: if has_border { 0.4 } else { 0.0 },
+                    corner_radius: cr,
+                },
+            });
+        }
+
+        // 3. Clip region — all TextBox content is clipped to the box boundary
+        elements.push(LayoutElement {
+            x: abs_x, y: abs_y, width: text_box.width, height: text_box.height,
+            content: LayoutContent::ClipStart,
+        });
+
+        // 4. Content layout within text box
+        // Word default inset: L/R = 7.2pt (0.1in = 91440 EMU), T/B = 3.6pt (0.05in = 45720 EMU)
+        let inset_l = text_box.inset_left.unwrap_or(7.2);
+        let inset_r = text_box.inset_right.unwrap_or(7.2);
+        let inset_t = text_box.inset_top.unwrap_or(3.6);
+        let inset_b = text_box.inset_bottom.unwrap_or(3.6);
+        let inner_x = abs_x + inset_l;
+        let inner_width = (text_box.width - inset_l - inset_r).max(0.0);
+        let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
+        let mut cursor_y = abs_y + inset_t;
+
+        // We layout content inside the text box without page-breaking.
+        // Use dummy page/elements vecs since we don't want page breaks inside text boxes.
+        let mut dummy_pages: Vec<LayoutPage> = Vec::new();
+        let mut dummy_elements: Vec<LayoutElement> = Vec::new();
+
+        for block in &text_box.blocks {
+            // Stop if we've exceeded the text box bounds
+            if cursor_y > abs_y + text_box.height - inset_b {
+                break;
+            }
+
+            match block {
+                Block::Paragraph(para) => {
+                    let clip_bottom = abs_y + text_box.height;
+                    let para_elements = self.layout_paragraph(
+                        para,
+                        inner_x,
+                        &mut cursor_y,
+                        inner_width,
+                        inner_height,
+                        abs_y + inset_t,
+                        page,
+                        &mut dummy_pages,
+                        &mut dummy_elements,
+                        None, // TextBox paragraphs have explicit snap=0 and line spacing rules
+                        None, // no prev style tracking
+                        true, // in_textbox: suppress CJK compression
+                    );
+                    // Word behavior: TextBox overflow text is not rendered.
+                    // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
+                    // Word PDF omits runs without color attribute inside colored TextBoxes —
+                    // these are overflow text that would be black-on-dark and shouldn't be visible.
+                    // Only apply to dark fills (not white/light backgrounds where black text is normal).
+                    let has_dark_fill = text_box.fill.as_ref().map_or(false, |f| {
+                        let hex = f.trim_start_matches('#');
+                        if hex.len() >= 6 {
+                            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
+                            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+                            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
+                            (r as u16 + g as u16 + b as u16) < 600
+                        } else {
+                            false
+                        }
+                    });
+                    let accept = |pe: &LayoutElement| -> bool {
+                        if pe.y + pe.height > clip_bottom { return false; }
+                        if has_dark_fill {
+                            if let LayoutContent::Text { ref color, .. } = pe.content {
+                                if color.is_none() { return false; }
+                            }
+                        }
+                        true
+                    };
+                    for pe in para_elements {
+                        if accept(&pe) { elements.push(pe); }
+                    }
+                    for de in dummy_elements.drain(..) {
+                        if accept(&de) { elements.push(de); }
+                    }
+                }
+                Block::Table(table) => {
+                    // TextBox tables don't paginate — use large content_height
+                    let mut tb_pages = Vec::new();
+                    let mut tb_elems = Vec::new();
+                    let table_elements = self.layout_table(
+                        table,
+                        inner_x,
+                        &mut cursor_y,
+                        inner_width,
+                        None,
+                        0.0, 99999.0, 0.0, 99999.0,
+                        &mut tb_pages, &mut tb_elems,
+                    );
+                    elements.extend(tb_elems);
+                    elements.extend(table_elements);
+                }
+                Block::Image(img) => {
+                    elements.push(LayoutElement {
+                        x: inner_x,
+                        y: cursor_y,
+                        width: img.width.min(inner_width),
+                        height: img.height,
+                        content: LayoutContent::Image {
+                            data: img.data.clone(),
+                            content_type: img.content_type.clone(),
+                        },
+                    });
+                    cursor_y += img.height;
+                }
+                Block::UnsupportedElement(_) => {}
+            }
+        }
+
+        // End clip region
+        elements.push(LayoutElement {
+            x: abs_x, y: abs_y, width: text_box.width, height: text_box.height,
+            content: LayoutContent::ClipEnd,
+        });
+
+        elements
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layout_paragraph(
+        &self,
+        para: &Paragraph,
+        start_x: f32,
+        cursor_y: &mut f32,
+        content_width: f32,
+        content_height: f32,
+        page_top: f32,
+        page: &Page,
+        pages: &mut Vec<LayoutPage>,
+        current_elements: &mut Vec<LayoutElement>,
+        grid_pitch: Option<f32>,
+        prev_style_id: Option<&str>,
+        #[allow(unused)] in_textbox: bool,
+    ) -> Vec<LayoutElement> {
+        let mut elements = Vec::new();
+
+        // Apply paragraph spacing (space_before).
+        // Word adds space_before and space_after independently (no CSS-style collapsing).
+        // beforeLines/afterLines: value/100 * linePitch, then grid-snap if applicable.
+        let mut space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+            let raw = bl / 100.0 * pitch;
+            if para.style.snap_to_grid && pitch > 0.0 {
+                ((raw / pitch) + 0.5).floor() * pitch
+            } else {
+                raw
+            }
+        } else {
+            para.style.space_before.unwrap_or(0.0)
+        };
+
+        // Contextual spacing: suppress space_before when previous paragraph
+        // has the same style and both have contextualSpacing enabled.
+        if para.style.contextual_spacing {
+            if let (Some(cur_id), Some(prev_id)) = (para.style.style_id.as_deref(), prev_style_id) {
+                if cur_id == prev_id {
+                    space_before = 0.0;
+                }
+            }
+        }
+
+        // Suppress space_before at the top of a page
+        if (*cursor_y - page_top).abs() < 0.01 {
+            space_before = 0.0;
+        }
+
+        *cursor_y += space_before;
+
+        let indent_left = para.style.indent_left.unwrap_or(0.0);
+        let indent_right = para.style.indent_right.unwrap_or(0.0);
+        let first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
+        let available_width = content_width - indent_left - indent_right;
+
+        // Render list marker if present
+        if let Some(ref marker) = para.style.list_marker {
+            let default_style = RunStyle::default();
+            let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
+            let marker_font_size = self.resolve_font_size(marker_style, &para.style);
+            let marker_metrics = self.metrics_for(marker_style, &para.style);
+            let marker_width: f32 = marker
+                .chars()
+                .map(|c| marker_metrics.char_width_pt(c, marker_font_size))
+                .sum();
+            let list_indent = para.style.list_indent.unwrap_or(18.0);
+            let marker_x = start_x + indent_left - list_indent;
+            let line_height = self.line_height(marker_font_size, para.style.line_spacing, para.style.line_spacing_rule.as_deref(), marker_metrics, para.style.snap_to_grid, grid_pitch);
+
+            // Determine marker text including suffix
+            let suff = para.style.list_suff.as_deref().unwrap_or("tab");
+            let marker_text = match suff {
+                "space" => format!("{} ", marker),
+                "nothing" => marker.clone(),
+                // "tab" — marker text alone; tab stop handled by indent_left
+                _ => {
+                    // For tab suffix: if there's a tab_stop defined, use it to
+                    // adjust text start position via indent_left. The marker sits
+                    // at marker_x and text starts at indent_left (which should
+                    // align with the tab stop).
+                    marker.clone()
+                }
+            };
+
+            // Page break check for marker
+            if *cursor_y + line_height > page_top + content_height {
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(current_elements),
+                });
+                current_elements.extend(std::mem::take(&mut elements));
+                elements = std::mem::take(current_elements);
+                *cursor_y = page_top;
+            }
+
+            elements.push(LayoutElement {
+                x: marker_x,
+                y: *cursor_y,
+                width: marker_width,
+                height: line_height,
+                content: LayoutContent::Text {
+                    text: marker_text,
+                    font_size: marker_font_size,
+                    font_family: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    underline_style: None,
+                    strikethrough: false,
+                    color: None,
+                    highlight: None,
+                    field_type: None,
+                    character_spacing: 0.0,
+                },
+            });
+        }
+
+        // Collect all text fragments with their styles and field types
+        let fragments: Vec<(&str, &RunStyle, Option<FieldType>)> = para
+            .runs
+            .iter()
+            .map(|r| (r.text.as_str(), &r.style, r.field_type))
+            .collect();
+
+        // Resolve font size for line breaking
+        let default_style = RunStyle::default();
+        let para_font_size = self.resolve_font_size(
+            para.runs.first().map(|r| &r.style).unwrap_or(&default_style),
+            &para.style,
+        );
+
+        // Line-break the text
+        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style);
+
+        // Widow/orphan control: pre-compute line heights for lookahead
+        // Word uses max(ascent) + max(descent) across all runs in a line,
+        // NOT just the first run's metrics. (#1/#2 fix)
+        let line_heights: Vec<f32> = lines.iter().map(|line| {
+            self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
+        }).collect();
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
+            let line_height = line_heights[line_idx];
+
+            // Page break check with widow/orphan control
+            let needs_page_break = *cursor_y + line_height > page_top + content_height;
+
+            // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
+            // check if only 1 line would fit on this page — if so, push the
+            // entire paragraph to the next page.
+            let widow_orphan_break = if para.style.widow_control && lines.len() >= 2 {
+                if line_idx == 0 && !needs_page_break {
+                    // Orphan: check if the next line would overflow — that would leave
+                    // only 1 line on this page. Push entire paragraph to next page.
+                    let next_h = line_heights.get(1).copied().unwrap_or(0.0);
+                    *cursor_y + line_height + next_h > page_top + content_height
+                        && !current_elements.is_empty()
+                } else if line_idx == lines.len() - 2 && !needs_page_break {
+                    // Widow: if the last line would overflow to the next page alone,
+                    // break BEFORE this line so at least 2 lines go to the next page.
+                    let next_h = line_heights.get(line_idx + 1).copied().unwrap_or(0.0);
+                    *cursor_y + line_height + next_h > page_top + content_height
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if widow_orphan_break {
+                // Push current page and move entire paragraph so far to next page
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(current_elements),
+                });
+                current_elements.extend(std::mem::take(&mut elements));
+                elements = std::mem::take(current_elements);
+                *cursor_y = page_top;
+            } else if needs_page_break {
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(current_elements),
+                });
+                current_elements.extend(std::mem::take(&mut elements));
+                elements = std::mem::take(current_elements);
+                *cursor_y = page_top;
+            }
+
+            let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
+            // For right-aligned text, firstLine indent reduces available width but
+            // doesn't shift line_x (text is pushed from the right edge).
+            let line_x = if para.alignment == Alignment::Right {
+                start_x + indent_left
+            } else {
+                start_x + indent_left + extra_indent
+            };
+
+            // Alignment offset
+            let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
+            let is_last_line = line_idx == lines.len() - 1;
+            let align_offset = match para.alignment {
+                Alignment::Left => 0.0,
+                Alignment::Center => (available_width - extra_indent - line_text_width) / 2.0,
+                Alignment::Right => available_width - extra_indent - line_text_width,
+                Alignment::Justify => 0.0,
+                // Distribute: when justification applies (multi-fragment lines), offset is 0
+                // because slack is distributed across fragments. When justification can't
+                // apply (single-fragment line), center the content.
+                Alignment::Distribute => {
+                    if line.fragments.len() > 1 {
+                        0.0
+                    } else {
+                        let slack = available_width - extra_indent - line_text_width;
+                        if slack > 0.0 { slack / 2.0 } else { 0.0 }
+                    }
+                }
+            };
+
+            // Justification (matches Word output, priority order):
+            // 1. CJK punctuation compression (full-width -> half-width, 50% savings)
+            // 2. Word-space expansion (distribute remaining slack at space characters)
+            // Latin text: ONLY expand at word spaces, never between characters.
+            // CJK text: compress punctuation first, then expand at inter-character gaps.
+
+            let mut frag_width_adjustments: Vec<f32> = vec![0.0; line.fragments.len()];
+            let mut frag_spacing_after: Vec<f32> = vec![0.0; line.fragments.len()];
+
+            let should_justify = (para.alignment == Alignment::Justify && !is_last_line)
+                || para.alignment == Alignment::Distribute;
+            if should_justify && line.fragments.len() > 1 {
+                let mut slack = available_width - extra_indent - line_text_width;
+
+                // Phase 1: CJK punctuation compression (full-width -> half-width)
+                // Only compress when the line overflows (slack < 0).
+                // Matches Word output: TextBox content does NOT use punctuation compression.
+                if slack < 0.0 && !in_textbox {
+                    for (fi, frag) in line.fragments.iter().enumerate() {
+                        for ch in frag.text.chars() {
+                            if kinsoku::is_cjk_compressible(ch) {
+                                let fs = frag.style.font_size.unwrap_or(para_font_size);
+                                let fm = self.metrics_for(&frag.style, &para.style);
+                                let char_w = fm.char_width_pt(ch, fs);
+                                let actual = char_w * 0.5;
+                                frag_width_adjustments[fi] -= actual;
+                                slack += actual; // reclaim freed space
+                            }
+                        }
+                    }
+                }
+
+                // Phase 2: Distribute remaining slack at word spaces (only if slack > 0 after compression)
+                if slack > 0.0 {
+                    let space_count = line.fragments.iter()
+                        .enumerate()
+                        .filter(|(i, f)| *i < line.fragments.len() - 1 && f.text.trim().is_empty())
+                        .count();
+
+                    if space_count > 0 {
+                        let per_space = slack / space_count as f32;
+                        for (fi, frag) in line.fragments.iter().enumerate() {
+                            if fi < line.fragments.len() - 1 && frag.text.trim().is_empty() {
+                                frag_spacing_after[fi] += per_space;
+                            }
+                        }
+                    } else {
+                        // No word spaces: distribute between CJK fragments only
+                        let has_cjk = line.fragments.iter()
+                            .any(|f| f.text.chars().any(|c| kinsoku::is_cjk(c)));
+                        if has_cjk {
+                            let gap_count = line.fragments.len() - 1;
+                            if gap_count > 0 {
+                                let per_gap = slack / gap_count as f32;
+                                for fi in 0..gap_count {
+                                    frag_spacing_after[fi] += per_gap;
+                                }
+                            }
+                        }
+                        // Pure Latin with no spaces: do NOT add inter-character spacing
+                    }
+                }
+            }
+
+            let mut x = line_x + align_offset;
+
+            // Matches Word output: exact/atLeast line spacing places text at BOTTOM of line box.
+            // Extra space goes above text (ascent increased, descent unchanged).
+            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height);
+
+            // Compute max ascent across all fragments for baseline alignment.
+            // All fragments in a line share the same baseline (matches Word output).
+            let line_max_ascent: f32 = if line.fragments.is_empty() {
+                self.doc_default_metrics().word_ascent_pt(para_font_size)
+            } else {
+                line.fragments.iter().map(|f| {
+                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                    self.metrics_for_text(&f.text, &f.style, &para.style).word_ascent_pt(fs)
+                }).fold(0.0_f32, f32::max)
+            };
+
+            for (frag_idx, frag) in line.fragments.iter().enumerate() {
+                let resolved_font_size = frag.style.font_size.unwrap_or(para_font_size);
+                let resolved_bold = self.resolve_bold(&frag.style, &para.style);
+                let adjusted_width = frag.width + frag_width_adjustments[frag_idx];
+
+                // Per-fragment baseline alignment: shift fragments with smaller ascent
+                // so all share the same baseline (y + frag_ascent = cursor_y + text_y_off + line_max_ascent)
+                let frag_metrics = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
+                let baseline_adjust = line_max_ascent - frag_ascent;
+
+                elements.push(LayoutElement {
+                    x,
+                    y: *cursor_y + text_y_off + baseline_adjust,
+                    width: adjusted_width,
+                    height: line_height,
+                    content: LayoutContent::Text {
+                        text: frag.text.clone(),
+                        font_size: resolved_font_size,
+                        font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
+                            .map(|s| s.to_string()),
+                        bold: resolved_bold,
+                        italic: self.resolve_italic(&frag.style, &para.style),
+                        underline: frag.style.underline,
+                        underline_style: frag.style.underline_style.clone(),
+                        strikethrough: frag.style.strikethrough,
+                        color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
+                        highlight: frag.style.highlight.clone(),
+                        field_type: frag.field_type,
+                        character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)),
+                    },
+                });
+                x += adjusted_width + frag_spacing_after[frag_idx];
+            }
+
+            *cursor_y += line_height;
+
+            // Handle explicit page/column breaks after this line
+            if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
+                // Push current page and start a new one
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(current_elements),
+                });
+                current_elements.extend(std::mem::take(&mut elements));
+                elements = std::mem::take(current_elements);
+                *cursor_y = page_top;
+            }
+        }
+
+        let space_after = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
+            let raw = al / 100.0 * pitch;
+            if para.style.snap_to_grid && pitch > 0.0 {
+                ((raw / pitch) + 0.5).floor() * pitch
+            } else {
+                raw
+            }
+        } else {
+            para.style.space_after.unwrap_or(0.0)
+        };
+        *cursor_y += space_after;
+
+        elements
+    }
+
+    fn break_into_lines(
+        &self,
+        fragments: &[(&str, &RunStyle, Option<FieldType>)],
+        available_width: f32,
+        first_line_indent: f32,
+        para_style: &ParagraphStyle,
+    ) -> Vec<Line> {
+        let mut lines = Vec::new();
+        let mut current_line = Line { fragments: vec![], ..Default::default() };
+        let mut current_width = first_line_indent;
+
+        // Word buffer spans across fragment boundaries so that a single word
+        // split across two runs (e.g. "te" in Run1 + "st" in Run2) is kept
+        // together for line-break decisions.
+        let mut word = String::new();
+        let mut word_width: f32 = 0.0;
+        let mut word_style: Option<RunStyle> = None;
+        let mut word_field_type: Option<FieldType> = None;
+
+        // Helper: flush the accumulated word into current_line, breaking if needed.
+        macro_rules! flush_word {
+            ($style:expr) => {
+                if !word.is_empty() {
+                    let ws = word_style.take().unwrap_or_else(|| $style.clone());
+                    let wft = word_field_type.take();
+                    if current_width + word_width > available_width && !current_line.fragments.is_empty() {
+                        lines.push(std::mem::take(&mut current_line));
+                        current_width = 0.0;
+                    }
+                    current_line.fragments.push(LineFragment {
+                        text: std::mem::take(&mut word),
+                        width: word_width,
+                        style: ws,
+                        tab_alignment: None,
+                        tab_position: None,
+                        field_type: wft,
+                    });
+                    current_width += word_width;
+                    word_width = 0.0;
+                }
+            };
+        }
+
+        for &(text, style, frag_field_type) in fragments {
+            let font_size = self.resolve_font_size(style, para_style);
+
+            let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
+            for ch in text.chars() {
+                let char_metrics = self.metrics_for_char(ch, style, para_style);
+                let char_width = char_metrics.char_width_pt(ch, font_size) + cs;
+
+                if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
+                    // Whitespace: flush word, then handle the whitespace
+                    flush_word!(style);
+
+                    if ch == '\n' || ch == '\x0C' || ch == '\x0B' {
+                        // Set break type on the current line before pushing
+                        let break_type = match ch {
+                            '\x0C' => LineBreakType::PageBreak,
+                            '\x0B' => LineBreakType::ColumnBreak,
+                            _ => LineBreakType::Normal,
+                        };
+                        current_line.break_type = break_type;
+                        lines.push(std::mem::take(&mut current_line));
+                        current_width = 0.0;
+                    } else {
+                        // Space or tab
+                        if ch == '\t' {
+                            // Find the next tab stop beyond current_width
+                            let (next_pos, tab_align) = if !para_style.tab_stops.is_empty() {
+                                para_style.tab_stops.iter()
+                                    .find(|ts| ts.position > current_width + 0.01)
+                                    .map(|ts| (ts.position, ts.alignment))
+                                    .unwrap_or_else(|| {
+                                        let tab_stop = 36.0;
+                                        (((current_width / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
+                                    })
+                            } else {
+                                let tab_stop = 36.0;
+                                (((current_width / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
+                            };
+                            let w = (next_pos - current_width).max(char_width);
+                            current_line.fragments.push(LineFragment {
+                                text: String::from('\t'),
+                                width: w,
+                                style: style.clone(),
+                                tab_alignment: Some(tab_align),
+                                tab_position: Some(next_pos),
+                                field_type: None,
+                            });
+                            current_width += w;
+                        } else {
+                            // Regular space
+                            current_line.fragments.push(LineFragment {
+                                text: String::from(ch),
+                                width: char_width,
+                                style: style.clone(),
+                                tab_alignment: None,
+                                tab_position: None,
+                                field_type: None,
+                            });
+                            current_width += char_width;
+                        }
+                    }
+                } else if is_break_after(ch) {
+                    // Characters like '-', '/' that allow a line break AFTER them.
+                    // Include them in the current word, flush, and allow a break.
+                    if word_style.is_none() {
+                        word_style = Some(style.clone());
+                        word_field_type = frag_field_type;
+                    }
+                    word.push(ch);
+                    word_width += char_width;
+                    flush_word!(style);
+                } else if kinsoku::is_cjk(ch) {
+                    // CJK characters can break at any point
+                    flush_word!(style);
+
+                    if current_width + char_width > available_width && !current_line.fragments.is_empty() {
+                        if kinsoku::is_line_start_prohibited(ch) && !current_line.fragments.is_empty() {
+                            current_line.fragments.push(LineFragment {
+                                text: ch.to_string(),
+                                width: char_width,
+                                style: style.clone(),
+                                tab_alignment: None,
+                                tab_position: None,
+                                field_type: frag_field_type,
+                            });
+                            lines.push(std::mem::take(&mut current_line));
+                            current_width = 0.0;
+                            continue;
+                        }
+                        lines.push(std::mem::take(&mut current_line));
+                        current_width = 0.0;
+                    }
+
+                    if kinsoku::is_line_end_prohibited(ch) {
+                        current_line.fragments.push(LineFragment {
+                            text: ch.to_string(),
+                            width: char_width,
+                            style: style.clone(),
+                            tab_alignment: None,
+                            tab_position: None,
+                            field_type: frag_field_type,
+                        });
+                        current_width += char_width;
+                        continue;
+                    }
+
+                    current_line.fragments.push(LineFragment {
+                        text: ch.to_string(),
+                        width: char_width,
+                        style: style.clone(),
+                        tab_alignment: None,
+                        tab_position: None,
+                        field_type: frag_field_type,
+                    });
+                    current_width += char_width;
+                } else {
+                    // Regular word character — accumulate
+                    if word_style.is_none() {
+                        word_style = Some(style.clone());
+                        word_field_type = frag_field_type;
+                    }
+                    word.push(ch);
+                    word_width += char_width;
+                }
+            }
+            // Do NOT flush word here — it may continue in the next fragment
+        }
+
+        // Flush any remaining word after all fragments
+        if !word.is_empty() {
+            let ws = word_style.take().unwrap_or_else(|| {
+                fragments.last().map(|f| f.1.clone()).unwrap_or_default()
+            });
+            let wft = word_field_type.take();
+            if current_width + word_width > available_width && !current_line.fragments.is_empty() {
+                lines.push(std::mem::take(&mut current_line));
+                current_width = 0.0;
+            }
+            current_line.fragments.push(LineFragment {
+                text: word,
+                width: word_width,
+                style: ws,
+                tab_alignment: None,
+                tab_position: None,
+                field_type: wft,
+            });
+            current_width += word_width;
+        }
+
+        // Flush last line
+        if !current_line.fragments.is_empty() {
+            lines.push(current_line);
+        }
+
+        // Ensure at least one empty line for empty paragraphs
+        if lines.is_empty() {
+            lines.push(Line { fragments: vec![], ..Default::default() });
+        }
+
+        // Post-process: adjust tab fragment widths for Center/Right/Decimal alignment.
+        // ECMA-376 §17.3.1.38: Center tabs center the following segment on the tab position,
+        // Right tabs right-align, Decimal tabs align at the decimal point.
+        for line in &mut lines {
+            let frag_count = line.fragments.len();
+            let mut i = 0;
+            while i < frag_count {
+                if let Some(align) = line.fragments[i].tab_alignment {
+                    if align == TabStopAlignment::Left {
+                        i += 1;
+                        continue;
+                    }
+                    let tab_pos = line.fragments[i].tab_position.unwrap_or(0.0);
+                    // Measure the segment width after this tab until next tab or end of line
+                    let mut segment_width: f32 = 0.0;
+                    let mut decimal_offset: Option<f32> = None;
+                    let mut j = i + 1;
+                    while j < frag_count {
+                        if line.fragments[j].tab_alignment.is_some() {
+                            break;
+                        }
+                        if align == TabStopAlignment::Decimal && decimal_offset.is_none() {
+                            // Find decimal point position within this fragment
+                            let mut char_offset: f32 = 0.0;
+                            let fs = line.fragments[j].style.font_size.unwrap_or(11.0);
+                            let metrics = self.registry.default_metrics();
+                            for ch in line.fragments[j].text.chars() {
+                                if ch == '.' || ch == ',' {
+                                    decimal_offset = Some(segment_width + char_offset);
+                                    break;
+                                }
+                                char_offset += metrics.char_width_pt(ch, fs);
+                            }
+                        }
+                        segment_width += line.fragments[j].width;
+                        j += 1;
+                    }
+
+                    // Calculate the desired tab width so the segment aligns correctly
+                    // Current tab width advances cursor to tab_pos. We need to adjust it
+                    // so the segment is positioned according to the alignment type.
+                    let current_tab_width = line.fragments[i].width;
+                    let adjustment = match align {
+                        TabStopAlignment::Center => segment_width / 2.0,
+                        TabStopAlignment::Right => segment_width,
+                        TabStopAlignment::Decimal => decimal_offset.unwrap_or(segment_width),
+                        TabStopAlignment::Left => 0.0,
+                    };
+                    // New tab width = original width - adjustment (shift left by adjustment)
+                    let new_width = (current_tab_width - adjustment).max(0.0);
+                    line.fragments[i].width = new_width;
+                }
+                i += 1;
+            }
+        }
+
+        lines
+    }
+
+    /// Calculate line height considering:
+    /// 1. Font metrics (base single-line height)
+    /// 2. Paragraph default font minimum (from style/docDefaults)
+    /// 3. Line spacing multiplier (w:line/240, e.g. 1.15 for default)
+    /// 4. Document grid snapping (linePitch)
+    ///
+    /// Word determines line height as the max of the run font's height
+    /// and the paragraph's default font height (from the style/theme).
+    /// Then applies the spacing multiplier and optionally snaps to grid.
+    fn line_height(
+        &self,
+        font_size: f32,
+        line_spacing: Option<f32>,
+        line_spacing_rule: Option<&str>,
+        metrics: &FontMetrics,
+        snap_to_grid: bool,
+        grid_pitch: Option<f32>,
+    ) -> f32 {
+        self.line_height_inner(font_size, line_spacing, line_spacing_rule, metrics, snap_to_grid, grid_pitch, false)
+    }
+
+    fn line_height_inner(
+        &self,
+        font_size: f32,
+        line_spacing: Option<f32>,
+        line_spacing_rule: Option<&str>,
+        metrics: &FontMetrics,
+        snap_to_grid: bool,
+        grid_pitch: Option<f32>,
+        in_table_cell: bool,
+    ) -> f32 {
+        // Word uses run font height only, no max with default.
+        let base = metrics.word_line_height(font_size, 96.0);
+
+        // Apply line spacing rule:
+        // - exact: use line_spacing value directly as absolute height (pt), NO grid snap
+        // - atLeast: max(base, line_spacing), NO grid snap
+        // - auto/multiple/None: base * factor, then grid snap
+        //   snap = ROUND((lh + pitch/2) / pitch) * pitch
+        match (line_spacing_rule, line_spacing) {
+            (Some("exact"), Some(val)) => val,
+            (Some("atLeast"), Some(val)) => base.max(val),
+            _ => {
+                let spaced = match line_spacing {
+                    Some(factor) => base * factor,
+                    None => base,
+                };
+                // Apply grid snapping: ROUND((lh + pitch/2) / pitch) * pitch
+                // round-half-up: floor((lh + pitch/2) / pitch + 0.5) * pitch
+                if snap_to_grid {
+                    if let Some(pitch) = grid_pitch {
+                        if pitch > 0.0 {
+                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor() * pitch;
+                        }
+                    }
+                }
+                spaced
+            }
+        }
+    }
+
+    /// Compute line height for a line with multiple runs using Word's algorithm:
+    /// max(ascent across all runs) + max(descent across all runs).
+    /// Uses EastAsia font metrics for CJK text (#2).
+    fn line_height_for_line(
+        &self,
+        line: &Line,
+        para_style: &ParagraphStyle,
+        para_font_size: f32,
+        snap_to_grid: bool,
+        grid_pitch: Option<f32>,
+    ) -> f32 {
+        self.line_height_for_line_inner(line, para_style, para_font_size, snap_to_grid, grid_pitch, false)
+    }
+
+    fn line_height_for_line_inner(
+        &self,
+        line: &Line,
+        para_style: &ParagraphStyle,
+        para_font_size: f32,
+        snap_to_grid: bool,
+        grid_pitch: Option<f32>,
+        in_table_cell: bool,
+    ) -> f32 {
+        let default_style = RunStyle::default();
+
+        let mut max_ascent: f32 = 0.0;
+        let mut max_descent: f32 = 0.0;
+
+        if line.fragments.is_empty() {
+            // Empty line: use paragraph's first run or default
+            let font_size = para_font_size;
+            let metrics = self.registry.default_metrics();
+            max_ascent = metrics.word_ascent_pt(font_size);
+            max_descent = metrics.word_descent_pt(font_size);
+        } else {
+            for frag in &line.fragments {
+                let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                // #2: Use EastAsia font metrics for CJK text
+                let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let asc = metrics.word_ascent_pt(font_size);
+                let des = metrics.word_descent_pt(font_size);
+                if asc > max_ascent { max_ascent = asc; }
+                if des > max_descent { max_descent = des; }
+            }
+        }
+
+        let run_base = max_ascent + max_descent;
+
+        // Word uses run font height only, no max with default.
+        let base = run_base;
+
+        // Apply line spacing rule
+        let line_spacing = para_style.line_spacing;
+        let line_spacing_rule = para_style.line_spacing_rule.as_deref();
+        match (line_spacing_rule, line_spacing) {
+            (Some("exact"), Some(val)) => val,
+            (Some("atLeast"), Some(val)) => base.max(val),
+            _ => {
+                let spaced = match line_spacing {
+                    Some(factor) => base * factor,
+                    None => base,
+                };
+                // Grid snap = ROUND((lh + pitch/2) / pitch) * pitch
+                // round-half-up: floor((lh + pitch/2) / pitch + 0.5) * pitch
+                if snap_to_grid {
+                    if let Some(pitch) = grid_pitch {
+                        if pitch > 0.0 {
+                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor() * pitch;
+                        }
+                    }
+                }
+                spaced
+            }
+        }
+    }
+
+    /// Compute the vertical offset to apply to text within a line for exact/atLeast spacing.
+    /// Matches Word output: exact/atLeast place text at BOTTOM of line box (extra space above).
+    /// Returns the offset from line-box top to where text should start.
+    fn text_y_offset_for_line(
+        &self,
+        line: &Line,
+        para_style: &ParagraphStyle,
+        para_font_size: f32,
+        line_height: f32,
+    ) -> f32 {
+        match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
+            (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
+                // Compute natural (ascent+descent) height for this line
+                const LAYOUT_DPI: f32 = 96.0;
+                let mut max_ascent: f32 = 0.0;
+                let mut max_descent: f32 = 0.0;
+                if line.fragments.is_empty() {
+                    let metrics = self.registry.default_metrics();
+                    max_ascent = metrics.word_ascent_pt(para_font_size);
+                    max_descent = metrics.word_descent_pt(para_font_size);
+                } else {
+                    for frag in &line.fragments {
+                        let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                        let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                        let asc = metrics.word_ascent_pt(font_size);
+                        let des = metrics.word_descent_pt(font_size);
+                        if asc > max_ascent { max_ascent = asc; }
+                        if des > max_descent { max_descent = des; }
+                    }
+                }
+                let natural = max_ascent + max_descent;
+                // Extra space goes above text (text at bottom of line box)
+                (line_height - natural).max(0.0)
+            }
+            _ => 0.0, // auto/multiple: text at top of line box
+        }
+    }
+
+    fn layout_table(
+        &self,
+        table: &Table,
+        start_x: f32,
+        cursor_y: &mut f32,
+        content_width: f32,
+        grid_pitch: Option<f32>,
+        page_top: f32,
+        content_height: f32,
+        page_width: f32,
+        page_height: f32,
+        pages: &mut Vec<LayoutPage>,
+        current_elements: &mut Vec<LayoutElement>,
+    ) -> Vec<LayoutElement> {
+        let mut elements = Vec::new();
+
+        // Resolve column widths from grid_columns, cell widths, or equal split
+        let col_widths = self.resolve_table_col_widths(table, content_width);
+        let table_width: f32 = col_widths.iter().sum();
+
+        // Table alignment
+        let table_x = match table.style.alignment.as_deref() {
+            Some("center") => start_x + (content_width - table_width) / 2.0,
+            Some("right") => start_x + content_width - table_width,
+            _ => start_x + table.style.indent.unwrap_or(0.0),
+        };
+
+        // Default cell padding from table style or OOXML default (L/R=108tw=5.4pt, T/B=0)
+        let default_pad = &table.style.default_cell_margins;
+        let default_pad_l = default_pad.as_ref().and_then(|m| m.left).unwrap_or(5.4);
+        let default_pad_r = default_pad.as_ref().and_then(|m| m.right).unwrap_or(5.4);
+        let default_pad_t = default_pad.as_ref().and_then(|m| m.top).unwrap_or(0.0);
+        let default_pad_b = default_pad.as_ref().and_then(|m| m.bottom).unwrap_or(0.0);
+
+        // Table cells DO snap to document grid (default Word mode)
+        // adjustLineHeightInTable is parsed from settings.xml but exact rendering effect TBD.
+        let table_grid_pitch: Option<f32> = grid_pitch;
+
+        let num_rows = table.rows.len();
+        for (row_idx, row) in table.rows.iter().enumerate() {
+            let mut row_height: f32 = 0.0;
+
+            // First pass: calculate row height
+            let mut grid_idx = row.grid_before as usize;
+            for cell in row.cells.iter() {
+                let span = cell.grid_span.max(1) as usize;
+                // vMerge="continue" cells don't contribute to row height
+                // (their content is part of the vMerge="restart" cell above)
+                if cell.v_merge.as_deref() == Some("continue") || cell.v_merge.as_deref() == Some("") {
+                    grid_idx += span;
+                    continue;
+                }
+                let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
+                let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
+                let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
+                let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
+                let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+                // Matches Word output: content starts after border width (filled rect, ~0.4pt)
+                let bw = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
+                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.top.is_some()) { pad_t += bw; }
+                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) { pad_b += bw; }
+                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
+                let mut cell_content_h = pad_t;
+
+                for block in &cell.blocks {
+                    match block {
+                        Block::Paragraph(para) => {
+                            let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref());
+                            cell_content_h += para_h;
+                        }
+                        Block::Table(nested) => {
+                            // Estimate nested table height from rows
+                            for nr in &nested.rows {
+                                let mut nr_h = 0.0_f32;
+                                for nc in &nr.cells {
+                                    let mut nc_h = 0.0_f32;
+                                    for nb in &nc.blocks {
+                                        if let Block::Paragraph(np) = nb {
+                                            nc_h += self.estimate_para_height(np, inner_w / 2.0, table_grid_pitch, nested.style.para_style.as_ref());
+                                        }
+                                    }
+                                    nr_h = nr_h.max(nc_h);
+                                }
+                                if let Some(h) = nr.height {
+                                    if nr.height_rule.as_deref() == Some("exact") { nr_h = h; }
+                                    else { nr_h = nr_h.max(h); }
+                                }
+                                cell_content_h += nr_h;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                cell_content_h += pad_b;
+
+                row_height = row_height.max(cell_content_h);
+                grid_idx += span;
+            }
+
+            // adjustLineHeightInTable (compat65): add grid_pitch/2 to content-driven row height
+            // Matches Word output: when content height exceeds trHeight, grid_pitch/2 is added.
+            // When trHeight exceeds content, trHeight is used directly (no addition).
+            let content_h_before_tr = row_height;
+
+            // Apply trHeight constraint
+            if let Some(h) = row.height {
+                if row.height_rule.as_deref() == Some("exact") {
+                    row_height = h;
+                } else {
+                    row_height = row_height.max(h);
+                }
+            }
+
+            // Add grid pitch supplement when content drives the height
+            if self.adjust_line_height_in_table {
+                if let Some(pitch) = table_grid_pitch {
+                    if row.height.map_or(true, |h| content_h_before_tr > h) {
+                        row_height += pitch * 0.5;
+                    }
+                }
+            }
+
+            // Matches Word output: when trHeight is set with atLeast rule and cell content
+            // overflows (e.g. text wraps in narrow cells), Word caps the row height
+            // at trHeight. Overflow content is clipped, not expanded.
+            if let Some(h) = row.height {
+                if row.height_rule.as_deref() != Some("exact") && row_height > h * 1.5 {
+                    // Content significantly exceeds trHeight — likely text wrapping in narrow cell
+                    // Cap to trHeight (Word behavior: clip overflow, don't expand)
+                    row_height = h;
+                }
+            }
+
+            if row_height == 0.0 {
+                let metrics = self.doc_default_metrics();
+                row_height = self.line_height_inner(self.default_font_size, None, None, metrics, true, table_grid_pitch, true);
+            }
+
+            // Page break check: if this row won't fit, push current page and reset
+            // Default is cantSplit=false (allow break)
+            if *cursor_y + row_height > page_top + content_height && !elements.is_empty() {
+                // Push all accumulated elements (including previous rows) to current page
+                current_elements.extend(std::mem::take(&mut elements));
+                pages.push(LayoutPage {
+                    width: page_width,
+                    height: page_height,
+                    elements: std::mem::take(current_elements),
+                });
+                *cursor_y = page_top;
+            }
+
+            // Second pass: render cells
+            // Apply gridBefore: skip leading grid columns
+            let mut cell_x = table_x + col_widths[..row.grid_before as usize].iter().sum::<f32>();
+            let num_cells = row.cells.len();
+            for (cell_idx, cell) in row.cells.iter().enumerate() {
+                let span = cell.grid_span.max(1) as usize;
+                // vMerge="continue" cells: skip content but still draw borders
+                let is_vmerge_continue = cell.v_merge.as_deref() == Some("continue") || cell.v_merge.as_deref() == Some("");
+                let grid_end = (col_widths.len()).min(
+                    col_widths.iter().enumerate()
+                        .scan(0.0f32, |acc, (i, w)| { *acc += w; Some((i, *acc)) })
+                        .find(|(_, acc)| (*acc - cell_x + table_x).abs() < 0.1)
+                        .map(|(i, _)| i + span)
+                        .unwrap_or(col_widths.len())
+                );
+                // Calculate cell width from grid columns
+                let cell_start_grid = col_widths.iter()
+                    .scan(0.0f32, |acc, w| { let prev = *acc; *acc += w; Some(prev) })
+                    .enumerate()
+                    .find(|(_, acc)| (cell_x - table_x - acc).abs() < 0.5)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                let cell_end_grid = (cell_start_grid + span).min(col_widths.len());
+                let cell_w: f32 = col_widths[cell_start_grid..cell_end_grid].iter().sum();
+
+                let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
+                let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
+                let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
+                let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+
+                // Matches Word output: border is rendered as filled rect, content starts after border width
+                // Add border width to effective padding so text doesn't overlap the border line
+                let border_w = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
+                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.top.is_some()) {
+                    pad_t += border_w;
+                }
+                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) {
+                    pad_b += border_w;
+                }
+
+                // Emit cell shading (background fill) before cell content
+                if let Some(ref shading_color) = cell.shading {
+                    if !shading_color.is_empty() && shading_color != "auto" {
+                        let color_hex = if shading_color.starts_with('#') {
+                            shading_color.clone()
+                        } else {
+                            format!("#{}", shading_color)
+                        };
+                        elements.push(LayoutElement {
+                            x: cell_x,
+                            y: *cursor_y,
+                            width: cell_w,
+                            height: row_height,
+                            content: LayoutContent::CellShading {
+                                color: color_hex,
+                            },
+                        });
+                    }
+                }
+
+                // Layout cell content with line wrapping and vAlign
+                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
+                let mut cell_elements: Vec<LayoutElement> = Vec::new();
+                let mut content_h: f32 = 0.0;
+
+                // Layout blocks in document order (paragraphs and nested tables interleaved)
+                let is_exact = row.height_rule.as_deref() == Some("exact");
+                if !is_vmerge_continue {
+                for block in &cell.blocks {
+                // Clip content that overflows exact row height
+                if is_exact && content_h + pad_t >= row_height {
+                    break;
+                }
+                match block {
+                Block::Table(nested) => {
+                    // Layout nested table: use cell_w (not inner_w) as content width
+                    // Word does not constrain nested tables to cell padding area
+                    let nested_x = cell_x + pad_l;
+                    let mut nested_y = content_h;
+                    let mut dummy_pages = Vec::new();
+                    let mut dummy_elems = Vec::new();
+                    let nested_elements = self.layout_table(
+                        nested, nested_x, &mut nested_y, cell_w, table_grid_pitch,
+                        0.0, 99999.0, 0.0, 99999.0,
+                        &mut dummy_pages, &mut dummy_elems,
+                    );
+                    for elem in nested_elements {
+                        cell_elements.push(elem);
+                    }
+                    content_h = nested_y;
+                }
+                Block::Paragraph(para) => {
+                let para = para;
+                    // Apply table style pPr as fallback (ECMA-376: table style pPr < paragraph style < direct)
+                    let effective_line_spacing = para.style.line_spacing
+                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing));
+                    let effective_line_rule = para.style.line_spacing_rule.as_deref()
+                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref()));
+                    let effective_space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
+                        bl / 100.0 * pitch
+                    } else {
+                        para.style.space_before
+                            .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
+                            .unwrap_or(0.0)
+                    };
+                    let effective_space_after = para.style.space_after
+                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after));
+                    // Suppress space_before for the first paragraph in a cell (cell padding handles it)
+                    if content_h > 0.0 {
+                        content_h += effective_space_before;
+                    }
+                    {
+                        // Paragraph indentation within cell (relative to cell content area)
+                        let p_indent_left = para.style.indent_left.unwrap_or(0.0);
+                        let p_indent_right = para.style.indent_right.unwrap_or(0.0);
+                        let p_first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
+                        let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
+                        let first_line_wrap_w = (wrap_w + p_first_line_indent.min(0.0)).max(0.0); // hanging reduces first line
+
+                        // Collect runs into lines with greedy wrapping
+                        // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing)
+                        let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32)>> = Vec::new();
+                        let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32)> = Vec::new();
+                        let mut line_x: f32 = if p_first_line_indent > 0.0 { p_first_line_indent } else { 0.0 };
+                        let mut is_first_line = true;
+
+                        for run in &para.runs {
+                            let font_size = self.resolve_font_size(&run.style, &para.style);
+                            let bold = self.resolve_bold(&run.style, &para.style);
+                            let font_family = self.resolve_font_family_for_text(&run.text, &run.style, &para.style)
+                                .map(|s| s.to_string());
+
+                            // Split text character by character for wrapping
+                            let cs = snap_character_spacing(run.style.character_spacing.unwrap_or(0.0));
+                            let mut buf = String::new();
+                            let mut buf_w: f32 = 0.0;
+                            for ch in run.text.chars() {
+                                let cw = self.metrics_for_char(ch, &run.style, &para.style).char_width_pt(ch, font_size) + cs;
+                                let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
+                                if line_x + buf_w + cw > effective_wrap && !(current_line.is_empty() && buf.is_empty()) {
+                                    // Flush buffer to current line, then wrap
+                                    if !buf.is_empty() {
+                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs));
+                                        buf.clear();
+                                        buf_w = 0.0;
+                                    }
+                                    lines.push(std::mem::take(&mut current_line));
+                                    line_x = 0.0;
+                                    is_first_line = false;
+                                }
+                                buf.push(ch);
+                                buf_w += cw;
+                            }
+                            if !buf.is_empty() {
+                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone(), cs));
+                                line_x += buf_w;
+                            }
+                        }
+                        if !current_line.is_empty() {
+                            lines.push(current_line);
+                        }
+
+                        if lines.is_empty() {
+                            let metrics = self.doc_default_metrics();
+                            content_h += self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, table_grid_pitch, true);
+                        }
+
+                        let total_lines = lines.len();
+                        for (line_idx, line) in lines.iter().enumerate() {
+                            // Clip content that overflows exact row height
+                            if is_exact && content_h + pad_t >= row_height {
+                                break;
+                            }
+                            // Line height = max of all runs in line (in_table_cell=true: no default font minimum)
+                            let lh: f32 = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _)| {
+                                let metrics = match font_family.as_deref() {
+                                    Some(ff) => self.registry.get(ff),
+                                    None => self.registry.default_metrics(),
+                                };
+                                self.line_height_inner(*fs, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, table_grid_pitch, true)
+                            }).fold(0.0_f32, f32::max);
+
+                            // Paragraph indentation: first line uses indent_left + first_line_indent
+                            let line_indent = p_indent_left + if line_idx == 0 { p_first_line_indent } else { 0.0 };
+
+                            // Calculate line total width for alignment
+                            let line_total_w: f32 = line.iter().map(|(_, _, tw, _, _, _, _, _, _, _, _, _)| tw).sum();
+                            let effective_wrap = if line_idx == 0 { first_line_wrap_w } else { wrap_w };
+
+                            // Justify: non-last lines for jc=both, all lines for distribute
+                            let is_last_line = line_idx == total_lines - 1;
+                            let should_justify = (para.alignment == Alignment::Justify && !is_last_line)
+                                || para.alignment == Alignment::Distribute;
+
+                            // Apply paragraph alignment within cell (wrap_w = available after indent)
+                            let align_offset = if should_justify {
+                                0.0
+                            } else {
+                                match para.alignment {
+                                    Alignment::Center => (effective_wrap - line_total_w).max(0.0) / 2.0,
+                                    Alignment::Right => (effective_wrap - line_total_w).max(0.0),
+                                    _ => 0.0,
+                                }
+                            };
+
+                            // Justify: CJK punctuation compression + space/gap distribution
+                            let mut frag_width_adj: Vec<f32> = vec![0.0; line.len()];
+                            let mut frag_spacing: Vec<f32> = vec![0.0; line.len()];
+                            if should_justify && line.len() > 1 {
+                                let mut slack = effective_wrap - line_total_w;
+
+                                // Phase 1: CJK punctuation compression (only when overflowing)
+                                if slack < 0.0 {
+                                    for (fi, (text, fs, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                        for ch in text.chars() {
+                                            if kinsoku::is_cjk_compressible(ch) {
+                                                let fm = self.registry.default_metrics();
+                                                let char_w = fm.char_width_pt(ch, *fs);
+                                                let savings = char_w * 0.5;
+                                                frag_width_adj[fi] -= savings;
+                                                slack += savings;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Phase 2: Distribute slack at word spaces, then CJK gaps
+                                if slack > 0.0 {
+                                    let space_count = line.iter()
+                                        .enumerate()
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
+                                        .count();
+                                    if space_count > 0 {
+                                        let per_space = slack / space_count as f32;
+                                        for (fi, (text, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                            if fi < line.len() - 1 && text.trim().is_empty() {
+                                                frag_spacing[fi] += per_space;
+                                            }
+                                        }
+                                    } else {
+                                        // No word spaces: distribute between CJK fragments
+                                        let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
+                                        if has_cjk {
+                                            let gap_count = line.len() - 1;
+                                            if gap_count > 0 {
+                                                let per_gap = slack / gap_count as f32;
+                                                for fi in 0..gap_count {
+                                                    frag_spacing[fi] += per_gap;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            let mut rx = 0.0_f32;
+                            for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs)) in line.iter().enumerate() {
+                                let adj_w = *tw + frag_width_adj[frag_idx];
+                                cell_elements.push(LayoutElement {
+                                    x: cell_x + pad_l + line_indent + align_offset + rx,
+                                    y: content_h, // relative to cell top
+                                    width: adj_w,
+                                    height: lh,
+                                    content: LayoutContent::Text {
+                                        text: text.clone(),
+                                        font_size: *fs,
+                                        font_family: font_family.clone(),
+                                        bold: *bold,
+                                        italic: *italic,
+                                        underline: *underline,
+                                        underline_style: underline_style.clone(),
+                                        strikethrough: *strikethrough,
+                                        color: color.clone(),
+                                        highlight: highlight.clone(),
+                                        character_spacing: *cs,
+                                        field_type: None,
+                                    },
+                                });
+                                rx += adj_w + frag_spacing[frag_idx];
+                            }
+                            content_h += lh;
+                        }
+                        content_h += effective_space_after.unwrap_or(0.0);
+                    }
+                }
+                _ => {}
+                } // match block
+                } // for block
+                } // if !is_vmerge_continue
+
+                // Apply vAlign offset
+                let v_offset = match cell.v_align.as_deref() {
+                    Some("center") => ((row_height - pad_t - pad_b - content_h) / 2.0).max(0.0),
+                    Some("bottom") => (row_height - pad_t - pad_b - content_h).max(0.0),
+                    _ => 0.0, // top (default)
+                };
+
+                // Emit cell elements with absolute Y positions
+                let dy = *cursor_y + pad_t + v_offset;
+                for mut elem in cell_elements {
+                    elem.y += dy;
+                    // Also update y-coords inside TableBorder content (nested tables)
+                    if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = elem.content {
+                        *y1 += dy;
+                        *y2 += dy;
+                    }
+                    elements.push(elem);
+                }
+
+                // Draw cell borders if table has borders OR cell has its own borders
+                let has_cell_borders = cell.borders.as_ref().map_or(false, |b| {
+                    b.top.is_some() || b.bottom.is_some() || b.left.is_some() || b.right.is_some()
+                });
+                if table.style.border || has_cell_borders {
+                    let bx = cell_x;
+                    let by = *cursor_y;
+
+                    // Resolve border color and width from cell borders, falling back to table style
+                    let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32) {
+                        if let Some(b) = side {
+                            let c = b.color.as_ref().map(|c| {
+                                if c.starts_with('#') { c.clone() } else { format!("#{}", c) }
+                            });
+                            (c, b.width)
+                        } else if table.style.border {
+                            // Table-level borders: use table style color, default to black
+                            let c = Some(table.style.border_color.as_ref()
+                                .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
+                                .unwrap_or_else(|| "#000000".to_string()));
+                            (c, table.style.border_width.unwrap_or(0.4))
+                        } else {
+                            (None, 0.4)
+                        }
+                    };
+
+                    let cell_borders = cell.borders.as_ref();
+                    let (top_color, top_width) = resolve_border(cell_borders.and_then(|b| b.top.as_ref()));
+                    let (bot_color, bot_width) = resolve_border(cell_borders.and_then(|b| b.bottom.as_ref()));
+                    let (left_color, left_width) = resolve_border(cell_borders.and_then(|b| b.left.as_ref()));
+                    let (right_color, right_width) = resolve_border(cell_borders.and_then(|b| b.right.as_ref()));
+
+                    // When cells have their own borders (tcBorders), draw each side per cell.
+                    // When using table-level borders, use collapsed model to avoid double-drawing.
+                    let use_collapsed = table.style.border && !has_cell_borders;
+
+                    // Top — skip for vMerge continue cells (internal to merged range)
+                    if !is_vmerge_continue && top_color.is_some() && (!use_collapsed || row_idx == 0) {
+                        elements.push(LayoutElement {
+                            x: bx, y: by, width: cell_w, height: 0.0,
+                            content: LayoutContent::TableBorder {
+                                x1: bx, y1: by, x2: bx + cell_w, y2: by,
+                                color: top_color, width: top_width,
+                            },
+                        });
+                    }
+                    // Bottom — skip for vMerge continue cells unless next row is not continue
+                    let next_is_continue = if row_idx + 1 < num_rows {
+                        table.rows[row_idx + 1].cells.get(cell_idx)
+                            .map_or(false, |nc| nc.v_merge.as_deref() == Some("continue") || nc.v_merge.as_deref() == Some(""))
+                    } else {
+                        false
+                    };
+                    if bot_color.is_some() && !next_is_continue {
+                        elements.push(LayoutElement {
+                            x: bx, y: by + row_height, width: cell_w, height: 0.0,
+                            content: LayoutContent::TableBorder {
+                                x1: bx, y1: by + row_height, x2: bx + cell_w, y2: by + row_height,
+                                color: bot_color, width: bot_width,
+                            },
+                        });
+                    }
+                    // Left
+                    if left_color.is_some() && (!use_collapsed || cell_idx == 0) {
+                        elements.push(LayoutElement {
+                            x: bx, y: by, width: 0.0, height: row_height,
+                            content: LayoutContent::TableBorder {
+                                x1: bx, y1: by, x2: bx, y2: by + row_height,
+                                color: left_color, width: left_width,
+                            },
+                        });
+                    }
+                    // Right
+                    if right_color.is_some() {
+                        elements.push(LayoutElement {
+                            x: bx + cell_w, y: by, width: 0.0, height: row_height,
+                            content: LayoutContent::TableBorder {
+                                x1: bx + cell_w, y1: by, x2: bx + cell_w, y2: by + row_height,
+                                color: right_color, width: right_width,
+                            },
+                        });
+                    }
+                }
+
+                cell_x += cell_w;
+            }
+
+            *cursor_y += row_height;
+        }
+
+        elements
+    }
+
+    /// Resolve column widths for a table.
+    /// Priority: grid_columns > cell widths > equal split.
+    fn resolve_table_col_widths(&self, table: &Table, content_width: f32) -> Vec<f32> {
+        // 1. Use grid_columns if available
+        // When nested table overflows parent cell, Word keeps earlier columns
+        // at their specified width and shrinks only the last column to fit.
+        if !table.grid_columns.is_empty() {
+            let total: f32 = table.grid_columns.iter().sum();
+            let indent = table.style.indent.unwrap_or(0.0);
+            let available = content_width - indent;
+            if total > available && table.grid_columns.len() > 1 {
+                let mut cols = table.grid_columns.clone();
+                let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
+                let last = (available - prefix_sum).max(0.0);
+                *cols.last_mut().unwrap() = last;
+                return cols;
+            }
+            return table.grid_columns.clone();
+        }
+
+        // 2. Use cell widths from first row
+        if let Some(first_row) = table.rows.first() {
+            let cell_widths: Vec<f32> = first_row.cells.iter()
+                .filter_map(|c| c.width)
+                .collect();
+            if cell_widths.len() == first_row.cells.len() && !cell_widths.is_empty() {
+                return cell_widths;
+            }
+        }
+
+        // 3. Use table style width
+        if let Some(tw) = table.style.width {
+            let num_cols = table.rows.first().map_or(1, |r| r.cells.len().max(1));
+            return vec![tw / num_cols as f32; num_cols];
+        }
+
+        // 4. Equal split fallback
+        let num_cols = table.rows.first().map_or(1, |r| r.cells.len().max(1));
+        vec![content_width / num_cols as f32; num_cols]
+    }
+
+    /// Estimate paragraph height for table cell height calculation.
+    fn estimate_para_height(&self, para: &Paragraph, available_width: f32, grid_pitch: Option<f32>, table_para_style: Option<&ParagraphStyle>) -> f32 {
+        let mut height = 0.0;
+        // Table cells snap to grid in default Word mode
+        let snap = para.style.snap_to_grid;
+        // Apply table style pPr as fallback
+        let eff_ls = para.style.line_spacing
+            .or_else(|| table_para_style.and_then(|ps| ps.line_spacing));
+        let eff_lr = para.style.line_spacing_rule.as_deref()
+            .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
+
+        if para.runs.is_empty() {
+            let metrics = self.doc_default_metrics();
+            height += self.line_height(self.default_font_size, eff_ls, eff_lr, metrics, snap, grid_pitch);
+        } else {
+            // Estimate number of lines by measuring total text width vs available width
+            let para_font_size = self.resolve_font_size(
+                para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                &para.style,
+            );
+            let mut total_text_w: f32 = 0.0;
+            let mut max_line_height: f32 = 0.0;
+            for run in &para.runs {
+                let font_size = self.resolve_font_size(&run.style, &para.style);
+                let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
+                // Estimate run width (including pixel-snapped character spacing)
+                let cs = snap_character_spacing(run.style.character_spacing.unwrap_or(0.0));
+                let run_w: f32 = run.text.chars()
+                    .map(|ch| self.metrics_for_char(ch, &run.style, &para.style).char_width_pt(ch, font_size) + cs)
+                    .sum();
+                total_text_w += run_w;
+                let lh = self.line_height(font_size, eff_ls, eff_lr, metrics, snap, grid_pitch);
+                if lh > max_line_height { max_line_height = lh; }
+            }
+            // Estimate line count (at least 1), accounting for indents
+            let indent_l = para.style.indent_left.unwrap_or(0.0);
+            let indent_r = para.style.indent_right.unwrap_or(0.0);
+            let first_indent = para.style.indent_first_line.unwrap_or(0.0);
+            let effective_width = (available_width - indent_l - indent_r).max(1.0);
+            let first_line_width = (effective_width - first_indent.max(0.0)).max(1.0);
+            // Greedy line count estimation
+            let line_count = if effective_width > 0.0 && total_text_w > 0.0 {
+                let mut remaining = total_text_w;
+                let mut lines = 0u32;
+                // First line
+                if remaining > 0.0 {
+                    remaining -= first_line_width;
+                    lines += 1;
+                }
+                // Subsequent lines
+                if remaining > 0.0 {
+                    lines += (remaining / effective_width).ceil() as u32;
+                }
+                lines.max(1)
+            } else {
+                1
+            };
+            height += max_line_height * line_count as f32;
+        }
+
+        height += if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+            bl / 100.0 * pitch
+        } else {
+            para.style.space_before
+                .or_else(|| table_para_style.and_then(|ps| ps.space_before))
+                .unwrap_or(0.0)
+        };
+        height += para.style.space_after
+            .or_else(|| table_para_style.and_then(|ps| ps.space_after))
+            .unwrap_or(0.0);
+        height
+    }
+}
+
+#[derive(Default)]
+struct Line {
+    fragments: Vec<LineFragment>,
+    /// What kind of break follows this line (normal line break, page break, or column break)
+    break_type: LineBreakType,
+}
+
+impl Default for LineBreakType {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+struct LineFragment {
+    text: String,
+    width: f32,
+    style: RunStyle,
+    /// For tab fragments: the alignment type of the tab stop they target.
+    /// None for non-tab fragments.
+    tab_alignment: Option<TabStopAlignment>,
+    /// For tab fragments: the absolute position (from left margin) of the tab stop.
+    tab_position: Option<f32>,
+    /// Field type for dynamic content (PAGE, NUMPAGES)
+    field_type: Option<FieldType>,
+}
+
+/// Marker for page/column break after a line
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineBreakType {
+    Normal,
+    PageBreak,   // \x0C
+    ColumnBreak, // \x0B
+}

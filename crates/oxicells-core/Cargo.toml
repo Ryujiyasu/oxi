@@ -1,0 +1,14 @@
+[package]
+name = "oxicells-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Core spreadsheet processing engine for OxiCells (.xlsx)"
+
+[dependencies]
+oxi-common = { path = "../oxi-common" }
+quick-xml = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+log = "0.4"

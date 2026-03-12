@@ -1,0 +1,12 @@
+[package]
+name = "oxipdf-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Core PDF processing engine for Oxi"
+
+[dependencies]
+thiserror = "1"
+log = "0.4"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }

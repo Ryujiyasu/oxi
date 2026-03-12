@@ -1,0 +1,30 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const build_docx: (a: any) => [number, number, number, number];
+export const build_docx_with_template: (a: any, b: number, c: number) => [number, number, number, number];
+export const create_blank_docx: () => [number, number];
+export const create_pdf: (a: number, b: number, c: number, d: number) => [number, number];
+export const docx_to_pdf: (a: number, b: number) => [number, number, number, number];
+export const edit_docx: (a: number, b: number, c: any) => [number, number, number, number];
+export const edit_docx_advanced: (a: number, b: number, c: any) => [number, number, number, number];
+export const edit_pptx: (a: number, b: number, c: any) => [number, number, number, number];
+export const edit_xlsx: (a: number, b: number, c: any) => [number, number, number, number];
+export const generate_hanko_svg: (a: any) => [number, number, number, number];
+export const layout_document: (a: number, b: number) => [number, number, number];
+export const parse_document: (a: number, b: number) => [number, number, number];
+export const parse_pdf: (a: number, b: number) => [number, number, number];
+export const parse_presentation: (a: number, b: number) => [number, number, number];
+export const parse_spreadsheet: (a: number, b: number) => [number, number, number];
+export const pdf_extract_text: (a: number, b: number) => [number, number, number, number];
+export const pdf_verify_signatures: (a: number, b: number) => [number, number, number];
+export const preview_hanko: (a: number, b: number) => [number, number];
+export const init: () => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_start: () => void;

@@ -1,0 +1,41 @@
+[
+  {
+    "family": "Calibri",
+    "units_per_em": 2048,
+    "ascender": 1536,
+    "descender": -512,
+    "line_gap": 0,
+    "win_ascent": 1536,
+    "win_descent": 512,
+    "typo_ascender": 1536,
+    "typo_descender": -512,
+    "typo_line_gap": 0,
+    "widths": {}
+  },
+  {
+    "family": "Times New Roman",
+    "units_per_em": 2048,
+    "ascender": 1825,
+    "descender": -443,
+    "line_gap": 87,
+    "win_ascent": 1825,
+    "win_descent": 443,
+    "typo_ascender": 1420,
+    "typo_descender": -442,
+    "typo_line_gap": 0,
+    "widths": {}
+  },
+  {
+    "family": "Arial",
+    "units_per_em": 2048,
+    "ascender": 1854,
+    "descender": -434,
+    "line_gap": 67,
+    "win_ascent": 1854,
+    "win_descent": 434,
+    "typo_ascender": 1491,
+    "typo_descender": -431,
+    "typo_line_gap": 0,
+    "widths": {}
+  }
+]

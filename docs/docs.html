@@ -1,0 +1,2036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Oxidocs</title>
+<style>
+:root {
+  --accent: #185ABD;
+  --accent-h: #1048A0;
+  --accent-l: #E6EEF9;
+  --rib: #F3F3F3;
+  --rib-b: #D6D6D6;
+  --txt: #333;
+  --bg: #E8E8E8;
+  --shad: 0 1px 4px rgba(0,0,0,.18);
+  --hover: #E0E0E0;
+  --grp: #D0D0D0;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);display:flex;flex-direction:column}
+
+/* Title bar */
+.tb{display:flex;align-items:center;height:32px;background:var(--accent);color:#fff;padding:0 12px;font-size:12px;user-select:none;flex-shrink:0}
+.tb .logo{font-weight:700;margin-right:10px;letter-spacing:.5px}
+.tb .qat{display:flex;gap:2px;margin-right:14px}
+.tb .qat button svg,.tb .ra button svg{width:16px;height:16px;vertical-align:middle}
+.tb .qat button,.tb .ra button{background:none;border:none;color:rgba(255,255,255,.9);cursor:pointer;padding:3px 7px;border-radius:3px;font-size:13px}
+.tb .qat button:hover,.tb .ra button:hover{background:rgba(255,255,255,.18)}
+.tb .dn{flex:1;text-align:center;opacity:.95}
+.tb .ra{display:flex;gap:4px}
+/* Mode toggle */
+.mode-toggle{display:flex;background:rgba(255,255,255,.15);border-radius:12px;overflow:hidden;margin:0 8px}
+.mode-toggle button{background:none;border:none;color:rgba(255,255,255,.7);font:inherit;font-size:11px;padding:3px 12px;cursor:pointer}
+.mode-toggle button.active{background:rgba(255,255,255,.25);color:#fff;font-weight:600}
+
+/* Ribbon tabs (desktop only) */
+.rtabs{display:flex;align-items:flex-end;background:var(--accent);padding:0 8px;flex-shrink:0;height:26px}
+.rtabs button{background:none;border:none;color:#fff;font:inherit;font-size:13px;padding:5px 14px;cursor:pointer;border-radius:4px 4px 0 0}
+.rtabs button:hover{color:#fff;background:rgba(255,255,255,.1)}
+.rtabs button.active{background:var(--rib);color:var(--txt);font-weight:500}
+
+/* Ribbon panel (desktop only) */
+.rib{background:var(--rib);border-bottom:1px solid var(--rib-b);padding:4px 10px 5px;display:flex;gap:2px;align-items:stretch;flex-shrink:0;min-height:82px}
+.rg{display:flex;flex-direction:column;border-right:1px solid var(--grp);padding:0 8px}
+.rg:last-child{border-right:none}
+.rg-l{font-size:9px;color:#888;text-align:center;margin-top:auto;padding-top:2px;user-select:none}
+.rr{display:flex;gap:1px;align-items:center}
+.rc{display:flex;flex-direction:column;gap:1px}
+
+/* Buttons */
+.rb{background:none;border:1px solid transparent;cursor:pointer;padding:3px 5px;border-radius:3px;color:var(--txt);display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;font:inherit;font-size:13px;line-height:1}
+.rb:hover{background:var(--hover);border-color:#C0C0C0}
+.rb.active{background:#D0D8E8;border-color:#9DB2D6}
+.rb svg{width:16px;height:16px;pointer-events:none}
+.rb.lg{padding:4px 10px;font-size:12px;gap:4px}
+.font-sel,.size-sel{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #C0C0C0;border-radius:2px;height:24px;background:#fff;cursor:pointer;color:#333}
+.font-sel{width:130px}
+.size-sel{width:46px;text-align:center}
+/* Color */
+.cb{position:relative;display:inline-flex;flex-direction:column;align-items:center;background:none;border:1px solid transparent;cursor:pointer;padding:2px 5px;border-radius:3px;font-size:14px;min-width:28px;min-height:24px;font-weight:700;color:var(--txt)}
+.cb:hover{background:var(--hover);border-color:#C0C0C0}
+.cb .bar{height:3px;width:16px;border-radius:1px}
+.cpop{display:none;position:absolute;top:100%;left:0;z-index:200;background:#fff;border:1px solid #ccc;border-radius:4px;padding:8px;box-shadow:0 4px 12px rgba(0,0,0,.2);gap:2px;flex-wrap:wrap;width:160px}
+.cpop.show{display:flex}
+.cpop .sw{width:16px;height:16px;border:1px solid #ddd;border-radius:2px;cursor:pointer;padding:0}
+.cpop .sw:hover{border-color:#333;transform:scale(1.15)}
+/* Table grid */
+.tgp{display:none;position:absolute;top:100%;left:0;z-index:200;background:#fff;border:1px solid #ccc;border-radius:4px;padding:10px;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.mbar .tgp{top:auto;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:8px}
+.tgp.show{display:block}
+.tgp .lbl{font-size:11px;color:#666;margin-bottom:6px;text-align:center}
+.tg{display:grid;grid-template-columns:repeat(8,18px);gap:2px}
+.tg .tc{width:18px;height:18px;border:1px solid #ccc;background:#fff;cursor:pointer;padding:0;border-radius:1px}
+.tg .tc.hl{background:var(--accent-l);border-color:var(--accent)}
+
+/* Document area */
+.doc-area{flex:1;overflow-y:auto;overflow-x:auto;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px}
+.page{width:794px;min-height:1123px;background:#fff;box-shadow:var(--shad);margin-bottom:20px;padding:96px;position:relative}
+.hf-area{padding:8px 0;font-family:'Calibri','Yu Gothic UI',sans-serif;font-size:9pt;color:#666;outline:none;min-height:1.5em;border-bottom:1px dashed #ccc;margin-bottom:8px;text-align:center}
+.hf-area.hf-footer{border-bottom:none;border-top:1px dashed #ccc;margin-bottom:0;margin-top:8px}
+.hf-area:empty::before{content:attr(data-placeholder);color:#bbb;pointer-events:none}
+.hf-area:focus{background:rgba(0,100,200,.03)}
+.page-content{outline:none;min-height:200px;font-family:'Calibri','Yu Gothic UI',sans-serif;font-size:10.5pt;line-height:1.15;color:#000;caret-color:#000}
+.page-content:focus{outline:none}
+.page-content p{margin-bottom:8pt}
+.page-content h1{font-size:16pt;color:#1F3864;margin-bottom:6pt}
+.page-content h2{font-size:13pt;color:#1F3864;margin-bottom:4pt}
+.page-content table{border-collapse:collapse;width:100%;margin:8pt 0}
+.page-content td,.page-content th{border:1px solid #999;padding:4px 6px;font-size:10.5pt;min-width:30px;vertical-align:top}
+.page-content img{max-width:100%;height:auto}
+
+/* Preview mode */
+.preview-area{flex:1;overflow:auto;display:none;flex-direction:column;align-items:center;padding:20px 0 60px;background:#888}
+.preview-area canvas{display:block;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.3);background:#fff}
+
+/* Status bar */
+.sb{display:flex;align-items:center;height:22px;background:var(--accent);color:#fff;padding:0 14px;font-size:11px;flex-shrink:0;gap:16px}
+.sb .sep{opacity:.3}
+.sb .zg{margin-left:auto;display:flex;align-items:center;gap:6px}
+.sb input[type="range"]{width:90px;accent-color:#fff;height:4px}
+
+/* ---- Mobile bottom bar ---- */
+.mbar{display:none;flex-shrink:0;background:var(--rib);border-top:1px solid var(--rib-b);padding:4px 0 env(safe-area-inset-bottom,4px);overflow-x:auto;-webkit-overflow-scrolling:touch}
+.mbar-row{display:flex;gap:2px;padding:0 8px;min-width:max-content;align-items:center}
+.mbar .rb{min-width:36px;min-height:36px;font-size:15px}
+.mbar .rb svg{width:20px;height:20px}
+.mbar .sep{width:1px;height:28px;background:var(--grp);margin:0 4px;flex-shrink:0}
+
+/* Ruler */
+.ruler{height:18px;background:#fff;border-bottom:1px solid #D0D0D0;flex-shrink:0;display:flex;justify-content:center;align-items:flex-end}
+.ruler-inner{width:794px;height:100%;position:relative;background:repeating-linear-gradient(90deg,transparent,transparent 95px,#ccc 95px,#ccc 96px)}
+
+/* Dialog */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;z-index:100;align-items:center;justify-content:center}
+.ov.show{display:flex}
+.dlg{background:#fff;border-radius:8px;padding:28px 32px;min-width:320px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.dlg h2{font-size:16px;margin-bottom:12px;color:var(--accent)}
+.dlg .acts{display:flex;gap:10px;margin-top:18px}
+.dlg button{padding:7px 22px;border:none;border-radius:4px;cursor:pointer;font:inherit;font-size:13px;font-weight:500}
+.dlg .bp{background:var(--accent);color:#fff}
+.dlg .bp:hover{background:var(--accent-h)}
+.dlg .bs{background:#E0E0E0;color:#333}
+.dlg .bs:hover{background:#D0D0D0}
+input[type="file"]{display:none}
+
+/* Line spacing popup */
+.ls-pop{position:fixed;inset:0;display:none;z-index:150;background:transparent;align-items:flex-end;justify-content:center}
+.ls-pop.show{display:flex}
+.ls-menu{background:#fff;border-radius:8px 8px 0 0;padding:12px 16px;box-shadow:0 -4px 16px rgba(0,0,0,.2);display:flex;flex-direction:column;gap:4px;min-width:180px;margin-bottom:env(safe-area-inset-bottom,0)}
+.ls-menu button{padding:8px 16px;border:none;border-radius:4px;cursor:pointer;font:inherit;font-size:14px;background:#f5f5f5;text-align:left}
+.ls-menu button:hover{background:var(--accent-l)}
+
+/* ---- Responsive ---- */
+@media(max-width:768px){
+  .rtabs,.rib,.ruler{display:none!important}
+  .mbar{display:block}
+  .tb{height:44px;padding:0 8px}
+  .tb .qat button,.tb .ra button{padding:6px 8px;font-size:14px}
+  .tb .logo{font-size:14px}
+  .sb{height:28px;font-size:12px}
+  /* Reflow mode on mobile */
+  .doc-area.reflow .page{width:100%!important;min-height:auto!important;box-shadow:none;margin:0;padding:16px!important;border-radius:0}
+  .doc-area.reflow{padding:0}
+  .mode-toggle{margin:0 4px}
+}
+@media(min-width:769px){
+  .mbar{display:none!important}
+}
+</style>
+</head>
+<body>
+
+<!-- SVG icons -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-save" viewBox="0 0 16 16"><path fill="currentColor" d="M2 2a1 1 0 0 1 1-1h8.5L14 3.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V2zm3 0v3h5V2H5zm3 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4 7h6a3 3 0 0 1 0 6H9M4 7l3-3M4 7l3 3"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M12 7H6a3 3 0 0 0 0 6h1M12 7l-3-3M12 7l-3 3"/></symbol>
+  <symbol id="i-b" viewBox="0 0 16 16"><path fill="currentColor" d="M5 2.5h3.8c1.7 0 2.9 1 2.9 2.5 0 1-.6 1.8-1.5 2.1 1.1.3 1.8 1.3 1.8 2.4 0 1.7-1.3 2.8-3.2 2.8H5V2.5zm2 4h1.5c.7 0 1.1-.4 1.1-1s-.4-1-1.1-1H7v2zm0 2v2.5h1.8c.8 0 1.3-.5 1.3-1.2 0-.8-.5-1.3-1.3-1.3H7z"/></symbol>
+  <symbol id="i-i" viewBox="0 0 16 16"><path fill="currentColor" d="M6 2h6v1.5h-2.2L7.2 12.5H9.5V14H4v-1.5h2.1l2.6-9H6V2z"/></symbol>
+  <symbol id="i-u" viewBox="0 0 16 16"><path fill="currentColor" d="M4 2v5.5a4 4 0 0 0 8 0V2h-1.5v5.5a2.5 2.5 0 0 1-5 0V2H4zM3 13h10v1.5H3V13z"/></symbol>
+  <symbol id="i-s" viewBox="0 0 16 16"><path fill="currentColor" d="M5.5 3C6.2 2.4 7 2 8.2 2c1.8 0 3 1 3 2.5 0 .7-.3 1.3-.7 1.7H9c.4-.3.7-.7.7-1.2 0-.7-.6-1.2-1.5-1.2-.7 0-1.3.3-1.7.7L5.5 3zM3 7.5h10V9H3V7.5zm7 2.5c-.3.4-.8.7-1.5.8-.8.1-1.3-.1-1.7-.4l-1 1.3c.6.5 1.4.8 2.5.8 1.5 0 2.7-.8 3-2h-1.3z"/></symbol>
+  <symbol id="i-al" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm0 3h8v1.5H2V6zm0 3h10v1.5H2V9zm0 3h6v1.5H2V12z"/></symbol>
+  <symbol id="i-ac" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm3 3h6v1.5H5V6zm1 3h4v1.5H6V9zm-1 3h6v1.5H5V12z"/></symbol>
+  <symbol id="i-ar" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm6 3h6v1.5H8V6zm4 3h-6v1.5h8V9zM10 12h4v1.5H8V12z"/></symbol>
+  <symbol id="i-aj" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm0 3h12v1.5H2V6zm0 3h12v1.5H2V9zm0 3h12v1.5H2V12z"/></symbol>
+  <symbol id="i-ls" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11zM3.5 4l-2 2.5h1.5v3H1.5L3.5 12l2-2.5H4v-3h1.5L3.5 4z"/></symbol>
+  <symbol id="i-tbl" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="2" y1="6" x2="14" y2="6" stroke="currentColor"/><line x1="2" y1="10" x2="14" y2="10" stroke="currentColor"/><line x1="6" y1="2" x2="6" y2="14" stroke="currentColor"/><line x1="10" y1="2" x2="10" y2="14" stroke="currentColor"/></symbol>
+  <symbol id="i-img" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="6" r="1.5" fill="currentColor"/><path d="M1.5 11l3-3 2 2 3-4 5 5z" fill="currentColor" opacity=".4"/></symbol>
+  <symbol id="i-color" viewBox="0 0 16 16"><path fill="currentColor" d="M8 1L3 11h2l1-2.5h4L11 11h2L8 1zm-1.2 6L8 4l1.2 3H6.8z"/></symbol>
+  <symbol id="i-ul" viewBox="0 0 16 16"><circle cx="3" cy="4" r="1.3" fill="currentColor"/><circle cx="3" cy="8" r="1.3" fill="currentColor"/><circle cx="3" cy="12" r="1.3" fill="currentColor"/><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11z"/></symbol>
+  <symbol id="i-ol" viewBox="0 0 16 16"><text x="1" y="5" fill="currentColor" font-size="5" font-weight="700">1.</text><text x="1" y="9" fill="currentColor" font-size="5" font-weight="700">2.</text><text x="1" y="13" fill="currentColor" font-size="5" font-weight="700">3.</text><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M6.5 9.5l3-3M7 11l-1.5 1.5a2.12 2.12 0 0 1-3-3L4 8m5-2l1.5-1.5a2.12 2.12 0 0 1 3 3L12 9"/></symbol>
+  <symbol id="i-hf" viewBox="0 0 16 16"><rect x="2" y="1" width="12" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><line x1="2" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width=".8" stroke-dasharray="2 1"/><line x1="2" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width=".8" stroke-dasharray="2 1"/><path fill="currentColor" d="M5 6h6v1H5V6zm0 2h4v1H5V8z"/></symbol>
+  <symbol id="i-fn" viewBox="0 0 16 16"><text x="2" y="12" fill="currentColor" font-size="11" font-weight="700">A</text><text x="10" y="7" fill="currentColor" font-size="7" font-weight="700">1</text></symbol>
+  <symbol id="i-toc" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2zm2 3h10v1.5H4zm2 3h8v1.5H6zm-4 3h12v1.5H2z"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 16 16"><rect x="1" y="2" width="6" height="12" rx=".5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="2" width="6" height="12" rx=".5" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+  <symbol id="i-shape" viewBox="0 0 16 16"><rect x="2" y="4" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="12" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+  <symbol id="i-math" viewBox="0 0 16 16"><text x="1" y="13" fill="currentColor" font-size="13" font-style="italic">∑</text></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M5 8l2 2 4-4"/></symbol>
+  <symbol id="i-comment" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M3 3h10a1 1 0 011 1v6a1 1 0 01-1 1H7l-3 2v-2H3a1 1 0 01-1-1V4a1 1 0 011-1z"/></symbol>
+  <symbol id="i-secbrk" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1H2zm0 8h12v1H2z"/><path fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 2" d="M2 8h12"/></symbol>
+  <symbol id="i-indent" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6zm0 4h8v1.5H6zm0 4h8v1.5H6z"/><path fill="currentColor" d="M2 5l3 3-3 3z"/></symbol>
+  <symbol id="i-outdent" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6zm0 4h8v1.5H6zm0 4h8v1.5H6z"/><path fill="currentColor" d="M5 5l-3 3 3 3z"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 16 16"><path fill="currentColor" d="M2 4h5v1H2zm0 3h5v1H2zm0 3h5v1H2z"/><path fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" d="M10 5l3 3-3 3"/></symbol>
+</svg>
+
+<!-- Title bar -->
+<div class="tb">
+  <span class="logo">Oxidocs</span>
+  <div class="qat">
+    <button id="btnSave" data-i18n-title="save"><svg><use href="#i-save"/></svg></button>
+    <button id="btnUndo" data-i18n-title="undo"><svg><use href="#i-undo"/></svg></button>
+    <button id="btnRedo" data-i18n-title="redo"><svg><use href="#i-redo"/></svg></button>
+  </div>
+  <div class="mode-toggle">
+    <button class="active" id="modeEdit" data-i18n="edit">Edit</button>
+    <button id="modePreview" data-i18n="preview">Preview</button>
+  </div>
+  <span class="dn" id="docName" data-i18n="newDoc">New Document</span>
+  <div class="ra">
+    <button id="btnNew" data-i18n="new">New</button>
+    <button id="btnOpen" data-i18n="open">Open</button>
+    <button id="btnPdf">PDF</button>
+    <select id="langSel" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:3px;font-size:11px;padding:1px 4px;cursor:pointer">
+      <option value="en" style="color:#333;background:#fff">EN</option><option value="ja" style="color:#333;background:#fff">JA</option>
+      <option value="de" style="color:#333;background:#fff">DE</option><option value="fr" style="color:#333;background:#fff">FR</option>
+      <option value="es" style="color:#333;background:#fff">ES</option><option value="it" style="color:#333;background:#fff">IT</option>
+      <option value="pt" style="color:#333;background:#fff">PT</option><option value="ko" style="color:#333;background:#fff">KO</option>
+      <option value="zh-Hans" style="color:#333;background:#fff">简中</option><option value="zh-Hant" style="color:#333;background:#fff">繁中</option>
+    </select>
+  </div>
+</div>
+
+<!-- Desktop: Ribbon tabs -->
+<div class="rtabs">
+  <button class="active" data-tab="home" data-i18n="home">Home</button>
+  <button data-tab="insert" data-i18n="insert">Insert</button>
+  <button data-tab="layout" data-i18n="layout">Layout</button>
+</div>
+
+<!-- Desktop: Home ribbon -->
+<div class="rib" id="ribHome">
+  <div class="rg">
+    <div class="rc" style="gap:3px">
+      <div class="rr">
+        <select class="font-sel" id="fontFamily" style="font-family:Calibri">
+          <option value="Calibri" style="font-family:Calibri">Calibri</option>
+          <option value="Yu Gothic UI" style="font-family:'Yu Gothic UI','游ゴシック'">游ゴシック</option>
+          <option value="Yu Mincho" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
+          <option value="Meiryo" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+          <option value="Arial" style="font-family:Arial">Arial</option>
+          <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
+          <option value="Georgia" style="font-family:Georgia">Georgia</option>
+          <option value="Verdana" style="font-family:Verdana">Verdana</option>
+          <option value="Comic Sans MS" style="font-family:'Comic Sans MS'">Comic Sans MS</option>
+          <option value="Courier New" style="font-family:'Courier New'">Courier New</option>
+        </select>
+        <select class="size-sel" id="fontSize">
+          <option>8</option><option>9</option><option>10</option><option>10.5</option>
+          <option selected>11</option><option>12</option><option>14</option>
+          <option>16</option><option>18</option><option>20</option><option>24</option>
+          <option>28</option><option>36</option><option>48</option><option>72</option>
+        </select>
+      </div>
+      <div class="rr">
+        <button class="rb" id="btnBold" data-i18n-title="bold"><svg><use href="#i-b"/></svg></button>
+        <button class="rb" id="btnItalic" data-i18n-title="italic"><svg><use href="#i-i"/></svg></button>
+        <button class="rb" id="btnUnderline" data-i18n-title="underline"><svg><use href="#i-u"/></svg></button>
+        <button class="rb" id="btnStrike" data-i18n-title="strikethrough"><svg><use href="#i-s"/></svg></button>
+        <span style="width:4px"></span>
+        <button class="cb" id="btnColor" data-i18n-title="fontColor"><svg style="width:14px;height:14px"><use href="#i-color"/></svg><div class="bar" id="colorBar" style="background:#F00"></div><div class="cpop" id="colorPop"></div></button>
+        <button class="cb" id="btnHl" data-i18n-title="highlight"><span style="background:#FF0;padding:0 2px;font-size:11px">ab</span><div class="bar" id="hlBar" style="background:#FF0"></div><div class="cpop" id="hlPop"></div></button>
+        <span style="width:4px"></span>
+        <button class="rb" id="btnUL" data-i18n-title="bulletList"><svg><use href="#i-ul"/></svg></button>
+        <button class="rb" id="btnOL" data-i18n-title="numberedList"><svg><use href="#i-ol"/></svg></button>
+        <button class="rb" id="btnIndent" data-i18n-title="indent"><svg><use href="#i-indent"/></svg></button>
+        <button class="rb" id="btnOutdent" data-i18n-title="outdent"><svg><use href="#i-outdent"/></svg></button>
+        <span style="width:4px"></span>
+        <button class="rb" id="btnAlL" data-i18n-title="left"><svg><use href="#i-al"/></svg></button>
+        <button class="rb" id="btnAlC" data-i18n-title="center"><svg><use href="#i-ac"/></svg></button>
+        <button class="rb" id="btnAlR" data-i18n-title="right"><svg><use href="#i-ar"/></svg></button>
+        <button class="rb" id="btnAlJ" data-i18n-title="justify"><svg><use href="#i-aj"/></svg></button>
+        <button class="rb" id="btnLS" data-i18n-title="lineSpacing"><svg><use href="#i-ls"/></svg></button>
+      </div>
+    </div>
+    <span class="rg-l" data-i18n="format">Format</span>
+  </div>
+  <div class="rg">
+    <div class="rr" style="gap:6px">
+      <div style="position:relative">
+        <button class="rb lg" id="btnTbl"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button>
+        <div class="tgp" id="tgPop"><div class="lbl" id="tgLbl" data-i18n="insertTable">Insert Table</div><div class="tg" id="tgGrid"></div></div>
+      </div>
+      <button class="rb lg" id="btnImg"><svg><use href="#i-img"/></svg> <span data-i18n="picture">Picture</span></button>
+    </div>
+    <span class="rg-l" data-i18n="insert">Insert</span>
+  </div>
+</div>
+
+<!-- Desktop: Insert ribbon -->
+<div class="rib" id="ribInsert" style="display:none">
+  <div class="rg"><div class="rr" style="gap:6px">
+    <div style="position:relative"><button class="rb lg" id="btnTbl2"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button></div>
+    <button class="rb lg" id="btnImg2"><svg><use href="#i-img"/></svg> <span data-i18n="picture">Picture</span></button>
+    <button class="rb lg" id="btnLink"><svg><use href="#i-link"/></svg> <span data-i18n="link">Link</span></button>
+    <button class="rb lg" id="btnShape"><svg><use href="#i-shape"/></svg> <span data-i18n="shape">Shape</span></button>
+  </div><span class="rg-l" data-i18n="insert">Insert</span></div>
+  <div class="rg"><div class="rr" style="gap:6px">
+    <button class="rb lg" id="btnHF"><svg><use href="#i-hf"/></svg> <span data-i18n="headerFooter">Header/Footer</span></button>
+    <button class="rb lg" id="btnFN"><svg><use href="#i-fn"/></svg> <span data-i18n="footnote">Footnote</span></button>
+    <button class="rb lg" id="btnTOC"><svg><use href="#i-toc"/></svg> <span data-i18n="toc">TOC</span></button>
+    <button class="rb lg" id="btnMath"><svg><use href="#i-math"/></svg> <span data-i18n="equation">Equation</span></button>
+  </div><span class="rg-l" data-i18n="references">References</span></div>
+  <div class="rg"><div class="rr" style="gap:6px">
+    <button class="rb lg" id="btnCheck"><svg><use href="#i-check"/></svg> <span data-i18n="checkbox">Checkbox</span></button>
+    <button class="rb lg" id="btnDropdown"><span style="font-size:10px">▼</span> <span data-i18n="dropdown">Dropdown</span></button>
+    <button class="rb lg" id="btnComment"><svg><use href="#i-comment"/></svg> <span data-i18n="comment">Comment</span></button>
+  </div><span class="rg-l" data-i18n="forms">Forms</span></div>
+</div>
+
+<!-- Desktop: Layout ribbon -->
+<div class="rib" id="ribLayout" style="display:none">
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg active" id="pgA4">A4</button>
+    <button class="rb lg" id="pgLetter">Letter</button>
+  </div><span class="rg-l" data-i18n="size">Size</span></div>
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg active" id="mgNorm" data-i18n="normal">Normal</button>
+    <button class="rb lg" id="mgNarrow" data-i18n="narrow">Narrow</button>
+  </div><span class="rg-l" data-i18n="margins">Margins</span></div>
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg active" id="col1" data-i18n="oneCol">1 Col</button>
+    <button class="rb lg" id="col2" data-i18n="twoCols">2 Cols</button>
+    <button class="rb lg" id="col3" data-i18n="threeCols">3 Cols</button>
+  </div><span class="rg-l" data-i18n="columns">Columns</span></div>
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg" id="btnPageBrk"><svg><use href="#i-secbrk"/></svg> <span data-i18n="pageBreak">Page Break</span></button>
+    <button class="rb lg" id="btnSecBrk"><svg><use href="#i-secbrk"/></svg> <span data-i18n="sectionBreak">Section</span></button>
+  </div><span class="rg-l" data-i18n="breaks">Breaks</span></div>
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg" id="btnMailMerge"><svg><use href="#i-merge"/></svg> <span data-i18n="mailMerge">Mail Merge</span></button>
+  </div><span class="rg-l" data-i18n="mailings">Mailings</span></div>
+</div>
+
+<!-- Ruler (desktop) -->
+<div class="ruler" id="ruler" style="display:none">
+  <div class="ruler-inner"></div>
+</div>
+
+<!-- Edit mode: document area -->
+<div class="doc-area reflow" id="editArea">
+  <div class="page" id="page1">
+    <div class="hf-area hf-header" id="headerArea" style="display:none" contenteditable="true" data-placeholder="Header"></div>
+    <div class="page-content" contenteditable="true" id="editor" spellcheck="true"></div>
+    <div class="hf-area hf-footer" id="footerArea" style="display:none" contenteditable="true" data-placeholder="Footer"></div>
+  </div>
+</div>
+
+<!-- Preview mode: canvas pages -->
+<div class="preview-area" id="previewArea"></div>
+
+<!-- Mobile bottom bar -->
+<div class="mbar">
+  <div class="mbar-row">
+    <select class="font-sel" id="mFontFamily" style="width:90px;height:32px;font-size:11px;font-family:Calibri">
+      <option value="Calibri" style="font-family:Calibri">Calibri</option>
+      <option value="Yu Gothic UI" style="font-family:'Yu Gothic UI','游ゴシック'">游ゴシック</option>
+      <option value="Yu Mincho" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
+      <option value="Meiryo" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+      <option value="Arial" style="font-family:Arial">Arial</option>
+      <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
+      <option value="Georgia" style="font-family:Georgia">Georgia</option>
+      <option value="Verdana" style="font-family:Verdana">Verdana</option>
+    </select>
+    <select class="size-sel" id="mFontSize" style="height:32px;font-size:12px">
+      <option>9</option><option>10</option><option selected>11</option><option>12</option><option>14</option><option>16</option><option>20</option><option>24</option><option>36</option>
+    </select>
+    <div class="sep"></div>
+    <button class="rb" id="mBold"><svg><use href="#i-b"/></svg></button>
+    <button class="rb" id="mItalic"><svg><use href="#i-i"/></svg></button>
+    <button class="rb" id="mUnder"><svg><use href="#i-u"/></svg></button>
+    <button class="rb" id="mStrike"><svg><use href="#i-s"/></svg></button>
+    <div class="sep"></div>
+    <select id="mFontSel" style="height:28px;font-size:11px;border:1px solid #ccc;border-radius:3px;max-width:80px;background:#fff">
+      <option value="Calibri">Calibri</option>
+      <option value="Arial">Arial</option>
+      <option value="Times New Roman">Times</option>
+      <option value="游ゴシック">游ゴシック</option>
+      <option value="游明朝">游明朝</option>
+      <option value="ＭＳ ゴシック">MS ゴシック</option>
+      <option value="ＭＳ 明朝">MS 明朝</option>
+    </select>
+    <div class="sep"></div>
+    <div style="position:relative">
+      <button class="cb" id="mColor" style="min-width:32px;min-height:32px">
+        <svg style="width:16px;height:16px"><use href="#i-color"/></svg>
+        <div class="bar" id="mColorBar" style="background:#F00"></div>
+      </button>
+      <div class="cpop" id="mColorPop" style="position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:8px"></div>
+    </div>
+    <div class="sep"></div>
+    <button class="rb" id="mAlL"><svg><use href="#i-al"/></svg></button>
+    <button class="rb" id="mAlC"><svg><use href="#i-ac"/></svg></button>
+    <button class="rb" id="mAlR"><svg><use href="#i-ar"/></svg></button>
+    <div class="sep"></div>
+    <button class="rb" id="mLS"><svg><use href="#i-ls"/></svg></button>
+    <div style="position:relative">
+      <button class="rb" id="mTbl"><svg><use href="#i-tbl"/></svg></button>
+      <div class="tgp" id="mTgPop"><div class="lbl" id="mTgLbl" data-i18n="insertTable">Insert Table</div><div class="tg" id="mTgGrid"></div></div>
+    </div>
+    <button class="rb" id="mImg"><svg><use href="#i-img"/></svg></button>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="sb">
+  <span id="pgInfo"></span><span class="sep">|</span>
+  <span id="wc"></span>
+  <div class="zg">
+    <button class="rb" style="color:#fff;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zOut">−</button>
+    <span id="zLvl">100%</span>
+    <input type="range" id="zSlider" min="50" max="200" value="100">
+    <button class="rb" style="color:#fff;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zIn">+</button>
+  </div>
+</div>
+
+<!-- Dialogs -->
+<div class="ov" id="openOv">
+  <div class="dlg"><h2 data-i18n="openFile">Open File</h2><p style="font-size:13px;color:#666" data-i18n="selectDocx">Select a .docx file.</p>
+    <div class="acts"><button class="bp" id="dChoose" data-i18n="chooseFile">Choose File</button><button class="bs" id="dCancel" data-i18n="cancel">Cancel</button></div>
+  </div>
+</div>
+<div class="ls-pop" id="lsPop">
+  <div class="ls-menu">
+    <button data-ls="1">1.0</button><button data-ls="1.15">1.15</button>
+    <button data-ls="1.5">1.5</button><button data-ls="2">2.0</button>
+    <button data-ls="2.5">2.5</button><button data-ls="3">3.0</button>
+  </div>
+</div>
+<!-- Find/Replace bar -->
+<div id="findBar" style="display:none;position:fixed;top:60px;right:16px;left:auto;z-index:90;background:#fff;border:1px solid #ccc;border-radius:6px;padding:10px 14px;box-shadow:0 4px 16px rgba(0,0,0,.15);font-size:13px;max-width:calc(100vw - 32px);box-sizing:border-box">
+  <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+    <input id="findInput" data-i18n-placeholder="find" placeholder="Find..." style="flex:1;padding:4px 8px;border:1px solid #ccc;border-radius:3px;font:inherit;font-size:13px;min-width:180px">
+    <button class="rb" id="findPrev" data-i18n-title="prev" style="font-size:16px">&#9650;</button>
+    <button class="rb" id="findNext" data-i18n-title="next" style="font-size:16px">&#9660;</button>
+    <span id="findCount" style="font-size:11px;color:#888;min-width:40px"></span>
+    <button class="rb" id="findClose" style="font-size:14px">&times;</button>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center">
+    <input id="replaceInput" data-i18n-placeholder="replace" placeholder="Replace..." style="flex:1;padding:4px 8px;border:1px solid #ccc;border-radius:3px;font:inherit;font-size:13px">
+    <button class="rb lg" id="replaceOne" data-i18n="replaceBtn">Replace</button>
+    <button class="rb lg" id="replaceAll" data-i18n="replaceAll">All</button>
+  </div>
+</div>
+<input type="file" id="fileIn" accept=".docx">
+
+<script type="module">
+// ---- i18n ----
+const I18N = {
+  en: {
+    new: 'New', newDoc: 'New Document', edit: 'Edit', preview: 'Preview',
+    open: 'Open', save: 'Save', undo: 'Undo', redo: 'Redo',
+    home: 'Home', insert: 'Insert', layout: 'Layout',
+    bold: 'Bold', italic: 'Italic', underline: 'Underline', strikethrough: 'Strikethrough',
+    fontColor: 'Font Color', highlight: 'Highlight',
+    left: 'Left', center: 'Center', right: 'Right', justify: 'Justify', lineSpacing: 'Line Spacing',
+    format: 'Format', table: 'Table', picture: 'Picture', insertTable: 'Insert Table',
+    size: 'Size', margins: 'Margins', normal: 'Normal', narrow: 'Narrow',
+    openFile: 'Open File', selectDocx: 'Select a .docx file.',
+    chooseFile: 'Choose File', cancel: 'Cancel',
+    find: 'Find...', replace: 'Replace...', replaceBtn: 'Replace', replaceAll: 'All',
+    prev: 'Previous', next: 'Next',
+    bulletList: 'Bullet List', numberedList: 'Numbered List', indent: 'Indent', outdent: 'Outdent',
+    link: 'Link', headerFooter: 'Header/Footer', footnote: 'Footnote', references: 'References',
+    insertLink: 'Insert Link', url: 'URL', linkText: 'Text', headerText: 'Header text', footerText: 'Footer text',
+    pageNumber: 'Page number', fnText: 'Footnote text',
+    toc: 'Table of Contents', equation: 'Equation', shape: 'Shape', checkbox: 'Checkbox', dropdown: 'Dropdown',
+    comment: 'Comment', forms: 'Forms', columns: 'Columns', oneCol: '1 Col', twoCols: '2 Cols', threeCols: '3 Cols',
+    pageBreak: 'Page Break', sectionBreak: 'Section', breaks: 'Breaks',
+    mailMerge: 'Mail Merge', mailings: 'Mailings',
+    tocTitle: 'Table of Contents', commentText: 'Comment text', eqPlaceholder: 'LaTeX (e.g. x^2 + y^2 = r^2)',
+    mergeField: 'Field name', mergeData: 'Paste CSV data', mergePreview: 'Preview',
+    page: 'Page', words: 'words', pages: 'pages', rendering: 'Rendering...',
+  },
+  ja: {
+    new: '新規', newDoc: '新しいドキュメント', edit: '編集', preview: 'プレビュー',
+    open: '開く', save: '保存', undo: '元に戻す', redo: 'やり直し',
+    home: 'ホーム', insert: '挿入', layout: 'レイアウト',
+    bold: '太字', italic: '斜体', underline: '下線', strikethrough: '取り消し線',
+    fontColor: 'フォントの色', highlight: '蛍光ペン',
+    left: '左揃え', center: '中央揃え', right: '右揃え', justify: '両端揃え', lineSpacing: '行間',
+    format: '書式', table: '表', picture: '画像', insertTable: '表の挿入',
+    size: 'サイズ', margins: '余白', normal: '標準', narrow: '狭い',
+    openFile: 'ファイルを開く', selectDocx: '.docxファイルを選択してください。',
+    chooseFile: 'ファイルを選択', cancel: 'キャンセル',
+    find: '検索...', replace: '置換...', replaceBtn: '置換', replaceAll: 'すべて',
+    prev: '前へ', next: '次へ',
+    bulletList: '箇条書き', numberedList: '番号付きリスト', indent: 'インデント', outdent: 'インデント解除',
+    link: 'リンク', headerFooter: 'ヘッダー/フッター', footnote: '脚注', references: '参照',
+    insertLink: 'リンクの挿入', url: 'URL', linkText: 'テキスト', headerText: 'ヘッダーテキスト', footerText: 'フッターテキスト',
+    pageNumber: 'ページ番号', fnText: '脚注テキスト',
+    toc: '目次', equation: '数式', shape: '図形', checkbox: 'チェックボックス', dropdown: 'ドロップダウン',
+    comment: 'コメント', forms: 'フォーム', columns: '段組み', oneCol: '1段', twoCols: '2段', threeCols: '3段',
+    pageBreak: '改ページ', sectionBreak: 'セクション', breaks: '区切り',
+    mailMerge: '差し込み印刷', mailings: '差し込み',
+    tocTitle: '目次', commentText: 'コメント内容', eqPlaceholder: 'LaTeX (例: x^2 + y^2 = r^2)',
+    mergeField: 'フィールド名', mergeData: 'CSVデータを貼り付け', mergePreview: 'プレビュー',
+    page: 'ページ', words: '語', pages: 'ページ', rendering: 'レンダリング中...',
+  },
+  de: {
+    new: 'Neu', newDoc: 'Neues Dokument', edit: 'Bearbeiten', preview: 'Vorschau',
+    open: 'Öffnen', save: 'Speichern', undo: 'Rückgängig', redo: 'Wiederholen',
+    home: 'Start', insert: 'Einfügen', layout: 'Layout',
+    bold: 'Fett', italic: 'Kursiv', underline: 'Unterstrichen', strikethrough: 'Durchgestrichen',
+    fontColor: 'Schriftfarbe', highlight: 'Hervorheben',
+    left: 'Links', center: 'Zentriert', right: 'Rechts', justify: 'Blocksatz', lineSpacing: 'Zeilenabstand',
+    format: 'Format', table: 'Tabelle', picture: 'Bild', insertTable: 'Tabelle einfügen',
+    size: 'Größe', margins: 'Seitenränder', normal: 'Normal', narrow: 'Schmal',
+    openFile: 'Datei öffnen', selectDocx: 'Wählen Sie eine .docx-Datei.',
+    chooseFile: 'Datei wählen', cancel: 'Abbrechen',
+    find: 'Suchen...', replace: 'Ersetzen...', replaceBtn: 'Ersetzen', replaceAll: 'Alle',
+    prev: 'Zurück', next: 'Weiter',
+    bulletList: 'Aufzählung', numberedList: 'Nummerierung',
+    link: 'Link', headerFooter: 'Kopf-/Fußzeile', footnote: 'Fußnote', references: 'Verweise',
+    insertLink: 'Link einfügen', url: 'URL', linkText: 'Text', headerText: 'Kopfzeilentext', footerText: 'Fußzeilentext',
+    pageNumber: 'Seitenzahl', fnText: 'Fußnotentext',
+    page: 'Seite', words: 'Wörter', pages: 'Seiten', rendering: 'Wird gerendert...',
+  },
+  fr: {
+    new: 'Nouveau', newDoc: 'Nouveau document', edit: 'Modifier', preview: 'Aperçu',
+    open: 'Ouvrir', save: 'Enregistrer', undo: 'Annuler', redo: 'Rétablir',
+    home: 'Accueil', insert: 'Insertion', layout: 'Mise en page',
+    bold: 'Gras', italic: 'Italique', underline: 'Souligné', strikethrough: 'Barré',
+    fontColor: 'Couleur de police', highlight: 'Surligneur',
+    left: 'Gauche', center: 'Centré', right: 'Droite', justify: 'Justifié', lineSpacing: 'Interligne',
+    format: 'Format', table: 'Tableau', picture: 'Image', insertTable: 'Insérer un tableau',
+    size: 'Taille', margins: 'Marges', normal: 'Normal', narrow: 'Étroit',
+    openFile: 'Ouvrir un fichier', selectDocx: 'Sélectionnez un fichier .docx.',
+    chooseFile: 'Choisir', cancel: 'Annuler',
+    find: 'Rechercher...', replace: 'Remplacer...', replaceBtn: 'Remplacer', replaceAll: 'Tout',
+    prev: 'Précédent', next: 'Suivant',
+    bulletList: 'Liste à puces', numberedList: 'Liste numérotée',
+    link: 'Lien', headerFooter: 'En-tête/Pied de page', footnote: 'Note de bas de page', references: 'Références',
+    insertLink: 'Insérer un lien', url: 'URL', linkText: 'Texte', headerText: 'Texte d\'en-tête', footerText: 'Texte de pied de page',
+    pageNumber: 'Numéro de page', fnText: 'Texte de note',
+    page: 'Page', words: 'mots', pages: 'pages', rendering: 'Rendu en cours...',
+  },
+  es: {
+    new: 'Nuevo', newDoc: 'Nuevo documento', edit: 'Editar', preview: 'Vista previa',
+    open: 'Abrir', save: 'Guardar', undo: 'Deshacer', redo: 'Rehacer',
+    home: 'Inicio', insert: 'Insertar', layout: 'Diseño',
+    bold: 'Negrita', italic: 'Cursiva', underline: 'Subrayado', strikethrough: 'Tachado',
+    fontColor: 'Color de fuente', highlight: 'Resaltar',
+    left: 'Izquierda', center: 'Centro', right: 'Derecha', justify: 'Justificar', lineSpacing: 'Interlineado',
+    format: 'Formato', table: 'Tabla', picture: 'Imagen', insertTable: 'Insertar tabla',
+    size: 'Tamaño', margins: 'Márgenes', normal: 'Normal', narrow: 'Estrecho',
+    openFile: 'Abrir archivo', selectDocx: 'Seleccione un archivo .docx.',
+    chooseFile: 'Elegir archivo', cancel: 'Cancelar',
+    find: 'Buscar...', replace: 'Reemplazar...', replaceBtn: 'Reemplazar', replaceAll: 'Todo',
+    prev: 'Anterior', next: 'Siguiente',
+    bulletList: 'Viñetas', numberedList: 'Numeración',
+    link: 'Enlace', headerFooter: 'Encabezado/Pie', footnote: 'Nota al pie', references: 'Referencias',
+    insertLink: 'Insertar enlace', url: 'URL', linkText: 'Texto', headerText: 'Texto de encabezado', footerText: 'Texto de pie',
+    pageNumber: 'Número de página', fnText: 'Texto de nota',
+    page: 'Página', words: 'palabras', pages: 'páginas', rendering: 'Renderizando...',
+  },
+  it: {
+    new: 'Nuovo', newDoc: 'Nuovo documento', edit: 'Modifica', preview: 'Anteprima',
+    open: 'Apri', save: 'Salva', undo: 'Annulla', redo: 'Ripristina',
+    home: 'Home', insert: 'Inserisci', layout: 'Layout',
+    bold: 'Grassetto', italic: 'Corsivo', underline: 'Sottolineato', strikethrough: 'Barrato',
+    fontColor: 'Colore carattere', highlight: 'Evidenzia',
+    left: 'Sinistra', center: 'Centro', right: 'Destra', justify: 'Giustifica', lineSpacing: 'Interlinea',
+    format: 'Formato', table: 'Tabella', picture: 'Immagine', insertTable: 'Inserisci tabella',
+    size: 'Dimensione', margins: 'Margini', normal: 'Normale', narrow: 'Stretto',
+    openFile: 'Apri file', selectDocx: 'Seleziona un file .docx.',
+    chooseFile: 'Scegli file', cancel: 'Annulla',
+    find: 'Cerca...', replace: 'Sostituisci...', replaceBtn: 'Sostituisci', replaceAll: 'Tutti',
+    prev: 'Precedente', next: 'Successivo',
+    bulletList: 'Elenco puntato', numberedList: 'Elenco numerato',
+    link: 'Collegamento', headerFooter: 'Intestazione/Piè di pagina', footnote: 'Nota a piè di pagina', references: 'Riferimenti',
+    insertLink: 'Inserisci collegamento', url: 'URL', linkText: 'Testo', headerText: 'Testo intestazione', footerText: 'Testo piè di pagina',
+    pageNumber: 'Numero di pagina', fnText: 'Testo nota',
+    page: 'Pagina', words: 'parole', pages: 'pagine', rendering: 'Rendering...',
+  },
+  pt: {
+    new: 'Novo', newDoc: 'Novo documento', edit: 'Editar', preview: 'Visualizar',
+    open: 'Abrir', save: 'Salvar', undo: 'Desfazer', redo: 'Refazer',
+    home: 'Início', insert: 'Inserir', layout: 'Layout',
+    bold: 'Negrito', italic: 'Itálico', underline: 'Sublinhado', strikethrough: 'Tachado',
+    fontColor: 'Cor da fonte', highlight: 'Realçar',
+    left: 'Esquerda', center: 'Centro', right: 'Direita', justify: 'Justificar', lineSpacing: 'Espaçamento',
+    format: 'Formato', table: 'Tabela', picture: 'Imagem', insertTable: 'Inserir tabela',
+    size: 'Tamanho', margins: 'Margens', normal: 'Normal', narrow: 'Estreito',
+    openFile: 'Abrir arquivo', selectDocx: 'Selecione um arquivo .docx.',
+    chooseFile: 'Escolher arquivo', cancel: 'Cancelar',
+    find: 'Localizar...', replace: 'Substituir...', replaceBtn: 'Substituir', replaceAll: 'Todos',
+    prev: 'Anterior', next: 'Próximo',
+    bulletList: 'Marcadores', numberedList: 'Numeração',
+    link: 'Link', headerFooter: 'Cabeçalho/Rodapé', footnote: 'Nota de rodapé', references: 'Referências',
+    insertLink: 'Inserir link', url: 'URL', linkText: 'Texto', headerText: 'Texto do cabeçalho', footerText: 'Texto do rodapé',
+    pageNumber: 'Número da página', fnText: 'Texto da nota',
+    page: 'Página', words: 'palavras', pages: 'páginas', rendering: 'Renderizando...',
+  },
+  ko: {
+    new: '새로', newDoc: '새 문서', edit: '편집', preview: '미리보기',
+    open: '열기', save: '저장', undo: '실행 취소', redo: '다시 실행',
+    home: '홈', insert: '삽입', layout: '레이아웃',
+    bold: '굵게', italic: '기울임꼴', underline: '밑줄', strikethrough: '취소선',
+    fontColor: '글꼴 색', highlight: '강조',
+    left: '왼쪽', center: '가운데', right: '오른쪽', justify: '양쪽 맞춤', lineSpacing: '줄 간격',
+    format: '서식', table: '표', picture: '그림', insertTable: '표 삽입',
+    size: '크기', margins: '여백', normal: '보통', narrow: '좁게',
+    openFile: '파일 열기', selectDocx: '.docx 파일을 선택하세요.',
+    chooseFile: '파일 선택', cancel: '취소',
+    find: '찾기...', replace: '바꾸기...', replaceBtn: '바꾸기', replaceAll: '모두',
+    prev: '이전', next: '다음',
+    bulletList: '글머리 기호', numberedList: '번호 매기기',
+    link: '링크', headerFooter: '머리글/바닥글', footnote: '각주', references: '참조',
+    insertLink: '링크 삽입', url: 'URL', linkText: '텍스트', headerText: '머리글 텍스트', footerText: '바닥글 텍스트',
+    pageNumber: '페이지 번호', fnText: '각주 텍스트',
+    page: '페이지', words: '단어', pages: '페이지', rendering: '렌더링 중...',
+  },
+  'zh-Hans': {
+    new: '新建', newDoc: '新建文档', edit: '编辑', preview: '预览',
+    open: '打开', save: '保存', undo: '撤销', redo: '重做',
+    home: '开始', insert: '插入', layout: '布局',
+    bold: '加粗', italic: '斜体', underline: '下划线', strikethrough: '删除线',
+    fontColor: '字体颜色', highlight: '突出显示',
+    left: '左对齐', center: '居中', right: '右对齐', justify: '两端对齐', lineSpacing: '行距',
+    format: '格式', table: '表格', picture: '图片', insertTable: '插入表格',
+    size: '大小', margins: '页边距', normal: '普通', narrow: '窄',
+    openFile: '打开文件', selectDocx: '请选择 .docx 文件。',
+    chooseFile: '选择文件', cancel: '取消',
+    find: '查找...', replace: '替换...', replaceBtn: '替换', replaceAll: '全部',
+    prev: '上一个', next: '下一个',
+    bulletList: '项目符号', numberedList: '编号列表',
+    link: '链接', headerFooter: '页眉/页脚', footnote: '脚注', references: '引用',
+    insertLink: '插入链接', url: 'URL', linkText: '文本', headerText: '页眉文本', footerText: '页脚文本',
+    pageNumber: '页码', fnText: '脚注文本',
+    page: '页', words: '字', pages: '页', rendering: '渲染中...',
+  },
+  'zh-Hant': {
+    new: '新增', newDoc: '新建文件', edit: '編輯', preview: '預覽',
+    open: '開啟', save: '儲存', undo: '復原', redo: '取消復原',
+    home: '常用', insert: '插入', layout: '版面配置',
+    bold: '粗體', italic: '斜體', underline: '底線', strikethrough: '刪除線',
+    fontColor: '字型色彩', highlight: '醒目提示',
+    left: '靠左', center: '置中', right: '靠右', justify: '左右對齊', lineSpacing: '行距',
+    format: '格式', table: '表格', picture: '圖片', insertTable: '插入表格',
+    size: '大小', margins: '邊界', normal: '標準', narrow: '窄',
+    openFile: '開啟檔案', selectDocx: '請選擇 .docx 檔案。',
+    chooseFile: '選擇檔案', cancel: '取消',
+    find: '尋找...', replace: '取代...', replaceBtn: '取代', replaceAll: '全部',
+    prev: '上一個', next: '下一個',
+    bulletList: '項目符號', numberedList: '編號清單',
+    link: '連結', headerFooter: '頁首/頁尾', footnote: '註腳', references: '參考資料',
+    insertLink: '插入連結', url: 'URL', linkText: '文字', headerText: '頁首文字', footerText: '頁尾文字',
+    pageNumber: '頁碼', fnText: '註腳文字',
+    page: '頁', words: '字', pages: '頁', rendering: '轉譯中...',
+  },
+};
+
+function detectLang() {
+  const stored = localStorage.getItem('oxi-lang');
+  if (stored && I18N[stored]) return stored;
+  const nav = navigator.language || 'en';
+  if (nav.startsWith('ja')) return 'ja';
+  if (nav.startsWith('ko')) return 'ko';
+  if (nav.startsWith('zh-TW') || nav.startsWith('zh-Hant')) return 'zh-Hant';
+  if (nav.startsWith('zh')) return 'zh-Hans';
+  if (nav.startsWith('de')) return 'de';
+  if (nav.startsWith('fr')) return 'fr';
+  if (nav.startsWith('es')) return 'es';
+  if (nav.startsWith('it')) return 'it';
+  if (nav.startsWith('pt')) return 'pt';
+  return 'en';
+}
+let curLang = detectLang();
+function t(key) { return (I18N[curLang] || I18N.en)[key] || I18N.en[key] || key; }
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    el.textContent = t(key);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+}
+
+import init, { create_blank_docx, parse_document, layout_document, docx_to_pdf, build_docx, build_docx_with_template, edit_docx_advanced } from './oxi_wasm.js';
+await init();
+
+const editor = document.getElementById('editor');
+const editArea = document.getElementById('editArea');
+const previewArea = document.getElementById('previewArea');
+let currentDocx = new Uint8Array(create_blank_docx());
+let originalDocx = null;  // Original bytes when file opened (null = new doc)
+let originalSnapshot = null; // Parsed paragraph texts at open time
+let fileName = '新しいドキュメント';
+let mode = 'edit'; // 'edit' | 'preview'
+let savedHtml = ''; // HTML at last save point
+
+editor.innerHTML = '<p><br></p>';
+editor.focus();
+markClean();
+
+// ---- Helpers ----
+const $ = id => document.getElementById(id);
+const exec = (cmd, v) => {
+  // For foreColor with no selection, insert a zero-width space to anchor the color
+  if (cmd === 'foreColor') {
+    const sel = window.getSelection();
+    if (sel.isCollapsed && sel.rangeCount) {
+      const span = document.createElement('span');
+      span.style.color = v;
+      span.textContent = '\u200B'; // zero-width space
+      const range = sel.getRangeAt(0);
+      range.insertNode(span);
+      range.setStart(span.firstChild, 1);
+      range.collapse(true);
+      sel.removeAllRanges(); sel.addRange(range);
+      editor.focus(); updateToolbar();
+      return;
+    }
+  }
+  document.execCommand(cmd, false, v); editor.focus(); updateToolbar();
+};
+const COLORS = ['#000','#444','#666','#999','#CCC','#FFF','#F00','#F60','#FC0','#FF0','#9C0','#0C0','#0CC','#06C','#00F','#63C','#C0C','#C06','#930','#630','#360','#036','#339','#808'];
+
+// ---- Mode toggle ----
+$('modeEdit').addEventListener('click', () => switchMode('edit'));
+$('modePreview').addEventListener('click', () => switchMode('preview'));
+
+function switchMode(m) {
+  mode = m;
+  $('modeEdit').classList.toggle('active', m === 'edit');
+  $('modePreview').classList.toggle('active', m === 'preview');
+  editArea.style.display = m === 'edit' ? 'flex' : 'none';
+  previewArea.style.display = m === 'preview' ? 'flex' : 'none';
+  // Hide ribbon in preview
+  document.querySelectorAll('.rtabs,.rib,.mbar').forEach(el => el.style.display = m === 'edit' ? '' : 'none');
+  if (m === 'preview') { syncDocx(); renderPreview(); }
+}
+
+/** Render a single layout page to a canvas 2D context. */
+function renderPageToCanvas(ctx, pg) {
+  for (const el of pg.elements) {
+    if (el.kind === 'text') {
+      const fs = el.font_size || 11;
+      const fam = el.font_family || 'sans-serif';
+      ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
+      ctx.fillStyle = el.color || '#000';
+      if (el.highlight && el.highlight !== 'none') {
+        ctx.save(); ctx.fillStyle = el.highlight;
+        ctx.fillRect(el.x, el.y, el.width, el.height);
+        ctx.restore(); ctx.fillStyle = el.color || '#000';
+      }
+      ctx.fillText(el.text || '', el.x, el.y + fs * .85);
+      if (el.underline) {
+        ctx.beginPath(); ctx.strokeStyle = el.color || '#000'; ctx.lineWidth = fs * .05;
+        ctx.moveTo(el.x, el.y + fs); ctx.lineTo(el.x + el.width, el.y + fs); ctx.stroke();
+      }
+    } else if (el.kind === 'border' && el.x1 != null) {
+      ctx.beginPath(); ctx.strokeStyle = el.color || '#000'; ctx.lineWidth = el.width || .5;
+      ctx.moveTo(el.x1, el.y1); ctx.lineTo(el.x2, el.y2); ctx.stroke();
+    } else if (el.kind === 'shading' && el.color) {
+      ctx.fillStyle = el.color; ctx.fillRect(el.x, el.y, el.width, el.height);
+    } else if (el.kind === 'image' && el.image_data) {
+      const img = new Image();
+      const ct = el.content_type || 'image/png';
+      img.src = `data:${ct};base64,${el.image_data}`;
+      const ex = el.x, ey = el.y, ew = el.width, eh = el.height;
+      img.onload = () => { ctx.drawImage(img, ex, ey, ew, eh); };
+    }
+  }
+}
+
+async function renderPreview() {
+  previewArea.innerHTML = `<div style="color:#fff;padding:20px;font-size:14px">${t('rendering')}</div>`;
+  try {
+    const result = layout_document(currentDocx);
+    previewArea.innerHTML = '';
+    const isMobile = window.innerWidth < 769;
+    const SCALE = isMobile ? window.innerWidth / (result.pages[0]?.width || 595) : 1.5;
+
+    for (let i = 0; i < result.pages.length; i++) {
+      const pg = result.pages[i];
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(pg.width * SCALE);
+      canvas.height = Math.round(pg.height * SCALE);
+      canvas.style.width = isMobile ? '100%' : canvas.width + 'px';
+      canvas.style.height = isMobile ? 'auto' : canvas.height + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.scale(SCALE, SCALE);
+      renderPageToCanvas(ctx, pg);
+      // Draw header/footer
+      const hdr = getHeaderText();
+      const ftr = getFooterText();
+      if (hdr) {
+        ctx.font = '9px Calibri, sans-serif';
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        ctx.fillText(hdr, pg.width / 2, 36);
+        ctx.textAlign = 'start';
+      }
+      if (ftr) {
+        ctx.font = '9px Calibri, sans-serif';
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        ctx.fillText(ftr, pg.width / 2, pg.height - 24);
+        ctx.textAlign = 'start';
+      }
+      // Page number in footer
+      if (ftr || hdr) {
+        ctx.font = '8px Calibri, sans-serif';
+        ctx.fillStyle = '#999';
+        ctx.textAlign = 'center';
+        ctx.fillText(`- ${i + 1} -`, pg.width / 2, pg.height - 12);
+        ctx.textAlign = 'start';
+      }
+      ctx.restore();
+      previewArea.appendChild(canvas);
+    }
+    $('pgInfo').textContent = `${result.pages.length} ${t('pages')}`;
+  } catch(e) { previewArea.innerHTML = `<div style="color:#fff;padding:20px">${e.message}</div>`; }
+}
+
+// ---- Color palettes ----
+let curColor = '#F00', curHl = '#FF0';
+function buildPal(el, cb) {
+  el.innerHTML = '';
+  for (const c of COLORS) {
+    const b = document.createElement('button'); b.className = 'sw'; b.style.background = c; b.title = c;
+    b.addEventListener('click', e => { e.stopPropagation(); cb(c); el.classList.remove('show'); });
+    el.appendChild(b);
+  }
+}
+buildPal($('colorPop'), c => { curColor = c; $('colorBar').style.background = c; exec('foreColor', c); });
+buildPal($('hlPop'), c => { curHl = c; $('hlBar').style.background = c; exec('hiliteColor', c); });
+$('btnColor').addEventListener('click', e => { e.stopPropagation(); $('colorPop').classList.toggle('show'); $('hlPop').classList.remove('show'); });
+$('btnHl').addEventListener('click', e => { e.stopPropagation(); $('hlPop').classList.toggle('show'); $('colorPop').classList.remove('show'); });
+document.addEventListener('click', () => { $('colorPop').classList.remove('show'); $('hlPop').classList.remove('show'); $('tgPop').classList.remove('show'); });
+
+// ---- Table grid ----
+const tg = $('tgGrid');
+for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+  const b = document.createElement('button'); b.className = 'tc'; b.dataset.r = r; b.dataset.c = c;
+  b.addEventListener('mouseenter', () => {
+    tg.querySelectorAll('.tc').forEach(t => t.classList.toggle('hl', +t.dataset.r <= r && +t.dataset.c <= c));
+    $('tgLbl').textContent = `${c+1} × ${r+1}`;
+  });
+  b.addEventListener('click', e => { e.stopPropagation(); insTable(r+1, c+1); $('tgPop').classList.remove('show'); });
+  tg.appendChild(b);
+}
+$('btnTbl').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
+
+function insTable(rows, cols) {
+  let h = '<table>';
+  for (let r = 0; r < rows; r++) { h += '<tr>'; for (let c = 0; c < cols; c++) h += '<td><br></td>'; h += '</tr>'; }
+  h += '</table><p><br></p>';
+  exec('insertHTML', h);
+}
+
+// ---- Desktop formatting ----
+$('btnBold').addEventListener('click', () => exec('bold'));
+$('btnItalic').addEventListener('click', () => exec('italic'));
+$('btnUnderline').addEventListener('click', () => exec('underline'));
+$('btnStrike').addEventListener('click', () => exec('strikeThrough'));
+$('btnAlL').addEventListener('click', () => exec('justifyLeft'));
+$('btnAlC').addEventListener('click', () => exec('justifyCenter'));
+$('btnAlR').addEventListener('click', () => exec('justifyRight'));
+$('btnAlJ').addEventListener('click', () => exec('justifyFull'));
+$('btnUL').addEventListener('click', () => exec('insertUnorderedList'));
+$('btnOL').addEventListener('click', () => exec('insertOrderedList'));
+$('btnIndent').addEventListener('click', () => exec('indent'));
+$('btnOutdent').addEventListener('click', () => exec('outdent'));
+$('fontFamily').addEventListener('change', e => { e.target.style.fontFamily = e.target.value; exec('fontName', e.target.value); });
+$('fontSize').addEventListener('change', e => {
+  const s = e.target.value + 'pt';
+  document.execCommand('fontSize', false, '7');
+  editor.querySelectorAll('font[size="7"]').forEach(el => { el.removeAttribute('size'); el.style.fontSize = s; });
+  editor.focus();
+});
+
+// ---- Mobile formatting ----
+$('mBold').addEventListener('click', () => exec('bold'));
+$('mItalic').addEventListener('click', () => exec('italic'));
+$('mUnder').addEventListener('click', () => exec('underline'));
+$('mStrike').addEventListener('click', () => exec('strikeThrough'));
+$('mFontSel').addEventListener('change', e => { exec('fontName', e.target.value); editor.focus(); });
+$('mAlL').addEventListener('click', () => exec('justifyLeft'));
+$('mAlC').addEventListener('click', () => exec('justifyCenter'));
+$('mAlR').addEventListener('click', () => exec('justifyRight'));
+
+// Line spacing
+function showLS() { $('lsPop').classList.add('show'); }
+$('btnLS').addEventListener('click', showLS);
+$('mLS').addEventListener('click', showLS);
+$('lsPop').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('show'); });
+document.querySelectorAll('#lsPop [data-ls]').forEach(b => {
+  b.addEventListener('click', () => {
+    let n = window.getSelection()?.anchorNode;
+    while (n && n !== editor && !['P','H1','H2','H3','DIV'].includes(n.nodeName)) n = n.parentNode;
+    if (n && n !== editor) n.style.lineHeight = b.dataset.ls;
+    $('lsPop').classList.remove('show');
+    editor.focus();
+  });
+});
+
+// Image insert
+function insImage() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const rdr = new FileReader();
+    rdr.onload = () => {
+      const img = document.createElement('img');
+      img.src = rdr.result;
+      img.style.cssText = 'max-width:100%;height:auto;cursor:pointer;display:block;margin:8px 0';
+      img.draggable = false;
+      img.addEventListener('click', () => selectImage(img));
+      const sel = window.getSelection();
+      if (sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        range.insertNode(img);
+        range.setStartAfter(img); sel.removeAllRanges(); sel.addRange(range);
+      } else {
+        editor.appendChild(img);
+      }
+    };
+    rdr.readAsDataURL(f);
+  };
+  inp.click();
+}
+
+// ---- Image resize ----
+let activeImg = null;
+function selectImage(img) {
+  deselectImage();
+  activeImg = img;
+  img.style.outline = '2px solid var(--accent)';
+  showImageMenu(img);
+  // Add resize handles
+  const wrapper = document.createElement('span');
+  wrapper.className = 'img-wrap';
+  wrapper.contentEditable = 'false';
+  wrapper.style.cssText = 'display:inline-block;position:relative;line-height:0';
+  img.parentNode.insertBefore(wrapper, img);
+  wrapper.appendChild(img);
+  const handle = document.createElement('div');
+  handle.className = 'img-handle';
+  handle.style.cssText = 'position:absolute;right:-4px;bottom:-4px;width:12px;height:12px;background:var(--accent);cursor:nwse-resize;border-radius:2px;border:1px solid #fff';
+  wrapper.appendChild(handle);
+  let startX, startW, startH;
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    startX = e.clientX; startW = img.offsetWidth; startH = img.offsetHeight;
+    const ratio = startH / startW;
+    const onMove = ev => {
+      const dx = ev.clientX - startX;
+      const newW = Math.max(30, startW + dx);
+      img.style.width = newW + 'px';
+      img.style.height = Math.round(newW * ratio) + 'px';
+    };
+    const onUp = () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+}
+function deselectImage() {
+  if (!activeImg) return;
+  activeImg.style.outline = '';
+  const wrap = activeImg.closest('.img-wrap');
+  if (wrap) {
+    wrap.parentNode.insertBefore(activeImg, wrap);
+    wrap.remove();
+  }
+  activeImg = null;
+  const menu = document.getElementById('imgMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+function showImageMenu(img) {
+  let menu = document.getElementById('imgMenu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'imgMenu';
+    menu.style.cssText = 'position:absolute;z-index:300;background:#fff;border:1px solid #ccc;border-radius:6px;padding:6px;box-shadow:0 4px 12px rgba(0,0,0,.2);display:flex;gap:4px;font-size:12px';
+    menu.innerHTML = `
+      <button class="rb" id="imgAlL" title="Left" style="font-size:11px">&#x25C0;</button>
+      <button class="rb" id="imgAlC" title="Center" style="font-size:11px">&#x25CF;</button>
+      <button class="rb" id="imgAlR" title="Right" style="font-size:11px">&#x25B6;</button>
+      <span style="width:1px;background:#ccc"></span>
+      <button class="rb" id="imgSmall" style="font-size:10px">S</button>
+      <button class="rb" id="imgMed" style="font-size:10px">M</button>
+      <button class="rb" id="imgLarge" style="font-size:10px">L</button>
+      <span style="width:1px;background:#ccc"></span>
+      <button class="rb" id="imgCrop" style="font-size:10px">Crop</button>
+      <span style="width:1px;background:#ccc"></span>
+      <button class="rb" id="imgDel" style="font-size:11px;color:#c00">&times;</button>
+    `;
+    document.body.appendChild(menu);
+    menu.querySelector('#imgAlL').addEventListener('click', () => { if (activeImg) activeImg.style.cssText += ';margin-left:0;margin-right:auto'; });
+    menu.querySelector('#imgAlC').addEventListener('click', () => { if (activeImg) activeImg.style.cssText += ';margin-left:auto;margin-right:auto'; });
+    menu.querySelector('#imgAlR').addEventListener('click', () => { if (activeImg) activeImg.style.cssText += ';margin-left:auto;margin-right:0'; });
+    menu.querySelector('#imgSmall').addEventListener('click', () => { if (activeImg) { activeImg.style.width = '25%'; activeImg.style.height = 'auto'; } });
+    menu.querySelector('#imgMed').addEventListener('click', () => { if (activeImg) { activeImg.style.width = '50%'; activeImg.style.height = 'auto'; } });
+    menu.querySelector('#imgLarge').addEventListener('click', () => { if (activeImg) { activeImg.style.width = '100%'; activeImg.style.height = 'auto'; } });
+    menu.querySelector('#imgCrop').addEventListener('click', () => {
+      if (!activeImg) return;
+      const img = activeImg;
+      // Toggle crop mode: add a draggable crop overlay
+      let cropOv = img.parentElement?.querySelector('.crop-ov');
+      if (cropOv) { cropOv.remove(); return; }
+      const wrap = img.closest('.img-wrap') || img.parentElement;
+      cropOv = document.createElement('div');
+      cropOv.className = 'crop-ov';
+      cropOv.style.cssText = 'position:absolute;top:10%;left:10%;right:10%;bottom:10%;border:2px dashed #fff;background:rgba(0,0,0,.3);cursor:move;z-index:10';
+      wrap.style.position = 'relative';
+      wrap.appendChild(cropOv);
+      // Drag to reposition crop area
+      let ox, oy, ot, ol;
+      cropOv.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation();
+        ox = e.clientX; oy = e.clientY;
+        ot = cropOv.offsetTop; ol = cropOv.offsetLeft;
+        const onMove = ev => {
+          cropOv.style.top = (ot + ev.clientY - oy) + 'px';
+          cropOv.style.left = (ol + ev.clientX - ox) + 'px';
+        };
+        const onUp = () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      });
+      // Double-click to apply crop
+      cropOv.addEventListener('dblclick', () => {
+        const iw = img.naturalWidth, ih = img.naturalHeight;
+        const dw = img.offsetWidth, dh = img.offsetHeight;
+        const sx = iw / dw, sy = ih / dh;
+        const cx = cropOv.offsetLeft * sx, cy = cropOv.offsetTop * sy;
+        const cw = cropOv.offsetWidth * sx, ch = cropOv.offsetHeight * sy;
+        // Draw cropped image to canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = cw; canvas.height = ch;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, cx, cy, cw, ch, 0, 0, cw, ch);
+        img.src = canvas.toDataURL('image/png');
+        img.style.width = cropOv.offsetWidth + 'px';
+        img.style.height = cropOv.offsetHeight + 'px';
+        cropOv.remove();
+      });
+    });
+    menu.querySelector('#imgDel').addEventListener('click', () => { if (activeImg) { const wrap = activeImg.closest('.img-wrap'); if (wrap) wrap.remove(); else activeImg.remove(); activeImg = null; menu.style.display = 'none'; } });
+  }
+  // Position menu above the image
+  const wrap = img.closest('.img-wrap') || img;
+  const rect = wrap.getBoundingClientRect();
+  menu.style.display = 'flex';
+  menu.style.left = rect.left + 'px';
+  menu.style.top = (rect.top - 40 + window.scrollY) + 'px';
+}
+
+document.addEventListener('click', e => {
+  if (activeImg && !e.target.closest('.img-wrap') && !e.target.closest('#imgMenu') && e.target !== activeImg) deselectImage();
+});
+$('btnImg').addEventListener('click', insImage);
+$('btnImg2').addEventListener('click', insImage);
+$('btnTbl2').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
+$('mImg').addEventListener('click', insImage);
+
+// ---- Link ----
+$('btnLink').addEventListener('click', () => {
+  const url = prompt(t('url'), 'https://');
+  if (!url) return;
+  const text = prompt(t('linkText'), url);
+  if (!text) return;
+  const a = document.createElement('a');
+  a.href = url; a.textContent = text; a.target = '_blank';
+  a.style.color = '#0563C1'; a.style.textDecoration = 'underline';
+  const sel = window.getSelection();
+  if (sel.rangeCount) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(a);
+    range.setStartAfter(a); sel.removeAllRanges(); sel.addRange(range);
+  } else {
+    editor.appendChild(a);
+  }
+});
+
+// ---- Header/Footer ----
+let hfVisible = false;
+$('btnHF').addEventListener('click', () => {
+  hfVisible = !hfVisible;
+  $('headerArea').style.display = hfVisible ? '' : 'none';
+  $('footerArea').style.display = hfVisible ? '' : 'none';
+  if (hfVisible) {
+    $('headerArea').dataset.placeholder = t('headerText');
+    $('footerArea').dataset.placeholder = t('footerText');
+    $('headerArea').focus();
+  }
+});
+function getHeaderText() { return $('headerArea').innerText.trim(); }
+function getFooterText() { return $('footerArea').innerText.trim(); }
+
+// ---- Footnote ----
+let footnoteCounter = 0;
+$('btnFN').addEventListener('click', () => {
+  const text = prompt(t('fnText'));
+  if (!text) return;
+  footnoteCounter++;
+  const sup = document.createElement('sup');
+  sup.textContent = footnoteCounter;
+  sup.style.cssText = 'color:#0563C1;cursor:pointer;font-size:0.7em';
+  sup.title = text;
+  sup.dataset.footnote = text;
+  sup.dataset.fnNum = footnoteCounter;
+  const sel = window.getSelection();
+  if (sel.rangeCount) {
+    const range = sel.getRangeAt(0);
+    range.insertNode(sup);
+    range.setStartAfter(sup); sel.removeAllRanges(); sel.addRange(range);
+  }
+  // Add footnote to bottom area
+  let fnArea = editor.querySelector('.fn-area');
+  if (!fnArea) {
+    fnArea = document.createElement('div');
+    fnArea.className = 'fn-area';
+    fnArea.style.cssText = 'border-top:1px solid #ccc;margin-top:20px;padding-top:8px;font-size:10px;color:#666';
+    editor.appendChild(fnArea);
+  }
+  const fnLine = document.createElement('div');
+  fnLine.innerHTML = `<sup>${footnoteCounter}</sup> ${text}`;
+  fnArea.appendChild(fnLine);
+});
+
+// ---- Table of Contents ----
+$('btnTOC').addEventListener('click', () => {
+  const headings = editor.querySelectorAll('h1,h2,h3,h4,h5,h6');
+  if (!headings.length) { alert('No headings found'); return; }
+  const toc = document.createElement('div');
+  toc.className = 'oxi-toc';
+  toc.contentEditable = 'false';
+  toc.style.cssText = 'border:1px solid #ddd;padding:12px 16px;margin:8px 0;background:#fafafa;border-radius:4px';
+  let html = `<p style="font-weight:700;font-size:12pt;margin-bottom:8px">${t('tocTitle')}</p>`;
+  headings.forEach((h, i) => {
+    const level = +h.tagName[1];
+    const indent = (level - 1) * 16;
+    const text = h.textContent;
+    h.id = h.id || 'heading-' + i;
+    html += `<p style="margin:2px 0;padding-left:${indent}px;font-size:10pt"><a href="#${h.id}" style="color:#0563C1;text-decoration:none">${text}</a></p>`;
+  });
+  toc.innerHTML = html;
+  // Insert at cursor or top
+  const sel = window.getSelection();
+  if (sel.rangeCount && editor.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0);
+    range.insertNode(toc);
+  } else {
+    editor.insertBefore(toc, editor.firstChild);
+  }
+});
+
+// ---- Equation ----
+$('btnMath').addEventListener('click', () => {
+  const tex = prompt(t('eqPlaceholder'), 'x^2 + y^2 = r^2');
+  if (!tex) return;
+  const eq = document.createElement('span');
+  eq.className = 'oxi-eq';
+  eq.contentEditable = 'false';
+  eq.style.cssText = 'display:inline-block;font-family:"Cambria Math","Times New Roman",serif;font-style:italic;font-size:12pt;padding:2px 6px;background:#f0f0f0;border-radius:3px;cursor:default;margin:0 2px';
+  // Simple LaTeX-like rendering
+  eq.textContent = tex.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1/$2)')
+    .replace(/\\sqrt\{([^}]*)\}/g, '√($1)')
+    .replace(/\^(\{[^}]*\}|\w)/g, (m, p) => { const s = p.replace(/[{}]/g, ''); return s.split('').map(c => '⁰¹²³⁴⁵⁶⁷⁸⁹'['0123456789'.indexOf(c)] || c).join(''); })
+    .replace(/_(\{[^}]*\}|\w)/g, (m, p) => { const s = p.replace(/[{}]/g, ''); return s.split('').map(c => '₀₁₂₃₄₅₆₇₈₉'['0123456789'.indexOf(c)] || c).join(''); })
+    .replace(/\\pi/g, 'π').replace(/\\alpha/g, 'α').replace(/\\beta/g, 'β').replace(/\\gamma/g, 'γ')
+    .replace(/\\theta/g, 'θ').replace(/\\lambda/g, 'λ').replace(/\\sigma/g, 'σ').replace(/\\omega/g, 'ω')
+    .replace(/\\sum/g, '∑').replace(/\\prod/g, '∏').replace(/\\int/g, '∫')
+    .replace(/\\infty/g, '∞').replace(/\\pm/g, '±').replace(/\\times/g, '×').replace(/\\div/g, '÷')
+    .replace(/\\leq/g, '≤').replace(/\\geq/g, '≥').replace(/\\neq/g, '≠');
+  eq.title = tex;
+  eq.addEventListener('dblclick', () => {
+    const newTex = prompt(t('eqPlaceholder'), eq.title);
+    if (newTex) { eq.title = newTex; eq.textContent = newTex; }
+  });
+  const sel = window.getSelection();
+  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(eq); r.setStartAfter(eq); sel.removeAllRanges(); sel.addRange(r); }
+});
+
+// ---- Shape ----
+$('btnShape').addEventListener('click', () => {
+  const shapes = ['rect', 'circle', 'line', 'arrow'];
+  const choice = prompt('Shape: rect, circle, line, arrow', 'rect');
+  if (!choice || !shapes.includes(choice)) return;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '120'); svg.setAttribute('height', '80');
+  svg.style.cssText = 'display:inline-block;margin:4px;cursor:pointer;border:1px solid transparent';
+  svg.setAttribute('viewBox', '0 0 120 80');
+  let shape;
+  if (choice === 'rect') {
+    shape = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    shape.setAttribute('x', '5'); shape.setAttribute('y', '5'); shape.setAttribute('width', '110'); shape.setAttribute('height', '70');
+    shape.setAttribute('rx', '4'); shape.setAttribute('fill', '#4472C4'); shape.setAttribute('stroke', '#2F5496'); shape.setAttribute('stroke-width', '2');
+  } else if (choice === 'circle') {
+    shape = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+    shape.setAttribute('cx', '60'); shape.setAttribute('cy', '40'); shape.setAttribute('rx', '55'); shape.setAttribute('ry', '35');
+    shape.setAttribute('fill', '#4472C4'); shape.setAttribute('stroke', '#2F5496'); shape.setAttribute('stroke-width', '2');
+  } else if (choice === 'line') {
+    shape = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    shape.setAttribute('x1', '10'); shape.setAttribute('y1', '70'); shape.setAttribute('x2', '110'); shape.setAttribute('y2', '10');
+    shape.setAttribute('stroke', '#4472C4'); shape.setAttribute('stroke-width', '3');
+  } else if (choice === 'arrow') {
+    shape = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    shape.setAttribute('points', '10,50 80,50 80,30 110,55 80,80 80,60 10,60');
+    shape.setAttribute('fill', '#4472C4'); shape.setAttribute('stroke', '#2F5496'); shape.setAttribute('stroke-width', '1');
+  }
+  svg.appendChild(shape);
+  const sel = window.getSelection();
+  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(svg); r.setStartAfter(svg); sel.removeAllRanges(); sel.addRange(r); }
+  else editor.appendChild(svg);
+});
+
+// ---- Checkbox ----
+$('btnCheck').addEventListener('click', () => {
+  const label = prompt(t('linkText'), 'Item');
+  if (label === null) return;
+  const wrap = document.createElement('label');
+  wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin:2px 4px;cursor:pointer;font-size:10.5pt';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.style.cssText = 'width:16px;height:16px;cursor:pointer';
+  wrap.appendChild(cb);
+  wrap.appendChild(document.createTextNode(label));
+  const sel = window.getSelection();
+  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(wrap); r.setStartAfter(wrap); sel.removeAllRanges(); sel.addRange(r); }
+  else editor.appendChild(wrap);
+});
+
+// ---- Dropdown ----
+$('btnDropdown').addEventListener('click', () => {
+  const opts = prompt('Options (comma-separated)', 'Option 1,Option 2,Option 3');
+  if (!opts) return;
+  const sel2 = document.createElement('select');
+  sel2.style.cssText = 'font:inherit;font-size:10.5pt;padding:2px 4px;border:1px solid #999;border-radius:3px;margin:2px 4px';
+  for (const o of opts.split(',')) {
+    const opt = document.createElement('option');
+    opt.textContent = o.trim(); sel2.appendChild(opt);
+  }
+  const sel = window.getSelection();
+  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(sel2); r.setStartAfter(sel2); sel.removeAllRanges(); sel.addRange(r); }
+  else editor.appendChild(sel2);
+});
+
+// ---- Comment ----
+let commentCounter = 0;
+$('btnComment').addEventListener('click', () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || sel.isCollapsed) { alert('Select text to comment on'); return; }
+  const text = prompt(t('commentText'));
+  if (!text) return;
+  commentCounter++;
+  const range = sel.getRangeAt(0);
+  const mark = document.createElement('mark');
+  mark.style.cssText = 'background:#FFF3A8;cursor:pointer;position:relative';
+  mark.dataset.comment = text;
+  mark.dataset.commentId = commentCounter;
+  mark.title = text;
+  range.surroundContents(mark);
+  // Comment indicator
+  const badge = document.createElement('sup');
+  badge.textContent = '💬';
+  badge.style.cssText = 'font-size:8px;cursor:pointer;user-select:none';
+  badge.addEventListener('click', e => {
+    e.stopPropagation();
+    alert(`Comment #${mark.dataset.commentId}:\n${mark.dataset.comment}`);
+  });
+  mark.appendChild(badge);
+});
+
+// ---- Columns ----
+$('col1').addEventListener('click', () => { editor.style.columnCount = ''; editor.style.columnGap = ''; $('col1').classList.add('active'); $('col2').classList.remove('active'); $('col3').classList.remove('active'); });
+$('col2').addEventListener('click', () => { editor.style.columnCount = '2'; editor.style.columnGap = '24px'; $('col2').classList.add('active'); $('col1').classList.remove('active'); $('col3').classList.remove('active'); });
+$('col3').addEventListener('click', () => { editor.style.columnCount = '3'; editor.style.columnGap = '16px'; $('col3').classList.add('active'); $('col1').classList.remove('active'); $('col2').classList.remove('active'); });
+
+// ---- Page Break / Section Break ----
+$('btnPageBrk').addEventListener('click', () => {
+  const brk = document.createElement('div');
+  brk.contentEditable = 'false';
+  brk.style.cssText = 'border-top:2px dashed #999;margin:16px 0;padding:4px 0;text-align:center;font-size:9px;color:#999;page-break-before:always;user-select:none';
+  brk.textContent = '--- ' + t('pageBreak') + ' ---';
+  const sel = window.getSelection();
+  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(brk); r.setStartAfter(brk); sel.removeAllRanges(); sel.addRange(r); }
+  else editor.appendChild(brk);
+});
+$('btnSecBrk').addEventListener('click', () => {
+  const brk = document.createElement('div');
+  brk.contentEditable = 'false';
+  brk.className = 'oxi-secbrk';
+  brk.style.cssText = 'border-top:2px double #666;margin:20px 0;padding:4px 0;text-align:center;font-size:9px;color:#666;page-break-before:always;user-select:none';
+  brk.textContent = '=== ' + t('sectionBreak') + ' ===';
+  const sel = window.getSelection();
+  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(brk); r.setStartAfter(brk); sel.removeAllRanges(); sel.addRange(r); }
+  else editor.appendChild(brk);
+});
+
+// ---- Mail Merge ----
+let mergeFields = [];
+let mergeData = [];
+$('btnMailMerge').addEventListener('click', () => {
+  const action = prompt('1: Insert field\n2: Load CSV data\n3: Generate merged docs', '1');
+  if (action === '1') {
+    const field = prompt(t('mergeField'), 'Name');
+    if (!field) return;
+    if (!mergeFields.includes(field)) mergeFields.push(field);
+    const tag = document.createElement('span');
+    tag.className = 'merge-field';
+    tag.contentEditable = 'false';
+    tag.dataset.field = field;
+    tag.style.cssText = 'display:inline-block;background:#E8F0FE;border:1px solid #4285F4;border-radius:3px;padding:1px 6px;font-size:9pt;color:#1A73E8;cursor:default;margin:0 2px';
+    tag.textContent = '«' + field + '»';
+    const sel = window.getSelection();
+    if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(tag); r.setStartAfter(tag); sel.removeAllRanges(); sel.addRange(r); }
+    else editor.appendChild(tag);
+  } else if (action === '2') {
+    const csv = prompt(t('mergeData'), 'Name,Email\nJohn,john@example.com\nJane,jane@example.com');
+    if (!csv) return;
+    const lines = csv.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.trim());
+    mergeData = lines.slice(1).map(line => {
+      const vals = line.split(',').map(v => v.trim());
+      const obj = {};
+      headers.forEach((h, i) => obj[h] = vals[i] || '');
+      return obj;
+    });
+    alert(`Loaded ${mergeData.length} records with fields: ${headers.join(', ')}`);
+  } else if (action === '3') {
+    if (!mergeData.length) { alert('Load CSV data first (option 2)'); return; }
+    // Generate merged documents
+    syncDocx();
+    const template = editor.innerHTML;
+    for (let i = 0; i < mergeData.length; i++) {
+      let html = template;
+      const row = mergeData[i];
+      for (const [key, val] of Object.entries(row)) {
+        const re = new RegExp('«' + key + '»', 'g');
+        html = html.replace(re, val);
+      }
+      // Build docx from merged content
+      editor.innerHTML = html;
+      syncDocx();
+      dl(currentDocx, `${fileName}_${i + 1}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
+    editor.innerHTML = template; // Restore
+    alert(`Generated ${mergeData.length} documents`);
+  }
+});
+
+// Mobile font/size
+$('mFontFamily').addEventListener('change', e => { e.target.style.fontFamily = e.target.value; exec('fontName', e.target.value); });
+$('mFontSize').addEventListener('change', e => {
+  const s = e.target.value + 'pt';
+  document.execCommand('fontSize', false, '7');
+  editor.querySelectorAll('font[size="7"]').forEach(el => { el.removeAttribute('size'); el.style.fontSize = s; });
+  editor.focus();
+});
+
+// Mobile color picker
+buildPal($('mColorPop'), c => { curColor = c; $('mColorBar').style.background = c; $('colorBar').style.background = c; exec('foreColor', c); });
+$('mColor').addEventListener('click', e => { e.stopPropagation(); $('mColorPop').classList.toggle('show'); });
+
+// Mobile table grid
+const mTg = $('mTgGrid');
+for (let r = 0; r < 6; r++) for (let c = 0; c < 6; c++) {
+  const b = document.createElement('button'); b.className = 'tc'; b.dataset.r = r; b.dataset.c = c;
+  b.addEventListener('mouseenter', () => { mTg.querySelectorAll('.tc').forEach(t => t.classList.toggle('hl', +t.dataset.r <= r && +t.dataset.c <= c)); $('mTgLbl').textContent = `${c+1} × ${r+1}`; });
+  b.addEventListener('click', e => { e.stopPropagation(); insTable(r+1, c+1); $('mTgPop').classList.remove('show'); });
+  mTg.appendChild(b);
+}
+$('mTbl').addEventListener('click', e => { e.stopPropagation(); $('mTgPop').classList.toggle('show'); });
+
+// ---- Toolbar state ----
+function updateToolbar() {
+  for (const [id, cmd] of [['btnBold','bold'],['btnItalic','italic'],['btnUnderline','underline'],['btnStrike','strikeThrough'],
+    ['mBold','bold'],['mItalic','italic'],['mUnder','underline'],['mStrike','strikeThrough'],
+    ['btnAlL','justifyLeft'],['btnAlC','justifyCenter'],['btnAlR','justifyRight'],['btnAlJ','justifyFull'],
+    ['mAlL','justifyLeft'],['mAlC','justifyCenter'],['mAlR','justifyRight']])
+    $(id)?.classList.toggle('active', document.queryCommandState(cmd));
+}
+// ---- Undo/Redo stack ----
+const undoStack = [];
+const redoStack = [];
+let undoTimer = null;
+// ---- Unsaved changes warning ----
+function isDirty() { return editor.innerHTML !== savedHtml; }
+function markClean() { savedHtml = editor.innerHTML; }
+window.addEventListener('beforeunload', e => {
+  if (isDirty()) { e.preventDefault(); e.returnValue = ''; }
+});
+function saveUndoState() {
+  const html = editor.innerHTML;
+  if (undoStack.length && undoStack[undoStack.length-1] === html) return;
+  undoStack.push(html);
+  if (undoStack.length > 100) undoStack.shift();
+  redoStack.length = 0;
+}
+function scheduleUndo() {
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = setTimeout(saveUndoState, 300);
+}
+function doUndo() {
+  if (undoStack.length < 1) return;
+  const current = editor.innerHTML;
+  // If current differs from top of stack, push current first
+  if (!undoStack.length || undoStack[undoStack.length-1] !== current) {
+    undoStack.push(current);
+  }
+  const state = undoStack.length > 1 ? (undoStack.pop(), undoStack[undoStack.length-1]) : undoStack[0];
+  redoStack.push(current);
+  editor.innerHTML = state;
+}
+function doRedo() {
+  if (!redoStack.length) return;
+  const state = redoStack.pop();
+  undoStack.push(editor.innerHTML);
+  editor.innerHTML = state;
+}
+// Save initial state
+saveUndoState();
+
+$('btnUndo').addEventListener('click', doUndo);
+$('btnRedo').addEventListener('click', doRedo);
+editor.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); doUndo(); }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); doRedo(); }
+});
+
+editor.addEventListener('input', () => { scheduleUndo(); updateStatus(); });
+editor.addEventListener('keyup', updateToolbar);
+editor.addEventListener('mouseup', updateToolbar);
+
+function updateStatus() {
+  const txt = editor.innerText || '';
+  const w = txt.trim() ? txt.trim().split(/\s+/).length : 0;
+  $('wc').textContent = w + ' ' + t('words');
+}
+updateStatus();
+
+// ---- Ribbon tabs ----
+const ribs = { home:'ribHome', insert:'ribInsert', layout:'ribLayout' };
+document.querySelectorAll('.rtabs button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.rtabs button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    for (const [k, id] of Object.entries(ribs)) $(id).style.display = k === b.dataset.tab ? 'flex' : 'none';
+  });
+});
+
+// ---- File ----
+$('btnNew').addEventListener('click', () => {
+  currentDocx = new Uint8Array(create_blank_docx());
+  originalDocx = null;
+  originalSnapshot = null;
+  fileName = t('newDoc');
+  $('docName').textContent = fileName;
+  $('docName').dataset.i18n = 'newDoc';
+  editor.innerHTML = '<p><br></p>';
+  editor.focus();
+  markClean();
+  undoStack.length = 0;
+  redoStack.length = 0;
+  saveUndoState();
+  updateStatus();
+  if (mode === 'preview') switchMode('edit');
+});
+$('btnOpen').addEventListener('click', () => $('openOv').classList.add('show'));
+$('dCancel').addEventListener('click', () => $('openOv').classList.remove('show'));
+$('dChoose').addEventListener('click', () => $('fileIn').click());
+$('fileIn').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('openOv').classList.remove('show');
+  fileName = f.name.replace(/\.docx$/,'');
+  $('docName').textContent = fileName;
+  $('docName').removeAttribute('data-i18n');
+  const r = new FileReader();
+  r.onload = () => { currentDocx = new Uint8Array(r.result); loadDocx(currentDocx); };
+  r.readAsArrayBuffer(f); e.target.value = '';
+});
+
+function loadDocx(data) {
+  try {
+    const doc = parse_document(data);
+    editor.innerHTML = '';
+    if (doc.pages) for (const pg of doc.pages) for (const b of pg.blocks) { const el = renderBlock(b); if (el) editor.appendChild(el); }
+    if (!editor.innerHTML.trim()) editor.innerHTML = '<p><br></p>';
+
+    // Store snapshot for diff-based saving
+    originalDocx = new Uint8Array(data);
+    originalSnapshot = takeSnapshot(doc);
+    markClean();
+    updateStatus();
+  } catch(e) { alert('Failed: ' + e.message); }
+}
+
+/** Take a snapshot of the parsed document structure for later diffing. */
+function takeSnapshot(doc) {
+  const blocks = [];
+  if (!doc.pages) return blocks;
+  for (const pg of doc.pages) {
+    for (const b of pg.blocks) {
+      if (b.Paragraph) {
+        const p = b.Paragraph;
+        const text = (p.runs || []).map(r => r.text || '').join('');
+        const runTexts = (p.runs || []).map(r => r.text || '');
+        blocks.push({ type: 'paragraph', text, runTexts, heading: p.style?.heading_level || 0 });
+      } else if (b.Table) {
+        const tbl = b.Table;
+        const cellTexts = (tbl.rows || []).map(row =>
+          (row.cells || []).map(cell => {
+            if (!cell.blocks) return '';
+            return cell.blocks.map(cb => {
+              if (cb.Paragraph) return (cb.Paragraph.runs || []).map(r => r.text || '').join('');
+              return '';
+            }).join('\n');
+          })
+        );
+        blocks.push({ type: 'table', cellTexts });
+      } else if (b.Image) {
+        blocks.push({ type: 'image' });
+      }
+    }
+  }
+  return blocks;
+}
+function renderBlock(b) {
+  if (b.Paragraph) return renderPara(b.Paragraph);
+  if (b.Table) return renderTbl(b.Table);
+  return null;
+}
+function renderPara(p) {
+  const tag = p.style?.heading_level ? `h${p.style.heading_level}` : 'p';
+  const el = document.createElement(tag);
+  if (p.alignment) el.style.textAlign = p.alignment === 'Justify' ? 'justify' : p.alignment.toLowerCase();
+  if (p.style?.indent_left) el.style.marginLeft = p.style.indent_left + 'pt';
+  if (p.style?.indent_first_line) el.style.textIndent = p.style.indent_first_line + 'pt';
+  if (p.style?.list_marker) { const m = document.createElement('span'); m.textContent = p.style.list_marker + ' '; el.appendChild(m); }
+  if (p.runs?.length) for (const r of p.runs) el.appendChild(renderRun(r));
+  else el.appendChild(document.createElement('br'));
+  return el;
+}
+function renderRun(r) {
+  const s = document.createElement('span'); s.textContent = r.text || '';
+  const st = r.style || {};
+  if (st.bold) s.style.fontWeight = 'bold';
+  if (st.italic) s.style.fontStyle = 'italic';
+  if (st.underline) s.style.textDecoration = 'underline';
+  if (st.strikethrough) s.style.textDecoration = (s.style.textDecoration||'') + ' line-through';
+  if (st.font_family) s.style.fontFamily = st.font_family;
+  if (st.font_size) s.style.fontSize = st.font_size + 'pt';
+  if (st.color) s.style.color = '#' + st.color;
+  if (r.url) { const a = document.createElement('a'); a.href = r.url; a.target = '_blank'; a.appendChild(s); return a; }
+  return s;
+}
+function renderTbl(t) {
+  const tbl = document.createElement('table');
+  for (const row of t.rows) {
+    const tr = document.createElement('tr');
+    for (const cell of row.cells) {
+      const td = document.createElement('td');
+      if (cell.shading) td.style.backgroundColor = '#' + cell.shading;
+      if (cell.blocks) for (const b of cell.blocks) { const el = renderBlock(b); if (el) td.appendChild(el); }
+      if (!td.childNodes.length) td.innerHTML = '<br>';
+      tr.appendChild(td);
+    }
+    tbl.appendChild(tr);
+  }
+  return tbl;
+}
+
+// ---- DOM → Content structure → docx ----
+function serializeEditor() {
+  const blocks = [];
+  for (const node of editor.childNodes) {
+    const block = serializeNode(node);
+    if (block) blocks.push(block);
+  }
+  if (!blocks.length) blocks.push({ type: 'paragraph', runs: [{ text: '' }] });
+  return blocks;
+}
+
+function serializeNode(node) {
+  if (node.nodeType === 3) {
+    // Text node at top level — wrap in paragraph
+    const text = node.textContent;
+    if (!text.trim()) return null;
+    return { type: 'paragraph', runs: [{ text }] };
+  }
+  if (node.nodeType !== 1) return null;
+  const tag = node.tagName;
+
+  if (tag === 'TABLE') return serializeTable(node);
+
+  // Paragraph-like elements
+  if (['P','H1','H2','H3','H4','H5','H6','DIV','LI'].includes(tag)) {
+    const block = { type: 'paragraph', runs: [] };
+    // Heading level
+    const m = tag.match(/^H(\d)$/);
+    if (m) block.heading_level = +m[1];
+    // Alignment
+    const align = node.style.textAlign;
+    if (align && align !== 'start') block.alignment = align;
+    // Line height
+    const lh = parseFloat(node.style.lineHeight);
+    if (lh && lh > 0) block.line_height = lh;
+    // Collect runs
+    collectRuns(node, block.runs, {});
+    // Remove empty trailing runs
+    if (!block.runs.length) block.runs.push({ text: '' });
+    return block;
+  }
+
+  // Unknown block element — try to extract text
+  if (node.children && node.children.length) {
+    const results = [];
+    for (const child of node.childNodes) {
+      const b = serializeNode(child);
+      if (b) results.push(b);
+    }
+    return results.length === 1 ? results[0] : null;
+  }
+
+  return null;
+}
+
+function collectRuns(node, runs, inherited) {
+  for (const child of node.childNodes) {
+    if (child.nodeType === 3) {
+      const text = child.textContent;
+      if (text) {
+        runs.push({ text, ...inherited });
+      }
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    if (child.tagName === 'BR') {
+      // Soft line break — append newline to current run text
+      runs.push({ text: '\n', ...inherited });
+      continue;
+    }
+    if (child.tagName === 'IMG') {
+      // Skip images in run collection (handled separately)
+      continue;
+    }
+    // Build style from this element
+    const style = { ...inherited };
+    const cs = child.style;
+    const tag = child.tagName;
+    if (tag === 'B' || tag === 'STRONG' || cs.fontWeight === 'bold' || +cs.fontWeight >= 700) style.bold = true;
+    if (tag === 'I' || tag === 'EM' || cs.fontStyle === 'italic') style.italic = true;
+    if (tag === 'U' || (cs.textDecoration && cs.textDecoration.includes('underline'))) style.underline = true;
+    if (tag === 'S' || tag === 'STRIKE' || (cs.textDecoration && cs.textDecoration.includes('line-through'))) style.strikethrough = true;
+    if (cs.fontFamily) {
+      const ff = cs.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+      if (ff) style.font_family = ff;
+    }
+    if (cs.fontSize) {
+      const sz = parseFloat(cs.fontSize);
+      if (sz > 0) {
+        // Convert px to pt if needed (CSS default)
+        if (cs.fontSize.endsWith('pt')) style.font_size = sz;
+        else if (cs.fontSize.endsWith('px')) style.font_size = sz * 72 / 96;
+        else style.font_size = sz;
+      }
+    }
+    if (cs.color && cs.color !== 'rgb(0, 0, 0)') {
+      style.color = rgbToHex(cs.color);
+    }
+    // FONT tag compatibility (execCommand generates these)
+    if (tag === 'FONT') {
+      if (child.color) style.color = child.color.replace('#','');
+      if (child.face) style.font_family = child.face;
+    }
+    // Recurse
+    collectRuns(child, runs, style);
+  }
+}
+
+function rgbToHex(rgb) {
+  if (!rgb) return undefined;
+  if (rgb.startsWith('#')) return rgb.replace('#','');
+  const m = rgb.match(/(\d+)/g);
+  if (!m || m.length < 3) return undefined;
+  return m.slice(0,3).map(n => (+n).toString(16).padStart(2,'0')).join('');
+}
+
+function serializeTable(tbl) {
+  const rows = [];
+  for (const tr of tbl.querySelectorAll(':scope > tr, :scope > thead > tr, :scope > tbody > tr')) {
+    const cells = [];
+    for (const td of tr.querySelectorAll(':scope > td, :scope > th')) {
+      const text = td.innerText.replace(/\n$/,'');
+      // Check for bold in cell
+      const cs = getComputedStyle(td);
+      const bold = cs.fontWeight === 'bold' || +cs.fontWeight >= 700 ||
+        td.querySelector('b,strong') !== null || td.tagName === 'TH';
+      cells.push({ text, bold: bold || undefined });
+    }
+    if (cells.length) rows.push(cells);
+  }
+  return { type: 'table', rows };
+}
+
+/**
+ * 3-tier sync strategy:
+ * Tier 1: Text-only changes → edit_docx_advanced (full OOXML preservation)
+ * Tier 2: Structure changed → build_docx_with_template (preserve styles/theme)
+ * Tier 3: New document → build_docx (from scratch)
+ */
+function syncDocx() {
+  try {
+    if (!originalDocx || !originalSnapshot) {
+      // Tier 3: New document — build from scratch
+      const content = serializeEditor();
+      currentDocx = new Uint8Array(build_docx(content));
+      return;
+    }
+
+    // Compare current DOM with original snapshot
+    const currentBlocks = serializeEditorAsSnapshot();
+    const diff = computeDiff(originalSnapshot, currentBlocks);
+
+    if (diff.structureChanged) {
+      // Tier 2: Structure changed — rebuild with template styles
+      const content = serializeEditor();
+      currentDocx = new Uint8Array(build_docx_with_template(content, originalDocx));
+    } else if (diff.edits.length > 0) {
+      // Tier 1: Text-only changes — patch original docx
+      currentDocx = new Uint8Array(edit_docx_advanced(originalDocx, diff.edits));
+    }
+    // else: no changes, keep currentDocx as-is
+  } catch(e) {
+    console.error('syncDocx failed:', e);
+    // Ultimate fallback: build from scratch
+    try {
+      const content = serializeEditor();
+      currentDocx = new Uint8Array(build_docx(content));
+    } catch(e2) { console.error('fallback failed:', e2); }
+  }
+}
+
+/** Serialize current DOM into snapshot format for comparison. */
+function serializeEditorAsSnapshot() {
+  const blocks = [];
+  for (const node of editor.childNodes) {
+    if (node.nodeType !== 1) continue;
+    const tag = node.tagName;
+    if (tag === 'TABLE') {
+      const cellTexts = [];
+      for (const tr of node.querySelectorAll('tr')) {
+        const row = [];
+        for (const td of tr.querySelectorAll('td,th')) {
+          row.push(td.innerText.replace(/\n$/, ''));
+        }
+        cellTexts.push(row);
+      }
+      blocks.push({ type: 'table', cellTexts });
+    } else if (['P','H1','H2','H3','H4','H5','H6','DIV'].includes(tag)) {
+      const text = node.innerText.replace(/\n$/, '');
+      blocks.push({ type: 'paragraph', text });
+    }
+  }
+  return blocks;
+}
+
+/** Compare original snapshot with current state, produce edit operations. */
+function computeDiff(original, current) {
+  const result = { structureChanged: false, edits: [] };
+
+  // Check if block types match (paragraph/table at each position)
+  if (original.length !== current.length) {
+    result.structureChanged = true;
+    return result;
+  }
+
+  let paraIdx = 0; // Paragraph index (body-level, excluding tables)
+  let tableIdx = 0;
+
+  for (let i = 0; i < original.length; i++) {
+    const orig = original[i];
+    const curr = current[i];
+
+    if (orig.type !== curr.type) {
+      result.structureChanged = true;
+      return result;
+    }
+
+    if (orig.type === 'paragraph') {
+      // Compare text content
+      if (orig.text !== curr.text) {
+        // Generate SetRunText — replace all runs with single run containing new text
+        // This loses original run splits but preserves paragraph-level formatting
+        result.edits.push({
+          type: 'set_run_text',
+          paragraph_index: paraIdx,
+          run_index: 0,
+          new_text: curr.text,
+        });
+
+        // If original had multiple runs, delete the extra ones
+        if (orig.runTexts && orig.runTexts.length > 1) {
+          for (let r = orig.runTexts.length - 1; r >= 1; r--) {
+            result.edits.push({
+              type: 'delete_run',
+              paragraph_index: paraIdx,
+              run_index: r,
+            });
+          }
+        }
+      }
+      paraIdx++;
+    } else if (orig.type === 'table') {
+      // Compare cell texts
+      const origCells = orig.cellTexts || [];
+      const currCells = curr.cellTexts || [];
+      if (origCells.length !== currCells.length) {
+        result.structureChanged = true;
+        return result;
+      }
+      for (let r = 0; r < origCells.length; r++) {
+        if (origCells[r].length !== currCells[r].length) {
+          result.structureChanged = true;
+          return result;
+        }
+        for (let c = 0; c < origCells[r].length; c++) {
+          if (origCells[r][c] !== currCells[r][c]) {
+            result.edits.push({
+              type: 'set_cell_text',
+              table_index: tableIdx,
+              row: r,
+              col: c,
+              text: currCells[r][c],
+            });
+          }
+        }
+      }
+      tableIdx++;
+    }
+    // 'image' blocks: no text to diff
+  }
+
+  return result;
+}
+
+// ---- Save / Export ----
+function dl(d, name, mime) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([d],{type:mime})); a.download = name; a.click(); URL.revokeObjectURL(a.href); }
+$('btnSave').addEventListener('click', () => {
+  syncDocx();
+  dl(currentDocx, (fileName||'doc')+'.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  markClean();
+});
+$('btnPdf').addEventListener('click', () => {
+  syncDocx();
+  try { dl(docx_to_pdf(currentDocx), (fileName||'doc')+'.pdf', 'application/pdf'); }
+  catch(e) { alert('PDF: ' + e.message); }
+});
+
+// ---- Zoom ----
+const zs = $('zSlider');
+function setZ(v) { v = Math.max(50,Math.min(200,v)); zs.value = v; $('zLvl').textContent = v+'%'; $('page1').style.transform = v===100?'':`scale(${v/100})`; $('page1').style.transformOrigin = 'top center'; }
+zs.addEventListener('input', e => setZ(+e.target.value));
+$('zOut').addEventListener('click', () => setZ(+zs.value-10));
+$('zIn').addEventListener('click', () => setZ(+zs.value+10));
+
+// ---- Layout ----
+$('pgA4').addEventListener('click', () => { $('page1').style.width='794px'; $('page1').style.minHeight='1123px'; $('pgA4').classList.add('active'); $('pgLetter').classList.remove('active'); });
+$('pgLetter').addEventListener('click', () => { $('page1').style.width='816px'; $('page1').style.minHeight='1056px'; $('pgLetter').classList.add('active'); $('pgA4').classList.remove('active'); });
+$('mgNorm').addEventListener('click', () => { $('page1').style.padding='96px'; $('mgNorm').classList.add('active'); $('mgNarrow').classList.remove('active'); });
+$('mgNarrow').addEventListener('click', () => { $('page1').style.padding='48px'; $('mgNarrow').classList.add('active'); $('mgNorm').classList.remove('active'); });
+
+// ---- Keyboard ----
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key==='s') { e.preventDefault(); $('btnSave').click(); }
+    if (e.key==='o') { e.preventDefault(); $('btnOpen').click(); }
+    if (e.key==='f') { e.preventDefault(); toggleFind(); }
+    if (e.key==='h') { e.preventDefault(); toggleFind(); }
+    if (e.key==='p') { e.preventDefault(); printDoc(); }
+  }
+  if (e.key === 'Escape') { $('findBar').style.display = 'none'; }
+});
+
+// ---- Find / Replace (#7) ----
+function toggleFind() {
+  const bar = $('findBar');
+  bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
+  if (bar.style.display === 'block') $('findInput').focus();
+}
+function findInEditor(dir) {
+  const query = $('findInput').value;
+  if (!query) return;
+  // Use window.find for simplicity (works in most browsers)
+  const found = window.find(query, false, dir === 'prev', true, false, true, false);
+  // Count occurrences
+  const text = editor.innerText;
+  const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  const matches = text.match(regex);
+  $('findCount').textContent = matches ? matches.length + ' found' : 'Not found';
+}
+$('findNext').addEventListener('click', () => findInEditor('next'));
+$('findPrev').addEventListener('click', () => findInEditor('prev'));
+$('findInput').addEventListener('keydown', e => { if (e.key === 'Enter') findInEditor(e.shiftKey ? 'prev' : 'next'); });
+$('findClose').addEventListener('click', () => { $('findBar').style.display = 'none'; });
+$('replaceOne').addEventListener('click', () => {
+  const sel = window.getSelection();
+  if (sel.rangeCount && !sel.isCollapsed) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(document.createTextNode($('replaceInput').value));
+  }
+  findInEditor('next');
+});
+$('replaceAll').addEventListener('click', () => {
+  const find = $('findInput').value;
+  const repl = $('replaceInput').value;
+  if (!find) return;
+  // Walk text nodes
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  let count = 0;
+  for (const node of nodes) {
+    if (node.textContent.includes(find)) {
+      node.textContent = node.textContent.split(find).join(repl);
+      count++;
+    }
+  }
+  $('findCount').textContent = count ? count + ' replaced' : 'Not found';
+});
+
+// ---- Print (#9) ----
+function printDoc() {
+  // Create a print-friendly iframe
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  doc.open();
+  doc.write(`<!DOCTYPE html><html><head><style>
+    body{font-family:Calibri,'Yu Gothic UI',sans-serif;font-size:10.5pt;margin:72pt;color:#000}
+    table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:4px 6px}
+    h1{font-size:16pt}h2{font-size:13pt}p{margin-bottom:8pt}
+    @page{size:A4;margin:1in}
+  </style></head><body>${editor.innerHTML}</body></html>`);
+  doc.close();
+  iframe.contentWindow.focus();
+  iframe.contentWindow.print();
+  setTimeout(() => document.body.removeChild(iframe), 3000);
+}
+
+// ---- Page tracking (#8) ----
+function updatePageInfo() {
+  const isMobile = window.innerWidth < 769;
+  if (isMobile) {
+    // Reflow mode: estimate from line count
+    const lineH = 22; // approx line height in reflow
+    const linesPerPage = Math.floor(842 * 0.75 / lineH); // A4 height minus margins, roughly
+    const contentH = editor.scrollHeight;
+    const totalLines = Math.max(1, Math.ceil(contentH / lineH));
+    const pages = Math.max(1, Math.ceil(totalLines / linesPerPage));
+    const scrollTop = $('editArea').scrollTop;
+    const currentPage = Math.min(pages, Math.floor(scrollTop / (linesPerPage * lineH)) + 1);
+    $('pgInfo').textContent = `~${t('page')} ${currentPage} / ~${pages}`;
+  } else {
+    // Page mode: estimate from editor page layout
+    const pageH = 1123; // A4 px
+    const contentH = editor.scrollHeight;
+    const pages = Math.max(1, Math.ceil(contentH / (pageH - 192)));
+    const scrollTop = $('editArea').scrollTop;
+    const currentPage = Math.min(pages, Math.floor(scrollTop / pageH) + 1);
+    $('pgInfo').textContent = `${t('page')} ${currentPage} / ${pages}`;
+  }
+}
+$('editArea').addEventListener('scroll', updatePageInfo);
+editor.addEventListener('input', () => { updatePageInfo(); });
+updatePageInfo();
+
+// ---- Print ----
+function handlePrint() {
+  syncDocx();
+  // Use layout engine to render pages, then print canvases
+  try {
+    const result = layout_document(currentDocx);
+    const printWin = window.open('', '_blank', 'width=800,height=1100');
+    printWin.document.write('<html><head><title>' + fileName + '</title>');
+    printWin.document.write('<style>@page{size:A4;margin:0}body{margin:0}canvas{display:block;page-break-after:always;width:100%;height:auto}</style>');
+    printWin.document.write('</head><body>');
+    printWin.document.close();
+    const SCALE = 2;
+    let loaded = 0;
+    for (const pg of result.pages) {
+      const canvas = printWin.document.createElement('canvas');
+      canvas.width = Math.round(pg.width * SCALE);
+      canvas.height = Math.round(pg.height * SCALE);
+      printWin.document.body.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+      ctx.scale(SCALE, SCALE);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, pg.width, pg.height);
+      renderPageToCanvas(ctx, pg);
+      loaded++;
+      if (loaded === result.pages.length) {
+        setTimeout(() => { printWin.print(); }, 200);
+      }
+    }
+  } catch(e) {
+    // Fallback: browser print
+    window.print();
+  }
+}
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); handlePrint(); }
+});
+
+// ---- Responsive: reflow on mobile ----
+function checkReflow() {
+  const mobile = window.innerWidth < 769;
+  editArea.classList.toggle('reflow', mobile);
+}
+window.addEventListener('resize', checkReflow);
+checkReflow();
+
+// ---- i18n init ----
+$('langSel').value = curLang;
+$('langSel').addEventListener('change', e => {
+  curLang = e.target.value;
+  localStorage.setItem('oxi-lang', curLang);
+  document.documentElement.lang = curLang.startsWith('zh') ? curLang : curLang.split('-')[0];
+  applyI18n();
+  updateStatus();
+  updatePageInfo();
+});
+document.documentElement.lang = curLang.startsWith('zh') ? curLang : curLang.split('-')[0];
+applyI18n();
+updatePageInfo();
+</script>
+</body>
+</html>
