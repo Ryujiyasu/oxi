@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/oxidocs-core", "crates/oxidocs-wasm"]
+members = ["crates/oxi-common", "crates/oxicells-core", "crates/oxidocs-core", "crates/oxi-wasm", "crates/oxislides-core"]
 resolver = "2"

@@ -1,9 +1,9 @@
 [package]
-name = "oxidocs-wasm"
+name = "oxi-wasm"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "WebAssembly bindings for Oxidocs"
+description = "WebAssembly bindings for the Oxi document processing suite"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

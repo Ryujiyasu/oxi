@@ -1,15 +1,12 @@
 [package]
-name = "oxidocs-core"
+name = "oxi-common"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Core .docx processing engine for Oxi"
+description = "Shared OOXML utilities for Oxi suite (ZIP, XML, relationships)"
 
 [dependencies]
-oxi-common = { path = "../oxi-common" }
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 thiserror = "1"
 log = "0.4"

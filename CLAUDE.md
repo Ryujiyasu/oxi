@@ -1,14 +1,17 @@
-# Oxidocs Development Guide
+# Oxi Development Guide
 
 ## Project Overview
 
-Oxidocs is a Word-compatible OSS document processing engine built with Rust + WebAssembly.
-The goal is to parse, render, and eventually edit .docx files natively in the browser.
+Oxi is an OSS document processing suite built with Rust + WebAssembly.
+The goal is to parse, render, and eventually edit .docx / .xlsx / .pptx files natively in the browser.
 
 ## Architecture
 
-- **oxidocs-core**: Core engine — parser, IR, layout, font metrics
-- **oxidocs-wasm**: WebAssembly bindings via wasm-bindgen
+- **oxi-common**: Shared OOXML utilities (ZIP, XML, relationships)
+- **oxidocs-core**: .docx engine — parser, IR, layout, font metrics
+- **oxicells-core**: .xlsx engine — parser, IR
+- **oxislides-core**: .pptx engine — parser, IR
+- **oxi-wasm**: WebAssembly bindings via wasm-bindgen
 - **web/**: React + Canvas demo app
 
 ## IR Design Principles
@@ -33,7 +36,7 @@ Reference: JIS X 4051
 
 ## Testing
 
-- Golden tests: render .docx with Oxidocs, compare pixel-by-pixel against Word screenshots
+- Golden tests: render .docx with Oxi, compare pixel-by-pixel against Word screenshots
 - Test fixtures go in tests/fixtures/
 - CI: `cargo test`, `cargo clippy`, `wasm-pack build`
 
@@ -43,7 +46,7 @@ Reference: JIS X 4051
 cargo build                          # Build all
 cargo test                           # Run tests
 cargo clippy                         # Lint
-cd crates/oxidocs-wasm && wasm-pack build --target web  # Wasm build
+cd crates/oxi-wasm && wasm-pack build --target web  # Wasm build
 ```
 
 ## License

@@ -1,10 +1,12 @@
-# Oxidocs
+# Oxi
 
-Word-compatible OSS document processing engine built with Rust + WebAssembly.
+OSS document processing suite built with Rust + WebAssembly.
+
+**[Live Demo](https://ryujiyasu.github.io/oxi/)**
 
 ## Vision
 
-Microsoft Word (.docx) compatibility for the browser — without Microsoft.
+Microsoft Office (.docx / .xlsx / .pptx) compatibility for the browser — without Microsoft.
 Built as a base by one developer, grown by the community.
 
 ## Status
@@ -14,6 +16,8 @@ Early development
 ## Goals (Phase 1)
 
 - [ ] .docx parser
+- [ ] .xlsx parser
+- [ ] .pptx parser
 - [ ] Language-agnostic IR
 - [ ] Basic layout engine (paragraph, table, image)
 - [ ] Japanese typography (kinsoku)
@@ -24,13 +28,16 @@ Early development
 
 ```
 crates/
-  oxidocs-core/       # Core engine (Rust)
+  oxi-common/         # Shared OOXML utilities
+  oxidocs-core/       # .docx engine (Rust)
     src/
       parser/          # .docx parser (OOXML)
       ir/              # Intermediate Representation
       layout/          # Layout engine
       font/            # Font metrics
-  oxidocs-wasm/        # Wasm bindings
+  oxicells-core/      # .xlsx engine (Rust)
+  oxislides-core/     # .pptx engine (Rust)
+  oxi-wasm/           # Wasm bindings
 web/                   # Web demo (React + Canvas)
 tests/
   fixtures/            # Test .docx files
@@ -48,7 +55,7 @@ tests/
 cargo build
 
 # Build Wasm
-cd crates/oxidocs-wasm
+cd crates/oxi-wasm
 wasm-pack build --target web
 ```
 
