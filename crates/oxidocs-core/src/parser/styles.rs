@@ -2,7 +2,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use super::ParseError;
-use crate::ir::{ParagraphStyle, StyleSheet};
+use crate::ir::{ParagraphStyle, RunStyle, StyleSheet};
 
 pub fn parse_styles(xml: &str) -> Result<StyleSheet, ParseError> {
     let mut reader = Reader::from_str(xml);
@@ -44,16 +44,82 @@ fn parse_style_definition(
     reader: &mut Reader<&[u8]>,
 ) -> Result<ParagraphStyle, ParseError> {
     let mut style = ParagraphStyle::default();
+    let mut run_style = RunStyle::default();
+    let mut has_run_style = false;
     let mut depth = 0;
+    let mut in_rpr = false;
 
     loop {
         match reader.read_event()? {
-            Event::Start(_e) => {
-                depth += 1;
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "rPr" if depth == 0 => {
+                        in_rpr = true;
+                        depth += 1;
+                    }
+                    "rFonts" if in_rpr => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "ascii" || key == "hAnsi" {
+                                run_style.font_family =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                                has_run_style = true;
+                            }
+                        }
+                        depth += 1;
+                    }
+                    _ => {
+                        depth += 1;
+                    }
+                }
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "spacing" {
+                if in_rpr {
+                    match local.as_str() {
+                        "b" => {
+                            run_style.bold = true;
+                            has_run_style = true;
+                        }
+                        "i" => {
+                            run_style.italic = true;
+                            has_run_style = true;
+                        }
+                        "sz" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.font_size =
+                                        val.parse::<f32>().ok().map(|v| v / 2.0);
+                                    has_run_style = true;
+                                }
+                            }
+                        }
+                        "color" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    if val != "auto" {
+                                        run_style.color = Some(val.to_string());
+                                        has_run_style = true;
+                                    }
+                                }
+                            }
+                        }
+                        "rFonts" => {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                if key == "ascii" || key == "hAnsi" {
+                                    run_style.font_family =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    has_run_style = true;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if local == "spacing" {
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
                         let val = String::from_utf8_lossy(&attr.value);
@@ -74,16 +140,22 @@ fn parse_style_definition(
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "style" && depth == 0 {
+                if local == "rPr" && in_rpr {
+                    in_rpr = false;
+                    depth -= 1;
+                } else if local == "style" && depth == 0 {
                     break;
-                }
-                if depth > 0 {
+                } else if depth > 0 {
                     depth -= 1;
                 }
             }
             Event::Eof => break,
             _ => {}
         }
+    }
+
+    if has_run_style {
+        style.default_run_style = Some(run_style);
     }
 
     Ok(style)

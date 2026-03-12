@@ -79,7 +79,7 @@ fn main() {
                     println!("  [{:2}] TEXT ({:6.1}, {:6.1}) w={:6.1} h={:5.1} {:.0}pt{} \"{}\"", 
                         ei, elem.x, elem.y, elem.width, elem.height, font_size, flags, text);
                 }
-                layout::LayoutContent::Image { data } => {
+                layout::LayoutContent::Image { data, .. } => {
                     println!("  [{:2}] IMG  ({:6.1}, {:6.1}) w={:6.1} h={:5.1} {} bytes", 
                         ei, elem.x, elem.y, elem.width, elem.height, data.len());
                 }

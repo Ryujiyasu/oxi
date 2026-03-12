@@ -29,10 +29,14 @@ pub enum LayoutContent {
         font_family: Option<String>,
         bold: bool,
         italic: bool,
+        underline: bool,
+        strikethrough: bool,
         color: Option<String>,
+        highlight: Option<String>,
     },
     Image {
         data: Vec<u8>,
+        content_type: Option<String>,
     },
     TableBorder {
         x1: f32,
@@ -45,6 +49,19 @@ pub enum LayoutContent {
 pub struct LayoutEngine {
     default_font_size: f32,
     default_metrics: FontMetrics,
+}
+
+/// Word's default heading font sizes (in points)
+fn heading_default_font_size(level: u8) -> f32 {
+    match level {
+        1 => 16.0,
+        2 => 13.0,
+        3 => 12.0,
+        4 => 11.0,
+        5 => 11.0,
+        6 => 11.0,
+        _ => 11.0,
+    }
 }
 
 impl LayoutEngine {
@@ -64,6 +81,43 @@ impl LayoutEngine {
         }
 
         LayoutResult { pages }
+    }
+
+    /// Resolve font size for a run, considering paragraph style defaults and heading level
+    fn resolve_font_size(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> f32 {
+        // 1. Explicit run font size
+        if let Some(fs) = run_style.font_size {
+            return fs;
+        }
+        // 2. Default run style from paragraph style definition
+        if let Some(ref drs) = para_style.default_run_style {
+            if let Some(fs) = drs.font_size {
+                return fs;
+            }
+        }
+        // 3. Heading level default
+        if let Some(level) = para_style.heading_level {
+            return heading_default_font_size(level);
+        }
+        // 4. Document default
+        self.default_font_size
+    }
+
+    /// Resolve bold for a run, considering paragraph style defaults
+    fn resolve_bold(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> bool {
+        if run_style.bold {
+            return true;
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if drs.bold {
+                return true;
+            }
+        }
+        // Headings 1-2 are bold by default in Word
+        if let Some(level) = para_style.heading_level {
+            return level <= 2;
+        }
+        false
     }
 
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
@@ -118,6 +172,7 @@ impl LayoutEngine {
                         height: img.height,
                         content: LayoutContent::Image {
                             data: img.data.clone(),
+                            content_type: img.content_type.clone(),
                         },
                     });
                     cursor_y += img.height;
@@ -166,15 +221,21 @@ impl LayoutEngine {
             .map(|r| (r.text.as_str(), &r.style))
             .collect();
 
+        // Resolve font size for line breaking (use paragraph-level defaults)
+        let para_font_size = self.resolve_font_size(
+            para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+            &para.style,
+        );
+
         // Line-break the text
-        let lines = self.break_into_lines(&fragments, available_width, first_line_indent);
+        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style);
 
         for (line_idx, line) in lines.iter().enumerate() {
             let font_size = line
                 .fragments
                 .first()
                 .and_then(|f| f.style.font_size)
-                .unwrap_or(self.default_font_size);
+                .unwrap_or(para_font_size);
             let line_height = self.line_height(font_size, para.style.line_spacing);
 
             // Page break check
@@ -206,6 +267,8 @@ impl LayoutEngine {
             let mut x = line_x + align_offset;
 
             for frag in &line.fragments {
+                let resolved_font_size = frag.style.font_size.unwrap_or(para_font_size);
+                let resolved_bold = self.resolve_bold(&frag.style, &para.style);
                 elements.push(LayoutElement {
                     x,
                     y: *cursor_y,
@@ -213,11 +276,14 @@ impl LayoutEngine {
                     height: line_height,
                     content: LayoutContent::Text {
                         text: frag.text.clone(),
-                        font_size: frag.style.font_size.unwrap_or(self.default_font_size),
+                        font_size: resolved_font_size,
                         font_family: frag.style.font_family.clone(),
-                        bold: frag.style.bold,
+                        bold: resolved_bold,
                         italic: frag.style.italic,
+                        underline: frag.style.underline,
+                        strikethrough: frag.style.strikethrough,
                         color: frag.style.color.clone(),
+                        highlight: frag.style.highlight.clone(),
                     },
                 });
                 x += frag.width;
@@ -237,6 +303,7 @@ impl LayoutEngine {
         fragments: &[(&str, &RunStyle)],
         available_width: f32,
         first_line_indent: f32,
+        para_style: &ParagraphStyle,
     ) -> Vec<Line> {
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![] };
@@ -244,7 +311,7 @@ impl LayoutEngine {
         let mut _is_first_line = true;
 
         for &(text, style) in fragments {
-            let font_size = style.font_size.unwrap_or(self.default_font_size);
+            let font_size = self.resolve_font_size(style, para_style);
 
             // Process text character by character for proper line breaking
             let mut word = String::new();
@@ -402,7 +469,7 @@ impl LayoutEngine {
                 for block in &cell.blocks {
                     if let Block::Paragraph(para) = block {
                         for run in &para.runs {
-                            let font_size = run.style.font_size.unwrap_or(self.default_font_size);
+                            let font_size = self.resolve_font_size(&run.style, &para.style);
                             let line_height = self.line_height(font_size, para.style.line_spacing);
                             cell_y += line_height;
                         }
@@ -427,7 +494,7 @@ impl LayoutEngine {
                 for block in &cell.blocks {
                     if let Block::Paragraph(para) = block {
                         for run in &para.runs {
-                            let font_size = run.style.font_size.unwrap_or(self.default_font_size);
+                            let font_size = self.resolve_font_size(&run.style, &para.style);
                             let lh = self.line_height(font_size, para.style.line_spacing);
                             let text_width = run
                                 .text
@@ -444,9 +511,12 @@ impl LayoutEngine {
                                     text: run.text.clone(),
                                     font_size,
                                     font_family: run.style.font_family.clone(),
-                                    bold: run.style.bold,
+                                    bold: self.resolve_bold(&run.style, &para.style),
                                     italic: run.style.italic,
+                                    underline: run.style.underline,
+                                    strikethrough: run.style.strikethrough,
                                     color: run.style.color.clone(),
+                                    highlight: run.style.highlight.clone(),
                                 },
                             });
                             text_y += lh;

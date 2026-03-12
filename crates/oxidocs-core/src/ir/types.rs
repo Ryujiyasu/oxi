@@ -42,7 +42,10 @@ pub struct RunStyle {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub strikethrough: bool,
     pub color: Option<String>,
+    pub highlight: Option<String>,
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 impl Default for RunStyle {
@@ -53,9 +56,19 @@ impl Default for RunStyle {
             bold: false,
             italic: false,
             underline: false,
+            strikethrough: false,
             color: None,
+            highlight: None,
+            vertical_align: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum VerticalAlign {
+    Baseline,
+    Superscript,
+    Subscript,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +94,7 @@ pub struct Image {
     pub width: f32,
     pub height: f32,
     pub alt_text: Option<String>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -106,6 +120,8 @@ pub struct ParagraphStyle {
     pub indent_left: Option<f32>,
     pub indent_right: Option<f32>,
     pub indent_first_line: Option<f32>,
+    /// Default run style from style definition (font size, bold, etc.)
+    pub default_run_style: Option<RunStyle>,
 }
 
 impl Default for ParagraphStyle {
@@ -118,6 +134,7 @@ impl Default for ParagraphStyle {
             indent_left: None,
             indent_right: None,
             indent_first_line: None,
+            default_run_style: None,
         }
     }
 }
