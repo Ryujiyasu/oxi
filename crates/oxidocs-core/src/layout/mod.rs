@@ -214,6 +214,51 @@ impl LayoutEngine {
         let first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
         let available_width = content_width - indent_left - indent_right;
 
+        // Render list marker if present
+        if let Some(ref marker) = para.style.list_marker {
+            let marker_font_size = self.resolve_font_size(
+                para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                &para.style,
+            );
+            let marker_width: f32 = marker
+                .chars()
+                .map(|c| self.char_width(c, marker_font_size))
+                .sum();
+            let list_indent = para.style.list_indent.unwrap_or(18.0);
+            let marker_x = start_x + indent_left - list_indent;
+            let line_height = self.line_height(marker_font_size, para.style.line_spacing);
+
+            // Page break check for marker
+            if *cursor_y + line_height > page_top + content_height {
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(current_elements),
+                });
+                current_elements.extend(std::mem::take(&mut elements));
+                elements = std::mem::take(current_elements);
+                *cursor_y = page_top;
+            }
+
+            elements.push(LayoutElement {
+                x: marker_x,
+                y: *cursor_y,
+                width: marker_width,
+                height: line_height,
+                content: LayoutContent::Text {
+                    text: marker.clone(),
+                    font_size: marker_font_size,
+                    font_family: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    strikethrough: false,
+                    color: None,
+                    highlight: None,
+                },
+            });
+        }
+
         // Collect all text fragments with their styles
         let fragments: Vec<(&str, &RunStyle)> = para
             .runs

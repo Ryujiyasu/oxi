@@ -122,6 +122,10 @@ pub struct ParagraphStyle {
     pub indent_first_line: Option<f32>,
     /// Default run style from style definition (font size, bold, etc.)
     pub default_run_style: Option<RunStyle>,
+    /// Pre-resolved list marker text (e.g., "•", "1.", "a)")
+    pub list_marker: Option<String>,
+    /// Hanging indent for the list marker in points
+    pub list_indent: Option<f32>,
 }
 
 impl Default for ParagraphStyle {
@@ -135,6 +139,8 @@ impl Default for ParagraphStyle {
             indent_right: None,
             indent_first_line: None,
             default_run_style: None,
+            list_marker: None,
+            list_indent: None,
         }
     }
 }

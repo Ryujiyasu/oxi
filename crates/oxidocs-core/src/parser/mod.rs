@@ -1,3 +1,4 @@
+mod numbering;
 mod ooxml;
 mod relationships;
 mod styles;

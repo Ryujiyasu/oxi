@@ -11,6 +11,7 @@ pub struct Presentation {
 pub struct Slide {
     pub index: usize,
     pub shapes: Vec<Shape>,
+    pub background_color: Option<String>, // hex color e.g. "FFFFFF"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,9 @@ pub struct Shape {
     pub width: f32,
     pub height: f32,
     pub content: ShapeContent,
+    pub fill_color: Option<String>,   // hex color for solid fill
+    pub border_color: Option<String>, // hex color for outline
+    pub border_width: Option<f32>,    // border width in points
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

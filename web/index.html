@@ -595,6 +595,26 @@ function renderEditableDocx(doc) {
                 else if (align === 'Right') paraDiv.classList.add('align-right');
                 else if (align === 'Justify') paraDiv.classList.add('align-justify');
 
+                // Indentation
+                if (para.style && para.style.indent_left) {
+                    paraDiv.style.paddingLeft = para.style.indent_left + 'pt';
+                }
+
+                // List marker
+                if (para.style && para.style.list_marker) {
+                    const markerSpan = document.createElement('span');
+                    markerSpan.className = 'edit-list-marker';
+                    markerSpan.textContent = para.style.list_marker;
+                    markerSpan.contentEditable = 'false';
+                    markerSpan.style.display = 'inline-block';
+                    markerSpan.style.userSelect = 'none';
+                    const listIndent = para.style.list_indent || 18;
+                    markerSpan.style.width = listIndent + 'pt';
+                    markerSpan.style.marginLeft = '-' + listIndent + 'pt';
+                    markerSpan.style.textAlign = 'left';
+                    paraDiv.appendChild(markerSpan);
+                }
+
                 for (let ri = 0; ri < para.runs.length; ri++) {
                     const run = para.runs[ri];
                     const span = document.createElement('span');
@@ -701,6 +721,135 @@ function colName(idx) {
     return name;
 }
 
+// Number formatting helper
+function formatCellValue(val, style) {
+    let raw = '';
+    let isNumber = false;
+    if (typeof val === 'object' && val !== null) {
+        if ('String' in val) raw = val.String;
+        else if ('Number' in val) { raw = val.Number; isNumber = true; }
+        else if ('Boolean' in val) return val.Boolean ? 'TRUE' : 'FALSE';
+        else if ('Error' in val) return val.Error;
+        else if ('Empty' in val) return '';
+    } else if (typeof val === 'string') {
+        return val;
+    }
+    if (!isNumber) return String(raw);
+
+    const fmt = style && style.number_format;
+    if (!fmt || fmt === 'General') {
+        if (raw === Math.floor(raw)) return String(Math.floor(raw));
+        return String(raw);
+    }
+
+    // Date formats (Excel serial number to date)
+    if (fmt.includes('yy') || (fmt.includes('mm') && fmt.includes('dd'))) {
+        const base = new Date(1899, 11, 30);
+        const d = new Date(base.getTime() + raw * 86400000);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yy = String(d.getFullYear()).slice(-2);
+        const yyyy = String(d.getFullYear());
+        if (fmt.includes('h:mm') || fmt.includes('H:mm')) {
+            const hh = String(d.getHours());
+            const mi = String(d.getMinutes()).padStart(2, '0');
+            return `${d.getMonth()+1}/${d.getDate()}/${yy} ${hh}:${mi}`;
+        }
+        if (fmt.includes('yyyy')) return `${yyyy}-${mm}-${dd}`;
+        return `${mm}-${dd}-${yy}`;
+    }
+
+    // Percentage
+    if (fmt.includes('%')) {
+        const pct = raw * 100;
+        if (fmt.includes('.00')) return pct.toFixed(2) + '%';
+        return Math.round(pct) + '%';
+    }
+
+    // Scientific
+    if (fmt.includes('E+')) {
+        return raw.toExponential(2).toUpperCase();
+    }
+
+    // Decimal fixed (0.00 or #,##0.00)
+    if (fmt === '0.00' || fmt.includes('#,##0.00')) {
+        const fixed = raw.toFixed(2);
+        if (fmt.includes(',')) {
+            return Number(fixed).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return fixed;
+    }
+
+    // Comma thousands (#,##0)
+    if (fmt === '#,##0' || fmt.includes(',')) {
+        return Math.round(raw).toLocaleString('en-US');
+    }
+
+    // Fixed integer (0)
+    if (fmt === '0') return String(Math.round(raw));
+
+    // Fallback
+    if (raw === Math.floor(raw)) return String(Math.floor(raw));
+    return String(raw);
+}
+
+// Build merge coverage info
+function buildMergeInfo(mergeCells) {
+    const covered = new Set();
+    const origins = new Map();
+    if (!mergeCells) return { covered, origins };
+    for (const mc of mergeCells) {
+        const rowspan = mc.end_row - mc.start_row + 1;
+        const colspan = mc.end_col - mc.start_col + 1;
+        origins.set(`${mc.start_row},${mc.start_col}`, { rowspan, colspan });
+        for (let r = mc.start_row; r <= mc.end_row; r++) {
+            for (let c = mc.start_col; c <= mc.end_col; c++) {
+                if (r !== mc.start_row || c !== mc.start_col) {
+                    covered.add(`${r},${c}`);
+                }
+            }
+        }
+    }
+    return { covered, origins };
+}
+
+function getColWidthPx(sheet, colIdx) {
+    const charWidth = 7;
+    if (sheet.col_widths && colIdx < sheet.col_widths.length) {
+        return Math.round(sheet.col_widths[colIdx] * charWidth);
+    }
+    return Math.round((sheet.default_col_width || 8.43) * charWidth);
+}
+
+function getRowHeightPx(row, defaultRowHeight) {
+    if (row && row.height != null) return Math.round(row.height * 1.333);
+    return Math.round((defaultRowHeight || 15) * 1.333);
+}
+
+function cellStyleStr(cell) {
+    let style = '';
+    if (cell && cell.style) {
+        const s = cell.style;
+        if (s.bold) style += 'font-weight:bold;';
+        if (s.italic) style += 'font-style:italic;';
+        if (s.font_color) style += `color:#${s.font_color};`;
+        if (s.bg_color) style += `background:#${s.bg_color};`;
+        if (s.horizontal_align) style += `text-align:${s.horizontal_align};`;
+        if (s.border_top) style += 'border-top:1px solid #333;';
+        if (s.border_bottom) style += 'border-bottom:1px solid #333;';
+        if (s.border_left) style += 'border-left:1px solid #333;';
+        if (s.border_right) style += 'border-right:1px solid #333;';
+        if (s.font_size) style += `font-size:${s.font_size}pt;`;
+    }
+    // Numbers default right-align
+    if (cell && cell.value && typeof cell.value === 'object' && 'Number' in cell.value) {
+        if (!cell.style || !cell.style.horizontal_align) {
+            style += 'text-align:right;';
+        }
+    }
+    return style;
+}
+
 function renderXlsx(workbook) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
@@ -717,41 +866,51 @@ function renderXlsx(workbook) {
 
         const sheet = workbook.sheets[idx];
         const colCount = sheet.col_count || 1;
+        const { covered, origins } = buildMergeInfo(sheet.merge_cells);
 
-        let html = '<table><thead><tr><th class="row-header"></th>';
+        const rowMap = {};
+        let maxRow = 0;
+        for (const row of sheet.rows) {
+            rowMap[row.index] = row;
+            if (row.index > maxRow) maxRow = row.index;
+        }
+        if (maxRow < 20) maxRow = 20;
+
+        let html = '<table><colgroup><col style="width:40px">';
+        for (let c = 0; c < colCount; c++) {
+            html += `<col style="width:${getColWidthPx(sheet, c)}px">`;
+        }
+        html += '</colgroup><thead><tr><th class="row-header"></th>';
         for (let c = 0; c < colCount; c++) {
             html += `<th>${colName(c)}</th>`;
         }
         html += '</tr></thead><tbody>';
 
-        for (const row of sheet.rows) {
-            html += `<tr><th class="row-header">${row.index}</th>`;
+        for (let r = 1; r <= maxRow; r++) {
+            const row = rowMap[r];
+            const rowH = getRowHeightPx(row, sheet.default_row_height);
+            html += `<tr style="height:${rowH}px"><th class="row-header">${r}</th>`;
+
             const cellMap = {};
-            for (const cell of row.cells) cellMap[cell.col] = cell;
+            if (row) {
+                for (const cell of row.cells) cellMap[cell.col] = cell;
+            }
+
             for (let c = 0; c < colCount; c++) {
+                const key = `${r},${c}`;
+                if (covered.has(key)) continue;
+
                 const cell = cellMap[c];
-                if (cell) {
-                    const val = cell.value;
-                    let display = '';
-                    if (typeof val === 'object' && val !== null) {
-                        if ('String' in val) display = val.String;
-                        else if ('Number' in val) display = String(val.Number);
-                        else if ('Boolean' in val) display = val.Boolean ? 'TRUE' : 'FALSE';
-                        else if ('Error' in val) display = val.Error;
-                    } else if (typeof val === 'string') {
-                        display = val;
-                    }
-                    let style = '';
-                    if (cell.style) {
-                        if (cell.style.bold) style += 'font-weight:bold;';
-                        if (cell.style.italic) style += 'font-style:italic;';
-                        if (cell.style.font_color) style += `color:#${cell.style.font_color};`;
-                        if (cell.style.bg_color) style += `background:#${cell.style.bg_color};`;
-                    }
-                    html += `<td${style ? ` style="${style}"` : ''}>${escapeHtml(display)}</td>`;
-                } else {
-                    html += '<td></td>';
+                const merge = origins.get(key);
+                let attrs = '';
+                if (merge) {
+                    if (merge.rowspan > 1) attrs += ` rowspan="${merge.rowspan}"`;
+                    if (merge.colspan > 1) attrs += ` colspan="${merge.colspan}"`;
                 }
+
+                const style = cellStyleStr(cell);
+                const display = cell ? formatCellValue(cell.value, cell.style) : '';
+                html += `<td${attrs}${style ? ` style="${style}"` : ''}>${escapeHtml(display)}</td>`;
             }
             html += '</tr>';
         }
@@ -793,9 +952,31 @@ function renderEditableXlsx(workbook) {
 
         const sheet = workbook.sheets[idx];
         const colCount = sheet.col_count || 1;
+        const { covered, origins } = buildMergeInfo(sheet.merge_cells);
+
+        const rowMap = {};
+        let maxRow = 0;
+        for (const row of sheet.rows) {
+            rowMap[row.index] = row;
+            if (row.index > maxRow) maxRow = row.index;
+        }
+        if (maxRow < 20) maxRow = 20;
 
         wrapper.innerHTML = '';
         const table = document.createElement('table');
+
+        // Colgroup for column widths
+        const colgroup = document.createElement('colgroup');
+        const rowHeaderCol = document.createElement('col');
+        rowHeaderCol.style.width = '40px';
+        colgroup.appendChild(rowHeaderCol);
+        for (let c = 0; c < colCount; c++) {
+            const col = document.createElement('col');
+            col.style.width = getColWidthPx(sheet, c) + 'px';
+            colgroup.appendChild(col);
+        }
+        table.appendChild(colgroup);
+
         const thead = document.createElement('thead');
         const headerRow = document.createElement('tr');
         headerRow.innerHTML = '<th class="row-header"></th>';
@@ -808,41 +989,60 @@ function renderEditableXlsx(workbook) {
         table.appendChild(thead);
 
         const tbody = document.createElement('tbody');
-        for (const row of sheet.rows) {
+        for (let r = 1; r <= maxRow; r++) {
+            const row = rowMap[r];
             const tr = document.createElement('tr');
+            const rowH = getRowHeightPx(row, sheet.default_row_height);
+            tr.style.height = rowH + 'px';
+
             const th = document.createElement('th');
             th.className = 'row-header';
-            th.textContent = row.index;
+            th.textContent = r;
             tr.appendChild(th);
 
             const cellMap = {};
-            for (const cell of row.cells) cellMap[cell.col] = cell;
+            if (row) {
+                for (const cell of row.cells) cellMap[cell.col] = cell;
+            }
 
             for (let c = 0; c < colCount; c++) {
+                const key = `${r},${c}`;
+                if (covered.has(key)) continue;
+
                 const td = document.createElement('td');
                 td.contentEditable = 'true';
                 td.className = 'edit-cell';
                 td.dataset.sheet = idx;
-                td.dataset.row = row.index;
+                td.dataset.row = r;
                 td.dataset.col = c;
+
+                const merge = origins.get(key);
+                if (merge) {
+                    if (merge.rowspan > 1) td.rowSpan = merge.rowspan;
+                    if (merge.colspan > 1) td.colSpan = merge.colspan;
+                }
 
                 const cell = cellMap[c];
                 let display = '';
                 if (cell) {
-                    const val = cell.value;
-                    if (typeof val === 'object' && val !== null) {
-                        if ('String' in val) display = val.String;
-                        else if ('Number' in val) display = String(val.Number);
-                        else if ('Boolean' in val) display = val.Boolean ? 'TRUE' : 'FALSE';
-                        else if ('Error' in val) display = val.Error;
-                    } else if (typeof val === 'string') {
-                        display = val;
-                    }
+                    display = formatCellValue(cell.value, cell.style);
                     if (cell.style) {
                         if (cell.style.bold) td.style.fontWeight = 'bold';
                         if (cell.style.italic) td.style.fontStyle = 'italic';
                         if (cell.style.font_color) td.style.color = '#' + cell.style.font_color;
                         if (cell.style.bg_color) td.style.background = '#' + cell.style.bg_color;
+                        if (cell.style.horizontal_align) td.style.textAlign = cell.style.horizontal_align;
+                        if (cell.style.border_top) td.style.borderTop = '1px solid #333';
+                        if (cell.style.border_bottom) td.style.borderBottom = '1px solid #333';
+                        if (cell.style.border_left) td.style.borderLeft = '1px solid #333';
+                        if (cell.style.border_right) td.style.borderRight = '1px solid #333';
+                        if (cell.style.font_size) td.style.fontSize = cell.style.font_size + 'pt';
+                    }
+                    // Numbers default right-align
+                    if (cell.value && typeof cell.value === 'object' && 'Number' in cell.value) {
+                        if (!cell.style || !cell.style.horizontal_align) {
+                            td.style.textAlign = 'right';
+                        }
                     }
                 }
                 td.textContent = display;
@@ -887,7 +1087,7 @@ function renderEditablePptx(presentation) {
         wrapper.className = 'slide-wrapper';
         wrapper.style.width = (presentation.slide_width * scale) + 'px';
         wrapper.style.height = (presentation.slide_height * scale) + 'px';
-        wrapper.style.background = 'white';
+        wrapper.style.background = slide.background_color ? '#' + slide.background_color : 'white';
 
         slide.shapes.forEach((shape, shapeIdx) => {
             const div = document.createElement('div');
@@ -896,6 +1096,14 @@ function renderEditablePptx(presentation) {
             div.style.top = (shape.y * scale) + 'px';
             div.style.width = (shape.width * scale) + 'px';
             div.style.height = (shape.height * scale) + 'px';
+            if (shape.fill_color) {
+                div.style.backgroundColor = '#' + shape.fill_color;
+            }
+            if (shape.border_color) {
+                const bw = shape.border_width || 1;
+                div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
+                div.style.boxSizing = 'border-box';
+            }
 
             const content = shape.content;
             if (content && content.TextBox) {
@@ -973,7 +1181,7 @@ function renderPptx(presentation) {
         wrapper.className = 'slide-wrapper';
         wrapper.style.width = (presentation.slide_width * scale) + 'px';
         wrapper.style.height = (presentation.slide_height * scale) + 'px';
-        wrapper.style.background = 'white';
+        wrapper.style.background = slide.background_color ? '#' + slide.background_color : 'white';
 
         for (const shape of slide.shapes) {
             const div = document.createElement('div');
@@ -982,6 +1190,14 @@ function renderPptx(presentation) {
             div.style.top = (shape.y * scale) + 'px';
             div.style.width = (shape.width * scale) + 'px';
             div.style.height = (shape.height * scale) + 'px';
+            if (shape.fill_color) {
+                div.style.backgroundColor = '#' + shape.fill_color;
+            }
+            if (shape.border_color) {
+                const bw = shape.border_width || 1;
+                div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
+                div.style.boxSizing = 'border-box';
+            }
 
             const content = shape.content;
             if (content && content.TextBox) {

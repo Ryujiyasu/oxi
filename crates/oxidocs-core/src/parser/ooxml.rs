@@ -5,6 +5,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use zip::ZipArchive;
 
+use super::numbering::{parse_numbering, NumberingDefinitions};
 use super::relationships::{parse_relationships, Relationship};
 use super::styles::parse_styles;
 use super::ParseError;
@@ -22,6 +23,10 @@ struct ParseContext {
     media: HashMap<String, Vec<u8>>,
     /// Relationship ID -> content type (e.g., "image/png")
     media_types: HashMap<String, String>,
+    /// Numbering definitions from word/numbering.xml
+    numbering: NumberingDefinitions,
+    /// Counters for numbered lists: (numId, ilvl) -> current count
+    list_counters: std::cell::RefCell<HashMap<(String, u8), u32>>,
 }
 
 impl OoxmlParser {
@@ -33,7 +38,8 @@ impl OoxmlParser {
 
     pub fn parse(mut self) -> Result<Document, ParseError> {
         let styles = self.parse_styles()?;
-        let ctx = self.build_context()?;
+        let numbering = self.parse_numbering()?;
+        let ctx = self.build_context(numbering)?;
         let (blocks, sect_pr) = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
 
@@ -72,7 +78,15 @@ impl OoxmlParser {
         Ok(contents)
     }
 
-    fn build_context(&mut self) -> Result<ParseContext, ParseError> {
+    fn parse_numbering(&mut self) -> Result<NumberingDefinitions, ParseError> {
+        match self.read_part("word/numbering.xml") {
+            Ok(xml) => parse_numbering(&xml),
+            Err(ParseError::MissingPart(_)) => Ok(NumberingDefinitions::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn build_context(&mut self, numbering: NumberingDefinitions) -> Result<ParseContext, ParseError> {
         // Parse relationships
         let rels = match self.read_part("word/_rels/document.xml.rels") {
             Ok(xml) => parse_relationships(&xml)?,
@@ -106,7 +120,13 @@ impl OoxmlParser {
             }
         }
 
-        Ok(ParseContext { rels, media, media_types })
+        Ok(ParseContext {
+            rels,
+            media,
+            media_types,
+            numbering,
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+        })
     }
 
     fn parse_styles(&mut self) -> Result<StyleSheet, ParseError> {
@@ -188,6 +208,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut style_id: Option<String> = None;
+    let mut num_pr_ref: Option<NumPrRef> = None;
     let mut depth = 0;
 
     loop {
@@ -196,10 +217,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, a, sid) = parse_paragraph_properties(reader)?;
+                        let (s, a, sid, npr) = parse_paragraph_properties(reader)?;
                         style = s;
                         alignment = a;
                         style_id = sid;
+                        num_pr_ref = npr;
                     }
                     "r" if depth == 0 => {
                         let (run, img) = parse_run(reader, ctx)?;
@@ -247,6 +269,27 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
+    // Resolve list marker from numbering definitions
+    if let Some(npr) = num_pr_ref {
+        if !npr.num_id.is_empty() && npr.num_id != "0" {
+            let (marker, indent) = ctx.numbering.resolve_marker(
+                &npr.num_id,
+                npr.ilvl,
+                &mut ctx.list_counters.borrow_mut(),
+            );
+            style.list_marker = Some(marker);
+            if let Some(ind) = indent {
+                style.list_indent = Some(ind);
+                // Set indent_left from numbering definition if not already set
+                if style.indent_left.is_none() {
+                    if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
+                        style.indent_left = Some(left);
+                    }
+                }
+            }
+        }
+    }
+
     // Append images as separate blocks after the paragraph runs
     // For now, store the first image inline with the paragraph
     let _ = images; // TODO: Better image-in-paragraph representation
@@ -258,13 +301,20 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     })
 }
 
+/// Numbering reference parsed from w:numPr
+struct NumPrRef {
+    num_id: String,
+    ilvl: u8,
+}
+
 /// Parse w:pPr (paragraph properties)
 fn parse_paragraph_properties(
     reader: &mut Reader<&[u8]>,
-) -> Result<(ParagraphStyle, Alignment, Option<String>), ParseError> {
+) -> Result<(ParagraphStyle, Alignment, Option<String>, Option<NumPrRef>), ParseError> {
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut style_id: Option<String> = None;
+    let mut num_pr: Option<NumPrRef> = None;
     let mut depth = 0;
 
     loop {
@@ -272,6 +322,9 @@ fn parse_paragraph_properties(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "numPr" if depth == 0 => {
+                        num_pr = Some(parse_num_pr(reader)?);
+                    }
                     "spacing" if depth == 0 => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -366,6 +419,11 @@ fn parse_paragraph_properties(
                                     style.indent_first_line =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                 }
+                                "hanging" => {
+                                    // Hanging indent: negative first-line indent
+                                    style.indent_first_line =
+                                        val.parse::<f32>().ok().map(|v| -(v / 20.0));
+                                }
                                 _ => {}
                             }
                         }
@@ -387,7 +445,56 @@ fn parse_paragraph_properties(
         }
     }
 
-    Ok((style, alignment, style_id))
+    Ok((style, alignment, style_id, num_pr))
+}
+
+/// Parse w:numPr element
+fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
+    let mut num_id = String::new();
+    let mut ilvl: u8 = 0;
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(_) => {
+                depth += 1;
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "ilvl" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                ilvl = val.parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    "numId" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                num_id = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "numPr" && depth == 0 {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(NumPrRef { num_id, ilvl })
 }
 
 /// Parse a w:r element (run). Returns the Run and optionally an Image if a drawing was found.

@@ -103,6 +103,11 @@ fn parse_slide(
     let mut _depth = 0u32;
     let mut in_sp_tree = false;
 
+    // Slide background state
+    let mut in_bg = false;
+    let mut in_bg_pr = false;
+    let mut slide_background_color: Option<String> = None;
+
     // Shape state
     let mut in_shape = false;
     let mut shape_x: f32 = 0.0;
@@ -112,6 +117,13 @@ fn parse_slide(
     let mut shape_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut shape_is_image = false;
     let mut shape_image_r_id: Option<String> = None;
+    let mut shape_fill_color: Option<String> = None;
+    let mut shape_border_color: Option<String> = None;
+    let mut shape_border_width: Option<f32> = None;
+
+    // Shape property context tracking
+    let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
+    let mut in_ln = false;    // inside <a:ln> (line/border properties)
 
     // Paragraph state
     let mut in_paragraph = false;
@@ -136,6 +148,12 @@ fn parse_slide(
                 _depth += 1;
 
                 match name.as_str() {
+                    "bg" => {
+                        in_bg = true;
+                    }
+                    "bgPr" if in_bg => {
+                        in_bg_pr = true;
+                    }
                     "spTree" => {
                         in_sp_tree = true;
                     }
@@ -148,6 +166,21 @@ fn parse_slide(
                         shape_paragraphs.clear();
                         shape_is_image = name == "pic";
                         shape_image_r_id = None;
+                        shape_fill_color = None;
+                        shape_border_color = None;
+                        shape_border_width = None;
+                    }
+                    "spPr" if in_shape => {
+                        in_sp_pr = true;
+                    }
+                    "ln" if in_sp_pr => {
+                        in_ln = true;
+                        // Width attribute in EMU; 12700 EMU = 1pt
+                        if let Some(w) = get_attr(&e, "w") {
+                            if let Ok(v) = w.parse::<f32>() {
+                                shape_border_width = Some(v / 12700.0);
+                            }
+                        }
                     }
                     "off" if in_shape => {
                         if let Some(x) = get_attr(&e, "x") {
@@ -216,10 +249,32 @@ fn parse_slide(
                             }
                         }
                     }
-                    "solidFill" => {} // container
-                    "srgbClr" if in_run => {
+                    "solidFill" => {} // container — context determines where color goes
+                    "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
-                            run_color = Some(val);
+                            if in_bg_pr {
+                                slide_background_color = Some(val);
+                            } else if in_ln && in_sp_pr {
+                                shape_border_color = Some(val);
+                            } else if in_sp_pr && !in_ln {
+                                shape_fill_color = Some(val);
+                            } else if in_run {
+                                run_color = Some(val);
+                            }
+                        }
+                    }
+                    "schemeClr" => {
+                        if let Some(val) = get_attr(&e, "val") {
+                            let hex = scheme_color_to_hex(&val);
+                            if in_bg_pr {
+                                slide_background_color = Some(hex);
+                            } else if in_ln && in_sp_pr {
+                                shape_border_color = Some(hex);
+                            } else if in_sp_pr && !in_ln {
+                                shape_fill_color = Some(hex);
+                            } else if in_run {
+                                run_color = Some(hex);
+                            }
                         }
                     }
                     "latin" | "ea" | "cs" if in_run => {
@@ -238,6 +293,14 @@ fn parse_slide(
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "ln" if in_sp_pr => {
+                        // Empty <a:ln/> — no border content, just attributes
+                        if let Some(w) = get_attr(&e, "w") {
+                            if let Ok(v) = w.parse::<f32>() {
+                                shape_border_width = Some(v / 12700.0);
+                            }
+                        }
+                    }
                     "off" if in_shape => {
                         if let Some(x) = get_attr(&e, "x") {
                             shape_x = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
@@ -286,9 +349,31 @@ fn parse_slide(
                             };
                         }
                     }
-                    "srgbClr" if in_run => {
+                    "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
-                            run_color = Some(val);
+                            if in_bg_pr {
+                                slide_background_color = Some(val);
+                            } else if in_ln && in_sp_pr {
+                                shape_border_color = Some(val);
+                            } else if in_sp_pr && !in_ln {
+                                shape_fill_color = Some(val);
+                            } else if in_run {
+                                run_color = Some(val);
+                            }
+                        }
+                    }
+                    "schemeClr" => {
+                        if let Some(val) = get_attr(&e, "val") {
+                            let hex = scheme_color_to_hex(&val);
+                            if in_bg_pr {
+                                slide_background_color = Some(hex);
+                            } else if in_ln && in_sp_pr {
+                                shape_border_color = Some(hex);
+                            } else if in_sp_pr && !in_ln {
+                                shape_fill_color = Some(hex);
+                            } else if in_run {
+                                run_color = Some(hex);
+                            }
                         }
                     }
                     "latin" | "ea" | "cs" if in_run => {
@@ -306,8 +391,20 @@ fn parse_slide(
                 _depth -= 1;
 
                 match name.as_str() {
+                    "bg" => {
+                        in_bg = false;
+                    }
+                    "bgPr" => {
+                        in_bg_pr = false;
+                    }
                     "spTree" => {
                         in_sp_tree = false;
+                    }
+                    "spPr" if in_sp_pr => {
+                        in_sp_pr = false;
+                    }
+                    "ln" if in_ln => {
+                        in_ln = false;
                     }
                     "sp" | "pic" if in_shape => {
                         let content = if shape_is_image {
@@ -344,6 +441,9 @@ fn parse_slide(
                             width: shape_w,
                             height: shape_h,
                             content,
+                            fill_color: shape_fill_color.take(),
+                            border_color: shape_border_color.take(),
+                            border_width: shape_border_width.take(),
                         });
                         in_shape = false;
                     }
@@ -387,6 +487,7 @@ fn parse_slide(
     Ok(Slide {
         index: slide_index,
         shapes,
+        background_color: slide_background_color,
     })
 }
 
@@ -449,6 +550,26 @@ fn detect_content_type(path: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Map common OOXML scheme color names to approximate hex values.
+fn scheme_color_to_hex(scheme: &str) -> String {
+    match scheme {
+        "bg1" | "lt1" => "FFFFFF",
+        "bg2" | "lt2" => "E7E6E6",
+        "tx1" | "dk1" => "000000",
+        "tx2" | "dk2" => "44546A",
+        "accent1" => "4472C4",
+        "accent2" => "ED7D31",
+        "accent3" => "A5A5A5",
+        "accent4" => "FFC000",
+        "accent5" => "5B9BD5",
+        "accent6" => "70AD47",
+        "hlink" => "0563C1",
+        "folHlink" => "954F72",
+        _ => "000000",
+    }
+    .to_string()
 }
 
 /// Parse a .pptx file from raw bytes into a Presentation IR.
