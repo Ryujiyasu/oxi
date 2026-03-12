@@ -1,8 +1,14 @@
-# Oxi
+<p align="center">
+  <img src="docs/oxi-logo.png" alt="Oxi" width="400">
+</p>
 
-OSS document processing suite built with Rust + WebAssembly.
+<p align="center">
+  OSS document processing suite built with Rust + WebAssembly.
+</p>
 
-**[Live Demo](https://ryujiyasu.github.io/oxi/)**
+<p align="center">
+  <a href="https://ryujiyasu.github.io/oxi/"><strong>Live Demo</strong></a>
+</p>
 
 ## Vision
 
