@@ -1,0 +1,8 @@
+# Generated test files (reproducible via generate_test_docx.py)
+docx_tests/*.docx
+
+# Word-generated PDFs (large, reproducible on Windows)
+output/pdfs/
+
+# Keep metrics results (these ARE the valuable output)
+# !output/metrics_diff.json

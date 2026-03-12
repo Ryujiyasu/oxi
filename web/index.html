@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oxidocs - Word Document Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f0f0f0;
+    color: #333;
+}
+header {
+    background: #1a1a2e;
+    color: white;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+header h1 { font-size: 20px; font-weight: 600; }
+header span { font-size: 13px; opacity: 0.7; }
+.container {
+    max-width: 900px;
+    margin: 32px auto;
+    padding: 0 16px;
+}
+.drop-zone {
+    border: 2px dashed #aaa;
+    border-radius: 12px;
+    padding: 48px;
+    text-align: center;
+    background: white;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+}
+.drop-zone:hover, .drop-zone.dragover {
+    border-color: #4a6cf7;
+    background: #f8f9ff;
+}
+.drop-zone p { font-size: 16px; color: #666; }
+.drop-zone .hint { font-size: 13px; color: #999; margin-top: 8px; }
+input[type="file"] { display: none; }
+#status {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    display: none;
+    font-size: 14px;
+}
+#status.info { display: block; background: #e8f4ff; color: #1a73e8; }
+#status.error { display: block; background: #ffeaea; color: #d93025; }
+#pages-container {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+}
+.page-wrapper {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    display: inline-block;
+}
+canvas { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>Oxidocs</h1>
+    <span>Word-compatible document viewer (Rust + Wasm)</span>
+</header>
+
+<div class="container">
+    <div class="drop-zone" id="dropZone">
+        <p>Drop a .docx file here or click to browse</p>
+        <p class="hint">Parsed and rendered entirely in your browser via WebAssembly</p>
+    </div>
+    <input type="file" id="fileInput" accept=".docx">
+    <div id="status"></div>
+    <div id="pages-container"></div>
+</div>
+
+<script type="module">
+import init, { layout_document } from '../crates/oxidocs-wasm/pkg/oxidocs_wasm.js';
+
+let wasmReady = false;
+
+async function initialize() {
+    try {
+        await init();
+        wasmReady = true;
+        console.log('Wasm initialized');
+    } catch(e) {
+        showStatus('Failed to load Wasm: ' + e.message, 'error');
+    }
+}
+
+function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = type;
+}
+
+function renderPages(layoutResult) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    const scale = window.devicePixelRatio || 1;
+    const displayScale = Math.min(1, (window.innerWidth - 64) / layoutResult.pages[0].width);
+
+    for (const page of layoutResult.pages) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'page-wrapper';
+
+        const canvas = document.createElement('canvas');
+        canvas.width = page.width * scale;
+        canvas.height = page.height * scale;
+        canvas.style.width = (page.width * displayScale) + 'px';
+        canvas.style.height = (page.height * displayScale) + 'px';
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(scale, scale);
+
+        // White background
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, page.width, page.height);
+
+        for (const elem of page.elements) {
+            if (elem.kind === 'text') {
+                const fontSize = elem.font_size || 11;
+                let fontStyle = '';
+                if (elem.italic) fontStyle += 'italic ';
+                if (elem.bold) fontStyle += 'bold ';
+                ctx.font = fontStyle + fontSize + 'px Calibri, "Yu Gothic", sans-serif';
+                ctx.fillStyle = elem.color ? '#' + elem.color : '#000';
+                // Baseline approximation: y + ascent (roughly 75% of font size)
+                ctx.fillText(elem.text, elem.x, elem.y + fontSize * 0.82);
+            } else if (elem.kind === 'border') {
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 0.5;
+                ctx.beginPath();
+                ctx.moveTo(elem.x1, elem.y1);
+                ctx.lineTo(elem.x2, elem.y2);
+                ctx.stroke();
+            } else if (elem.kind === 'image') {
+                ctx.fillStyle = '#eee';
+                ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+                ctx.strokeStyle = '#ccc';
+                ctx.strokeRect(elem.x, elem.y, elem.width, elem.height);
+                ctx.fillStyle = '#999';
+                ctx.font = '10px sans-serif';
+                ctx.fillText('[image]', elem.x + 4, elem.y + 14);
+            }
+        }
+
+        wrapper.appendChild(canvas);
+        container.appendChild(wrapper);
+    }
+}
+
+async function handleFile(file) {
+    if (!file.name.endsWith('.docx')) {
+        showStatus('Please select a .docx file', 'error');
+        return;
+    }
+    if (!wasmReady) {
+        showStatus('Wasm is still loading...', 'info');
+        return;
+    }
+
+    showStatus('Parsing and rendering...', 'info');
+
+    try {
+        const buffer = await file.arrayBuffer();
+        const data = new Uint8Array(buffer);
+        const t0 = performance.now();
+        const result = layout_document(data);
+        const elapsed = (performance.now() - t0).toFixed(1);
+
+        let totalElements = 0;
+        for (const p of result.pages) totalElements += p.elements.length;
+
+        showStatus(
+            `Rendered ${result.pages.length} page(s), ${totalElements} elements in ${elapsed}ms`,
+            'info'
+        );
+        renderPages(result);
+    } catch(e) {
+        showStatus('Error: ' + e.message, 'error');
+        console.error(e);
+    }
+}
+
+// Event handlers
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('dragover');
+});
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+initialize();
+</script>
+</body>
+</html>

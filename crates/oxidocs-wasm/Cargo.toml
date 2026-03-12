@@ -11,5 +11,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 oxidocs-core = { path = "../oxidocs-core" }
 wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
