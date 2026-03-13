@@ -12,8 +12,8 @@ use super::filter::decode_stream;
 pub fn parse_pdf(data: &[u8]) -> Result<PdfDocument, PdfError> {
     let version = parse_header(data)?;
     let startxref = find_startxref(data)?;
-    let (xref, trailer_pos) = parse_xref_table(data, startxref)?;
-    let trailer = parse_trailer(data, trailer_pos)?;
+
+    let (xref, trailer) = parse_xref_and_trailer(data, startxref)?;
 
     let catalog = read_object_at(data, &xref, trailer.root.num)?;
     let pages = parse_pages(data, &xref, &catalog)?;
@@ -31,6 +31,58 @@ pub fn parse_pdf(data: &[u8]) -> Result<PdfDocument, PdfError> {
         pages,
         outline: Vec::new(),
     })
+}
+
+/// Detect whether the xref at `offset` is a traditional table or an xref stream,
+/// and parse accordingly.
+fn parse_xref_and_trailer(
+    data: &[u8],
+    offset: u64,
+) -> Result<(XrefTable, Trailer), PdfError> {
+    let pos = offset as usize;
+
+    // Check if this is a traditional xref table (starts with "xref")
+    if pos + 4 <= data.len() && &data[pos..pos + 4] == b"xref" {
+        let (xref, trailer_pos) = parse_xref_table(data, offset)?;
+        let trailer = parse_trailer(data, trailer_pos)?;
+        Ok((xref, trailer))
+    } else {
+        // Must be an xref stream (PDF 1.5+): an indirect object containing a stream
+        // with /Type /XRef
+        parse_xref_stream_at(data, pos)
+    }
+}
+
+/// Parse an xref stream object at the given position.
+fn parse_xref_stream_at(data: &[u8], pos: usize) -> Result<(XrefTable, Trailer), PdfError> {
+    // Skip the "N G obj" header
+    let mut p = pos;
+
+    // object number
+    while p < data.len() && data[p].is_ascii_digit() {
+        p += 1;
+    }
+    p = skip_ws(data, p);
+    // generation number
+    while p < data.len() && data[p].is_ascii_digit() {
+        p += 1;
+    }
+    p = skip_ws(data, p);
+    // "obj"
+    if p + 3 <= data.len() && &data[p..p + 3] == b"obj" {
+        p += 3;
+    }
+    p = skip_ws(data, p);
+
+    let (obj, _) = parse_raw_object(data, p)?;
+
+    match obj {
+        PdfObject::Stream { ref dict, data: ref stream_data } => {
+            let decoded = decode_stream(dict, stream_data)?;
+            parse_xref_stream(dict, &decoded)
+        }
+        _ => Err(PdfError::Parse("expected xref stream object".into())),
+    }
 }
 
 /// Parse the PDF header line: `%PDF-X.Y`
@@ -88,12 +140,19 @@ fn parse_trailer(data: &[u8], mut pos: usize) -> Result<Trailer, PdfError> {
 
 /// Read an indirect object given its object number.
 fn read_object_at(data: &[u8], xref: &XrefTable, obj_num: u32) -> Result<PdfObject, PdfError> {
-    let offset = xref
-        .get_offset(obj_num)
-        .ok_or_else(|| PdfError::Parse(format!("object {obj_num} not in xref")))?;
+    match xref.entries.get(&obj_num) {
+        Some(XrefEntry::InUse { offset, .. }) => {
+            read_object_at_offset(data, *offset as usize)
+        }
+        Some(XrefEntry::Compressed { stream_obj, index }) => {
+            read_object_from_object_stream(data, xref, *stream_obj, *index)
+        }
+        _ => Err(PdfError::Parse(format!("object {obj_num} not in xref"))),
+    }
+}
 
-    let mut pos = offset as usize;
-
+/// Read an object at a direct byte offset (traditional in-use object).
+fn read_object_at_offset(data: &[u8], mut pos: usize) -> Result<PdfObject, PdfError> {
     // Skip "N G obj" header.
     // object number
     while pos < data.len() && data[pos].is_ascii_digit() {
@@ -113,6 +172,86 @@ fn read_object_at(data: &[u8], xref: &XrefTable, obj_num: u32) -> Result<PdfObje
 
     let (obj, _) = parse_raw_object(data, pos)?;
     Ok(obj)
+}
+
+/// Read an object from an object stream (PDF 1.5+, /Type /ObjStm).
+fn read_object_from_object_stream(
+    data: &[u8],
+    xref: &XrefTable,
+    stream_obj_num: u32,
+    index: u16,
+) -> Result<PdfObject, PdfError> {
+    // The object stream itself must be an InUse entry
+    let stream_offset = match xref.entries.get(&stream_obj_num) {
+        Some(XrefEntry::InUse { offset, .. }) => *offset as usize,
+        _ => {
+            return Err(PdfError::Parse(format!(
+                "object stream {stream_obj_num} not found"
+            )))
+        }
+    };
+
+    let stream_obj = read_object_at_offset(data, stream_offset)?;
+
+    match stream_obj {
+        PdfObject::Stream {
+            ref dict,
+            data: ref stream_data,
+        } => {
+            use super::filter::decode_stream;
+            let decoded = decode_stream(dict, stream_data)?;
+
+            // /N = number of objects, /First = byte offset of first object data
+            let n = dict
+                .iter()
+                .find(|(k, _)| k == "N")
+                .and_then(|(_, v)| v.as_i64())
+                .unwrap_or(0) as usize;
+
+            let first = dict
+                .iter()
+                .find(|(k, _)| k == "First")
+                .and_then(|(_, v)| v.as_i64())
+                .unwrap_or(0) as usize;
+
+            if (index as usize) >= n {
+                return Err(PdfError::Parse(format!(
+                    "object stream index {index} >= N={n}"
+                )));
+            }
+
+            // The first part of the decoded data contains N pairs of (obj_num, byte_offset)
+            // as space-separated integers. Parse them.
+            let header_part = &decoded[..first.min(decoded.len())];
+            let header_str = String::from_utf8_lossy(header_part);
+            let tokens: Vec<&str> = header_str.split_whitespace().collect();
+
+            // Each object has 2 tokens: obj_num, offset_from_first
+            let pair_idx = (index as usize) * 2 + 1; // +1 to get the offset (skip obj_num)
+            if pair_idx >= tokens.len() {
+                return Err(PdfError::Parse(
+                    "object stream header truncated".into(),
+                ));
+            }
+
+            let obj_offset: usize = tokens[pair_idx]
+                .parse()
+                .map_err(|_| PdfError::Parse("invalid object stream offset".into()))?;
+
+            let abs_offset = first + obj_offset;
+            if abs_offset >= decoded.len() {
+                return Err(PdfError::Parse(
+                    "object stream offset out of bounds".into(),
+                ));
+            }
+
+            let (obj, _) = parse_raw_object(&decoded, abs_offset)?;
+            Ok(obj)
+        }
+        _ => Err(PdfError::Parse(format!(
+            "object {stream_obj_num} is not a stream"
+        ))),
+    }
 }
 
 /// Resolve a reference by following it through the xref table.
