@@ -42,6 +42,17 @@ header {
 }
 header h1 { font-size: 20px; font-weight: 600; }
 header span { font-size: 13px; opacity: 0.7; }
+#langToggle {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.3);
+    color: white;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+#langToggle:hover { border-color: rgba(255,255,255,0.7); }
 .container {
     max-width: 1100px;
     margin: 32px auto;
@@ -625,30 +636,31 @@ input[type="file"] { display: none; }
 <header>
     <img src="../docs/icon-64.png" alt="Oxi" height="28" style="border-radius:4px">
     <h1>Oxi</h1>
-    <span>Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
+    <span data-i18n="subtitle">Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
+    <button id="langToggle" onclick="toggleLang()">日本語</button>
 </header>
 
 <div class="container">
     <div class="drop-zone" id="dropZone">
-        <p>Drop a .docx, .xlsx, or .pptx file here — or click to browse</p>
-        <p class="hint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
+        <p data-i18n="dropText">Drop a .docx, .xlsx, or .pptx file here — or click to browse</p>
+        <p class="hint" data-i18n="dropHint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
     <div class="sample-buttons" id="sampleButtons">
-        <span>Try a sample:</span>
+        <span data-i18n="trySample">Try a sample:</span>
         <button onclick="loadSample('sample.docx')">Word (.docx)</button>
         <button onclick="loadSample('sample.xlsx')">Excel (.xlsx)</button>
         <button onclick="loadSample('sample.pptx')">PowerPoint (.pptx)</button>
     </div>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx">
     <div class="toolbar" id="toolbar">
-        <button id="btnDownload" class="primary">Download</button>
+        <button id="btnDownload" class="primary" data-i18n="download">Download</button>
     </div>
     <div class="ribbon" id="ribbon"></div>
     <div id="status"></div>
     <div id="pages-container"></div>
     <div class="status-bar" id="statusBar">
         <div class="status-left">
-            <span id="statusInfo">Ready</span>
+            <span id="statusInfo" data-i18n="ready">Ready</span>
         </div>
         <div class="zoom-controls">
             <button id="zoomOut" title="Zoom Out">−</button>
@@ -663,20 +675,129 @@ input[type="file"] { display: none; }
     <button class="fr-close" id="frClose">×</button>
     <div class="fr-row">
         <label>Find:</label>
-        <input type="text" id="frFind" placeholder="Search text...">
+        <input type="text" id="frFind" data-i18n-placeholder="searchText" placeholder="Search text...">
     </div>
     <div class="fr-row">
         <label>Replace:</label>
-        <input type="text" id="frReplace" placeholder="Replace with...">
+        <input type="text" id="frReplace" data-i18n-placeholder="replaceWith" placeholder="Replace with...">
     </div>
     <div class="fr-buttons">
-        <button id="frPrev">← Prev</button>
-        <button id="frNext">Next →</button>
-        <button id="frReplaceOne">Replace</button>
-        <button id="frReplaceAll" class="primary">Replace All</button>
+        <button id="frPrev" data-i18n="prev">← Prev</button>
+        <button id="frNext" data-i18n="next">Next →</button>
+        <button id="frReplaceOne" data-i18n="replace">Replace</button>
+        <button id="frReplaceAll" class="primary" data-i18n="replaceAll">Replace All</button>
     </div>
     <div class="fr-status" id="frStatus"></div>
 </div>
+
+<script>
+// === I18N ===
+const I18N = {
+    en: {
+        subtitle: 'Document viewer & editor — .docx / .xlsx / .pptx (Rust + Wasm)',
+        dropText: 'Drop a .docx, .xlsx, or .pptx file here — or click to browse',
+        dropHint: 'Parsed, rendered, and edited entirely in your browser via WebAssembly',
+        trySample: 'Try a sample:',
+        download: 'Download',
+        ready: 'Ready',
+        searchText: 'Search text...',
+        replaceWith: 'Replace with...',
+        prev: '← Prev',
+        next: 'Next →',
+        replace: 'Replace',
+        replaceAll: 'Replace All',
+        find: 'Find:',
+        replaceLabel: 'Replace:',
+        parsing: 'Parsing and rendering...',
+        loadingSample: 'Loading sample...',
+        wasmLoading: 'Wasm is still loading...',
+        unsupported: 'Supported formats: .docx, .xlsx, .pptx',
+        noChanges: 'No changes to save',
+        noMatches: 'No matches found',
+        matchOf: (cur, total) => `${cur} of ${total} matches`,
+        replaced: (n) => `Replaced ${n} occurrence(s)`,
+        parsedDocx: (ms) => `Parsed in ${ms}ms — click text to edit`,
+        parsedXlsx: (sheets, rows, ms) => `Parsed ${sheets} sheet(s), ${rows} rows in ${ms}ms`,
+        parsedPptx: (slides, shapes, ms) => `Parsed ${slides} slide(s), ${shapes} shapes in ${ms}ms`,
+        downloaded: (n) => `Downloaded with ${n} edit(s)`,
+        // Ribbon
+        home: 'Home', insert: 'Insert', layout: 'Layout', view: 'View',
+        formulas: 'Formulas', data: 'Data',
+        undo: 'Undo', clipboard: 'Clipboard', font: 'Font',
+        paragraph: 'Paragraph', editing: 'Editing',
+        alignment: 'Alignment', number: 'Number',
+        tables: 'Tables', illustrations: 'Illustrations', links: 'Links',
+        pageSetup: 'Page Setup', views: 'Views',
+        toggleLang: '日本語',
+    },
+    ja: {
+        subtitle: 'ドキュメント ビューア & エディタ — .docx / .xlsx / .pptx (Rust + Wasm)',
+        dropText: '.docx, .xlsx, .pptx ファイルをドロップ — またはクリックして選択',
+        dropHint: 'WebAssemblyによりブラウザ内で完結。サーバーにファイルは送信されません',
+        trySample: 'サンプルを試す:',
+        download: 'ダウンロード',
+        ready: '準備完了',
+        searchText: 'テキストを検索...',
+        replaceWith: '置換テキスト...',
+        prev: '← 前へ',
+        next: '次へ →',
+        replace: '置換',
+        replaceAll: 'すべて置換',
+        find: '検索:',
+        replaceLabel: '置換:',
+        parsing: '解析・描画中...',
+        loadingSample: 'サンプルを読み込み中...',
+        wasmLoading: 'Wasmを読み込み中...',
+        unsupported: '対応形式: .docx, .xlsx, .pptx',
+        noChanges: '変更がありません',
+        noMatches: '一致なし',
+        matchOf: (cur, total) => `${total}件中 ${cur}件目`,
+        replaced: (n) => `${n}件を置換しました`,
+        parsedDocx: (ms) => `${ms}msで解析完了 — テキストをクリックして編集`,
+        parsedXlsx: (sheets, rows, ms) => `${sheets}シート, ${rows}行を${ms}msで解析`,
+        parsedPptx: (slides, shapes, ms) => `${slides}スライド, ${shapes}図形を${ms}msで解析`,
+        downloaded: (n) => `${n}件の編集を含めてダウンロード`,
+        // Ribbon
+        home: 'ホーム', insert: '挿入', layout: 'レイアウト', view: '表示',
+        formulas: '数式', data: 'データ',
+        undo: '元に戻す', clipboard: 'クリップボード', font: 'フォント',
+        paragraph: '段落', editing: '編集',
+        alignment: '配置', number: '数値',
+        tables: '表', illustrations: '図', links: 'リンク',
+        pageSetup: 'ページ設定', views: '表示形式',
+        toggleLang: 'English',
+    }
+};
+
+let currentLang = (navigator.language || '').startsWith('ja') ? 'ja' : 'en';
+
+function t(key) { return I18N[currentLang][key] || I18N.en[key] || key; }
+
+function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.dataset.i18n;
+        const val = t(key);
+        if (typeof val === 'string') el.textContent = val;
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        el.placeholder = t(el.dataset.i18nPlaceholder);
+    });
+    document.getElementById('langToggle').textContent = t('toggleLang');
+    // Update Find/Replace labels
+    const frLabels = document.querySelectorAll('.fr-row label');
+    if (frLabels[0]) frLabels[0].textContent = t('find');
+    if (frLabels[1]) frLabels[1].textContent = t('replaceLabel');
+}
+
+function toggleLang() {
+    currentLang = currentLang === 'en' ? 'ja' : 'en';
+    applyI18n();
+    // Re-build ribbon if visible
+    if (typeof rebuildCurrentRibbon === 'function') rebuildCurrentRibbon();
+}
+
+applyI18n();
+</script>
 
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
@@ -918,85 +1039,85 @@ function buildRibbon(format) {
     let tabDefs;
     if (format === 'docx') {
         tabDefs = [
-            { name: 'Home', groups: [
-                { label: 'Undo', items: [
+            { name: t('home'), groups: [
+                { label: t('undo'), items: [
                     { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
                     { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
                 ]},
-                { label: 'Clipboard', items: [
+                { label: t('clipboard'), items: [
                     { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
                     { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
                     { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
-                { label: 'Font', items: fontGroupItems(true) },
-                { label: 'Paragraph', items: [
+                { label: t('font'), items: fontGroupItems(true) },
+                { label: t('paragraph'), items: [
                     { text: '☰', title: 'Align Left', action: ribbonAction('justifyLeft') },
                     { text: '☰', title: 'Center', style: 'letter-spacing:1px', action: ribbonAction('justifyCenter') },
                     { text: '☰', title: 'Align Right', action: ribbonAction('justifyRight') },
                     { text: '☰', title: 'Justify', action: ribbonAction('justifyFull') },
                 ]},
-                { label: 'Editing', items: [
+                { label: t('editing'), items: [
                     { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
                 ]},
             ]},
-            { name: 'Insert', groups: [
-                { label: 'Tables', items: [{ text: '⊞', title: 'Table' }] },
-                { label: 'Illustrations', items: [{ text: '🖼', title: 'Picture' }] },
-                { label: 'Links', items: [{ text: '🔗', title: 'Link' }] },
+            { name: t('insert'), groups: [
+                { label: t('tables'), items: [{ text: '⊞', title: 'Table' }] },
+                { label: t('illustrations'), items: [{ text: '🖼', title: 'Picture' }] },
+                { label: t('links'), items: [{ text: '🔗', title: 'Link' }] },
             ]},
-            { name: 'Layout', groups: [
-                { label: 'Page Setup', items: [
+            { name: t('layout'), groups: [
+                { label: t('pageSetup'), items: [
                     { text: '▯', title: 'Margins' }, { text: '↔', title: 'Orientation' }, { text: '📐', title: 'Size' },
                 ]},
             ]},
-            { name: 'View', groups: [
-                { label: 'Views', items: [
+            { name: t('view'), groups: [
+                { label: t('views'), items: [
                     { text: '📖', title: 'Read Mode' }, { text: '📝', title: 'Print Layout' },
                 ]},
             ]},
         ];
     } else if (format === 'xlsx') {
         tabDefs = [
-            { name: 'Home', groups: [
-                { label: 'Undo', items: [
+            { name: t('home'), groups: [
+                { label: t('undo'), items: [
                     { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
                     { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
                 ]},
-                { label: 'Clipboard', items: [
+                { label: t('clipboard'), items: [
                     { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
                     { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
                     { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
-                { label: 'Font', items: fontGroupItems(false) },
-                { label: 'Alignment', items: [
+                { label: t('font'), items: fontGroupItems(false) },
+                { label: t('alignment'), items: [
                     { text: '⬅', title: 'Align Left', action: ribbonAction('justifyLeft') },
                     { text: '⬌', title: 'Center', action: ribbonAction('justifyCenter') },
                     { text: '➡', title: 'Align Right', action: ribbonAction('justifyRight') },
                 ]},
-                { label: 'Number', items: [
+                { label: t('number'), items: [
                     { text: '%', title: 'Percent Style' }, { text: ',', title: 'Comma Style' },
                     { text: '.0', title: 'Increase Decimal' }, { text: '.', title: 'Decrease Decimal' },
                 ]},
-                { label: 'Editing', items: [
+                { label: t('editing'), items: [
                     { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
                 ]},
             ]},
-            { name: 'Insert', groups: [
+            { name: t('insert'), groups: [
                 { label: 'Charts', items: [{ text: '📊', title: 'Chart' }] },
-                { label: 'Tables', items: [{ text: '⊞', title: 'Table' }] },
+                { label: t('tables'), items: [{ text: '⊞', title: 'Table' }] },
             ]},
-            { name: 'Formulas', groups: [
+            { name: t('formulas'), groups: [
                 { label: 'Function Library', items: [
                     { text: 'fx', title: 'Insert Function' },
                     { text: 'Σ', title: 'AutoSum' },
                 ]},
             ]},
-            { name: 'Data', groups: [
+            { name: t('data'), groups: [
                 { label: 'Sort & Filter', items: [
                     { text: '↕', title: 'Sort' }, { text: '▼', title: 'Filter' },
                 ]},
             ]},
-            { name: 'View', groups: [
+            { name: t('view'), groups: [
                 { label: 'Show', items: [
                     { text: '⊞', title: 'Gridlines' }, { text: 'H', title: 'Headings' },
                 ]},
@@ -1004,18 +1125,18 @@ function buildRibbon(format) {
         ];
     } else if (format === 'pptx') {
         tabDefs = [
-            { name: 'Home', groups: [
-                { label: 'Undo', items: [
+            { name: t('home'), groups: [
+                { label: t('undo'), items: [
                     { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
                     { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
                 ]},
-                { label: 'Clipboard', items: [
+                { label: t('clipboard'), items: [
                     { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
                     { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
                     { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
-                { label: 'Font', items: fontGroupItems(false) },
-                { label: 'Paragraph', items: [
+                { label: t('font'), items: fontGroupItems(false) },
+                { label: t('paragraph'), items: [
                     { text: '☰', title: 'Align Left', action: ribbonAction('justifyLeft') },
                     { text: '☰', title: 'Center', action: ribbonAction('justifyCenter') },
                     { text: '☰', title: 'Align Right', action: ribbonAction('justifyRight') },
@@ -1023,7 +1144,7 @@ function buildRibbon(format) {
                 { label: 'Drawing', items: [
                     { text: '□', title: 'Shape' }, { text: '⬜', title: 'Shape Fill' }, { text: '▢', title: 'Shape Outline' },
                 ]},
-                { label: 'Editing', items: [
+                { label: t('editing'), items: [
                     { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
                 ]},
             ]},
@@ -1100,6 +1221,10 @@ function buildRibbon(format) {
     ribbon.appendChild(tabs);
     ribbon.appendChild(contentArea);
     showTab(0);
+}
+
+function rebuildCurrentRibbon() {
+    if (currentFileType) buildRibbon(currentFileType);
 }
 
 function hideRibbon() {
@@ -1241,9 +1366,9 @@ function highlightCurrent() {
 function updateFindStatus() {
     const status = document.getElementById('frStatus');
     if (findMatches.length === 0) {
-        status.textContent = document.getElementById('frFind').value ? 'No matches found' : '';
+        status.textContent = document.getElementById('frFind').value ? t('noMatches') : '';
     } else {
-        status.textContent = `${findCurrentIdx + 1} of ${findMatches.length} matches`;
+        status.textContent = I18N[currentLang].matchOf(findCurrentIdx + 1, findMatches.length);
     }
 }
 
@@ -1279,7 +1404,7 @@ document.getElementById('frReplaceAll').addEventListener('click', () => {
     const count = findMatches.length;
     findMatches = [];
     findCurrentIdx = -1;
-    document.getElementById('frStatus').textContent = `Replaced ${count} occurrence(s)`;
+    document.getElementById('frStatus').textContent = I18N[currentLang].replaced(count);
 });
 
 function collectDocxEdits() {
@@ -1346,7 +1471,7 @@ function downloadEdited() {
     else return;
 
     if (edits.length === 0) {
-        showStatus('No changes to save', 'info');
+        showStatus(t('noChanges'), 'info');
         return;
     }
 
@@ -1364,7 +1489,7 @@ function downloadEdited() {
         a.download = `edited.${currentFileType}`;
         a.click();
         URL.revokeObjectURL(url);
-        showStatus(`Downloaded with ${edits.length} edit(s)`, 'info');
+        showStatus(I18N[currentLang].downloaded(edits.length), 'info');
     } catch(e) {
         showStatus('Save error: ' + e.message, 'error');
         console.error(e);
@@ -2044,17 +2169,17 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
 async function handleFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['docx', 'xlsx', 'pptx'].includes(ext)) {
-        showStatus('Supported formats: .docx, .xlsx, .pptx', 'error');
+        showStatus(t('unsupported'), 'error');
         return;
     }
     if (!wasmReady) {
-        showStatus('Wasm is still loading...', 'info');
+        showStatus(t('wasmLoading'), 'info');
         return;
     }
 
-    showStatus('Parsing and rendering...', 'info');
+    showStatus(t('parsing'), 'info');
     currentFileType = ext;
-    btnDownload.textContent = `Download .${ext}`;
+    btnDownload.textContent = `${t('download')} .${ext}`;
 
     toolbar.classList.add('visible');
     buildRibbon(ext);
@@ -2073,20 +2198,20 @@ async function handleFile(file) {
             currentDocIR = parse_document(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             renderEditableDocx(currentDocIR);
-            showStatus(`Parsed in ${elapsed}ms — click text to edit`, 'info');
+            showStatus(I18N[currentLang].parsedDocx(elapsed), 'info');
         } else if (ext === 'xlsx') {
             currentDocIR = parse_spreadsheet(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;
             for (const s of currentDocIR.sheets) totalRows += s.rows.length;
-            showStatus(`Parsed ${currentDocIR.sheets.length} sheet(s), ${totalRows} rows in ${elapsed}ms`, 'info');
+            showStatus(I18N[currentLang].parsedXlsx(currentDocIR.sheets.length, totalRows, elapsed), 'info');
             renderEditableXlsx(currentDocIR);
         } else if (ext === 'pptx') {
             currentDocIR = parse_presentation(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalShapes = 0;
             for (const s of currentDocIR.slides) totalShapes += s.shapes.length;
-            showStatus(`Parsed ${currentDocIR.slides.length} slide(s), ${totalShapes} shapes in ${elapsed}ms`, 'info');
+            showStatus(I18N[currentLang].parsedPptx(currentDocIR.slides.length, totalShapes, elapsed), 'info');
             renderEditablePptx(currentDocIR);
         }
     } catch(e) {
@@ -2119,11 +2244,11 @@ initialize();
 // === SAMPLE LOADER ===
 async function loadSample(filename) {
     if (!wasmReady) {
-        showStatus('Wasm is still loading...', 'info');
+        showStatus(t('wasmLoading'), 'info');
         return;
     }
     try {
-        showStatus('Loading sample...', 'info');
+        showStatus(t('loadingSample'), 'info');
         // Try relative paths for both docs/ and web/ deployments
         let resp = await fetch(filename);
         if (!resp.ok) resp = await fetch('../docs/' + filename);
