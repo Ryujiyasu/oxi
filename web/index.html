@@ -1439,6 +1439,16 @@ function renderEditableDocx(doc) {
                     if (para.style.line_spacing) {
                         paraDiv.style.lineHeight = String(para.style.line_spacing);
                     }
+                    // Paragraph shading
+                    if (para.style.shading) {
+                        paraDiv.style.backgroundColor = '#' + para.style.shading;
+                    }
+                    // Page break before
+                    if (para.style.page_break_before) {
+                        paraDiv.style.pageBreakBefore = 'always';
+                        paraDiv.style.borderTop = '2px dashed #ccc';
+                        paraDiv.style.marginTop = '12pt';
+                    }
                 }
 
                 // Indentation
@@ -1554,28 +1564,78 @@ function renderEditableDocx(doc) {
                 const table = block.Table;
                 const tableEl = document.createElement('table');
                 tableEl.className = 'edit-table';
-                if (!table.style || !table.style.border) {
-                    tableEl.style.borderCollapse = 'collapse';
+                tableEl.style.borderCollapse = 'collapse';
+
+                // Apply table border styles
+                if (table.style && table.style.border) {
+                    const bw = (table.style.border_width || 0.5) + 'pt';
+                    const bc = table.style.border_color ? '#' + table.style.border_color : '#000';
+                    const bs = (table.style.border_style === 'double') ? 'double' :
+                               (table.style.border_style === 'dashed') ? 'dashed' :
+                               (table.style.border_style === 'dotted') ? 'dotted' : 'solid';
+                    tableEl.style.border = `${bw} ${bs} ${bc}`;
+                    // Apply to cells via CSS custom property
+                    tableEl.dataset.borderWidth = bw;
+                    tableEl.dataset.borderColor = bc;
+                    tableEl.dataset.borderStyle = bs;
                 }
 
-                for (const row of table.rows) {
+                // Pre-pass: compute rowspan for vertical merges
+                const rowspanMap = {}; // "rowIdx-colIdx" -> rowspan count
+                for (let ri = 0; ri < table.rows.length; ri++) {
+                    let ci = 0;
+                    for (const cell of table.rows[ri].cells) {
+                        if (cell.v_merge === 'restart') {
+                            let span = 1;
+                            for (let rj = ri + 1; rj < table.rows.length; rj++) {
+                                let cj = 0;
+                                let found = false;
+                                for (const c2 of table.rows[rj].cells) {
+                                    if (cj === ci && c2.v_merge === 'continue') {
+                                        span++;
+                                        found = true;
+                                        break;
+                                    }
+                                    cj += (c2.grid_span || 1);
+                                }
+                                if (!found) break;
+                            }
+                            rowspanMap[ri + '-' + ci] = span;
+                        }
+                        ci += (cell.grid_span || 1);
+                    }
+                }
+
+                for (let ri = 0; ri < table.rows.length; ri++) {
+                    const row = table.rows[ri];
                     const tr = document.createElement('tr');
                     if (row.height) tr.style.height = row.height + 'pt';
+                    let ci = 0;
                     for (const cell of row.cells) {
                         // Skip cells that are vertical merge continuations
-                        if (cell.v_merge === 'continue') continue;
+                        if (cell.v_merge === 'continue') {
+                            ci += (cell.grid_span || 1);
+                            continue;
+                        }
 
                         const td = document.createElement('td');
+                        // Apply table border to cells
+                        if (table.style && table.style.border) {
+                            const bw = tableEl.dataset.borderWidth || '0.5pt';
+                            const bc = tableEl.dataset.borderColor || '#000';
+                            const bs = tableEl.dataset.borderStyle || 'solid';
+                            td.style.border = `${bw} ${bs} ${bc}`;
+                        }
                         // Cell width
                         if (cell.width) td.style.width = cell.width + 'pt';
                         // Horizontal merge (gridSpan)
                         if (cell.grid_span && cell.grid_span > 1) {
                             td.colSpan = cell.grid_span;
                         }
-                        // Vertical merge: count continuation cells below
-                        if (cell.v_merge === 'restart') {
-                            // We can't easily count rowspan from here, but mark it
-                            // Real rowspan would need a pre-pass; for now just mark restart
+                        // Vertical merge rowspan from pre-pass
+                        const rsKey = ri + '-' + ci;
+                        if (rowspanMap[rsKey] && rowspanMap[rsKey] > 1) {
+                            td.rowSpan = rowspanMap[rsKey];
                         }
                         // Cell shading
                         if (cell.shading) td.style.backgroundColor = '#' + cell.shading;
@@ -1625,6 +1685,7 @@ function renderEditableDocx(doc) {
                             }
                         }
                         tr.appendChild(td);
+                        ci += (cell.grid_span || 1);
                     }
                     tableEl.appendChild(tr);
                 }

@@ -497,6 +497,19 @@ fn parse_paragraph_properties(
                             }
                         }
                     }
+                    "shd" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "fill" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if val != "auto" {
+                                    style.shading = Some(val);
+                                }
+                            }
+                        }
+                    }
+                    "pageBreakBefore" => {
+                        style.page_break_before = true;
+                    }
                     _ => {}
                 }
             }
@@ -628,13 +641,15 @@ fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>, ParseErro
     Ok(stops)
 }
 
-/// Parse a w:r element (run). Returns the Run and optionally an Image if a drawing was found.
+/// Parse a w:r element (run). Returns the Run, optionally an Image, and field info.
 fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Option<Image>), ParseError> {
     let mut text = String::new();
     let mut style = RunStyle::default();
     let mut image = None;
     let mut depth = 0;
     let mut in_text = false;
+    let mut in_instr_text = false;
+    let mut instr_text = String::new();
 
     loop {
         match reader.read_event()? {
@@ -647,6 +662,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
                     "t" if depth == 0 => {
                         in_text = true;
                     }
+                    "instrText" if depth == 0 => {
+                        in_instr_text = true;
+                    }
                     "drawing" if depth == 0 => {
                         image = parse_drawing(reader, ctx)?;
                     }
@@ -656,14 +674,19 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
                 }
             }
             Event::Text(e) => {
+                let content = e.unescape().unwrap_or_default();
                 if in_text {
-                    text.push_str(&e.unescape().unwrap_or_default());
+                    text.push_str(&content);
+                } else if in_instr_text {
+                    instr_text.push_str(&content);
                 }
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "t" {
                     in_text = false;
+                } else if local == "instrText" {
+                    in_instr_text = false;
                 } else if local == "r" && depth == 0 {
                     break;
                 } else if depth > 0 {
@@ -675,11 +698,27 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
                 match local.as_str() {
                     "br" => text.push('\n'),
                     "tab" => text.push('\t'),
+                    "fldChar" => {
+                        // fldChar with fldCharType="separate" or "end" — no action needed
+                        // The instrText content is captured by the instrText handler
+                    }
                     _ => {}
                 }
             }
             Event::Eof => break,
             _ => {}
+        }
+    }
+
+    // If this run contains a field instruction, convert to placeholder text
+    if !instr_text.is_empty() {
+        let field = instr_text.trim();
+        if field.contains("PAGE") && !field.contains("NUMPAGES") {
+            text = "#".to_string(); // Placeholder for page number
+        } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
+            text = "#".to_string(); // Placeholder for total pages
+        } else if field.contains("DATE") || field.contains("TIME") {
+            text = field.to_string();
         }
     }
 
@@ -958,6 +997,7 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
 fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, ParseError> {
     let mut style = TableStyle::default();
     let mut depth = 0;
+    let mut in_borders = false;
 
     loop {
         match reader.read_event()? {
@@ -965,11 +1005,15 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                 let local = local_name(e.name().as_ref());
                 if local == "tblBorders" {
                     style.border = true;
+                    in_borders = true;
                 }
                 depth += 1;
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "tblBorders" {
+                    in_borders = false;
+                }
                 if local == "tblPr" && depth == 0 {
                     break;
                 }
@@ -981,9 +1025,35 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                 let local = local_name(e.name().as_ref());
                 if matches!(
                     local.as_str(),
-                    "top" | "left" | "bottom" | "right" | "insideH" | "insideV"
+                    "top" | "left" | "bottom" | "right" | "insideH" | "insideV" | "start" | "end"
                 ) {
-                    style.border = true;
+                    if in_borders || depth == 0 {
+                        style.border = true;
+                        // Extract border details from first border element encountered
+                        if style.border_color.is_none() {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                let val = String::from_utf8_lossy(&attr.value);
+                                match key.as_str() {
+                                    "color" => {
+                                        if val != "auto" {
+                                            style.border_color = Some(val.to_string());
+                                        }
+                                    }
+                                    "sz" => {
+                                        // sz is in 1/8 pt
+                                        style.border_width = val.parse::<f32>().ok().map(|v| v / 8.0);
+                                    }
+                                    "val" => {
+                                        if val != "none" && val != "nil" {
+                                            style.border_style = Some(val.to_string());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Event::Eof => break,

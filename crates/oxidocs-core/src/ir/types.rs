@@ -206,6 +206,12 @@ pub struct ParagraphStyle {
     /// Custom tab stops (w:tabs)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tab_stops: Vec<TabStop>,
+    /// Paragraph background/shading color (hex from w:shd fill)
+    #[serde(default)]
+    pub shading: Option<String>,
+    /// Page break before this paragraph (w:pageBreakBefore)
+    #[serde(default)]
+    pub page_break_before: bool,
 }
 
 fn default_true() -> bool { true }
@@ -227,6 +233,8 @@ impl Default for ParagraphStyle {
             contextual_spacing: false,
             style_id: None,
             tab_stops: Vec::new(),
+            shading: None,
+            page_break_before: false,
         }
     }
 }
@@ -234,6 +242,15 @@ impl Default for ParagraphStyle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TableStyle {
     pub border: bool,
+    /// Border color (hex), e.g. "000000"
+    #[serde(default)]
+    pub border_color: Option<String>,
+    /// Border width in points (w:sz is in 1/8 pt)
+    #[serde(default)]
+    pub border_width: Option<f32>,
+    /// Border style (e.g. "single", "double", "dashed")
+    #[serde(default)]
+    pub border_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
