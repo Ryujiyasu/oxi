@@ -518,6 +518,10 @@ fn resolve_slide_relative_path(rels_path: &str, target: &str) -> String {
     for segment in target.split('/') {
         match segment {
             ".." => {
+                // Prevent escaping beyond archive root
+                if base_parts.is_empty() {
+                    return String::new(); // reject traversal beyond root
+                }
                 base_parts.pop();
             }
             "." | "" => {}

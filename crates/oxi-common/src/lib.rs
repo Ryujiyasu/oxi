@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod relationships;
+pub mod security;
 pub mod xml_utils;
 
 use thiserror::Error;
@@ -23,4 +24,7 @@ pub enum OxiError {
 
     #[error("Parse error: {0}")]
     Parse(String),
+
+    #[error("Security error: {0}")]
+    Security(String),
 }

@@ -17,8 +17,8 @@ pub struct OoxmlParser {
 
 /// Context passed through parsing functions for resource resolution
 struct ParseContext {
-    /// Relationship ID -> Relationship mapping
-    rels: HashMap<String, Relationship>,
+    /// Relationship ID -> Relationship mapping (reserved for future use)
+    _rels: HashMap<String, Relationship>,
     /// Relationship ID -> binary data (images, etc.)
     media: HashMap<String, Vec<u8>>,
     /// Relationship ID -> content type (e.g., "image/png")
@@ -100,7 +100,11 @@ impl OoxmlParser {
         let image_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
         for (id, rel) in &rels {
             if rel.rel_type == image_rel_type {
-                let path = format!("word/{}", rel.target);
+                // Validate relationship target path against traversal attacks
+                let path = match oxi_common::security::sanitize_rel_target("word", &rel.target) {
+                    Ok(p) => p,
+                    Err(_) => continue, // Skip suspicious paths
+                };
                 if let Ok(data) = self.read_binary_part(&path) {
                     // Detect content type from file extension
                     let ct = match rel.target.rsplit('.').next().map(|s| s.to_lowercase()).as_deref() {
@@ -121,7 +125,7 @@ impl OoxmlParser {
         }
 
         Ok(ParseContext {
-            rels,
+            _rels: rels,
             media,
             media_types,
             numbering,

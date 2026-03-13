@@ -193,11 +193,8 @@ impl PptxEditor {
         let mut paths = Vec::new();
         for r_id in &r_ids {
             if let Some(target) = rid_to_path.get(r_id) {
-                let path = if target.starts_with('/') {
-                    target.trim_start_matches('/').to_string()
-                } else {
-                    format!("ppt/{}", target)
-                };
+                let path = oxi_common::security::sanitize_rel_target("ppt", target)
+                    .unwrap_or_default();
                 paths.push(path);
             } else {
                 paths.push(String::new());

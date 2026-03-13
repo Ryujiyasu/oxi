@@ -1,8 +1,10 @@
 pub mod editor;
+pub mod formula;
 pub mod ir;
 pub mod parser;
 
 pub use editor::XlsxEditor;
+pub use formula::evaluate_sheet_formulas;
 pub use parser::parse_xlsx;
 
 #[cfg(test)]

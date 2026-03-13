@@ -523,6 +523,8 @@ fn parse_worksheet(
     let mut in_cell = false;
     let mut in_value = false;
     let mut value_text = String::new();
+    let mut in_formula = false;
+    let mut formula_text = String::new();
 
     // Section tracking
     let mut in_merge_cells = false;
@@ -551,6 +553,8 @@ fn parse_worksheet(
                     "c" if in_row => {
                         in_cell = true;
                         value_text.clear();
+                        formula_text.clear();
+                        in_formula = false;
                         cell_type = get_attr(&e, "t");
                         cell_style_index =
                             get_attr(&e, "s").and_then(|v| v.parse::<usize>().ok());
@@ -560,6 +564,10 @@ fn parse_worksheet(
                         if col + 1 > max_col {
                             max_col = col + 1;
                         }
+                    }
+                    "f" if in_cell => {
+                        in_formula = true;
+                        formula_text.clear();
                     }
                     "v" if in_cell => {
                         in_value = true;
@@ -594,15 +602,25 @@ fn parse_worksheet(
                                 Some(idx) => resolve_cell_style(idx, stylesheet),
                                 None => CellStyle::default(),
                             };
+                            let formula = if formula_text.is_empty() {
+                                None
+                            } else {
+                                Some(formula_text.clone())
+                            };
                             current_cells.push(Cell {
                                 col: cell_col,
                                 value: cell_value,
                                 style,
+                                formula,
                             });
                             in_cell = false;
+                            in_formula = false;
                             cell_type = None;
                             cell_style_index = None;
                         }
+                    }
+                    "f" => {
+                        in_formula = false;
                     }
                     "v" => {
                         in_value = false;
@@ -614,7 +632,10 @@ fn parse_worksheet(
                 }
             }
             Event::Text(e) => {
-                if in_value {
+                if in_formula {
+                    let text = e.unescape()?.to_string();
+                    formula_text.push_str(&text);
+                } else if in_value {
                     let text = e.unescape()?.to_string();
                     value_text.push_str(&text);
                 }
@@ -639,6 +660,7 @@ fn parse_worksheet(
                             col,
                             value: CellValue::Empty,
                             style,
+                            formula: None,
                         });
                     }
 
@@ -842,6 +864,11 @@ pub fn parse_xlsx(data: &[u8]) -> Result<Workbook, XlsxError> {
                 log::warn!("Sheet file '{}' not found in archive, skipping", sheet_path);
             }
         }
+    }
+
+    // 6. Evaluate formulas in each sheet
+    for sheet in &mut sheets {
+        crate::formula::evaluate_sheet_formulas(sheet);
     }
 
     Ok(Workbook { sheets })

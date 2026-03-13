@@ -97,7 +97,7 @@ pub struct Image {
     pub content_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Alignment {
     Left,
     Center,

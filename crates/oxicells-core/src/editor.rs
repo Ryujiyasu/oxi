@@ -187,11 +187,8 @@ impl XlsxEditor {
         let mut paths = Vec::new();
         for r_id in &r_ids {
             if let Some(target) = rid_to_path.get(r_id) {
-                let path = if target.starts_with('/') {
-                    target.trim_start_matches('/').to_string()
-                } else {
-                    format!("xl/{}", target)
-                };
+                let path = oxi_common::security::sanitize_rel_target("xl", target)
+                    .unwrap_or_default();
                 paths.push(path);
             } else {
                 paths.push(String::new());
@@ -264,8 +261,9 @@ fn patch_worksheet_xml(
                         // Write <v> start
                         writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         // Write new value text
-                        let val = current_edit.unwrap();
-                        writer.write_event(Event::Text(BytesText::new(val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        if let Some(val) = current_edit {
+                            writer.write_event(Event::Text(BytesText::new(val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        }
                         continue;
                     }
                     _ => {}
@@ -280,10 +278,11 @@ fn patch_worksheet_xml(
                         if in_cell && current_edit.is_some() {
                             // If the original cell had no <v>, we need to add one
                             if !in_value {
-                                let val = current_edit.unwrap();
-                                writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                                writer.write_event(Event::Text(BytesText::new(val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                                writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                                if let Some(val) = current_edit {
+                                    writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                                    writer.write_event(Event::Text(BytesText::new(val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                                    writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                                }
                             }
                         }
                         in_cell = false;

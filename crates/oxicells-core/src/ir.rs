@@ -36,6 +36,9 @@ pub struct Cell {
     pub col: u32,
     pub value: CellValue,
     pub style: CellStyle,
+    /// Original formula string (e.g. "=SUM(A1:A3)"), if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

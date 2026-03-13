@@ -1,6 +1,7 @@
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
+use crate::security;
 use crate::OxiError;
 
 /// Generic OOXML archive wrapper for reading parts from ZIP files
@@ -10,29 +11,54 @@ pub struct OoxmlArchive {
 
 impl OoxmlArchive {
     pub fn new(data: &[u8]) -> Result<Self, OxiError> {
+        security::validate_input_size(data)?;
+
         let cursor = Cursor::new(data.to_vec());
         let archive = ZipArchive::new(cursor)?;
+
+        if archive.len() > security::MAX_ZIP_ENTRIES {
+            return Err(OxiError::Security(format!(
+                "Too many ZIP entries: {} (max {})",
+                archive.len(),
+                security::MAX_ZIP_ENTRIES
+            )));
+        }
+
         Ok(Self { archive })
     }
 
-    /// Read a text part from the archive
+    /// Read a text part from the archive with size validation
     pub fn read_part(&mut self, name: &str) -> Result<String, OxiError> {
         let mut file = self
             .archive
             .by_name(name)
             .map_err(|_| OxiError::MissingPart(name.to_string()))?;
-        let mut contents = String::new();
+
+        security::validate_zip_entry(
+            name,
+            file.compressed_size(),
+            file.size(),
+        )?;
+
+        let mut contents = String::with_capacity(file.size().min(security::MAX_ENTRY_SIZE) as usize);
         file.read_to_string(&mut contents)?;
         Ok(contents)
     }
 
-    /// Read a binary part from the archive
+    /// Read a binary part from the archive with size validation
     pub fn read_binary_part(&mut self, name: &str) -> Result<Vec<u8>, OxiError> {
         let mut file = self
             .archive
             .by_name(name)
             .map_err(|_| OxiError::MissingPart(name.to_string()))?;
-        let mut contents = Vec::new();
+
+        security::validate_zip_entry(
+            name,
+            file.compressed_size(),
+            file.size(),
+        )?;
+
+        let mut contents = Vec::with_capacity(file.size().min(security::MAX_ENTRY_SIZE) as usize);
         file.read_to_end(&mut contents)?;
         Ok(contents)
     }

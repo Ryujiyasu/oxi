@@ -64,6 +64,30 @@ header span { font-size: 13px; opacity: 0.7; }
 .drop-zone p { font-size: 16px; color: #666; }
 .drop-zone .hint { font-size: 13px; color: #999; margin-top: 8px; }
 input[type="file"] { display: none; }
+.sample-buttons {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #666;
+}
+.sample-buttons button {
+    padding: 6px 16px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: white;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+}
+.sample-buttons button:hover {
+    border-color: #4a6cf7;
+    color: #4a6cf7;
+    background: #f8f9ff;
+}
 #status {
     margin-top: 16px;
     padding: 12px;
@@ -195,6 +219,145 @@ input[type="file"] { display: none; }
     background: #d0d0d0;
     margin: 0 4px;
 }
+/* Ribbon dropdowns */
+.ribbon-select {
+    padding: 2px 4px;
+    border: 1px solid #c0c0c0;
+    border-radius: 3px;
+    font-size: 12px;
+    background: white;
+    cursor: pointer;
+    outline: none;
+    height: 26px;
+}
+.ribbon-select:hover { border-color: #888; }
+.ribbon-select:focus { border-color: #4a6cf7; }
+.ribbon-font-family { width: 130px; }
+.ribbon-font-size { width: 48px; }
+/* Color picker button */
+.ribbon-color-btn {
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    min-width: 28px;
+    text-align: center;
+    position: relative;
+    line-height: 1.2;
+}
+.ribbon-color-btn:hover { background: #dde4f0; border-color: #b0bdd4; }
+.ribbon-color-bar {
+    display: block;
+    height: 3px;
+    border-radius: 1px;
+    margin-top: 1px;
+}
+/* Color palette popup */
+.color-palette {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 100;
+    width: 160px;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+.color-palette.open { display: flex; }
+.color-swatch {
+    width: 18px; height: 18px;
+    border: 1px solid #ddd;
+    border-radius: 2px;
+    cursor: pointer;
+}
+.color-swatch:hover { border-color: #333; transform: scale(1.15); }
+
+/* Status bar / zoom */
+.status-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    background: #f3f3f3;
+    border-top: 1px solid #d0d0d0;
+    padding: 2px 12px;
+    font-size: 12px;
+    color: #555;
+    margin-top: 0;
+    border-radius: 0 0 8px 8px;
+}
+.status-bar.visible { display: flex; }
+.status-bar .status-left { display: flex; gap: 16px; }
+.status-bar .zoom-controls { display: flex; align-items: center; gap: 6px; }
+.zoom-controls button {
+    width: 22px; height: 22px; border: none; background: transparent;
+    cursor: pointer; font-size: 14px; border-radius: 3px; color: #555;
+}
+.zoom-controls button:hover { background: #ddd; }
+.zoom-controls input[type="range"] { width: 100px; cursor: pointer; }
+.zoom-controls .zoom-label { min-width: 40px; text-align: center; }
+
+/* Find & Replace dialog */
+.find-replace-dialog {
+    display: none;
+    position: fixed;
+    top: 60px;
+    right: 24px;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    padding: 12px 16px;
+    z-index: 200;
+    min-width: 340px;
+    font-size: 13px;
+}
+.find-replace-dialog.open { display: block; }
+.find-replace-dialog .fr-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.find-replace-dialog label { min-width: 60px; color: #555; }
+.find-replace-dialog input[type="text"] {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    outline: none;
+}
+.find-replace-dialog input[type="text"]:focus { border-color: #4a6cf7; }
+.find-replace-dialog .fr-buttons {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+.find-replace-dialog .fr-buttons button {
+    padding: 4px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #f5f5f5;
+    cursor: pointer;
+    font-size: 12px;
+}
+.find-replace-dialog .fr-buttons button:hover { background: #e0e0e0; }
+.find-replace-dialog .fr-buttons button.primary { background: #4a6cf7; color: white; border-color: #4a6cf7; }
+.find-replace-dialog .fr-close {
+    position: absolute; top: 8px; right: 8px;
+    background: none; border: none; font-size: 16px; cursor: pointer; color: #888;
+}
+.find-replace-dialog .fr-close:hover { color: #333; }
+.find-replace-dialog .fr-status { font-size: 11px; color: #888; margin-top: 4px; }
 /* Format-specific ribbon colors */
 .ribbon.docx { border-top: 3px solid #2b579a; }
 .ribbon.docx .ribbon-tab.active { border-bottom-color: #2b579a; }
@@ -367,6 +530,15 @@ input[type="file"] { display: none; }
     outline: 2px solid #217346;
     outline-offset: -1px;
 }
+.spreadsheet-wrapper td.range-selected {
+    background: rgba(33, 115, 70, 0.08) !important;
+}
+.spreadsheet-wrapper td.range-border-top { border-top: 2px solid #217346 !important; }
+.spreadsheet-wrapper td.range-border-bottom { border-bottom: 2px solid #217346 !important; }
+.spreadsheet-wrapper td.range-border-left { border-left: 2px solid #217346 !important; }
+.spreadsheet-wrapper td.range-border-right { border-right: 2px solid #217346 !important; }
+.spreadsheet-wrapper th.col-selected { background: #d0e8d8 !important; }
+.spreadsheet-wrapper th.row-selected { background: #d0e8d8 !important; }
 
 /* Slide styles */
 .pptx-layout {
@@ -455,6 +627,12 @@ input[type="file"] { display: none; }
         <p>Drop a .docx, .xlsx, or .pptx file here — or click to browse</p>
         <p class="hint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
+    <div class="sample-buttons" id="sampleButtons">
+        <span>Try a sample:</span>
+        <button onclick="loadSample('sample.docx')">Word (.docx)</button>
+        <button onclick="loadSample('sample.xlsx')">Excel (.xlsx)</button>
+        <button onclick="loadSample('sample.pptx')">PowerPoint (.pptx)</button>
+    </div>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx">
     <div class="toolbar" id="toolbar">
         <button id="btnDownload" class="primary">Download</button>
@@ -462,6 +640,36 @@ input[type="file"] { display: none; }
     <div class="ribbon" id="ribbon"></div>
     <div id="status"></div>
     <div id="pages-container"></div>
+    <div class="status-bar" id="statusBar">
+        <div class="status-left">
+            <span id="statusInfo">Ready</span>
+        </div>
+        <div class="zoom-controls">
+            <button id="zoomOut" title="Zoom Out">−</button>
+            <input type="range" id="zoomSlider" min="50" max="200" value="100">
+            <button id="zoomIn" title="Zoom In">+</button>
+            <span class="zoom-label" id="zoomLabel">100%</span>
+        </div>
+    </div>
+</div>
+
+<div class="find-replace-dialog" id="findReplaceDialog">
+    <button class="fr-close" id="frClose">×</button>
+    <div class="fr-row">
+        <label>Find:</label>
+        <input type="text" id="frFind" placeholder="Search text...">
+    </div>
+    <div class="fr-row">
+        <label>Replace:</label>
+        <input type="text" id="frReplace" placeholder="Replace with...">
+    </div>
+    <div class="fr-buttons">
+        <button id="frPrev">← Prev</button>
+        <button id="frNext">Next →</button>
+        <button id="frReplaceOne">Replace</button>
+        <button id="frReplaceAll" class="primary">Replace All</button>
+    </div>
+    <div class="fr-status" id="frStatus"></div>
 </div>
 
 <script type="module">
@@ -505,6 +713,28 @@ btnDownload.addEventListener('click', downloadEdited);
 // === RIBBON MENU ===
 const ribbon = document.getElementById('ribbon');
 
+const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+const FONT_FAMILIES = [
+    'Calibri', 'Arial', 'Times New Roman', 'Helvetica', 'Georgia',
+    'Verdana', 'Courier New', 'Trebuchet MS', 'Comic Sans MS',
+    'Impact', 'Palatino Linotype', 'Lucida Console', 'Tahoma',
+    'MS Gothic', 'MS Mincho', 'Yu Gothic', 'Meiryo',
+];
+const COLOR_PALETTE = [
+    '#000000','#434343','#666666','#999999','#B7B7B7','#CCCCCC','#D9D9D9','#FFFFFF',
+    '#980000','#FF0000','#FF9900','#FFFF00','#00FF00','#00FFFF','#4A86E8','#0000FF',
+    '#9900FF','#FF00FF','#E6B8AF','#F4CCCC','#FCE5CD','#FFF2CC','#D9EAD3','#D0E0E3',
+    '#C9DAF8','#CFE2F3','#D9D2E9','#EAD1DC','#DD7E6B','#EA9999','#F9CB9C','#FFE599',
+    '#B6D7A8','#A2C4C9','#A4C2F4','#9FC5E8','#B4A7D6','#D5A6BD','#CC4125','#E06666',
+    '#F6B26B','#FFD966','#93C47D','#76A5AF','#6D9EEB','#6FA8DC','#8E7CC3','#C27BA0',
+    '#A61C00','#CC0000','#E69138','#F1C232','#6AA84F','#45818E','#3C78D8','#3D85C6',
+    '#674EA7','#A64D79','#85200C','#990000','#B45F06','#BF9000','#38761D','#134F5C',
+    '#1155CC','#0B5394','#351C75','#741B47',
+];
+
+let currentFontColor = '#FF0000';
+let currentHighlightColor = '#FFFF00';
+
 function buildRibbon(format) {
     ribbon.className = 'ribbon visible ' + format;
     ribbon.innerHTML = '';
@@ -519,32 +749,188 @@ function buildRibbon(format) {
         return () => {
             if (['bold', 'italic', 'underline', 'strikeThrough',
                  'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull',
-                 'copy', 'cut', 'paste'].includes(cmd)) {
+                 'copy', 'cut', 'paste', 'undo', 'redo'].includes(cmd)) {
                 document.execCommand(cmd, false, null);
             }
         };
+    }
+
+    // Create font family dropdown
+    function createFontFamilySelect() {
+        const sel = document.createElement('select');
+        sel.className = 'ribbon-select ribbon-font-family';
+        sel.title = 'Font Family';
+        for (const f of FONT_FAMILIES) {
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = f;
+            opt.style.fontFamily = f;
+            sel.appendChild(opt);
+        }
+        sel.addEventListener('mousedown', (e) => { /* don't prevent — need dropdown */ });
+        sel.addEventListener('change', () => {
+            document.execCommand('fontName', false, sel.value);
+            sel.blur();
+        });
+        return { type: 'custom', el: sel };
+    }
+
+    // Create font size dropdown
+    function createFontSizeSelect() {
+        const sel = document.createElement('select');
+        sel.className = 'ribbon-select ribbon-font-size';
+        sel.title = 'Font Size';
+        for (const s of FONT_SIZES) {
+            const opt = document.createElement('option');
+            opt.value = s;
+            opt.textContent = s;
+            if (s === 11) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        sel.addEventListener('change', () => {
+            // execCommand fontSize only supports 1-7, so we use CSS instead
+            const size = sel.value + 'pt';
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && !selection.isCollapsed) {
+                // Wrap selection in a font-size span
+                document.execCommand('fontSize', false, '7');
+                // Find all font size=7 elements and replace with proper size
+                const fontEls = document.querySelectorAll('font[size="7"]');
+                for (const fe of fontEls) {
+                    fe.removeAttribute('size');
+                    fe.style.fontSize = size;
+                }
+            }
+            sel.blur();
+        });
+        return { type: 'custom', el: sel };
+    }
+
+    // Create color picker button
+    function createColorBtn(label, title, getColor, setColor, applyCmd) {
+        const wrapper = document.createElement('div');
+        wrapper.style.position = 'relative';
+        wrapper.style.display = 'inline-block';
+
+        const btn = document.createElement('button');
+        btn.className = 'ribbon-color-btn';
+        btn.title = title;
+        const letterSpan = document.createElement('span');
+        letterSpan.textContent = label;
+        const bar = document.createElement('span');
+        bar.className = 'ribbon-color-bar';
+        bar.style.background = getColor();
+        btn.appendChild(letterSpan);
+        btn.appendChild(bar);
+
+        const palette = document.createElement('div');
+        palette.className = 'color-palette';
+        for (const c of COLOR_PALETTE) {
+            const swatch = document.createElement('div');
+            swatch.className = 'color-swatch';
+            swatch.style.background = c;
+            swatch.title = c;
+            swatch.addEventListener('mousedown', (e) => e.preventDefault());
+            swatch.addEventListener('click', () => {
+                setColor(c);
+                bar.style.background = c;
+                palette.classList.remove('open');
+                if (applyCmd === 'foreColor') {
+                    document.execCommand('foreColor', false, c);
+                } else if (applyCmd === 'hiliteColor') {
+                    document.execCommand('hiliteColor', false, c);
+                }
+            });
+            palette.appendChild(swatch);
+        }
+        wrapper.appendChild(btn);
+        wrapper.appendChild(palette);
+
+        // Click on the letter part → apply current color
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', (e) => {
+            if (e.detail === 1) {
+                // Single click: apply current color
+                if (applyCmd === 'foreColor') document.execCommand('foreColor', false, getColor());
+                else if (applyCmd === 'hiliteColor') document.execCommand('hiliteColor', false, getColor());
+            }
+        });
+        // Right-click or long-press shows palette
+        btn.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            palette.classList.toggle('open');
+        });
+        // Also add a small dropdown arrow
+        const arrow = document.createElement('button');
+        arrow.className = 'ribbon-btn';
+        arrow.style.padding = '2px 2px';
+        arrow.style.fontSize = '8px';
+        arrow.style.minWidth = '14px';
+        arrow.textContent = '▼';
+        arrow.title = 'Choose ' + title;
+        arrow.addEventListener('mousedown', (e) => e.preventDefault());
+        arrow.addEventListener('click', () => {
+            // Close all other palettes first
+            document.querySelectorAll('.color-palette.open').forEach(p => {
+                if (p !== palette) p.classList.remove('open');
+            });
+            palette.classList.toggle('open');
+        });
+
+        const container = document.createElement('div');
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.appendChild(wrapper);
+        container.appendChild(arrow);
+        return { type: 'custom', el: container };
+    }
+
+    // Close color palettes on outside click
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.ribbon-color-btn') && !e.target.closest('.color-palette') && !e.target.closest('.ribbon-btn')) {
+            document.querySelectorAll('.color-palette.open').forEach(p => p.classList.remove('open'));
+        }
+    });
+
+    // Build font group items shared across formats
+    function fontGroupItems(includeStrike) {
+        const items = [
+            createFontFamilySelect(),
+            createFontSizeSelect(),
+            { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
+            { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
+            { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
+        ];
+        if (includeStrike) {
+            items.push({ text: 'S', title: 'Strikethrough', style: 'text-decoration:line-through', action: ribbonAction('strikeThrough') });
+        }
+        items.push(createColorBtn('A', 'Font Color', () => currentFontColor, (c) => { currentFontColor = c; }, 'foreColor'));
+        items.push(createColorBtn('ab', 'Highlight Color', () => currentHighlightColor, (c) => { currentHighlightColor = c; }, 'hiliteColor'));
+        return items;
     }
 
     let tabDefs;
     if (format === 'docx') {
         tabDefs = [
             { name: 'Home', groups: [
+                { label: 'Undo', items: [
+                    { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
+                    { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
+                ]},
                 { label: 'Clipboard', items: [
                     { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
                     { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
                     { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
-                { label: 'Font', items: [
-                    { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
-                    { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
-                    { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
-                    { text: 'S', title: 'Strikethrough', style: 'text-decoration:line-through', action: ribbonAction('strikeThrough') },
-                ]},
+                { label: 'Font', items: fontGroupItems(true) },
                 { label: 'Paragraph', items: [
-                    { text: '≡', title: 'Align Left', action: ribbonAction('justifyLeft') },
-                    { text: '≡', title: 'Center', action: ribbonAction('justifyCenter') },
-                    { text: '≡', title: 'Align Right', action: ribbonAction('justifyRight') },
-                    { text: '≡', title: 'Justify', action: ribbonAction('justifyFull') },
+                    { text: '☰', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '☰', title: 'Center', style: 'letter-spacing:1px', action: ribbonAction('justifyCenter') },
+                    { text: '☰', title: 'Align Right', action: ribbonAction('justifyRight') },
+                    { text: '☰', title: 'Justify', action: ribbonAction('justifyFull') },
+                ]},
+                { label: 'Editing', items: [
+                    { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
                 ]},
             ]},
             { name: 'Insert', groups: [
@@ -566,16 +952,16 @@ function buildRibbon(format) {
     } else if (format === 'xlsx') {
         tabDefs = [
             { name: 'Home', groups: [
+                { label: 'Undo', items: [
+                    { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
+                    { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
+                ]},
                 { label: 'Clipboard', items: [
                     { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
                     { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
                     { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
-                { label: 'Font', items: [
-                    { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
-                    { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
-                    { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
-                ]},
+                { label: 'Font', items: fontGroupItems(false) },
                 { label: 'Alignment', items: [
                     { text: '⬅', title: 'Align Left', action: ribbonAction('justifyLeft') },
                     { text: '⬌', title: 'Center', action: ribbonAction('justifyCenter') },
@@ -584,6 +970,9 @@ function buildRibbon(format) {
                 { label: 'Number', items: [
                     { text: '%', title: 'Percent Style' }, { text: ',', title: 'Comma Style' },
                     { text: '.0', title: 'Increase Decimal' }, { text: '.', title: 'Decrease Decimal' },
+                ]},
+                { label: 'Editing', items: [
+                    { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
                 ]},
             ]},
             { name: 'Insert', groups: [
@@ -610,23 +999,26 @@ function buildRibbon(format) {
     } else if (format === 'pptx') {
         tabDefs = [
             { name: 'Home', groups: [
+                { label: 'Undo', items: [
+                    { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
+                    { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
+                ]},
                 { label: 'Clipboard', items: [
                     { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
                     { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
                     { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
                 ]},
-                { label: 'Font', items: [
-                    { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
-                    { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
-                    { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
-                ]},
+                { label: 'Font', items: fontGroupItems(false) },
                 { label: 'Paragraph', items: [
-                    { text: '≡', title: 'Align Left', action: ribbonAction('justifyLeft') },
-                    { text: '≡', title: 'Center', action: ribbonAction('justifyCenter') },
-                    { text: '≡', title: 'Align Right', action: ribbonAction('justifyRight') },
+                    { text: '☰', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '☰', title: 'Center', action: ribbonAction('justifyCenter') },
+                    { text: '☰', title: 'Align Right', action: ribbonAction('justifyRight') },
                 ]},
                 { label: 'Drawing', items: [
                     { text: '□', title: 'Shape' }, { text: '⬜', title: 'Shape Fill' }, { text: '▢', title: 'Shape Outline' },
+                ]},
+                { label: 'Editing', items: [
+                    { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
                 ]},
             ]},
             { name: 'Insert', groups: [
@@ -665,6 +1057,10 @@ function buildRibbon(format) {
             itemsRow.style.gap = '1px';
             itemsRow.style.alignItems = 'center';
             for (const item of group.items) {
+                if (item.type === 'custom') {
+                    itemsRow.appendChild(item.el);
+                    continue;
+                }
                 const btn = document.createElement('button');
                 btn.className = 'ribbon-btn';
                 btn.title = item.title;
@@ -705,13 +1101,179 @@ function hideRibbon() {
     ribbon.innerHTML = '';
 }
 
-// Keyboard shortcuts for formatting (Ctrl/Cmd+B, I, U)
+// Keyboard shortcuts for formatting (Ctrl/Cmd+B, I, U, Z, Y, H, F)
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey) {
         if (e.key === 'b') { e.preventDefault(); document.execCommand('bold'); }
         else if (e.key === 'i') { e.preventDefault(); document.execCommand('italic'); }
         else if (e.key === 'u') { e.preventDefault(); document.execCommand('underline'); }
+        else if (e.key === 'h' || e.key === 'f') { e.preventDefault(); toggleFindReplace(); }
     }
+    if (e.key === 'Escape') {
+        const dlg = document.getElementById('findReplaceDialog');
+        if (dlg.classList.contains('open')) dlg.classList.remove('open');
+    }
+});
+
+// === ZOOM CONTROLS ===
+const statusBar = document.getElementById('statusBar');
+const zoomSlider = document.getElementById('zoomSlider');
+const zoomLabel = document.getElementById('zoomLabel');
+const zoomOut = document.getElementById('zoomOut');
+const zoomIn = document.getElementById('zoomIn');
+let currentZoom = 100;
+
+function applyZoom() {
+    const container = document.getElementById('pages-container');
+    container.style.transform = `scale(${currentZoom / 100})`;
+    container.style.transformOrigin = 'top center';
+    zoomLabel.textContent = currentZoom + '%';
+    zoomSlider.value = currentZoom;
+}
+
+zoomSlider.addEventListener('input', () => {
+    currentZoom = parseInt(zoomSlider.value);
+    applyZoom();
+});
+zoomOut.addEventListener('click', () => {
+    currentZoom = Math.max(50, currentZoom - 10);
+    applyZoom();
+});
+zoomIn.addEventListener('click', () => {
+    currentZoom = Math.min(200, currentZoom + 10);
+    applyZoom();
+});
+
+// === FIND & REPLACE ===
+function toggleFindReplace() {
+    const dlg = document.getElementById('findReplaceDialog');
+    dlg.classList.toggle('open');
+    if (dlg.classList.contains('open')) {
+        document.getElementById('frFind').focus();
+    }
+}
+
+document.getElementById('frClose').addEventListener('click', () => {
+    document.getElementById('findReplaceDialog').classList.remove('open');
+    clearFindHighlights();
+});
+
+let findMatches = [];
+let findCurrentIdx = -1;
+
+function clearFindHighlights() {
+    // Remove existing highlights
+    document.querySelectorAll('.fr-highlight').forEach(el => {
+        const parent = el.parentNode;
+        parent.replaceChild(document.createTextNode(el.textContent), el);
+        parent.normalize();
+    });
+    findMatches = [];
+    findCurrentIdx = -1;
+    document.getElementById('frStatus').textContent = '';
+}
+
+function performFind() {
+    clearFindHighlights();
+    const query = document.getElementById('frFind').value;
+    if (!query) return;
+
+    const container = document.getElementById('pages-container');
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+    const lowerQuery = query.toLowerCase();
+    for (const textNode of textNodes) {
+        const text = textNode.textContent;
+        const lowerText = text.toLowerCase();
+        let idx = 0;
+        const parts = [];
+        let lastEnd = 0;
+        while ((idx = lowerText.indexOf(lowerQuery, idx)) !== -1) {
+            if (idx > lastEnd) parts.push({ text: text.slice(lastEnd, idx), match: false });
+            parts.push({ text: text.slice(idx, idx + query.length), match: true });
+            lastEnd = idx + query.length;
+            idx = lastEnd;
+        }
+        if (parts.length > 0) {
+            if (lastEnd < text.length) parts.push({ text: text.slice(lastEnd), match: false });
+            const frag = document.createDocumentFragment();
+            for (const p of parts) {
+                if (p.match) {
+                    const mark = document.createElement('mark');
+                    mark.className = 'fr-highlight';
+                    mark.style.background = '#fff3a8';
+                    mark.style.padding = '0';
+                    mark.textContent = p.text;
+                    frag.appendChild(mark);
+                    findMatches.push(mark);
+                } else {
+                    frag.appendChild(document.createTextNode(p.text));
+                }
+            }
+            textNode.parentNode.replaceChild(frag, textNode);
+        }
+    }
+
+    if (findMatches.length > 0) {
+        findCurrentIdx = 0;
+        highlightCurrent();
+    }
+    updateFindStatus();
+}
+
+function highlightCurrent() {
+    findMatches.forEach((m, i) => {
+        m.style.background = i === findCurrentIdx ? '#ff9632' : '#fff3a8';
+    });
+    if (findMatches[findCurrentIdx]) {
+        findMatches[findCurrentIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function updateFindStatus() {
+    const status = document.getElementById('frStatus');
+    if (findMatches.length === 0) {
+        status.textContent = document.getElementById('frFind').value ? 'No matches found' : '';
+    } else {
+        status.textContent = `${findCurrentIdx + 1} of ${findMatches.length} matches`;
+    }
+}
+
+document.getElementById('frFind').addEventListener('input', performFind);
+document.getElementById('frNext').addEventListener('click', () => {
+    if (findMatches.length === 0) return;
+    findCurrentIdx = (findCurrentIdx + 1) % findMatches.length;
+    highlightCurrent();
+    updateFindStatus();
+});
+document.getElementById('frPrev').addEventListener('click', () => {
+    if (findMatches.length === 0) return;
+    findCurrentIdx = (findCurrentIdx - 1 + findMatches.length) % findMatches.length;
+    highlightCurrent();
+    updateFindStatus();
+});
+document.getElementById('frReplaceOne').addEventListener('click', () => {
+    if (findMatches.length === 0 || findCurrentIdx < 0) return;
+    const replaceVal = document.getElementById('frReplace').value;
+    const mark = findMatches[findCurrentIdx];
+    mark.parentNode.replaceChild(document.createTextNode(replaceVal), mark);
+    findMatches.splice(findCurrentIdx, 1);
+    if (findCurrentIdx >= findMatches.length) findCurrentIdx = 0;
+    if (findMatches.length > 0) highlightCurrent();
+    updateFindStatus();
+});
+document.getElementById('frReplaceAll').addEventListener('click', () => {
+    if (findMatches.length === 0) return;
+    const replaceVal = document.getElementById('frReplace').value;
+    for (const mark of findMatches) {
+        mark.parentNode.replaceChild(document.createTextNode(replaceVal), mark);
+    }
+    const count = findMatches.length;
+    findMatches = [];
+    findCurrentIdx = -1;
+    document.getElementById('frStatus').textContent = `Replaced ${count} occurrence(s)`;
 });
 
 function collectDocxEdits() {
@@ -1089,6 +1651,57 @@ function renderEditableXlsx(workbook) {
     const wrapper = document.createElement('div');
     wrapper.className = 'spreadsheet-wrapper';
 
+    // Range selection state
+    let rangeStart = null; // {r, c}
+    let rangeEnd = null;
+    let isSelecting = false;
+
+    function clearRangeSelection() {
+        wrapper.querySelectorAll('.range-selected, .range-border-top, .range-border-bottom, .range-border-left, .range-border-right').forEach(el => {
+            el.classList.remove('range-selected', 'range-border-top', 'range-border-bottom', 'range-border-left', 'range-border-right');
+        });
+        wrapper.querySelectorAll('th.col-selected, th.row-selected').forEach(el => {
+            el.classList.remove('col-selected', 'row-selected');
+        });
+    }
+
+    function applyRangeSelection() {
+        clearRangeSelection();
+        if (!rangeStart || !rangeEnd) return;
+        const r1 = Math.min(rangeStart.r, rangeEnd.r), r2 = Math.max(rangeStart.r, rangeEnd.r);
+        const c1 = Math.min(rangeStart.c, rangeEnd.c), c2 = Math.max(rangeStart.c, rangeEnd.c);
+
+        // Update cell ref display
+        if (r1 === r2 && c1 === c2) {
+            cellRefEl.textContent = colName(c1) + r1;
+        } else {
+            cellRefEl.textContent = colName(c1) + r1 + ':' + colName(c2) + r2;
+        }
+
+        // Highlight column and row headers
+        const headerCells = wrapper.querySelectorAll('thead th');
+        for (let c = c1; c <= c2; c++) {
+            if (headerCells[c + 1]) headerCells[c + 1].classList.add('col-selected');
+        }
+        const rowHeaders = wrapper.querySelectorAll('th.row-header');
+        for (let r = r1; r <= r2; r++) {
+            const rh = rowHeaders[r - 1]; // rows are 1-indexed
+            if (rh) rh.classList.add('row-selected');
+        }
+
+        for (let r = r1; r <= r2; r++) {
+            for (let c = c1; c <= c2; c++) {
+                const cell = wrapper.querySelector(`td.edit-cell[data-row="${r}"][data-col="${c}"]`);
+                if (!cell) continue;
+                cell.classList.add('range-selected');
+                if (r === r1) cell.classList.add('range-border-top');
+                if (r === r2) cell.classList.add('range-border-bottom');
+                if (c === c1) cell.classList.add('range-border-left');
+                if (c === c2) cell.classList.add('range-border-right');
+            }
+        }
+    }
+
     function showSheet(idx) {
         for (const t of tabs.children) t.classList.remove('active');
         tabs.children[idx].classList.add('active');
@@ -1226,6 +1839,31 @@ function renderEditableXlsx(workbook) {
                         td.textContent = td.dataset.original;
                         td.blur();
                     }
+                    // Shift+Arrow for range selection
+                    if (e.shiftKey && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+                        e.preventDefault();
+                        if (!rangeStart) rangeStart = { r, c };
+                        if (!rangeEnd) rangeEnd = { r, c };
+                        if (e.key === 'ArrowDown') rangeEnd.r++;
+                        else if (e.key === 'ArrowUp') rangeEnd.r = Math.max(1, rangeEnd.r - 1);
+                        else if (e.key === 'ArrowRight') rangeEnd.c++;
+                        else if (e.key === 'ArrowLeft') rangeEnd.c = Math.max(0, rangeEnd.c - 1);
+                        applyRangeSelection();
+                    }
+                });
+
+                // Mouse range selection
+                td.addEventListener('mousedown', (e) => {
+                    if (e.button !== 0) return;
+                    rangeStart = { r, c };
+                    rangeEnd = { r, c };
+                    isSelecting = true;
+                    applyRangeSelection();
+                });
+                td.addEventListener('mouseover', () => {
+                    if (!isSelecting) return;
+                    rangeEnd = { r, c };
+                    applyRangeSelection();
                 });
 
                 tr.appendChild(td);
@@ -1234,6 +1872,9 @@ function renderEditableXlsx(workbook) {
         }
         table.appendChild(tbody);
         wrapper.appendChild(table);
+
+        // Stop mouse range selection on mouseup
+        document.addEventListener('mouseup', () => { isSelecting = false; });
     }
 
     workbook.sheets.forEach((sheet, i) => {
@@ -1411,6 +2052,9 @@ async function handleFile(file) {
 
     toolbar.classList.add('visible');
     buildRibbon(ext);
+    statusBar.classList.add('visible');
+    currentZoom = 100;
+    applyZoom();
     document.querySelector('.container').classList.toggle('xlsx-active', ext === 'xlsx');
 
     try {
@@ -1465,6 +2109,30 @@ fileInput.addEventListener('change', () => {
 });
 
 initialize();
+
+// === SAMPLE LOADER ===
+async function loadSample(filename) {
+    if (!wasmReady) {
+        showStatus('Wasm is still loading...', 'info');
+        return;
+    }
+    try {
+        showStatus('Loading sample...', 'info');
+        // Try relative paths for both docs/ and web/ deployments
+        let resp = await fetch(filename);
+        if (!resp.ok) resp = await fetch('../docs/' + filename);
+        if (!resp.ok) resp = await fetch('../tests/fixtures/' + filename.replace('sample', 'basic_test'));
+        if (!resp.ok) throw new Error('Failed to fetch sample: ' + resp.status);
+        const buffer = await resp.arrayBuffer();
+        const blob = new Blob([buffer]);
+        const file = new File([blob], filename);
+        document.getElementById('sampleButtons').style.display = 'none';
+        await handleFile(file);
+    } catch(e) {
+        showStatus('Error loading sample: ' + e.message, 'error');
+        console.error(e);
+    }
+}
 </script>
 </body>
 </html>

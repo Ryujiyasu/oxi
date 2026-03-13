@@ -302,16 +302,43 @@ impl LayoutEngine {
 
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
+            let is_last_line = line_idx == lines.len() - 1;
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
                 Alignment::Center => (available_width - extra_indent - line_text_width) / 2.0,
                 Alignment::Right => available_width - extra_indent - line_text_width,
-                Alignment::Justify => 0.0, // TODO: distribute spacing
+                Alignment::Justify => 0.0, // handled via inter-fragment spacing below
+            };
+
+            // For justify: distribute extra space between fragments (not on last line)
+            let justify_extra = if para.alignment == Alignment::Justify
+                && !is_last_line
+                && line.fragments.len() > 1
+            {
+                let slack = available_width - extra_indent - line_text_width;
+                if slack > 0.0 {
+                    // Count spaces (whitespace-only fragments) for distributing gaps
+                    let gap_count = line
+                        .fragments
+                        .iter()
+                        .filter(|f| f.text.trim().is_empty())
+                        .count();
+                    if gap_count > 0 {
+                        slack / gap_count as f32
+                    } else {
+                        // No space fragments: distribute evenly between all fragments
+                        slack / (line.fragments.len() - 1) as f32
+                    }
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
             };
 
             let mut x = line_x + align_offset;
 
-            for frag in &line.fragments {
+            for (frag_idx, frag) in line.fragments.iter().enumerate() {
                 let resolved_font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let resolved_bold = self.resolve_bold(&frag.style, &para.style);
                 elements.push(LayoutElement {
@@ -332,6 +359,18 @@ impl LayoutEngine {
                     },
                 });
                 x += frag.width;
+
+                // Add justify spacing after space fragments (or between all fragments if no spaces)
+                if justify_extra > 0.0 && frag_idx < line.fragments.len() - 1 {
+                    let has_space_gaps = line.fragments.iter().any(|f| f.text.trim().is_empty());
+                    if has_space_gaps {
+                        if frag.text.trim().is_empty() {
+                            x += justify_extra;
+                        }
+                    } else {
+                        x += justify_extra;
+                    }
+                }
             }
 
             *cursor_y += line_height;
@@ -427,7 +466,6 @@ impl LayoutEngine {
                                 width: char_width,
                                 style: style.clone(),
                             });
-                            current_width += char_width;
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0;
                             _is_first_line = false;
@@ -438,7 +476,20 @@ impl LayoutEngine {
                         _is_first_line = false;
                     }
 
-                    // Check next char for line-end prohibition
+                    // Check line-end prohibition: if this char shouldn't end a line,
+                    // don't allow a break after it
+                    if kinsoku::is_line_end_prohibited(ch) {
+                        // Keep this char on the current line and prevent break after it
+                        current_line.fragments.push(LineFragment {
+                            text: ch.to_string(),
+                            width: char_width,
+                            style: style.clone(),
+                        });
+                        current_width += char_width;
+                        // Don't allow line break after this char — continue to next
+                        continue;
+                    }
+
                     current_line.fragments.push(LineFragment {
                         text: ch.to_string(),
                         width: char_width,
