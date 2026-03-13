@@ -19,9 +19,9 @@
 <meta name="twitter:description" content="View and edit .docx / .xlsx / .pptx files natively in the browser. Built with Rust + WebAssembly.">
 <meta name="twitter:image" content="https://ryujiyasu.github.io/oxi/oxi-logo.png">
 <link rel="canonical" href="https://ryujiyasu.github.io/oxi/">
-<link rel="icon" type="image/x-icon" href="../docs/favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="../docs/favicon-32x32.png">
-<link rel="apple-touch-icon" href="../docs/apple-touch-icon.png">
+<link rel="icon" type="image/x-icon" href="./favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
@@ -962,7 +962,7 @@ input[type="file"] { display: none; }
     </div>
 </div>
 <header id="landingHeader">
-    <img src="../docs/icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
+    <img src="./icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
     <h1>Oxi</h1>
     <span data-i18n="subtitle">Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
     <button class="dark-mode-toggle" id="darkModeLanding" onclick="toggleDarkMode()">&#x263D;</button>
@@ -1311,7 +1311,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from './oxi_wasm.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
@@ -3998,7 +3998,7 @@ async function loadSample(filename) {
         showStatus(t('loadingSample'), 'info');
         // Try relative paths for both docs/ and web/ deployments
         let resp = await fetch(filename);
-        if (!resp.ok) resp = await fetch('../docs/' + filename);
+        if (!resp.ok) resp = await fetch('./' + filename);
         if (!resp.ok) resp = await fetch('../tests/fixtures/' + filename.replace('sample', 'basic_test'));
         if (!resp.ok) throw new Error('Failed to fetch sample: ' + resp.status);
         const buffer = await resp.arrayBuffer();
