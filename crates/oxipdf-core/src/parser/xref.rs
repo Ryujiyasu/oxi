@@ -28,6 +28,7 @@ impl XrefTable {
     }
 
     /// Get the byte offset of an in-use object.
+    #[allow(dead_code)]
     pub fn get_offset(&self, obj_num: u32) -> Option<u64> {
         match self.entries.get(&obj_num) {
             Some(XrefEntry::InUse { offset, .. }) => Some(*offset),

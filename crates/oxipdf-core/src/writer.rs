@@ -573,6 +573,42 @@ fn build_content_stream_with_images(
                     (None, None) => write!(buf, "n\n").unwrap(),
                 }
             }
+            ContentElement::SaveState => {
+                write!(buf, "q\n").unwrap();
+            }
+            ContentElement::RestoreState => {
+                write!(buf, "Q\n").unwrap();
+            }
+            ContentElement::ClipPath(clip) => {
+                for op in &clip.operations {
+                    match op {
+                        PathOp::MoveTo(x, y) => {
+                            let py = page.height - y;
+                            write!(buf, "{x} {py} m\n").unwrap();
+                        }
+                        PathOp::LineTo(x, y) => {
+                            let py = page.height - y;
+                            write!(buf, "{x} {py} l\n").unwrap();
+                        }
+                        PathOp::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                            write!(
+                                buf,
+                                "{x1} {} {x2} {} {x3} {} c\n",
+                                page.height - y1,
+                                page.height - y2,
+                                page.height - y3,
+                            )
+                            .unwrap();
+                        }
+                        PathOp::ClosePath => write!(buf, "h\n").unwrap(),
+                    }
+                }
+                if clip.even_odd {
+                    write!(buf, "W* n\n").unwrap();
+                } else {
+                    write!(buf, "W n\n").unwrap();
+                }
+            }
             ContentElement::Image(img) => {
                 // Check if this image has an allocated XObject.
                 if images.iter().any(|&(ci, _)| ci == idx) {

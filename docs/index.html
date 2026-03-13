@@ -4003,7 +4003,13 @@ function renderPdfViewer(doc, rawData) {
 
         // Draw content elements
         (page.contents || []).forEach(elem => {
-            if (elem.Path) {
+            if (elem === 'SaveState') {
+                ctx.save();
+            } else if (elem === 'RestoreState') {
+                ctx.restore();
+            } else if (elem.ClipPath) {
+                drawPdfClip(ctx, elem.ClipPath);
+            } else if (elem.Path) {
                 drawPdfPath(ctx, elem.Path);
             } else if (elem.Text) {
                 drawPdfText(ctx, elem.Text);
@@ -4076,25 +4082,69 @@ function drawPdfText(ctx, span) {
     const y = span.y;
     const fontSize = span.font_size || 12;
 
-    // Map PDF font names to CSS
+    // Map PDF font names to CSS font families
     let fontFamily = 'serif';
-    const fn = (span.font_name || '').toLowerCase();
-    if (fn.includes('arial') || fn.includes('helvetica') || fn.includes('gothic') || fn.includes('sans')) {
-        fontFamily = 'sans-serif';
-    } else if (fn.includes('courier') || fn.includes('mono')) {
-        fontFamily = 'monospace';
-    } else if (fn.includes('mincho') || fn.includes('times') || fn.includes('serif')) {
+    let fontWeight = 'normal';
+    let fontStyle = 'normal';
+    const fname = (span.font_name || '').toLowerCase();
+    // Strip subset prefix (e.g. "ABCDEF+" → "")
+    const cleanName = fname.replace(/^[a-z]{6}\+/, '');
+    if (cleanName.includes('bold') || cleanName.includes(',bold')) fontWeight = 'bold';
+    if (cleanName.includes('italic') || cleanName.includes('oblique')) fontStyle = 'italic';
+
+    // Try specific font matches first
+    if (cleanName.includes('helvetica') || cleanName.includes('arial')) {
+        fontFamily = '"Helvetica Neue", Arial, "Noto Sans JP", sans-serif';
+    } else if (cleanName.includes('gothic') || cleanName.includes('msgothic') || cleanName.includes('ms-gothic')) {
+        fontFamily = '"MS Gothic", "Noto Sans JP", sans-serif';
+    } else if (cleanName.includes('yugothic') || cleanName.includes('yu gothic')) {
+        fontFamily = '"Yu Gothic", "Noto Sans JP", sans-serif';
+    } else if (cleanName.includes('meiryo')) {
+        fontFamily = '"Meiryo", "Noto Sans JP", sans-serif';
+    } else if (cleanName.includes('mincho') || cleanName.includes('msmincho') || cleanName.includes('ms-mincho')) {
+        fontFamily = '"MS Mincho", "Noto Serif JP", serif';
+    } else if (cleanName.includes('yumincho') || cleanName.includes('yu mincho')) {
+        fontFamily = '"Yu Mincho", "Noto Serif JP", serif';
+    } else if (cleanName.includes('courier')) {
+        fontFamily = '"Courier New", monospace';
+    } else if (cleanName.includes('times')) {
+        fontFamily = '"Times New Roman", serif';
+    } else if (cleanName.includes('sans') || cleanName.includes('calibri')) {
+        fontFamily = '"Calibri", "Noto Sans JP", sans-serif';
+    } else if (cleanName.includes('serif')) {
         fontFamily = 'serif';
+    } else {
+        // Default: for Japanese PDFs, sans-serif with Noto fallback
+        fontFamily = '"Noto Sans JP", sans-serif';
     }
 
     // Canvas is y-flipped to match PDF coords, so flip text back to render upright
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(1, -1);
-    ctx.font = `${fontSize}px ${fontFamily}`;
+    ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
     ctx.fillStyle = colorToCss(span.fill_color);
+    ctx.textBaseline = 'alphabetic';
     ctx.fillText(span.text, 0, 0);
     ctx.restore();
+}
+
+function drawPdfClip(ctx, clip) {
+    if (!clip.operations || clip.operations.length === 0) return;
+    ctx.beginPath();
+    clip.operations.forEach(op => {
+        if (op.MoveTo) {
+            ctx.moveTo(op.MoveTo[0], op.MoveTo[1]);
+        } else if (op.LineTo) {
+            ctx.lineTo(op.LineTo[0], op.LineTo[1]);
+        } else if (op.CurveTo) {
+            const [x1, y1, x2, y2, x3, y3] = op.CurveTo;
+            ctx.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+        } else if (op === 'ClosePath' || op.ClosePath !== undefined) {
+            ctx.closePath();
+        }
+    });
+    ctx.clip(clip.even_odd ? 'evenodd' : 'nonzero');
 }
 
 function drawPdfPath(ctx, path) {
@@ -4121,6 +4171,16 @@ function drawPdfPath(ctx, path) {
     if (path.stroke) {
         ctx.strokeStyle = colorToCss(path.stroke.color);
         ctx.lineWidth = path.stroke.width || 1;
+        // Line cap: Butt/Round/Square
+        if (path.stroke.line_cap) {
+            const capMap = { Butt: 'butt', Round: 'round', Square: 'square' };
+            ctx.lineCap = capMap[path.stroke.line_cap] || 'butt';
+        }
+        // Line join: Miter/Round/Bevel
+        if (path.stroke.line_join) {
+            const joinMap = { Miter: 'miter', Round: 'round', Bevel: 'bevel' };
+            ctx.lineJoin = joinMap[path.stroke.line_join] || 'miter';
+        }
         ctx.stroke();
     }
 }

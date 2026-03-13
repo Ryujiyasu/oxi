@@ -5,7 +5,8 @@ use crate::ir::*;
 use super::object::*;
 use super::xref::*;
 use super::cmap::{CMap, parse_cmap};
-use super::content::interpret_content_stream_with_cmaps;
+use super::content::{interpret_content_stream_with_resources, PageResources, XObjectData};
+use super::encoding::FontEncoding;
 use super::filter::decode_stream;
 
 /// Parse a PDF file from bytes into a `PdfDocument`.
@@ -341,10 +342,10 @@ fn parse_page_contents(
     data: &[u8],
     xref: &XrefTable,
     page_node: &PdfObject,
-    page_height: f64,
+    _page_height: f64,
 ) -> Vec<ContentElement> {
-    // Extract font ToUnicode CMaps from Resources.
-    let font_cmaps = extract_font_cmaps(data, xref, page_node);
+    // Build full page resources (CMaps, encodings, XObjects).
+    let resources = build_page_resources(data, xref, page_node);
 
     let contents_obj = match page_node.dict_get("Contents") {
         Some(obj) => obj,
@@ -377,30 +378,49 @@ fn parse_page_contents(
     };
 
     match stream_data {
-        Some(raw) => interpret_content_stream_with_cmaps(&raw, page_height, &font_cmaps)
+        Some(raw) => interpret_content_stream_with_resources(&raw, &resources)
             .unwrap_or_default(),
         None => Vec::new(),
     }
 }
 
-/// Extract ToUnicode CMaps for all fonts in the page's Resources dictionary.
-fn extract_font_cmaps(
+/// Build full PageResources from a page/XObject node's Resources dictionary.
+fn build_page_resources(
     data: &[u8],
     xref: &XrefTable,
-    page_node: &PdfObject,
-) -> HashMap<String, CMap> {
-    let mut cmaps = HashMap::new();
-
-    let resources = match page_node.dict_get("Resources") {
+    node: &PdfObject,
+) -> PageResources {
+    let resources_obj = match node.dict_get("Resources") {
         Some(PdfObject::Reference(r)) => read_object_at(data, xref, r.num).ok(),
         Some(obj) => Some(obj.clone()),
         None => None,
     };
 
-    let resources = match resources {
+    let resources_obj = match resources_obj {
         Some(r) => r,
-        None => return cmaps,
+        None => return PageResources::default(),
     };
+
+    let font_cmaps = extract_font_cmaps_from(data, xref, &resources_obj);
+    let font_encodings = extract_font_encodings(data, xref, &resources_obj);
+    let font_base_names = extract_font_base_names(data, xref, &resources_obj);
+    let xobject_streams = extract_xobject_streams(data, xref, &resources_obj);
+
+    PageResources {
+        font_cmaps,
+        font_encodings,
+        font_base_names,
+        xobject_streams,
+    }
+}
+
+/// Extract ToUnicode CMaps from a resolved Resources dictionary.
+fn extract_font_cmaps_from(
+    data: &[u8],
+    xref: &XrefTable,
+    resources: &PdfObject,
+) -> HashMap<String, CMap> {
+    let mut cmaps = HashMap::new();
 
     let font_dict = match resources.dict_get("Font") {
         Some(PdfObject::Reference(r)) => read_object_at(data, xref, r.num).ok(),
@@ -421,7 +441,6 @@ fn extract_font_cmaps(
             };
 
             if let Some(font_obj) = font_obj {
-                // Look for /ToUnicode stream.
                 if let Some(to_unicode_ref) = font_obj.dict_get("ToUnicode") {
                     let to_unicode = match to_unicode_ref {
                         PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
@@ -440,6 +459,271 @@ fn extract_font_cmaps(
     }
 
     cmaps
+}
+
+/// Extract BaseFont names from Resources → Font dictionary.
+/// Maps resource keys like "F1" to actual font names like "Helvetica-Bold".
+fn extract_font_base_names(
+    data: &[u8],
+    xref: &XrefTable,
+    resources: &PdfObject,
+) -> HashMap<String, String> {
+    let mut names = HashMap::new();
+
+    let font_dict = match resources.dict_get("Font") {
+        Some(PdfObject::Reference(r)) => read_object_at(data, xref, r.num).ok(),
+        Some(obj) => Some(obj.clone()),
+        None => None,
+    };
+
+    let font_dict = match font_dict {
+        Some(d) => d,
+        None => return names,
+    };
+
+    if let Some(entries) = font_dict.as_dict() {
+        for (font_name, font_ref) in entries {
+            let font_obj = match font_ref {
+                PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
+                obj => Some(obj.clone()),
+            };
+
+            if let Some(font_obj) = font_obj {
+                // Try /BaseFont first
+                if let Some(base_font) = font_obj.dict_get("BaseFont") {
+                    if let Some(name) = base_font.as_name() {
+                        names.insert(font_name.clone(), name.to_string());
+                        continue;
+                    }
+                }
+                // For Type0 (composite) fonts, check DescendantFonts
+                if let Some(descendants) = font_obj.dict_get("DescendantFonts") {
+                    let arr = match descendants {
+                        PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
+                        obj => Some(obj.clone()),
+                    };
+                    if let Some(PdfObject::Array(arr)) = arr {
+                        if let Some(first) = arr.first() {
+                            let desc_font = match first {
+                                PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
+                                obj => Some(obj.clone()),
+                            };
+                            if let Some(desc_font) = desc_font {
+                                if let Some(base_font) = desc_font.dict_get("BaseFont") {
+                                    if let Some(name) = base_font.as_name() {
+                                        names.insert(font_name.clone(), name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    names
+}
+
+/// Extract font encodings from Resources → Font dictionary.
+fn extract_font_encodings(
+    data: &[u8],
+    xref: &XrefTable,
+    resources: &PdfObject,
+) -> HashMap<String, FontEncoding> {
+    let mut encodings = HashMap::new();
+
+    let font_dict = match resources.dict_get("Font") {
+        Some(PdfObject::Reference(r)) => read_object_at(data, xref, r.num).ok(),
+        Some(obj) => Some(obj.clone()),
+        None => None,
+    };
+
+    let font_dict = match font_dict {
+        Some(d) => d,
+        None => return encodings,
+    };
+
+    if let Some(entries) = font_dict.as_dict() {
+        for (font_name, font_ref) in entries {
+            let font_obj = match font_ref {
+                PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
+                obj => Some(obj.clone()),
+            };
+
+            if let Some(font_obj) = font_obj {
+                if let Some(enc) = parse_font_encoding(data, xref, &font_obj) {
+                    encodings.insert(font_name.clone(), enc);
+                }
+            }
+        }
+    }
+
+    encodings
+}
+
+/// Parse the /Encoding entry of a font dictionary.
+fn parse_font_encoding(
+    data: &[u8],
+    xref: &XrefTable,
+    font_obj: &PdfObject,
+) -> Option<FontEncoding> {
+    let enc = font_obj.dict_get("Encoding")?;
+
+    match enc {
+        PdfObject::Name(name) => match name.as_str() {
+            "WinAnsiEncoding" => Some(FontEncoding::WinAnsi),
+            "MacRomanEncoding" => Some(FontEncoding::MacRoman),
+            _ => None,
+        },
+        PdfObject::Reference(r) => {
+            let enc_obj = read_object_at(data, xref, r.num).ok()?;
+            let base = enc_obj
+                .dict_get("BaseEncoding")
+                .and_then(|o| o.as_name())
+                .unwrap_or("");
+            match base {
+                "WinAnsiEncoding" => Some(FontEncoding::WinAnsi),
+                "MacRomanEncoding" => Some(FontEncoding::MacRoman),
+                _ => Some(FontEncoding::WinAnsi), // default
+            }
+        }
+        PdfObject::Dictionary(_) => {
+            let base = enc
+                .dict_get("BaseEncoding")
+                .and_then(|o| o.as_name())
+                .unwrap_or("");
+            match base {
+                "WinAnsiEncoding" => Some(FontEncoding::WinAnsi),
+                "MacRomanEncoding" => Some(FontEncoding::MacRoman),
+                _ => Some(FontEncoding::WinAnsi),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract Form XObject streams from Resources → XObject dictionary.
+fn extract_xobject_streams(
+    data: &[u8],
+    xref: &XrefTable,
+    resources: &PdfObject,
+) -> HashMap<String, XObjectData> {
+    let mut xobjects = HashMap::new();
+
+    let xobj_dict = match resources.dict_get("XObject") {
+        Some(PdfObject::Reference(r)) => read_object_at(data, xref, r.num).ok(),
+        Some(obj) => Some(obj.clone()),
+        None => None,
+    };
+
+    let xobj_dict = match xobj_dict {
+        Some(d) => d,
+        None => return xobjects,
+    };
+
+    if let Some(entries) = xobj_dict.as_dict() {
+        for (name, xobj_ref) in entries {
+            let xobj = match xobj_ref {
+                PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
+                obj => Some(obj.clone()),
+            };
+
+            if let Some(xobj) = xobj {
+                if let Some(xobj_data) = parse_form_xobject(data, xref, &xobj) {
+                    xobjects.insert(name.clone(), xobj_data);
+                }
+            }
+        }
+    }
+
+    xobjects
+}
+
+/// Parse a Form XObject (stream with /Subtype /Form).
+fn parse_form_xobject(
+    data: &[u8],
+    xref: &XrefTable,
+    obj: &PdfObject,
+) -> Option<XObjectData> {
+    match obj {
+        PdfObject::Stream { dict, data: stream_data } => {
+            // Only process Form XObjects (not Image XObjects)
+            let subtype = dict
+                .iter()
+                .find(|(k, _)| k == "Subtype")
+                .and_then(|(_, v)| v.as_name());
+
+            if subtype != Some("Form") {
+                return None;
+            }
+
+            let decoded = decode_stream(dict, stream_data).ok()?;
+
+            // Extract /Matrix (default: identity)
+            let matrix = dict
+                .iter()
+                .find(|(k, _)| k == "Matrix")
+                .and_then(|(_, v)| v.as_array())
+                .map(|arr| {
+                    let mut m = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+                    for (i, val) in arr.iter().take(6).enumerate() {
+                        m[i] = val.as_f64().unwrap_or(if i == 0 || i == 3 { 1.0 } else { 0.0 });
+                    }
+                    m
+                })
+                .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+            // Extract /BBox
+            let bbox = dict
+                .iter()
+                .find(|(k, _)| k == "BBox")
+                .and_then(|(_, v)| v.as_array())
+                .and_then(|arr| {
+                    if arr.len() >= 4 {
+                        Some(Rectangle {
+                            llx: arr[0].as_f64()?,
+                            lly: arr[1].as_f64()?,
+                            urx: arr[2].as_f64()?,
+                            ury: arr[3].as_f64()?,
+                        })
+                    } else {
+                        None
+                    }
+                });
+
+            // Extract sub-resources from the XObject's own /Resources
+            let sub_resources = dict
+                .iter()
+                .find(|(k, _)| k == "Resources")
+                .and_then(|(_, v)| {
+                    let res_obj = match v {
+                        PdfObject::Reference(r) => read_object_at(data, xref, r.num).ok(),
+                        obj => Some(obj.clone()),
+                    };
+                    res_obj.map(|r| {
+                        let cmaps = extract_font_cmaps_from(data, xref, &r);
+                        let encs = extract_font_encodings(data, xref, &r);
+                        let base_names = extract_font_base_names(data, xref, &r);
+                        let xobjs = extract_xobject_streams(data, xref, &r);
+                        Box::new(PageResources {
+                            font_cmaps: cmaps,
+                            font_encodings: encs,
+                            font_base_names: base_names,
+                            xobject_streams: xobjs,
+                        })
+                    })
+                });
+
+            Some(XObjectData {
+                stream: decoded,
+                matrix,
+                bbox,
+                resources: sub_resources,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Decode a stream object (apply filters) and return the raw bytes.

@@ -115,6 +115,12 @@ pub enum ContentElement {
     Text(TextSpan),
     Path(PathData),
     Image(ImageData),
+    /// Set a clipping region (intersects with current clip).
+    ClipPath(ClipPathData),
+    /// Save graphics state (corresponds to PDF `q` operator).
+    SaveState,
+    /// Restore graphics state (corresponds to PDF `Q` operator).
+    RestoreState,
 }
 
 /// A span of text with position and style.
@@ -172,6 +178,14 @@ pub enum Color {
     Gray(f64),
     Rgb(f64, f64, f64),
     Cmyk(f64, f64, f64, f64),
+}
+
+/// A clipping path that constrains subsequent drawing.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClipPathData {
+    pub operations: Vec<PathOp>,
+    /// True for even-odd rule (W*), false for non-zero winding (W).
+    pub even_odd: bool,
 }
 
 /// An embedded image.

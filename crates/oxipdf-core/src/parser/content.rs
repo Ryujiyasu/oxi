@@ -9,6 +9,33 @@ use crate::error::PdfError;
 use crate::ir::*;
 use super::object::PdfObject;
 use super::cmap::CMap;
+use super::encoding::{FontEncoding, decode_with_encoding};
+
+/// Pre-resolved page resources needed for content stream interpretation.
+#[derive(Default)]
+pub struct PageResources {
+    /// Font name → ToUnicode CMap.
+    pub font_cmaps: HashMap<String, CMap>,
+    /// Font name → encoding (when no CMap is available).
+    pub font_encodings: HashMap<String, FontEncoding>,
+    /// Font resource key (e.g. "F1") → BaseFont name (e.g. "Helvetica-Bold").
+    pub font_base_names: HashMap<String, String>,
+    /// XObject name → (decoded stream bytes, matrix, optional sub-resources).
+    /// Form XObjects contain their own content streams.
+    pub xobject_streams: HashMap<String, XObjectData>,
+}
+
+/// Data for a resolved Form XObject.
+pub struct XObjectData {
+    /// Decoded content stream bytes.
+    pub stream: Vec<u8>,
+    /// Transformation matrix from /Matrix entry (default: identity).
+    pub matrix: [f64; 6],
+    /// Optional BBox for clipping.
+    pub bbox: Option<Rectangle>,
+    /// Resources inherited or defined in the XObject.
+    pub resources: Option<Box<PageResources>>,
+}
 
 /// A parsed content-stream operator with its operands.
 #[derive(Debug, Clone)]
@@ -25,9 +52,19 @@ struct GraphicsState {
     font_size: f64,
     text_matrix: [f64; 6],
     line_matrix: [f64; 6],
+    text_leading: f64,
+    char_spacing: f64,
+    word_spacing: f64,
+    text_rise: f64,
+    horiz_scaling: f64,
     // Color state
     fill_color: Color,
     stroke_color: Color,
+    // Line/path state
+    line_width: f64,
+    line_cap: LineCap,
+    line_join: LineJoin,
+    miter_limit: f64,
     // CTM (current transformation matrix)
     ctm: [f64; 6],
 }
@@ -39,8 +76,17 @@ impl Default for GraphicsState {
             font_size: 12.0,
             text_matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             line_matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            text_leading: 0.0,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            text_rise: 0.0,
+            horiz_scaling: 100.0,
             fill_color: Color::Gray(0.0), // black
             stroke_color: Color::Gray(0.0),
+            line_width: 1.0,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            miter_limit: 10.0,
             ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         }
     }
@@ -52,31 +98,104 @@ pub fn interpret_content_stream(
     stream_data: &[u8],
     _page_height: f64,
 ) -> Result<Vec<ContentElement>, PdfError> {
-    interpret_content_stream_with_cmaps(stream_data, _page_height, &HashMap::new())
+    let resources = PageResources::default();
+    interpret_content_stream_impl(stream_data, &resources, 0)
 }
 
-/// Interpret a content stream with font-specific CMap decoders.
-/// The `font_cmaps` map font names (e.g. "/F1") to their ToUnicode CMaps.
-/// Coordinates are in raw PDF space (origin at bottom-left).
+/// Interpret a content stream with full page resources (CMaps, encodings, XObjects).
+pub fn interpret_content_stream_with_resources(
+    stream_data: &[u8],
+    resources: &PageResources,
+) -> Result<Vec<ContentElement>, PdfError> {
+    interpret_content_stream_impl(stream_data, resources, 0)
+}
+
+/// Interpret a content stream with font-specific CMap decoders (legacy API).
+#[allow(dead_code)]
 pub fn interpret_content_stream_with_cmaps(
     stream_data: &[u8],
     _page_height: f64,
     font_cmaps: &HashMap<String, CMap>,
 ) -> Result<Vec<ContentElement>, PdfError> {
+    let resources = PageResources {
+        font_cmaps: font_cmaps.clone(),
+        ..Default::default()
+    };
+    interpret_content_stream_impl(stream_data, &resources, 0)
+}
+
+/// Maximum recursion depth for Form XObject interpretation.
+const MAX_XOBJECT_DEPTH: u32 = 10;
+
+fn interpret_content_stream_impl(
+    stream_data: &[u8],
+    resources: &PageResources,
+    depth: u32,
+) -> Result<Vec<ContentElement>, PdfError> {
+    if depth > MAX_XOBJECT_DEPTH {
+        return Ok(Vec::new());
+    }
     let operators = tokenize_content_stream(stream_data)?;
     let mut elements = Vec::new();
     let mut state = GraphicsState::default();
     let mut state_stack: Vec<GraphicsState> = Vec::new();
     let mut current_path: Vec<PathOp> = Vec::new();
+    let mut pending_clip: Option<bool> = None; // Some(even_odd)
+
+    // Helper: build StrokeStyle from current state
+    let make_stroke = |state: &GraphicsState| -> StrokeStyle {
+        StrokeStyle {
+            color: state.stroke_color,
+            width: state.line_width,
+            line_cap: state.line_cap,
+            line_join: state.line_join,
+        }
+    };
+
+    // Helper: compute effective font size (accounts for text matrix + CTM scaling)
+    let effective_font_size = |state: &GraphicsState| -> f64 {
+        let tm = &state.text_matrix;
+        let ctm = &state.ctm;
+        let combined = multiply_matrix(tm, ctm);
+        // Scale factor from the y-axis of the combined matrix
+        let sy = (combined[2] * combined[2] + combined[3] * combined[3]).sqrt();
+        (state.font_size * sy).abs()
+    };
+
+    // Helper: emit a text element
+    let emit_text = |state: &GraphicsState, text: String, elements: &mut Vec<ContentElement>| {
+        if !text.trim().is_empty() {
+            let (x, y) = transform_point(&state.ctm, &state.text_matrix);
+            let font_size = effective_font_size(state);
+            // Use BaseFont name if available, otherwise keep resource key
+            let font_name = resources
+                .font_base_names
+                .get(&state.font_name)
+                .cloned()
+                .unwrap_or_else(|| state.font_name.clone());
+            elements.push(ContentElement::Text(TextSpan {
+                x,
+                y,
+                text,
+                font_name,
+                font_size,
+                fill_color: state.fill_color,
+            }));
+        }
+    };
 
     for op in &operators {
         match op.name.as_str() {
             // --- Graphics state ---
-            "q" => state_stack.push(state.clone()),
+            "q" => {
+                state_stack.push(state.clone());
+                elements.push(ContentElement::SaveState);
+            }
             "Q" => {
                 if let Some(saved) = state_stack.pop() {
                     state = saved;
                 }
+                elements.push(ContentElement::RestoreState);
             }
             "cm" => {
                 if op.operands.len() >= 6 {
@@ -84,8 +203,42 @@ pub fn interpret_content_stream_with_cmaps(
                     state.ctm = multiply_matrix(&state.ctm, &m);
                 }
             }
+            // Line width
+            "w" => {
+                if let Some(w) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.line_width = w;
+                }
+            }
+            // Line cap style: 0=Butt, 1=Round, 2=Square
+            "J" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_i64()) {
+                    state.line_cap = match v {
+                        1 => LineCap::Round,
+                        2 => LineCap::Square,
+                        _ => LineCap::Butt,
+                    };
+                }
+            }
+            // Line join style: 0=Miter, 1=Round, 2=Bevel
+            "j" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_i64()) {
+                    state.line_join = match v {
+                        1 => LineJoin::Round,
+                        2 => LineJoin::Bevel,
+                        _ => LineJoin::Miter,
+                    };
+                }
+            }
+            // Miter limit
+            "M" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.miter_limit = v;
+                }
+            }
+            // Dash pattern (ignored for now, but don't fail)
+            "d" | "i" | "gs" | "ri" => {}
 
-            // --- Text operators ---
+            // --- Text state operators ---
             "BT" => {
                 state.text_matrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
                 state.line_matrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -101,22 +254,66 @@ pub fn interpret_content_stream_with_cmaps(
                     }
                 }
             }
+            // Text leading
+            "TL" => {
+                if let Some(leading) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.text_leading = leading;
+                }
+            }
+            // Character spacing
+            "Tc" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.char_spacing = v;
+                }
+            }
+            // Word spacing
+            "Tw" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.word_spacing = v;
+                }
+            }
+            // Horizontal scaling
+            "Tz" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.horiz_scaling = v;
+                }
+            }
+            // Text rise
+            "Ts" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_f64()) {
+                    state.text_rise = v;
+                }
+            }
+            // Text rendering mode (ignored for now)
+            "Tr" => {}
             "Td" => {
                 if op.operands.len() >= 2 {
                     let tx = op.operands[0].as_f64().unwrap_or(0.0);
                     let ty = op.operands[1].as_f64().unwrap_or(0.0);
-                    state.line_matrix[4] += tx;
-                    state.line_matrix[5] += ty;
+                    // Td translates the line matrix
+                    let new_lm = [
+                        state.line_matrix[0], state.line_matrix[1],
+                        state.line_matrix[2], state.line_matrix[3],
+                        tx * state.line_matrix[0] + ty * state.line_matrix[2] + state.line_matrix[4],
+                        tx * state.line_matrix[1] + ty * state.line_matrix[3] + state.line_matrix[5],
+                    ];
+                    state.line_matrix = new_lm;
                     state.text_matrix = state.line_matrix;
                 }
             }
             "TD" => {
-                // Same as Td but also sets leading.
+                // TD = set leading to -ty, then Td
                 if op.operands.len() >= 2 {
                     let tx = op.operands[0].as_f64().unwrap_or(0.0);
                     let ty = op.operands[1].as_f64().unwrap_or(0.0);
-                    state.line_matrix[4] += tx;
-                    state.line_matrix[5] += ty;
+                    state.text_leading = -ty;
+                    let new_lm = [
+                        state.line_matrix[0], state.line_matrix[1],
+                        state.line_matrix[2], state.line_matrix[3],
+                        tx * state.line_matrix[0] + ty * state.line_matrix[2] + state.line_matrix[4],
+                        tx * state.line_matrix[1] + ty * state.line_matrix[3] + state.line_matrix[5],
+                    ];
+                    state.line_matrix = new_lm;
                     state.text_matrix = state.line_matrix;
                 }
             }
@@ -128,24 +325,27 @@ pub fn interpret_content_stream_with_cmaps(
                 }
             }
             "T*" => {
-                // Move to next line (uses text leading, default ~font_size).
-                state.line_matrix[5] -= state.font_size;
+                // Move to next line using text_leading
+                let leading = if state.text_leading != 0.0 {
+                    state.text_leading
+                } else {
+                    state.font_size
+                };
+                let tx = 0.0;
+                let ty = -leading;
+                let new_lm = [
+                    state.line_matrix[0], state.line_matrix[1],
+                    state.line_matrix[2], state.line_matrix[3],
+                    tx * state.line_matrix[0] + ty * state.line_matrix[2] + state.line_matrix[4],
+                    tx * state.line_matrix[1] + ty * state.line_matrix[3] + state.line_matrix[5],
+                ];
+                state.line_matrix = new_lm;
                 state.text_matrix = state.line_matrix;
             }
             "Tj" => {
                 if let Some(text_bytes) = op.operands.first().and_then(|o| o.as_bytes()) {
-                    let text = decode_with_cmap(text_bytes, &state.font_name, font_cmaps);
-                    if !text.trim().is_empty() {
-                        let (x, y) = transform_point(&state.ctm, &state.text_matrix);
-                        elements.push(ContentElement::Text(TextSpan {
-                            x,
-                            y,
-                            text,
-                            font_name: state.font_name.clone(),
-                            font_size: state.font_size,
-                            fill_color: state.fill_color,
-                        }));
-                    }
+                    let text = decode_text(text_bytes, &state.font_name, resources);
+                    emit_text(&state, text, &mut elements);
                 }
             }
             "TJ" => {
@@ -155,40 +355,57 @@ pub fn interpret_content_stream_with_cmaps(
                     for item in arr {
                         match item {
                             PdfObject::String(b) | PdfObject::HexString(b) => {
-                                combined.push_str(&decode_with_cmap(b, &state.font_name, font_cmaps));
+                                combined.push_str(&decode_text(b, &state.font_name, resources));
                             }
-                            _ => {} // Numeric kerning adjustments, skip for now.
+                            _ => {} // Numeric kerning adjustments
                         }
                     }
-                    if !combined.trim().is_empty() {
-                        let (x, y) = transform_point(&state.ctm, &state.text_matrix);
-                        elements.push(ContentElement::Text(TextSpan {
-                            x,
-                            y,
-                            text: combined,
-                            font_name: state.font_name.clone(),
-                            font_size: state.font_size,
-                            fill_color: state.fill_color,
-                        }));
-                    }
+                    emit_text(&state, combined, &mut elements);
                 }
             }
             "'" => {
-                // Move to next line and show text.
-                state.line_matrix[5] -= state.font_size;
+                // Move to next line and show text (equivalent to T* then Tj).
+                let leading = if state.text_leading != 0.0 {
+                    state.text_leading
+                } else {
+                    state.font_size
+                };
+                let ty = -leading;
+                let new_lm = [
+                    state.line_matrix[0], state.line_matrix[1],
+                    state.line_matrix[2], state.line_matrix[3],
+                    ty * state.line_matrix[2] + state.line_matrix[4],
+                    ty * state.line_matrix[3] + state.line_matrix[5],
+                ];
+                state.line_matrix = new_lm;
                 state.text_matrix = state.line_matrix;
                 if let Some(text_bytes) = op.operands.first().and_then(|o| o.as_bytes()) {
-                    let text = decode_with_cmap(text_bytes, &state.font_name, font_cmaps);
-                    if !text.trim().is_empty() {
-                        let (x, y) = transform_point(&state.ctm, &state.text_matrix);
-                        elements.push(ContentElement::Text(TextSpan {
-                            x,
-                            y,
-                            text,
-                            font_name: state.font_name.clone(),
-                            font_size: state.font_size,
-                            fill_color: state.fill_color,
-                        }));
+                    let text = decode_text(text_bytes, &state.font_name, resources);
+                    emit_text(&state, text, &mut elements);
+                }
+            }
+            "\"" => {
+                // Set word spacing, char spacing, move to next line, show text.
+                if op.operands.len() >= 3 {
+                    state.word_spacing = op.operands[0].as_f64().unwrap_or(0.0);
+                    state.char_spacing = op.operands[1].as_f64().unwrap_or(0.0);
+                    let leading = if state.text_leading != 0.0 {
+                        state.text_leading
+                    } else {
+                        state.font_size
+                    };
+                    let ty = -leading;
+                    let new_lm = [
+                        state.line_matrix[0], state.line_matrix[1],
+                        state.line_matrix[2], state.line_matrix[3],
+                        ty * state.line_matrix[2] + state.line_matrix[4],
+                        ty * state.line_matrix[3] + state.line_matrix[5],
+                    ];
+                    state.line_matrix = new_lm;
+                    state.text_matrix = state.line_matrix;
+                    if let Some(text_bytes) = op.operands.get(2).and_then(|o| o.as_bytes()) {
+                        let text = decode_text(text_bytes, &state.font_name, resources);
+                        emit_text(&state, text, &mut elements);
                     }
                 }
             }
@@ -238,6 +455,54 @@ pub fn interpret_content_stream_with_cmaps(
                     state.stroke_color = Color::Cmyk(c, m, y, k);
                 }
             }
+            // sc/SC/scn/SCN: set color in current color space
+            // Treat as RGB if 3 args, Gray if 1 arg, CMYK if 4 args
+            "sc" | "scn" => {
+                match op.operands.len() {
+                    1 => {
+                        let v = op.operands[0].as_f64().unwrap_or(0.0);
+                        state.fill_color = Color::Gray(v);
+                    }
+                    3 => {
+                        let r = op.operands[0].as_f64().unwrap_or(0.0);
+                        let g = op.operands[1].as_f64().unwrap_or(0.0);
+                        let b = op.operands[2].as_f64().unwrap_or(0.0);
+                        state.fill_color = Color::Rgb(r, g, b);
+                    }
+                    4 => {
+                        let c = op.operands[0].as_f64().unwrap_or(0.0);
+                        let m = op.operands[1].as_f64().unwrap_or(0.0);
+                        let y = op.operands[2].as_f64().unwrap_or(0.0);
+                        let k = op.operands[3].as_f64().unwrap_or(0.0);
+                        state.fill_color = Color::Cmyk(c, m, y, k);
+                    }
+                    _ => {}
+                }
+            }
+            "SC" | "SCN" => {
+                match op.operands.len() {
+                    1 => {
+                        let v = op.operands[0].as_f64().unwrap_or(0.0);
+                        state.stroke_color = Color::Gray(v);
+                    }
+                    3 => {
+                        let r = op.operands[0].as_f64().unwrap_or(0.0);
+                        let g = op.operands[1].as_f64().unwrap_or(0.0);
+                        let b = op.operands[2].as_f64().unwrap_or(0.0);
+                        state.stroke_color = Color::Rgb(r, g, b);
+                    }
+                    4 => {
+                        let c = op.operands[0].as_f64().unwrap_or(0.0);
+                        let m = op.operands[1].as_f64().unwrap_or(0.0);
+                        let y = op.operands[2].as_f64().unwrap_or(0.0);
+                        let k = op.operands[3].as_f64().unwrap_or(0.0);
+                        state.stroke_color = Color::Cmyk(c, m, y, k);
+                    }
+                    _ => {}
+                }
+            }
+            // Color space operators (track but don't fully implement)
+            "cs" | "CS" => {}
 
             // --- Path construction ---
             "m" => {
@@ -265,6 +530,28 @@ pub fn interpret_content_stream_with_cmaps(
                     current_path.push(PathOp::CurveTo(x1, y1, x2, y2, x3, y3));
                 }
             }
+            // v: curve with first control point = current point
+            "v" => {
+                if op.operands.len() >= 4 {
+                    let x2 = op.operands[0].as_f64().unwrap_or(0.0);
+                    let y2 = op.operands[1].as_f64().unwrap_or(0.0);
+                    let x3 = op.operands[2].as_f64().unwrap_or(0.0);
+                    let y3 = op.operands[3].as_f64().unwrap_or(0.0);
+                    // Get current point from last path op
+                    let (cx, cy) = last_path_point(&current_path);
+                    current_path.push(PathOp::CurveTo(cx, cy, x2, y2, x3, y3));
+                }
+            }
+            // y: curve with last control point = endpoint
+            "y" => {
+                if op.operands.len() >= 4 {
+                    let x1 = op.operands[0].as_f64().unwrap_or(0.0);
+                    let y1 = op.operands[1].as_f64().unwrap_or(0.0);
+                    let x3 = op.operands[2].as_f64().unwrap_or(0.0);
+                    let y3 = op.operands[3].as_f64().unwrap_or(0.0);
+                    current_path.push(PathOp::CurveTo(x1, y1, x3, y3, x3, y3));
+                }
+            }
             "h" => current_path.push(PathOp::ClosePath),
             "re" => {
                 // Rectangle shorthand: x y w h re
@@ -285,50 +572,158 @@ pub fn interpret_content_stream_with_cmaps(
             "S" => {
                 // Stroke
                 if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
                     elements.push(ContentElement::Path(PathData {
-                        operations: std::mem::take(&mut current_path),
-                        stroke: Some(StrokeStyle {
-                            color: state.stroke_color,
-                            width: 1.0,
-                            line_cap: LineCap::Butt,
-                            line_join: LineJoin::Miter,
-                        }),
+                        operations: transformed,
+                        stroke: Some(make_stroke(&state)),
                         fill: None,
                     }));
+                    current_path.clear();
+                }
+            }
+            "s" => {
+                // Close and stroke
+                current_path.push(PathOp::ClosePath);
+                if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
+                    elements.push(ContentElement::Path(PathData {
+                        operations: transformed,
+                        stroke: Some(make_stroke(&state)),
+                        fill: None,
+                    }));
+                    current_path.clear();
                 }
             }
             "f" | "F" => {
-                // Fill
+                // Fill (non-zero winding)
                 if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
                     elements.push(ContentElement::Path(PathData {
-                        operations: std::mem::take(&mut current_path),
+                        operations: transformed,
                         stroke: None,
                         fill: Some(state.fill_color),
                     }));
+                    current_path.clear();
+                }
+            }
+            "f*" => {
+                // Fill (even-odd rule)
+                if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
+                    elements.push(ContentElement::Path(PathData {
+                        operations: transformed,
+                        stroke: None,
+                        fill: Some(state.fill_color),
+                    }));
+                    current_path.clear();
                 }
             }
             "B" => {
-                // Fill and stroke
+                // Fill and stroke (non-zero)
                 if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
                     elements.push(ContentElement::Path(PathData {
-                        operations: std::mem::take(&mut current_path),
-                        stroke: Some(StrokeStyle {
-                            color: state.stroke_color,
-                            width: 1.0,
-                            line_cap: LineCap::Butt,
-                            line_join: LineJoin::Miter,
-                        }),
+                        operations: transformed,
+                        stroke: Some(make_stroke(&state)),
                         fill: Some(state.fill_color),
                     }));
+                    current_path.clear();
+                }
+            }
+            "B*" => {
+                // Fill (even-odd) and stroke
+                if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
+                    elements.push(ContentElement::Path(PathData {
+                        operations: transformed,
+                        stroke: Some(make_stroke(&state)),
+                        fill: Some(state.fill_color),
+                    }));
+                    current_path.clear();
+                }
+            }
+            "b" => {
+                // Close, fill and stroke (non-zero)
+                current_path.push(PathOp::ClosePath);
+                if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
+                    elements.push(ContentElement::Path(PathData {
+                        operations: transformed,
+                        stroke: Some(make_stroke(&state)),
+                        fill: Some(state.fill_color),
+                    }));
+                    current_path.clear();
+                }
+            }
+            "b*" => {
+                // Close, fill (even-odd) and stroke
+                current_path.push(PathOp::ClosePath);
+                if !current_path.is_empty() {
+                    emit_clip_if_pending(&mut pending_clip, &current_path, &state.ctm, &mut elements);
+                    let transformed = transform_path_ops(&current_path, &state.ctm);
+                    elements.push(ContentElement::Path(PathData {
+                        operations: transformed,
+                        stroke: Some(make_stroke(&state)),
+                        fill: Some(state.fill_color),
+                    }));
+                    current_path.clear();
                 }
             }
             "n" => {
-                // End path without painting (clipping path).
+                // End path without painting.
+                // If a clip was pending, emit it now.
+                if let Some(even_odd) = pending_clip.take() {
+                    if !current_path.is_empty() {
+                        let transformed = transform_path_ops(&current_path, &state.ctm);
+                        elements.push(ContentElement::ClipPath(ClipPathData {
+                            operations: transformed,
+                            even_odd,
+                        }));
+                    }
+                }
                 current_path.clear();
             }
+            // Clipping path operators — flag pending, emitted on next paint/n op
+            "W" => {
+                pending_clip = Some(false);
+            }
+            "W*" => {
+                pending_clip = Some(true);
+            }
+
+            // --- XObject (Form XObject / Image) ---
+            "Do" => {
+                if let Some(name) = op.operands.first().and_then(|o| o.as_name()) {
+                    if let Some(xobj) = resources.xobject_streams.get(name) {
+                        // Save current CTM, apply XObject's matrix, interpret, restore
+                        let saved_ctm = state.ctm;
+                        state.ctm = multiply_matrix(&saved_ctm, &xobj.matrix);
+                        // Use XObject's own resources if available, otherwise inherit page resources
+                        let sub_resources = match &xobj.resources {
+                            Some(r) => r.as_ref(),
+                            None => resources,
+                        };
+                        if let Ok(sub_elements) = interpret_content_stream_impl(
+                            &xobj.stream, sub_resources, depth + 1,
+                        ) {
+                            elements.extend(sub_elements);
+                        }
+                        state.ctm = saved_ctm;
+                    }
+                }
+            }
+            // Inline image / marked content (skip)
+            "BI" | "ID" | "EI" | "BMC" | "BDC" | "EMC" | "MP" | "DP" | "sh" => {}
 
             _ => {
-                // Unknown operator — skip for now.
+                // Unknown operator — skip.
             }
         }
     }
@@ -400,6 +795,67 @@ fn tokenize_content_stream(data: &[u8]) -> Result<Vec<Operator>, PdfError> {
                     "true" => operands.push(PdfObject::Boolean(true)),
                     "false" => operands.push(PdfObject::Boolean(false)),
                     "null" => operands.push(PdfObject::Null),
+                    "BI" => {
+                        // Inline image: BI <dict pairs> ID <binary data> EI
+                        // Skip everything until we find "EI" preceded by whitespace.
+                        // First skip to "ID"
+                        while pos < data.len() {
+                            pos = skip_content_ws(data, pos);
+                            if pos + 2 <= data.len()
+                                && data[pos] == b'I'
+                                && data[pos + 1] == b'D'
+                                && (pos + 2 >= data.len() || !data[pos + 2].is_ascii_alphabetic())
+                            {
+                                pos += 2;
+                                // Skip single whitespace/newline after ID
+                                if pos < data.len() && (data[pos] == b' ' || data[pos] == b'\n' || data[pos] == b'\r') {
+                                    pos += 1;
+                                }
+                                break;
+                            }
+                            // Skip key-value pair tokens
+                            if pos < data.len() {
+                                if data[pos] == b'/' {
+                                    // Name
+                                    pos += 1;
+                                    while pos < data.len() && !data[pos].is_ascii_whitespace()
+                                        && !matches!(data[pos], b'/' | b'<' | b'>' | b'[' | b']')
+                                    {
+                                        pos += 1;
+                                    }
+                                } else if data[pos].is_ascii_digit() || data[pos] == b'-' || data[pos] == b'+' || data[pos] == b'.' {
+                                    while pos < data.len() && (data[pos].is_ascii_digit() || data[pos] == b'.') {
+                                        pos += 1;
+                                    }
+                                } else if data[pos].is_ascii_alphabetic() {
+                                    while pos < data.len() && data[pos].is_ascii_alphabetic() {
+                                        pos += 1;
+                                    }
+                                } else {
+                                    pos += 1;
+                                }
+                            }
+                        }
+                        // Now skip binary data until EI
+                        // EI must be preceded by whitespace and followed by whitespace/EOF
+                        while pos < data.len() {
+                            if pos + 2 <= data.len()
+                                && data[pos] == b'E'
+                                && data[pos + 1] == b'I'
+                                && (pos == 0 || data[pos - 1].is_ascii_whitespace())
+                                && (pos + 2 >= data.len() || data[pos + 2].is_ascii_whitespace())
+                            {
+                                pos += 2; // skip "EI"
+                                break;
+                            }
+                            pos += 1;
+                        }
+                        // Push BI as operator (will be ignored in interpreter)
+                        operators.push(Operator {
+                            name,
+                            operands: std::mem::take(&mut operands),
+                        });
+                    }
                     _ => {
                         operators.push(Operator {
                             name,
@@ -594,17 +1050,22 @@ fn skip_content_ws(data: &[u8], mut pos: usize) -> usize {
     pos
 }
 
-/// Decode text bytes using CMap if available for the font, otherwise fallback.
-fn decode_with_cmap(
+/// Decode text bytes using CMap, font encoding, or fallback.
+fn decode_text(
     bytes: &[u8],
     font_name: &str,
-    font_cmaps: &HashMap<String, CMap>,
+    resources: &PageResources,
 ) -> String {
-    if let Some(cmap) = font_cmaps.get(font_name) {
-        cmap.decode_bytes(bytes)
-    } else {
-        decode_pdf_text(bytes)
+    // 1. Try ToUnicode CMap first (most accurate)
+    if let Some(cmap) = resources.font_cmaps.get(font_name) {
+        return cmap.decode_bytes(bytes);
     }
+    // 2. Try font encoding (WinAnsiEncoding, MacRomanEncoding)
+    if let Some(enc) = resources.font_encodings.get(font_name) {
+        return decode_with_encoding(bytes, enc);
+    }
+    // 3. Fallback to PDFDocEncoding
+    decode_pdf_text(bytes)
 }
 
 /// Decode PDF text bytes to a String (fallback when no CMap is available).
@@ -651,6 +1112,77 @@ fn transform_point(ctm: &[f64; 6], tm: &[f64; 6]) -> (f64, f64) {
     // Combine text matrix with CTM.
     let combined = multiply_matrix(tm, ctm);
     (combined[4], combined[5])
+}
+
+/// Transform a single point through a CTM.
+fn ctm_transform(ctm: &[f64; 6], x: f64, y: f64) -> (f64, f64) {
+    (
+        x * ctm[0] + y * ctm[2] + ctm[4],
+        x * ctm[1] + y * ctm[3] + ctm[5],
+    )
+}
+
+/// Transform all path operations through a CTM.
+fn transform_path_ops(ops: &[PathOp], ctm: &[f64; 6]) -> Vec<PathOp> {
+    // If CTM is identity, skip transformation
+    if (ctm[0] - 1.0).abs() < 1e-10
+        && ctm[1].abs() < 1e-10
+        && ctm[2].abs() < 1e-10
+        && (ctm[3] - 1.0).abs() < 1e-10
+        && ctm[4].abs() < 1e-10
+        && ctm[5].abs() < 1e-10
+    {
+        return ops.to_vec();
+    }
+    ops.iter()
+        .map(|op| match op {
+            PathOp::MoveTo(x, y) => {
+                let (tx, ty) = ctm_transform(ctm, *x, *y);
+                PathOp::MoveTo(tx, ty)
+            }
+            PathOp::LineTo(x, y) => {
+                let (tx, ty) = ctm_transform(ctm, *x, *y);
+                PathOp::LineTo(tx, ty)
+            }
+            PathOp::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                let (tx1, ty1) = ctm_transform(ctm, *x1, *y1);
+                let (tx2, ty2) = ctm_transform(ctm, *x2, *y2);
+                let (tx3, ty3) = ctm_transform(ctm, *x3, *y3);
+                PathOp::CurveTo(tx1, ty1, tx2, ty2, tx3, ty3)
+            }
+            PathOp::ClosePath => PathOp::ClosePath,
+        })
+        .collect()
+}
+
+/// Emit a ClipPath element if a clip is pending.
+fn emit_clip_if_pending(
+    pending_clip: &mut Option<bool>,
+    current_path: &[PathOp],
+    ctm: &[f64; 6],
+    elements: &mut Vec<ContentElement>,
+) {
+    if let Some(even_odd) = pending_clip.take() {
+        if !current_path.is_empty() {
+            let transformed = transform_path_ops(current_path, ctm);
+            elements.push(ContentElement::ClipPath(ClipPathData {
+                operations: transformed,
+                even_odd,
+            }));
+        }
+    }
+}
+
+/// Get the current point from the last path operation (for `v` operator).
+fn last_path_point(path: &[PathOp]) -> (f64, f64) {
+    for op in path.iter().rev() {
+        match op {
+            PathOp::MoveTo(x, y) | PathOp::LineTo(x, y) => return (*x, *y),
+            PathOp::CurveTo(_, _, _, _, x, y) => return (*x, *y),
+            PathOp::ClosePath => continue,
+        }
+    }
+    (0.0, 0.0)
 }
 
 #[cfg(test)]
