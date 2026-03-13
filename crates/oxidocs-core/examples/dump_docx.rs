@@ -50,8 +50,11 @@ fn main() {
                     }
                 }
                 ir::Block::Image(img) => {
-                    println!("  [{}] Image {:.0}x{:.0}pt ({} bytes) alt={:?}", 
+                    println!("  [{}] Image {:.0}x{:.0}pt ({} bytes) alt={:?}",
                         bi, img.width, img.height, img.data.len(), img.alt_text);
+                }
+                ir::Block::UnsupportedElement(u) => {
+                    println!("  [{}] Unsupported: {}", bi, u.element_type);
                 }
             }
         }

@@ -74,6 +74,18 @@ pub enum Block {
     Paragraph(Paragraph),
     Table(Table),
     Image(Image),
+    /// Placeholder for unsupported content (SmartArt, Chart, etc.)
+    UnsupportedElement(UnsupportedElement),
+}
+
+/// Represents an unsupported OOXML element that was skipped during parsing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsupportedElement {
+    /// Type of unsupported element (e.g. "SmartArt", "Chart", "ActiveX")
+    pub element_type: String,
+    /// Optional fallback image data (base64)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +123,9 @@ pub struct Run {
     /// Bookmark anchor name (from w:bookmarkStart w:name)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bookmark_name: Option<String>,
+    /// Whether this run contains OMML math content
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_math: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

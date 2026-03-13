@@ -2184,6 +2184,11 @@ function downloadEdited() {
 
 // === Shared run styling helper (header/footer/nested) ===
 function applyRunStyle(span, run) {
+    if (run.is_math) {
+        span.style.fontFamily = "'Cambria Math', 'STIX Two Math', serif";
+        span.style.fontStyle = 'italic';
+        span.title = 'Math: ' + run.text;
+    }
     if (!run.style) return;
     const s = run.style;
     if (s.bold) span.style.fontWeight = 'bold';
@@ -2923,6 +2928,18 @@ function renderEditableDocx(doc) {
                     }
                     blocksContainer.appendChild(imgEl);
                 }
+            } else if (block.UnsupportedElement) {
+                const elem = block.UnsupportedElement;
+                const placeholder = document.createElement('div');
+                placeholder.style.cssText = 'border:2px dashed var(--oxi-primary,#5b4fc7);border-radius:8px;padding:16px;margin:8px 0;text-align:center;color:var(--oxi-primary,#5b4fc7);background:var(--oxi-primary-light,#ede8ff);font-size:13px;';
+                placeholder.textContent = `[${elem.element_type}] — この要素は現在未対応です`;
+                if (elem.fallback_image) {
+                    const img = document.createElement('img');
+                    img.src = `data:image/png;base64,${elem.fallback_image}`;
+                    img.style.cssText = 'max-width:100%;margin-top:8px;';
+                    placeholder.appendChild(img);
+                }
+                blocksContainer.appendChild(placeholder);
             }
         }
 

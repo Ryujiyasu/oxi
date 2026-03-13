@@ -199,6 +199,9 @@ impl LayoutEngine {
                     });
                     cursor_y += img.height;
                 }
+                Block::UnsupportedElement(_) => {
+                    // Skip unsupported elements in layout
+                }
             }
         }
 

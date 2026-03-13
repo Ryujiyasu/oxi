@@ -481,6 +481,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: vec![],
+            unsupported_elements: vec![],
         }
     }
 

@@ -754,6 +754,7 @@ fn parse_worksheet(
         default_col_width,
         default_row_height,
         merge_cells,
+        unsupported_elements: Vec::new(),
     })
 }
 

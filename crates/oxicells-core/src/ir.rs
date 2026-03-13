@@ -14,6 +14,9 @@ pub struct Sheet {
     pub default_col_width: f32,
     pub default_row_height: f32,
     pub merge_cells: Vec<MergeCell>,
+    /// Unsupported elements found in this sheet (e.g. "Chart", "PivotTable", "Drawing")
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_elements: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -604,6 +604,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 tracked_change: None,
                                 ruby: None,
                                 bookmark_name: None,
+                                is_math: true,
                             });
                         }
                     }
@@ -663,6 +664,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     tracked_change: None,
                                     ruby: None,
                                     bookmark_name: Some(name),
+                                    is_math: false,
                                 });
                             }
                         }
@@ -1362,6 +1364,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         tracked_change: None,
         ruby,
         bookmark_name: None,
+        is_math: false,
     }, drawing_result))
 }
 
@@ -3576,7 +3579,7 @@ fn collect_note_refs(blocks: &[Block], ctx: &ParseContext, footnotes: &mut Vec<F
                     }
                 }
             }
-            Block::Image(_) => {}
+            Block::Image(_) | Block::UnsupportedElement(_) => {}
         }
     }
 }

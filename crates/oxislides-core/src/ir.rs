@@ -35,6 +35,10 @@ pub enum ShapeContent {
         data: Vec<u8>,
         content_type: Option<String>,
     },
+    /// Unsupported element with type label (e.g. "SmartArt", "Chart", "OLE")
+    Unsupported {
+        element_type: String,
+    },
     Placeholder, // shapes we can't parse yet
 }
 
