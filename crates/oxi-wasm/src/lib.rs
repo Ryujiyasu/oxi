@@ -147,6 +147,7 @@ struct LayoutElementJs {
     // Text fields
     text: Option<String>,
     font_size: Option<f32>,
+    font_family: Option<String>,
     bold: Option<bool>,
     italic: Option<bool>,
     underline: Option<bool>,
@@ -215,12 +216,13 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                 elements: page.elements.into_iter().map(|elem| {
                     match elem.content {
                         oxidocs_core::layout::LayoutContent::Text {
-                            text, font_size, bold, italic, underline, strikethrough, color, highlight, ..
+                            text, font_size, font_family, bold, italic, underline, strikethrough, color, highlight,
                         } => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "text".into(),
                             text: Some(text),
                             font_size: Some(font_size),
+                            font_family,
                             bold: Some(bold),
                             italic: Some(italic),
                             underline: Some(underline),
@@ -235,7 +237,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             LayoutElementJs {
                                 x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                                 kind: "image".into(),
-                                text: None, font_size: None, bold: None, italic: None,
+                                text: None, font_size: None, font_family: None, bold: None, italic: None,
                                 underline: None, strikethrough: None, color: None, highlight: None,
                                 image_data: b64,
                                 content_type,
@@ -245,7 +247,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                         oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2 } => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "border".into(),
-                            text: None, font_size: None, bold: None, italic: None,
+                            text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, strikethrough: None, color: None, highlight: None,
                             image_data: None, content_type: None,
                             x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2),

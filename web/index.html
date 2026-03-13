@@ -22,6 +22,9 @@
 <link rel="icon" type="image/x-icon" href="../docs/favicon.ico">
 <link rel="icon" type="image/png" sizes="32x32" href="../docs/favicon-32x32.png">
 <link rel="apple-touch-icon" href="../docs/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -373,7 +376,7 @@ input[type="file"] { display: none; }
     background: white;
     border: 1px solid #d0d0d0;
     border-top: none;
-    font-family: 'Calibri', 'Segoe UI', sans-serif;
+    font-family: 'Calibri', 'Yu Gothic', 'Meiryo', 'Noto Sans JP', 'Segoe UI', sans-serif;
     font-size: 13px;
 }
 .formula-bar .cell-ref {
@@ -413,6 +416,9 @@ input[type="file"] { display: none; }
     margin-bottom: 4px;
     line-height: 1.5;
     min-height: 1.2em;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    line-break: strict; /* JIS X 4051 kinsoku */
 }
 .edit-page .edit-para.heading1 {
     font-size: 24px;
@@ -492,7 +498,7 @@ input[type="file"] { display: none; }
 .spreadsheet-wrapper table {
     border-collapse: collapse;
     font-size: 13px;
-    font-family: 'Calibri', 'Segoe UI', sans-serif;
+    font-family: 'Calibri', 'Yu Gothic', 'Meiryo', 'Noto Sans JP', 'Segoe UI', sans-serif;
 }
 .spreadsheet-wrapper th {
     background: #f3f3f3;
@@ -1436,7 +1442,7 @@ function renderEditableDocx(doc) {
                         }
                         if (run.style.color) span.style.color = '#' + run.style.color;
                         if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
-                        if (run.style.font_family) span.style.fontFamily = run.style.font_family + ', sans-serif';
+                        if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
                         if (run.style.highlight) {
                             span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
                         }
@@ -1997,7 +2003,7 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
                     if (run.bold) span.style.fontWeight = 'bold';
                     if (run.italic) span.style.fontStyle = 'italic';
                     if (run.color) span.style.color = '#' + run.color;
-                    if (run.font_family) span.style.fontFamily = run.font_family + ', sans-serif';
+                    if (run.font_family) span.style.fontFamily = run.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
 
                     if (editable) {
                         span.className = 'edit-slide-run';

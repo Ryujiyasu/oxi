@@ -47,8 +47,11 @@ impl FontMetrics {
 
     pub fn char_width(&self, c: char) -> f32 {
         self.char_widths.get(&c).copied().unwrap_or_else(|| {
-            // CJK characters are full-width
-            if is_fullwidth(c) {
+            if is_halfwidth_katakana(c) {
+                // Half-width katakana (ｱ, ｲ, ｳ, etc.) are 0.5em
+                self.size * 0.5
+            } else if is_fullwidth(c) {
+                // CJK characters are full-width (1.0em)
                 self.size
             } else {
                 self.size * 0.5
@@ -61,12 +64,21 @@ impl FontMetrics {
     }
 }
 
+/// Half-width katakana: U+FF65..U+FF9F (ｦ, ｧ, ｨ, ... ﾝ, ﾞ, ﾟ)
+fn is_halfwidth_katakana(ch: char) -> bool {
+    matches!(ch as u32, 0xFF65..=0xFF9F)
+}
+
 fn is_fullwidth(ch: char) -> bool {
     matches!(ch as u32,
-        0x3000..=0x303F |  // CJK Symbols and Punctuation
+        0x3000..=0x303F |  // CJK Symbols and Punctuation (　、。〃〄々〆〇〈〉《》「」)
         0x3040..=0x309F |  // Hiragana
-        0x30A0..=0x30FF |  // Katakana
+        0x30A0..=0x30FF |  // Katakana (full-width)
+        0x3400..=0x4DBF |  // CJK Unified Ideographs Extension A
         0x4E00..=0x9FFF |  // CJK Unified Ideographs
-        0xFF00..=0xFFEF    // Fullwidth Forms
+        0xF900..=0xFAFF |  // CJK Compatibility Ideographs
+        0xFF01..=0xFF60 |  // Fullwidth Latin / symbols (Ａ, Ｂ, ！, etc.)
+        0xFFE0..=0xFFE6 |  // Fullwidth currency/symbols (￠, ￡, ￥, etc.)
+        0x20000..=0x2A6DF  // CJK Unified Ideographs Extension B
     )
 }
