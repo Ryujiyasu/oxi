@@ -28,35 +28,92 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
     background: #f0f0f0;
     color: #333;
 }
-header {
-    background: #1a1a2e;
-    color: white;
-    padding: 16px 24px;
+/* Title bar — Office style */
+.title-bar {
     display: flex;
     align-items: center;
-    gap: 16px;
+    height: 32px;
+    background: #2b579a; /* Word blue default */
+    color: white;
+    font-size: 12px;
+    padding: 0 8px;
+    user-select: none;
 }
-header h1 { font-size: 20px; font-weight: 600; }
-header span { font-size: 13px; opacity: 0.7; }
+.title-bar.docx { background: #2b579a; }
+.title-bar.xlsx { background: #217346; }
+.title-bar.pptx { background: #d24726; }
+.title-bar.pdf { background: #e2574c; }
+.title-bar .qat {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+}
+.title-bar .qat button {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 2px;
+}
+.title-bar .qat button:hover { background: rgba(255,255,255,0.15); }
+.title-bar .title-text {
+    flex: 1;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 400;
+    opacity: 0.95;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.title-bar .title-right {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.title-bar .title-right button {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 2px;
+}
+.title-bar .title-right button:hover { background: rgba(255,255,255,0.15); }
+/* Legacy header for landing page */
+header {
+    background: #2b579a;
+    color: white;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+header h1 { font-size: 16px; font-weight: 600; }
+header span { font-size: 12px; opacity: 0.7; }
 #langToggle {
     margin-left: auto;
     background: transparent;
     border: 1px solid rgba(255,255,255,0.3);
     color: white;
-    padding: 4px 12px;
-    border-radius: 4px;
+    padding: 3px 10px;
+    border-radius: 3px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
 }
 #langToggle:hover { border-color: rgba(255,255,255,0.7); }
 .container {
     max-width: 1100px;
-    margin: 32px auto;
+    margin: 16px auto;
     padding: 0 16px;
+    padding-bottom: 32px; /* space for fixed status bar */
 }
 .container.xlsx-active {
     max-width: 100%;
@@ -149,89 +206,125 @@ input[type="file"] { display: none; }
     background: #3a5ce7;
 }
 
-/* Ribbon menu bar */
+/* Ribbon menu bar — Office style */
 .ribbon {
     display: none;
     background: #f3f3f3;
-    border-bottom: 1px solid #d0d0d0;
+    border-bottom: 1px solid #d6d6d6;
     padding: 0;
-    margin-top: 12px;
-    border-radius: 8px 8px 0 0;
+    margin-top: 0;
     overflow: hidden;
 }
 .ribbon.visible { display: block; }
 .ribbon-tabs {
     display: flex;
     gap: 0;
-    background: #e6e6e6;
-    border-bottom: 1px solid #d0d0d0;
+    background: white;
+    border-bottom: 1px solid #d6d6d6;
+    padding-left: 0;
 }
-.ribbon-tab {
+.ribbon-tab-file {
     padding: 6px 18px;
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
-    color: #555;
+    color: white;
+    border: none;
+    background: #2b579a;
+    letter-spacing: 0.3px;
+}
+.ribbon-tab-file:hover { opacity: 0.9; }
+.ribbon.docx .ribbon-tab-file { background: #2b579a; }
+.ribbon.xlsx .ribbon-tab-file { background: #217346; }
+.ribbon.pptx .ribbon-tab-file { background: #d24726; }
+.ribbon.pdf .ribbon-tab-file { background: #e2574c; }
+.ribbon-tab {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 400;
+    cursor: pointer;
+    color: #444;
     border: none;
     background: transparent;
-    border-bottom: 2px solid transparent;
-    transition: all 0.15s;
+    border-bottom: 3px solid transparent;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
-.ribbon-tab:hover { background: #ddd; }
+.ribbon-tab:hover { background: #e8e8e8; }
 .ribbon-tab.active {
     color: #333;
     background: #f3f3f3;
-    border-bottom-color: #4a6cf7;
-    font-weight: 600;
+    border-bottom-color: #2b579a;
+    font-weight: 500;
 }
 .ribbon-content {
     display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 6px 12px;
-    min-height: 44px;
-    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0;
+    padding: 4px 4px 2px 4px;
+    min-height: 80px;
+    background: #f3f3f3;
 }
 .ribbon-group {
     display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 0 10px;
+    flex-direction: column;
+    padding: 0 6px;
     border-right: 1px solid #d8d8d8;
+    min-width: 0;
 }
 .ribbon-group:last-child { border-right: none; }
+.ribbon-group-items {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex: 1;
+}
 .ribbon-group-label {
     font-size: 10px;
     color: #888;
     text-align: center;
-    margin-top: 2px;
+    padding: 2px 0 1px 0;
+    border-top: 1px solid #e0e0e0;
+    margin-top: auto;
 }
 .ribbon-btn {
-    padding: 4px 8px;
+    padding: 3px 6px;
     border: 1px solid transparent;
-    border-radius: 3px;
+    border-radius: 2px;
     background: transparent;
     cursor: pointer;
     font-size: 13px;
     color: #444;
-    transition: all 0.1s;
-    min-width: 28px;
+    transition: all 0.08s;
+    min-width: 26px;
     text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
 }
 .ribbon-btn:hover {
-    background: #dde4f0;
-    border-color: #b0bdd4;
+    background: #c8daf5;
+    border-color: #a8c0e0;
 }
 .ribbon-btn.active {
-    background: #cdd6ea;
-    border-color: #a0b0d0;
+    background: #b0c8e8;
+    border-color: #90b0d0;
 }
+.ribbon-btn-large {
+    padding: 4px 8px;
+    font-size: 11px;
+    min-width: 50px;
+}
+.ribbon-btn-large .rb-icon { font-size: 20px; margin-bottom: 2px; }
+.ribbon-btn-large .rb-label { font-size: 10px; }
 .ribbon-btn svg { width: 16px; height: 16px; vertical-align: middle; }
 .ribbon-sep {
     width: 1px;
-    height: 28px;
+    height: 24px;
     background: #d0d0d0;
-    margin: 0 4px;
+    margin: 0 2px;
+    align-self: center;
 }
 /* Ribbon dropdowns */
 .ribbon-select {
@@ -294,27 +387,35 @@ input[type="file"] { display: none; }
 }
 .color-swatch:hover { border-color: #333; transform: scale(1.15); }
 
-/* Status bar / zoom */
+/* Status bar / zoom — Office style */
 .status-bar {
     display: none;
     align-items: center;
     justify-content: space-between;
-    background: #f3f3f3;
-    border-top: 1px solid #d0d0d0;
+    background: #2b579a;
     padding: 2px 12px;
     font-size: 12px;
-    color: #555;
+    color: rgba(255,255,255,0.9);
     margin-top: 0;
-    border-radius: 0 0 8px 8px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    height: 24px;
 }
+.status-bar.docx { background: #2b579a; }
+.status-bar.xlsx { background: #217346; }
+.status-bar.pptx { background: #d24726; }
+.status-bar.pdf { background: #e2574c; }
 .status-bar.visible { display: flex; }
 .status-bar .status-left { display: flex; gap: 16px; }
 .status-bar .zoom-controls { display: flex; align-items: center; gap: 6px; }
 .zoom-controls button {
     width: 22px; height: 22px; border: none; background: transparent;
-    cursor: pointer; font-size: 14px; border-radius: 3px; color: #555;
+    cursor: pointer; font-size: 14px; border-radius: 3px; color: rgba(255,255,255,0.9);
 }
-.zoom-controls button:hover { background: #ddd; }
+.zoom-controls button:hover { background: rgba(255,255,255,0.15); }
 .zoom-controls input[type="range"] { width: 100px; cursor: pointer; }
 .zoom-controls .zoom-label { min-width: 40px; text-align: center; }
 
@@ -373,13 +474,9 @@ input[type="file"] { display: none; }
 .find-replace-dialog .fr-close:hover { color: #333; }
 .find-replace-dialog .fr-status { font-size: 11px; color: #888; margin-top: 4px; }
 /* Format-specific ribbon colors */
-.ribbon.docx { border-top: 3px solid #2b579a; }
 .ribbon.docx .ribbon-tab.active { border-bottom-color: #2b579a; }
-.ribbon.xlsx { border-top: 3px solid #217346; }
 .ribbon.xlsx .ribbon-tab.active { border-bottom-color: #217346; }
-.ribbon.pptx { border-top: 3px solid #d24726; }
 .ribbon.pptx .ribbon-tab.active { border-bottom-color: #d24726; }
-.ribbon.pdf { border-top: 3px solid #e2574c; }
 .ribbon.pdf .ribbon-tab.active { border-bottom-color: #e2574c; }
 
 /* PDF text viewer */
@@ -702,11 +799,22 @@ input[type="file"] { display: none; }
 </head>
 <body>
 
-<header>
-    <img src="../docs/icon-64.png" alt="Oxi" height="28" style="border-radius:4px">
+<div class="title-bar" id="titleBar" style="display:none">
+    <div class="qat">
+        <button id="qatSave" title="Save (Ctrl+S)">💾</button>
+        <button id="qatUndo" title="Undo (Ctrl+Z)">↩</button>
+        <button id="qatRedo" title="Redo (Ctrl+Y)">↪</button>
+    </div>
+    <div class="title-text" id="titleText">Oxi</div>
+    <div class="title-right">
+        <button id="langToggle" onclick="toggleLang()">日本語</button>
+    </div>
+</div>
+<header id="landingHeader">
+    <img src="../docs/icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
     <h1>Oxi</h1>
     <span data-i18n="subtitle">Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
-    <button id="langToggle" onclick="toggleLang()">日本語</button>
+    <button id="langToggleLanding" onclick="toggleLang()">日本語</button>
 </header>
 
 <div class="container">
@@ -798,8 +906,9 @@ const I18N = {
         signatures: 'Digital Signatures',
         noSignatures: 'No signatures found',
         // Ribbon
+        file: 'File',
         home: 'Home', insert: 'Insert', layout: 'Layout', view: 'View',
-        formulas: 'Formulas', data: 'Data',
+        formulas: 'Formulas', data: 'Data', review: 'Review',
         undo: 'Undo', clipboard: 'Clipboard', font: 'Font',
         paragraph: 'Paragraph', editing: 'Editing',
         alignment: 'Alignment', number: 'Number',
@@ -841,8 +950,9 @@ const I18N = {
         signatures: '電子署名',
         noSignatures: '署名が見つかりません',
         // Ribbon
+        file: 'ファイル',
         home: 'ホーム', insert: '挿入', layout: 'レイアウト', view: '表示',
-        formulas: '数式', data: 'データ',
+        formulas: '数式', data: 'データ', review: '校閲',
         undo: '元に戻す', clipboard: 'クリップボード', font: 'フォント',
         paragraph: '段落', editing: '編集',
         alignment: '配置', number: '数値',
@@ -1370,30 +1480,41 @@ function buildRibbon(format) {
     }
 
     function showTab(idx) {
-        for (const t of tabs.children) t.classList.remove('active');
-        tabs.children[idx].classList.add('active');
+        // Skip file tab (index 0 in tabs.children is the File button)
+        const tabBtns = tabs.querySelectorAll('.ribbon-tab');
+        for (const t of tabBtns) t.classList.remove('active');
+        tabBtns[idx].classList.add('active');
         contentArea.innerHTML = '';
         const def = tabDefs[idx];
         for (const group of def.groups) {
             const g = document.createElement('div');
             g.className = 'ribbon-group';
             const itemsRow = document.createElement('div');
-            itemsRow.style.display = 'flex';
-            itemsRow.style.gap = '1px';
-            itemsRow.style.alignItems = 'center';
+            itemsRow.className = 'ribbon-group-items';
             for (const item of group.items) {
                 if (item.type === 'custom') {
                     itemsRow.appendChild(item.el);
                     continue;
                 }
                 const btn = document.createElement('button');
-                btn.className = 'ribbon-btn';
+                btn.className = item.large ? 'ribbon-btn ribbon-btn-large' : 'ribbon-btn';
                 btn.title = item.title;
-                btn.textContent = item.icon || item.text;
+                if (item.large) {
+                    const icon = document.createElement('span');
+                    icon.className = 'rb-icon';
+                    icon.textContent = item.icon || item.text;
+                    const lbl = document.createElement('span');
+                    lbl.className = 'rb-label';
+                    lbl.textContent = item.label || item.title;
+                    btn.appendChild(icon);
+                    btn.appendChild(lbl);
+                } else {
+                    btn.textContent = item.icon || item.text;
+                }
                 if (item.style) btn.style.cssText = item.style;
                 if (item.action) {
                     btn.addEventListener('mousedown', (e) => {
-                        e.preventDefault(); // Prevent losing selection
+                        e.preventDefault();
                     });
                     btn.addEventListener('click', item.action);
                 }
@@ -1407,6 +1528,16 @@ function buildRibbon(format) {
             contentArea.appendChild(g);
         }
     }
+
+    // File tab (styled differently)
+    const fileTab = document.createElement('button');
+    fileTab.className = 'ribbon-tab-file';
+    fileTab.textContent = t('file');
+    fileTab.onclick = () => {
+        // Could open a backstage view — for now just download
+        if (typeof downloadDocument === 'function') downloadDocument();
+    };
+    tabs.appendChild(fileTab);
 
     tabDefs.forEach((def, i) => {
         const tab = document.createElement('button');
@@ -3152,6 +3283,14 @@ async function handleFile(file) {
     toolbar.classList.add('visible');
     buildRibbon(ext);
     statusBar.classList.add('visible');
+    statusBar.className = 'status-bar visible ' + ext;
+    // Show Office-style title bar, hide landing header
+    const titleBar = document.getElementById('titleBar');
+    const landingHeader = document.getElementById('landingHeader');
+    titleBar.style.display = 'flex';
+    titleBar.className = 'title-bar ' + ext;
+    document.getElementById('titleText').textContent = file.name + ' - Oxi';
+    if (landingHeader) landingHeader.style.display = 'none';
     currentZoom = 100;
     applyZoom();
     document.querySelector('.container').classList.toggle('xlsx-active', ext === 'xlsx');
@@ -3323,6 +3462,13 @@ function createNewDocument() {
         btnDownload.textContent = `${t('download')} .docx`;
         buildRibbon('docx');
         statusBar.classList.add('visible');
+        statusBar.className = 'status-bar visible docx';
+        const titleBar = document.getElementById('titleBar');
+        const landingHeader = document.getElementById('landingHeader');
+        titleBar.style.display = 'flex';
+        titleBar.className = 'title-bar docx';
+        document.getElementById('titleText').textContent = 'Document1 - Oxi';
+        if (landingHeader) landingHeader.style.display = 'none';
         currentZoom = 100;
         applyZoom();
         document.querySelector('.container').classList.remove('xlsx-active');
