@@ -1,0 +1,12 @@
+[package]
+name = "oxihanko"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Japanese digital stamp (hanko/inkan) generator and PDF signer for Oxi"
+
+[dependencies]
+oxipdf-core = { path = "../oxipdf-core" }
+thiserror = "1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }

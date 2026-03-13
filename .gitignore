@@ -3,3 +3,7 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+tools/metrics/docx_tests/
+tools/metrics/docx_tests_default/
+tools/metrics/docx_tests_isolated/
+tools/metrics/output/
