@@ -47,18 +47,20 @@ impl Default for GraphicsState {
 }
 
 /// Interpret a content stream and extract content elements.
+/// Coordinates are in raw PDF space (origin at bottom-left).
 pub fn interpret_content_stream(
     stream_data: &[u8],
-    page_height: f64,
+    _page_height: f64,
 ) -> Result<Vec<ContentElement>, PdfError> {
-    interpret_content_stream_with_cmaps(stream_data, page_height, &HashMap::new())
+    interpret_content_stream_with_cmaps(stream_data, _page_height, &HashMap::new())
 }
 
 /// Interpret a content stream with font-specific CMap decoders.
 /// The `font_cmaps` map font names (e.g. "/F1") to their ToUnicode CMaps.
+/// Coordinates are in raw PDF space (origin at bottom-left).
 pub fn interpret_content_stream_with_cmaps(
     stream_data: &[u8],
-    page_height: f64,
+    _page_height: f64,
     font_cmaps: &HashMap<String, CMap>,
 ) -> Result<Vec<ContentElement>, PdfError> {
     let operators = tokenize_content_stream(stream_data)?;
@@ -137,7 +139,7 @@ pub fn interpret_content_stream_with_cmaps(
                         let (x, y) = transform_point(&state.ctm, &state.text_matrix);
                         elements.push(ContentElement::Text(TextSpan {
                             x,
-                            y: page_height - y, // PDF y=0 is bottom
+                            y,
                             text,
                             font_name: state.font_name.clone(),
                             font_size: state.font_size,
@@ -162,7 +164,7 @@ pub fn interpret_content_stream_with_cmaps(
                         let (x, y) = transform_point(&state.ctm, &state.text_matrix);
                         elements.push(ContentElement::Text(TextSpan {
                             x,
-                            y: page_height - y,
+                            y,
                             text: combined,
                             font_name: state.font_name.clone(),
                             font_size: state.font_size,
@@ -181,7 +183,7 @@ pub fn interpret_content_stream_with_cmaps(
                         let (x, y) = transform_point(&state.ctm, &state.text_matrix);
                         elements.push(ContentElement::Text(TextSpan {
                             x,
-                            y: page_height - y,
+                            y,
                             text,
                             font_name: state.font_name.clone(),
                             font_size: state.font_size,
@@ -242,14 +244,14 @@ pub fn interpret_content_stream_with_cmaps(
                 if op.operands.len() >= 2 {
                     let x = op.operands[0].as_f64().unwrap_or(0.0);
                     let y = op.operands[1].as_f64().unwrap_or(0.0);
-                    current_path.push(PathOp::MoveTo(x, page_height - y));
+                    current_path.push(PathOp::MoveTo(x, y));
                 }
             }
             "l" => {
                 if op.operands.len() >= 2 {
                     let x = op.operands[0].as_f64().unwrap_or(0.0);
                     let y = op.operands[1].as_f64().unwrap_or(0.0);
-                    current_path.push(PathOp::LineTo(x, page_height - y));
+                    current_path.push(PathOp::LineTo(x, y));
                 }
             }
             "c" => {
@@ -260,29 +262,21 @@ pub fn interpret_content_stream_with_cmaps(
                     let y2 = op.operands[3].as_f64().unwrap_or(0.0);
                     let x3 = op.operands[4].as_f64().unwrap_or(0.0);
                     let y3 = op.operands[5].as_f64().unwrap_or(0.0);
-                    current_path.push(PathOp::CurveTo(
-                        x1,
-                        page_height - y1,
-                        x2,
-                        page_height - y2,
-                        x3,
-                        page_height - y3,
-                    ));
+                    current_path.push(PathOp::CurveTo(x1, y1, x2, y2, x3, y3));
                 }
             }
             "h" => current_path.push(PathOp::ClosePath),
             "re" => {
-                // Rectangle shorthand: x y w h
+                // Rectangle shorthand: x y w h re
                 if op.operands.len() >= 4 {
                     let x = op.operands[0].as_f64().unwrap_or(0.0);
                     let y = op.operands[1].as_f64().unwrap_or(0.0);
                     let w = op.operands[2].as_f64().unwrap_or(0.0);
                     let h = op.operands[3].as_f64().unwrap_or(0.0);
-                    let fy = page_height - y;
-                    current_path.push(PathOp::MoveTo(x, fy));
-                    current_path.push(PathOp::LineTo(x + w, fy));
-                    current_path.push(PathOp::LineTo(x + w, fy - h));
-                    current_path.push(PathOp::LineTo(x, fy - h));
+                    current_path.push(PathOp::MoveTo(x, y));
+                    current_path.push(PathOp::LineTo(x + w, y));
+                    current_path.push(PathOp::LineTo(x + w, y + h));
+                    current_path.push(PathOp::LineTo(x, y + h));
                     current_path.push(PathOp::ClosePath);
                 }
             }
@@ -687,7 +681,7 @@ mod tests {
                 assert_eq!(span.text, "Hello");
                 assert_eq!(span.font_size, 12.0);
                 assert!((span.x - 100.0).abs() < 0.01);
-                assert!((span.y - 92.0).abs() < 0.01); // 792 - 700
+                assert!((span.y - 700.0).abs() < 0.01); // raw PDF coords
             }
             _ => panic!("expected text element"),
         }
