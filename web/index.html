@@ -27,43 +27,43 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root {
-    /* Oxi brand palette — distinct from MS Office */
-    --oxi-primary: #5b4fc7;       /* Oxi violet */
-    --oxi-primary-dark: #463bab;
-    --oxi-primary-light: #ede8ff;
-    --oxi-accent: #00b4d8;        /* Cyan accent */
-    --oxi-text: #1e1e2e;
-    --oxi-text-secondary: #555;
-    --oxi-bg: #f5f5f7;
+    /* Oxi brand palette — Japanese traditional colors (和の伝統色) */
+    --oxi-primary: #264653;       /* 藍色 (Ai-iro) — deep indigo */
+    --oxi-primary-dark: #1b3440;
+    --oxi-primary-light: #e8f0f2;
+    --oxi-accent: #C84C3A;        /* 朱色 (Shu-iro) — vermilion accent */
+    --oxi-text: #1a1a1a;
+    --oxi-text-secondary: #5a5a5a;
+    --oxi-bg: #f7f5f0;            /* 生成り (Kinari) — warm off-white, like washi paper */
     --oxi-surface: #ffffff;
-    --oxi-border: #d6d6d6;
-    --oxi-hover: #e8e5f5;
-    /* Format accent colors (softer than MS) */
-    --oxi-docs: #5b4fc7;         /* Oxi Docs — violet */
-    --oxi-cells: #0fa87e;        /* Oxi Cells — teal */
-    --oxi-slides: #e0603e;       /* Oxi Slides — warm coral */
-    --oxi-pdf: #c75050;          /* Oxi PDF — muted red */
+    --oxi-border: #d5d0c8;        /* Warm gray, like aged paper edge */
+    --oxi-hover: #ece8e0;
+    /* Format accent colors — Japanese traditional tones */
+    --oxi-docs: #8B72BE;          /* 藤色 (Fuji-iro) — wisteria purple */
+    --oxi-cells: #86A95B;         /* 萌黄 (Moegi) — fresh green, like bamboo/matcha */
+    --oxi-slides: #E8927C;        /* 鴇色 (Toki-iro) — warm coral, like ibis feathers */
+    --oxi-pdf: #B5495B;           /* 紅 (Kurenai) — deep crimson */
     /* Dark mode vars (overridden by .dark) */
     --bg: var(--oxi-bg);
     --surface: var(--oxi-surface);
     --text: var(--oxi-text);
     --text-secondary: var(--oxi-text-secondary);
     --border: var(--oxi-border);
-    --ribbon-bg: #f3f3f3;
+    --ribbon-bg: #f0ece4;
     --ribbon-tab-bg: var(--surface);
     --ribbon-hover: var(--oxi-hover);
     --title-bar-bg: var(--oxi-primary);
 }
 .dark {
-    --bg: #1e1e2e;
-    --surface: #2a2a3c;
-    --text: #e0e0e8;
-    --text-secondary: #a0a0b0;
-    --border: #3a3a4c;
-    --ribbon-bg: #252535;
-    --ribbon-tab-bg: #2a2a3c;
-    --ribbon-hover: #3a3a50;
-    --title-bar-bg: #16162a;
+    --bg: #1a1a2e;                /* 墨色 (Sumi-iro) — ink black with blue tint */
+    --surface: #262640;
+    --text: #e8e4dc;              /* Warm white, like candlelit paper */
+    --text-secondary: #a8a098;
+    --border: #3a3850;
+    --ribbon-bg: #22223a;
+    --ribbon-tab-bg: #262640;
+    --ribbon-hover: #363652;
+    --title-bar-bg: #141428;      /* 漆黒 (Shikkoku) — lacquer black */
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -161,13 +161,14 @@ header span { font-size: 12px; opacity: 0.7; }
     padding: 0 16px;
 }
 .drop-zone {
-    border: 2px dashed #aaa;
+    border: 2px dashed #b8b0a0;
     border-radius: 12px;
     padding: 48px;
     text-align: center;
-    background: white;
+    background: #fdfbf7;          /* 鳥の子色 — warm cream, like torinoko paper */
     cursor: pointer;
     transition: border-color 0.2s, background 0.2s;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.04);
 }
 .drop-zone:hover, .drop-zone.dragover {
     border-color: var(--oxi-primary);
@@ -207,8 +208,8 @@ input[type="file"] { display: none; }
     display: none;
     font-size: 14px;
 }
-#status.info { display: block; background: #e8f4ff; color: #1a73e8; }
-#status.error { display: block; background: #ffeaea; color: #d93025; }
+#status.info { display: block; background: var(--oxi-primary-light); color: var(--oxi-primary); }
+#status.error { display: block; background: #fde8eb; color: var(--oxi-pdf); }
 #pages-container {
     margin-top: 24px;
     display: flex;
@@ -920,9 +921,9 @@ input[type="file"] { display: none; }
     margin-top: 4px;
 }
 /* Dark mode overrides */
-.dark .drop-zone { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .drop-zone { background: #2e2e48; border-color: #4a4860; color: var(--text); }
 .dark .drop-zone p { color: var(--text-secondary); }
-.dark .drop-zone .hint { color: #888; }
+.dark .drop-zone .hint { color: #8a8078; }
 .dark .sample-buttons { color: var(--text-secondary); }
 .dark .sample-buttons button { background: var(--surface); border-color: #555; color: var(--text); }
 .dark .page-wrapper { box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
