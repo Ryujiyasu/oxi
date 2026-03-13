@@ -1297,8 +1297,109 @@ function showBackstagePanel(panel) {
             </div>`;
         const blankBtn = document.getElementById('bsNewBlank');
         if (blankBtn) blankBtn.addEventListener('click', () => { closeBackstage(); if (typeof createNewDocument === 'function') createNewDocument(); });
-    } else {
-        main.innerHTML = `<h2>${panel.charAt(0).toUpperCase() + panel.slice(1)}</h2><p style="color:var(--text-secondary)">Coming soon...</p>`;
+    } else if (panel === 'open') {
+        main.innerHTML = `<h2>${t('bsOpen')}</h2>
+            <div class="bs-section">
+                <h3>${currentLang === 'ja' ? 'ファイルを開く' : 'Open a file'}</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="bs-row" id="bsOpenFile" style="width:160px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px">&#x1F4C2;</span>
+                        <span class="bs-label">${currentLang === 'ja' ? 'ファイルを選択' : 'Browse files'}</span>
+                        <span class="bs-desc">.docx / .xlsx / .pptx / .pdf</span>
+                    </div>
+                </div>
+            </div>
+            <div class="bs-section">
+                <h3>${currentLang === 'ja' ? 'サンプル' : 'Samples'}</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="bs-row bs-sample-btn" data-sample="sample.docx" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px;color:var(--oxi-docs)">&#x1F4DD;</span>
+                        <span class="bs-label">sample.docx</span>
+                    </div>
+                    <div class="bs-row bs-sample-btn" data-sample="sample.xlsx" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px;color:var(--oxi-cells)">&#x1F4CA;</span>
+                        <span class="bs-label">sample.xlsx</span>
+                    </div>
+                    <div class="bs-row bs-sample-btn" data-sample="sample.pptx" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px;color:var(--oxi-slides)">&#x1F3AC;</span>
+                        <span class="bs-label">sample.pptx</span>
+                    </div>
+                </div>
+            </div>`;
+        document.getElementById('bsOpenFile').addEventListener('click', () => {
+            closeBackstage();
+            document.getElementById('fileInput').click();
+        });
+        main.querySelectorAll('.bs-sample-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                closeBackstage();
+                if (typeof loadSample === 'function') loadSample(btn.dataset.sample);
+            });
+        });
+    } else if (panel === 'export') {
+        const hasFile = !!currentFileType;
+        main.innerHTML = `<h2>${t('bsExport')}</h2>
+            <div class="bs-section">
+                <h3>${currentLang === 'ja' ? 'エクスポート形式' : 'Export format'}</h3>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <div class="bs-row" id="bsExportOriginal" style="padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;opacity:${hasFile?'1':'0.4'}">
+                        <span class="bs-icon">&#x1F4BE;</span>
+                        <div>
+                            <div class="bs-label">${currentLang === 'ja' ? '元の形式でダウンロード' : 'Download as original format'}</div>
+                            <div class="bs-desc">${hasFile ? '.' + currentFileType : (currentLang === 'ja' ? 'ファイルを開いてください' : 'Open a file first')}</div>
+                        </div>
+                    </div>
+                    <div class="bs-row" id="bsExportPdf" style="padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="color:var(--oxi-pdf)">&#x1F4C4;</span>
+                        <div>
+                            <div class="bs-label">${currentLang === 'ja' ? 'PDF を新規生成' : 'Generate new PDF'}</div>
+                            <div class="bs-desc">${currentLang === 'ja' ? 'A4・テキスト付き PDF を作成' : 'Create an A4 PDF with text content'}</div>
+                        </div>
+                    </div>
+                    <div class="bs-row" id="bsExportHanko" style="padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="color:#E34234">&#x2B55;</span>
+                        <div>
+                            <div class="bs-label">${currentLang === 'ja' ? '判子 SVG をダウンロード' : 'Download hanko stamp SVG'}</div>
+                            <div class="bs-desc">${currentLang === 'ja' ? '名前を入力して判子画像を保存' : 'Enter a name and save a stamp image'}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        document.getElementById('bsExportOriginal').addEventListener('click', () => {
+            if (!hasFile) return;
+            closeBackstage();
+            if (typeof downloadDocument === 'function') downloadDocument();
+        });
+        document.getElementById('bsExportPdf').addEventListener('click', () => {
+            closeBackstage();
+            const title = prompt(currentLang === 'ja' ? 'PDF タイトル:' : 'PDF title:', 'Oxi Document');
+            if (!title) return;
+            const text = prompt(currentLang === 'ja' ? '本文テキスト:' : 'Text content:', 'Hello, World!');
+            if (text === null) return;
+            try {
+                const pdfBytes = create_pdf(title, text);
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = title + '.pdf'; a.click();
+                URL.revokeObjectURL(url);
+                showStatus(currentLang === 'ja' ? 'PDF を生成しました' : 'PDF generated', 'info');
+            } catch(e) { showStatus('Error: ' + e.message, 'error'); }
+        });
+        document.getElementById('bsExportHanko').addEventListener('click', () => {
+            closeBackstage();
+            const name = prompt(currentLang === 'ja' ? '名前（漢字）:' : 'Name (kanji):', '山田');
+            if (!name) return;
+            try {
+                const svg = preview_hanko(name);
+                const blob = new Blob([svg], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = 'hanko_' + name + '.svg'; a.click();
+                URL.revokeObjectURL(url);
+                showStatus(currentLang === 'ja' ? '判子 SVG をダウンロードしました' : 'Hanko SVG downloaded', 'info');
+            } catch(e) { showStatus('Error: ' + e.message, 'error'); }
+        });
     }
 }
 // Close backstage on Escape
