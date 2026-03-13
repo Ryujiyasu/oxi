@@ -119,6 +119,7 @@ impl OoxmlParser {
                     columns: section.properties.columns,
                     page_number_format: section.properties.page_number_format,
                     page_number_start: section.properties.page_number_start,
+                    page_borders: section.properties.page_borders,
                 });
             }
             page_index += 1;
@@ -438,6 +439,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         section_type: None,
         page_number_format: None,
         page_number_start: None,
+        page_borders: None,
     });
     sections.push(ParsedSection {
         blocks: current_blocks,
@@ -3039,6 +3041,8 @@ struct SectionProperties {
     page_number_format: Option<String>,
     /// Starting page number for this section
     page_number_start: Option<u32>,
+    /// Page borders
+    page_borders: Option<PageBorders>,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -3055,13 +3059,58 @@ fn parse_section_properties(
     let mut section_type: Option<String> = None;
     let mut page_number_format: Option<String> = None;
     let mut page_number_start: Option<u32> = None;
+    let mut page_borders: Option<PageBorders> = None;
     let mut depth = 0;
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "cols" && depth == 0 {
+                if local == "pgBorders" && depth == 0 {
+                    // Parse page borders - child elements: top, bottom, left, right
+                    let mut pb = PageBorders { top: None, bottom: None, left: None, right: None };
+                    loop {
+                        match reader.read_event() {
+                            Ok(Event::Empty(be)) => {
+                                let bl = local_name(be.name().as_ref());
+                                let mut bdr_style = String::new();
+                                let mut bdr_width = 0.0f32;
+                                let mut bdr_color: Option<String> = None;
+                                for attr in be.attributes().flatten() {
+                                    let key = local_name(attr.key.as_ref());
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    match key.as_str() {
+                                        "val" => bdr_style = val.to_string(),
+                                        "sz" => { bdr_width = val.parse::<f32>().unwrap_or(0.0) / 8.0; }
+                                        "color" => {
+                                            let c = val.to_string();
+                                            if c != "auto" { bdr_color = Some(c); }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if bdr_style != "none" && bdr_style != "nil" && bdr_width > 0.0 {
+                                    let def = BorderDef { style: bdr_style, width: bdr_width, color: bdr_color };
+                                    match bl.as_str() {
+                                        "top" => pb.top = Some(def),
+                                        "bottom" => pb.bottom = Some(def),
+                                        "left" => pb.left = Some(def),
+                                        "right" => pb.right = Some(def),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Ok(Event::End(ee)) => {
+                                if local_name(ee.name().as_ref()) == "pgBorders" { break; }
+                            }
+                            Ok(Event::Eof) => break,
+                            _ => {}
+                        }
+                    }
+                    if pb.top.is_some() || pb.bottom.is_some() || pb.left.is_some() || pb.right.is_some() {
+                        page_borders = Some(pb);
+                    }
+                } else if local == "cols" && depth == 0 {
                     // w:cols as Start element — has child w:col elements
                     let mut num = 1u32;
                     let mut space: Option<f32> = None;
@@ -3142,6 +3191,7 @@ fn parse_section_properties(
                         }
                     }
                     "pgMar" => {
+                        let mut gutter = 0.0f32;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -3166,8 +3216,17 @@ fn parse_section_properties(
                                         margin.right = v / 20.0;
                                     }
                                 }
+                                "gutter" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        gutter = v / 20.0;
+                                    }
+                                }
                                 _ => {}
                             }
+                        }
+                        // Gutter adds to left margin (default) or top margin (gutterTop not implemented yet)
+                        if gutter > 0.0 {
+                            margin.left += gutter;
                         }
                     }
                     "docGrid" => {
@@ -3294,6 +3353,7 @@ fn parse_section_properties(
         section_type,
         page_number_format,
         page_number_start,
+        page_borders,
     })
 }
 

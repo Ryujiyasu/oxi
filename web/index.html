@@ -1345,44 +1345,37 @@ function renderCellBlocks(blocks, container) {
                     cellParaDiv.style.lineHeight = String(cellPara.style.line_spacing);
                 }
             }
+            // Apply paragraph default_run_style to cell paragraphs
+            if (cellPara.style && cellPara.style.space_before) cellParaDiv.style.marginTop = cellPara.style.space_before + 'pt';
+            if (cellPara.style && cellPara.style.space_after) cellParaDiv.style.marginBottom = cellPara.style.space_after + 'pt';
+            if (cellPara.style && cellPara.style.indent_left) cellParaDiv.style.paddingLeft = cellPara.style.indent_left + 'pt';
+            if (cellPara.style && cellPara.style.indent_right) cellParaDiv.style.paddingRight = cellPara.style.indent_right + 'pt';
+            if (cellPara.style && cellPara.style.indent_first_line) cellParaDiv.style.textIndent = cellPara.style.indent_first_line + 'pt';
+            // List marker in cell
+            if (cellPara.style && cellPara.style.list_marker) {
+                const markerSpan = document.createElement('span');
+                markerSpan.textContent = cellPara.style.list_marker;
+                markerSpan.contentEditable = 'false';
+                markerSpan.style.display = 'inline-block';
+                markerSpan.style.userSelect = 'none';
+                const listIndent = cellPara.style.list_indent || 18;
+                markerSpan.style.width = listIndent + 'pt';
+                markerSpan.style.marginLeft = '-' + listIndent + 'pt';
+                cellParaDiv.appendChild(markerSpan);
+            }
             for (const run of cellPara.runs) {
                 const span = document.createElement('span');
                 span.textContent = run.text;
-                if (run.style) {
-                    if (run.style.bold) span.style.fontWeight = 'bold';
-                    if (run.style.italic) span.style.fontStyle = 'italic';
-                    if (run.style.underline) span.style.textDecoration = 'underline';
-                    if (run.style.strikethrough) {
-                        span.style.textDecoration = (span.style.textDecoration || '') + ' line-through';
-                    }
-                    if (run.style.color) span.style.color = '#' + run.style.color;
-                    if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
-                    if (run.style.font_family || run.style.font_family_east_asia) {
-                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
-                            const la = run.style.font_family || 'Calibri';
-                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
-                        }
-                    if (run.style.highlight) {
-                        span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
-                    } else if (run.style.shading) {
-                        span.style.backgroundColor = '#' + run.style.shading;
-                    }
-                    if (run.style.vertical_align === 'Superscript') {
-                        span.style.verticalAlign = 'super';
-                        span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
-                    } else if (run.style.vertical_align === 'Subscript') {
-                        span.style.verticalAlign = 'sub';
-                        span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
-                    }
-                    if (run.style.vanish) span.style.display = 'none';
-                    if (run.style.outline) { span.style.webkitTextStroke = '1px'; span.style.color = 'transparent'; }
-                    if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
-                    if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
-                    if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
-                    if (run.style.kern) span.style.fontKerning = 'normal';
-                    if (run.style.fit_text) span.style.width = run.style.fit_text + 'pt';
-                    if (run.style.combine) { span.style.writingMode = 'horizontal-tb'; span.style.textCombineUpright = 'all'; }
+                // Apply default_run_style from paragraph, then run overrides
+                const drs = cellPara.style && cellPara.style.default_run_style;
+                if (drs) {
+                    if (drs.font_family) span.style.fontFamily = drs.font_family + ", 'Yu Gothic', 'Noto Sans JP', sans-serif";
+                    if (drs.font_size) span.style.fontSize = drs.font_size + 'pt';
+                    if (drs.bold) span.style.fontWeight = 'bold';
+                    if (drs.italic) span.style.fontStyle = 'italic';
+                    if (drs.color) span.style.color = '#' + drs.color;
                 }
+                applyRunStyle(span, run);
                 cellParaDiv.appendChild(span);
             }
             container.appendChild(cellParaDiv);
@@ -1399,18 +1392,63 @@ function renderCellBlocks(blocks, container) {
                 const bc = nestedTable.style.border_color ? '#' + nestedTable.style.border_color : '#000';
                 nestedEl.style.border = `${bw} solid ${bc}`;
             }
-            for (const nRow of nestedTable.rows) {
+            // Pre-pass for nested table vMerge
+            const nRowspanMap = {};
+            for (let nri = 0; nri < nestedTable.rows.length; nri++) {
+                let nci = 0;
+                for (const nc of nestedTable.rows[nri].cells) {
+                    if (nc.v_merge === 'restart') {
+                        let nspan = 1;
+                        for (let nrj = nri + 1; nrj < nestedTable.rows.length; nrj++) {
+                            let ncj = 0;
+                            let nfound = false;
+                            for (const nc2 of nestedTable.rows[nrj].cells) {
+                                if (ncj === nci && nc2.v_merge === 'continue') { nspan++; nfound = true; break; }
+                                ncj += (nc2.grid_span || 1);
+                            }
+                            if (!nfound) break;
+                        }
+                        nRowspanMap[nri + '-' + nci] = nspan;
+                    }
+                    nci += (nc.grid_span || 1);
+                }
+            }
+            for (let nri = 0; nri < nestedTable.rows.length; nri++) {
+                const nRow = nestedTable.rows[nri];
                 const nTr = document.createElement('tr');
+                if (nRow.height) nTr.style.height = nRow.height + 'pt';
+                let nci = 0;
                 for (const nCell of nRow.cells) {
+                    if (nCell.v_merge === 'continue') { nci += (nCell.grid_span || 1); continue; }
                     const nTd = document.createElement('td');
                     if (nestedTable.style && nestedTable.style.border) {
                         nTd.style.border = '0.5pt solid #000';
                     }
                     if (nCell.width) nTd.style.width = nCell.width + 'pt';
                     if (nCell.grid_span > 1) nTd.colSpan = nCell.grid_span;
+                    const nrsKey = nri + '-' + nci;
+                    if (nRowspanMap[nrsKey] && nRowspanMap[nrsKey] > 1) nTd.rowSpan = nRowspanMap[nrsKey];
                     if (nCell.shading) nTd.style.backgroundColor = '#' + nCell.shading;
+                    if (nCell.v_align) nTd.style.verticalAlign = nCell.v_align === 'center' ? 'middle' : nCell.v_align;
+                    // Cell borders
+                    if (nCell.borders) {
+                        const bdrCss = (d) => d ? `${d.width||1}pt ${d.style==='double'?'double':d.style==='dashed'?'dashed':'solid'} ${d.color?'#'+d.color:'#000'}` : '';
+                        if (nCell.borders.top) nTd.style.borderTop = bdrCss(nCell.borders.top);
+                        if (nCell.borders.bottom) nTd.style.borderBottom = bdrCss(nCell.borders.bottom);
+                        if (nCell.borders.left) nTd.style.borderLeft = bdrCss(nCell.borders.left);
+                        if (nCell.borders.right) nTd.style.borderRight = bdrCss(nCell.borders.right);
+                    }
+                    // Cell margins
+                    const ncm = nCell.margins || (nestedTable.style && nestedTable.style.default_cell_margins);
+                    if (ncm) {
+                        if (ncm.top) nTd.style.paddingTop = ncm.top + 'pt';
+                        if (ncm.bottom) nTd.style.paddingBottom = ncm.bottom + 'pt';
+                        if (ncm.left) nTd.style.paddingLeft = ncm.left + 'pt';
+                        if (ncm.right) nTd.style.paddingRight = ncm.right + 'pt';
+                    }
                     renderCellBlocks(nCell.blocks, nTd);
                     nTr.appendChild(nTd);
+                    nci += (nCell.grid_span || 1);
                 }
                 nestedEl.appendChild(nTr);
             }
@@ -2142,6 +2180,47 @@ function downloadEdited() {
     }
 }
 
+// === Shared run styling helper (header/footer/nested) ===
+function applyRunStyle(span, run) {
+    if (!run.style) return;
+    const s = run.style;
+    if (s.bold) span.style.fontWeight = 'bold';
+    if (s.italic) span.style.fontStyle = 'italic';
+    if (s.underline) {
+        const uStyle = s.underline_style || 'single';
+        const uMap = {
+            'single': 'underline solid', 'double': 'underline double',
+            'thick': 'underline solid 2px', 'dotted': 'underline dotted',
+            'dash': 'underline dashed', 'wave': 'underline wavy',
+        };
+        span.style.textDecoration = uMap[uStyle] || 'underline';
+    }
+    if (s.strikethrough) {
+        span.style.textDecoration = (span.style.textDecoration || '') + ' line-through';
+        if (s.double_strikethrough) span.style.textDecorationStyle = 'double';
+    }
+    if (s.color) span.style.color = '#' + s.color;
+    if (s.font_size) span.style.fontSize = s.font_size + 'pt';
+    if (s.font_family || s.font_family_east_asia) {
+        const ea = s.font_family_east_asia ? "'" + s.font_family_east_asia + "', " : '';
+        span.style.fontFamily = ea + (s.font_family || 'Calibri') + ", 'Yu Gothic', 'Noto Sans JP', sans-serif";
+    }
+    if (s.highlight) span.style.backgroundColor = HIGHLIGHT_COLORS[s.highlight] || s.highlight;
+    else if (s.shading) span.style.backgroundColor = '#' + s.shading;
+    if (s.vertical_align === 'Superscript') { span.style.verticalAlign = 'super'; span.style.fontSize = ((s.font_size||11)*0.6)+'pt'; }
+    else if (s.vertical_align === 'Subscript') { span.style.verticalAlign = 'sub'; span.style.fontSize = ((s.font_size||11)*0.6)+'pt'; }
+    if (s.character_spacing) span.style.letterSpacing = s.character_spacing + 'pt';
+    if (s.all_caps) span.style.textTransform = 'uppercase';
+    else if (s.small_caps) span.style.fontVariant = 'small-caps';
+    if (s.rtl) { span.style.direction = 'rtl'; span.style.unicodeBidi = 'embed'; }
+    if (s.vanish) span.style.display = 'none';
+    if (s.outline) { span.style.webkitTextStroke = '1px'; }
+    if (s.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
+    if (s.bold_cs) span.style.fontWeight = 'bold';
+    if (s.italic_cs) span.style.fontStyle = 'italic';
+    if (s.font_size_cs && !s.font_size) span.style.fontSize = s.font_size_cs + 'pt';
+}
+
 // === DOCX RENDERER (DOM) ===
 function renderEditableDocx(doc) {
     const container = document.getElementById('pages-container');
@@ -2165,6 +2244,21 @@ function renderEditableDocx(doc) {
             pageDiv.style.paddingBottom = page.margin.bottom + 'pt';
             pageDiv.style.paddingLeft = page.margin.left + 'pt';
             pageDiv.style.paddingRight = page.margin.right + 'pt';
+        }
+        // Page borders
+        if (page.page_borders) {
+            const pb = page.page_borders;
+            const bdrCss = (d) => {
+                if (!d) return '';
+                const w = d.width ? d.width + 'pt' : '1pt';
+                const c = d.color ? '#' + d.color : '#000';
+                const s = d.style === 'double' ? 'double' : d.style === 'dashed' ? 'dashed' : d.style === 'dotted' ? 'dotted' : 'solid';
+                return `${w} ${s} ${c}`;
+            };
+            if (pb.top) pageDiv.style.borderTop = bdrCss(pb.top);
+            if (pb.bottom) pageDiv.style.borderBottom = bdrCss(pb.bottom);
+            if (pb.left) pageDiv.style.borderLeft = bdrCss(pb.left);
+            if (pb.right) pageDiv.style.borderRight = bdrCss(pb.right);
         }
 
         // Column layout support
@@ -2191,12 +2285,20 @@ function renderEditableDocx(doc) {
                     const hPara = document.createElement('div');
                     if (hBlock.Paragraph.alignment === 'Center') hPara.style.textAlign = 'center';
                     else if (hBlock.Paragraph.alignment === 'Right') hPara.style.textAlign = 'right';
+                    else if (hBlock.Paragraph.alignment === 'Justify') hPara.style.textAlign = 'justify';
+                    // Apply paragraph style to header
+                    if (hBlock.Paragraph.style) {
+                        if (hBlock.Paragraph.style.space_before) hPara.style.marginTop = hBlock.Paragraph.style.space_before + 'pt';
+                        if (hBlock.Paragraph.style.space_after) hPara.style.marginBottom = hBlock.Paragraph.style.space_after + 'pt';
+                        if (hBlock.Paragraph.style.indent_left) hPara.style.paddingLeft = hBlock.Paragraph.style.indent_left + 'pt';
+                        if (hBlock.Paragraph.style.indent_right) hPara.style.paddingRight = hBlock.Paragraph.style.indent_right + 'pt';
+                        if (hBlock.Paragraph.style.indent_first_line) hPara.style.textIndent = hBlock.Paragraph.style.indent_first_line + 'pt';
+                    }
                     for (const run of hBlock.Paragraph.runs) {
                         const span = document.createElement('span');
                         span.textContent = run.text;
-                        if (run.style && run.style.bold) span.style.fontWeight = 'bold';
-                        if (run.style && run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
-                        hPara.appendChild(span);
+                        applyRunStyle(span, run);
+                    hPara.appendChild(span);
                     }
                     if (hBlock.Paragraph.runs.length === 0) hPara.innerHTML = '&nbsp;';
                     headerDiv.appendChild(hPara);
@@ -2205,7 +2307,9 @@ function renderEditableDocx(doc) {
             pageDiv.appendChild(headerDiv);
         }
 
-        for (const block of page.blocks) {
+        let prevParaStyleId = null;
+        for (let blockIdx = 0; blockIdx < page.blocks.length; blockIdx++) {
+            const block = page.blocks[blockIdx];
             if (block.Paragraph) {
                 const para = block.Paragraph;
                 const paraDiv = document.createElement('div');
@@ -2231,8 +2335,12 @@ function renderEditableDocx(doc) {
 
                 // Paragraph spacing
                 if (para.style) {
-                    const sb = para.style.space_before || 0;
+                    let sb = para.style.space_before || 0;
                     const sa = para.style.space_after || 0;
+                    // Contextual spacing: suppress space_before if prev paragraph has same style
+                    if (para.style.contextual_spacing && para.style.style_id && para.style.style_id === prevParaStyleId) {
+                        sb = 0;
+                    }
                     if (sb > 0) paraDiv.style.marginTop = sb + 'pt';
                     if (sa > 0) paraDiv.style.marginBottom = sa + 'pt';
 
@@ -2296,6 +2404,12 @@ function renderEditableDocx(doc) {
                 // Indentation
                 if (para.style && para.style.indent_left) {
                     paraDiv.style.paddingLeft = para.style.indent_left + 'pt';
+                }
+                if (para.style && para.style.indent_right) {
+                    paraDiv.style.paddingRight = para.style.indent_right + 'pt';
+                }
+                if (para.style && para.style.indent_first_line) {
+                    paraDiv.style.textIndent = para.style.indent_first_line + 'pt';
                 }
 
                 // List marker
@@ -2418,7 +2532,17 @@ function renderEditableDocx(doc) {
                         span.title = (run.footnote_ref ? 'Footnote ' : 'Endnote ') + (run.footnote_ref || run.endnote_ref);
                     }
 
-                    // Preserve visual styling
+                    // Apply paragraph default_run_style as baseline, then overlay run style
+                    const drs = para.style && para.style.default_run_style;
+                    if (drs && !run.tracked_change && !run.footnote_ref && !run.endnote_ref) {
+                        if (drs.font_family) span.style.fontFamily = drs.font_family + ", 'Yu Gothic', 'Noto Sans JP', sans-serif";
+                        if (drs.font_size) span.style.fontSize = drs.font_size + 'pt';
+                        if (drs.bold) span.style.fontWeight = 'bold';
+                        if (drs.italic) span.style.fontStyle = 'italic';
+                        if (drs.color) span.style.color = '#' + drs.color;
+                    }
+
+                    // Preserve visual styling (run-level overrides paragraph defaults)
                     if (run.style) {
                         if (run.style.bold) span.style.fontWeight = 'bold';
                         if (run.style.italic) span.style.fontStyle = 'italic';
@@ -2490,14 +2614,41 @@ function renderEditableDocx(doc) {
                         if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
                         if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
                         if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
-                        // Kerning
-                        if (run.style.kern) span.style.fontKerning = 'normal';
-                        // Fit text to width
+                        // Kerning — enable when font size >= threshold
+                        if (run.style.kern) {
+                            const fs = run.style.font_size || (drs && drs.font_size) || 11;
+                            span.style.fontKerning = fs >= run.style.kern ? 'normal' : 'none';
+                        }
+                        // Fit text to width — scale font to fit
                         if (run.style.fit_text) {
                             span.style.display = 'inline-block';
                             span.style.width = run.style.fit_text + 'pt';
                             span.style.overflow = 'hidden';
-                            span.style.textOverflow = 'clip';
+                            span.style.whiteSpace = 'nowrap';
+                            // Use CSS transform scaleX to squeeze text
+                            const measure = document.createElement('span');
+                            measure.style.cssText = span.style.cssText;
+                            measure.style.display = 'inline';
+                            measure.style.visibility = 'hidden';
+                            measure.style.position = 'absolute';
+                            measure.textContent = span.textContent;
+                            document.body.appendChild(measure);
+                            const naturalW = measure.offsetWidth;
+                            document.body.removeChild(measure);
+                            if (naturalW > 0) {
+                                const targetPx = run.style.fit_text * 96 / 72;
+                                const scale = targetPx / naturalW;
+                                if (scale < 1) {
+                                    span.style.transform = 'scaleX(' + scale.toFixed(3) + ')';
+                                    span.style.transformOrigin = 'left';
+                                }
+                            }
+                        }
+                        // Complex script properties
+                        if (run.style.bold_cs) span.style.fontWeight = 'bold';
+                        if (run.style.italic_cs) span.style.fontStyle = 'italic';
+                        if (run.style.font_size_cs && !run.style.font_size) {
+                            span.style.fontSize = run.style.font_size_cs + 'pt';
                         }
                         // East Asian layout: combine (kumimoji)
                         if (run.style.combine) {
@@ -2553,6 +2704,7 @@ function renderEditableDocx(doc) {
                 }
 
                 blocksContainer.appendChild(paraDiv);
+                prevParaStyleId = (para.style && para.style.style_id) || null;
                 bodyParaIdx++;
 
             } else if (block.Table) {
@@ -2655,6 +2807,7 @@ function renderEditableDocx(doc) {
                             }
                         }
                     }
+                    const totalCols = row.cells.reduce((sum, c) => sum + (c.grid_span || 1), 0);
                     let ci = 0;
                     for (const cell of row.cells) {
                         // Skip cells that are vertical merge continuations
@@ -2664,6 +2817,21 @@ function renderEditableDocx(doc) {
                         }
 
                         const td = document.createElement('td');
+                        // Table conditional formatting: first/last column, banded columns
+                        if (tblLook) {
+                            if (tblLook.first_column && ci === 0) {
+                                td.style.fontWeight = 'bold';
+                            }
+                            if (tblLook.last_column && ci + (cell.grid_span || 1) >= totalCols) {
+                                td.style.fontWeight = 'bold';
+                            }
+                            if (tblLook.banded_columns && !tblLook.first_row) {
+                                const bandSize = tblLook.col_band_size || 1;
+                                if (Math.floor(ci / bandSize) % 2 === 1) {
+                                    td.style.backgroundColor = td.style.backgroundColor || '#D9E2F3';
+                                }
+                            }
+                        }
                         // Apply table border to cells
                         if (table.style && table.style.border) {
                             const bw = tableEl.dataset.borderWidth || '0.5pt';
@@ -2772,8 +2940,18 @@ function renderEditableDocx(doc) {
                     fImgEl.src = `data:${ct};base64,${btoa(binary)}`;
                     fImgEl.style.position = 'absolute';
                     if (fImg.position) {
-                        fImgEl.style.left = fImg.position.x + 'pt';
-                        fImgEl.style.top = fImg.position.y + 'pt';
+                        // Anchor reference: adjust position based on h_relative/v_relative
+                        let xOff = fImg.position.x;
+                        let yOff = fImg.position.y;
+                        const hr = fImg.position.h_relative || 'column';
+                        const vr = fImg.position.v_relative || 'paragraph';
+                        // For page-relative, subtract page margins
+                        if (hr === 'page' && page.margin) xOff -= 0; // already relative to page
+                        else if (hr === 'margin' && page.margin) xOff += 0; // relative to margin = default
+                        // column is default behavior
+                        if (vr === 'page' && page.margin) yOff -= 0;
+                        fImgEl.style.left = xOff + 'pt';
+                        fImgEl.style.top = yOff + 'pt';
                     }
                     fImgEl.style.width = fImg.width + 'pt';
                     fImgEl.style.height = fImg.height + 'pt';
@@ -2785,10 +2963,16 @@ function renderEditableDocx(doc) {
                         const l = fImg.crop.left || 0;
                         fImgEl.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
                     }
-                    // Wrap type affects z-index
+                    // Wrap type behavior
                     if (fImg.wrap_type === 'None') {
                         fImgEl.style.zIndex = '10';
+                        fImgEl.style.pointerEvents = 'none';
+                    } else if (fImg.wrap_type === 'TopAndBottom') {
+                        // Simulate top-and-bottom: use CSS shape-outside not available,
+                        // just ensure proper z-index
+                        fImgEl.style.zIndex = '1';
                     } else {
+                        // Square / Tight: use CSS float for approximate wrapping
                         fImgEl.style.zIndex = '1';
                     }
                     pageDiv.appendChild(fImgEl);
@@ -2996,11 +3180,16 @@ function renderEditableDocx(doc) {
                     const fPara = document.createElement('div');
                     if (fBlock.Paragraph.alignment === 'Center') fPara.style.textAlign = 'center';
                     else if (fBlock.Paragraph.alignment === 'Right') fPara.style.textAlign = 'right';
+                    else if (fBlock.Paragraph.alignment === 'Justify') fPara.style.textAlign = 'justify';
+                    if (fBlock.Paragraph.style) {
+                        if (fBlock.Paragraph.style.space_before) fPara.style.marginTop = fBlock.Paragraph.style.space_before + 'pt';
+                        if (fBlock.Paragraph.style.space_after) fPara.style.marginBottom = fBlock.Paragraph.style.space_after + 'pt';
+                        if (fBlock.Paragraph.style.indent_left) fPara.style.paddingLeft = fBlock.Paragraph.style.indent_left + 'pt';
+                    }
                     for (const run of fBlock.Paragraph.runs) {
                         const span = document.createElement('span');
                         span.textContent = run.text;
-                        if (run.style && run.style.bold) span.style.fontWeight = 'bold';
-                        if (run.style && run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                        applyRunStyle(span, run);
                         fPara.appendChild(span);
                     }
                     if (fBlock.Paragraph.runs.length === 0) fPara.innerHTML = '&nbsp;';

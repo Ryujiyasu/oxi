@@ -51,6 +51,22 @@ pub struct Page {
     /// Starting page number for this section
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number_start: Option<u32>,
+    /// Page borders
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_borders: Option<PageBorders>,
+}
+
+/// Page border definitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageBorders {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<BorderDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
