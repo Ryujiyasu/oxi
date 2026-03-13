@@ -30,6 +30,7 @@ pub fn parse_pdf(data: &[u8]) -> Result<PdfDocument, PdfError> {
         info,
         pages,
         outline: Vec::new(),
+        embedded_fonts: std::collections::HashMap::new(),
     })
 }
 

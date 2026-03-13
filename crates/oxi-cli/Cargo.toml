@@ -1,0 +1,13 @@
+[package]
+name = "oxi-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "oxi"
+path = "src/main.rs"
+
+[dependencies]
+oxidocs-core = { path = "../oxidocs-core" }
+oxipdf-core = { path = "../oxipdf-core" }
+serde_json = "1"
