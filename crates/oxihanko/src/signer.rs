@@ -114,6 +114,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let pdf = oxipdf_core::write_pdf(&doc);
 

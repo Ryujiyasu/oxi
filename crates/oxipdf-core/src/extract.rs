@@ -120,6 +120,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         }
     }
 
@@ -166,6 +167,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let text = extract_text_string(&doc);
         assert!(text.is_empty());
@@ -207,6 +209,7 @@ mod tests {
                 },
             ],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let pages = extract_text(&doc);
         assert_eq!(pages.len(), 2);

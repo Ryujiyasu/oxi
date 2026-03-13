@@ -252,6 +252,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let pdf = crate::write_pdf(&doc);
         let signed = sign_pdf(&pdf, &DummyProvider, &SignatureConfig::default()).unwrap();
@@ -278,6 +279,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let pdf = crate::write_pdf(&doc);
         let signed = sign_pdf(&pdf, &DummyProvider, &SignatureConfig::default()).unwrap();
@@ -308,6 +310,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let pdf = crate::write_pdf(&doc);
         let sigs = verify_pdf_signatures(&pdf).unwrap();

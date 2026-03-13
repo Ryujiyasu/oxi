@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// A parsed PDF document.
 #[derive(Debug, Clone, Serialize)]
@@ -11,6 +12,34 @@ pub struct PdfDocument {
     pub pages: Vec<Page>,
     /// Named destinations, bookmarks, etc.
     pub outline: Vec<OutlineItem>,
+    /// Embedded font data, keyed by font name (as used in TextSpan.font_name).
+    /// When present, the font binary will be embedded in the PDF for portable rendering.
+    #[serde(skip)]
+    pub embedded_fonts: HashMap<String, EmbeddedFont>,
+}
+
+/// Embedded font data for PDF inclusion.
+#[derive(Debug, Clone)]
+pub struct EmbeddedFont {
+    /// Raw font file data (CFF program, or TTF binary).
+    pub data: Vec<u8>,
+    /// Font format for correct /FontFile* reference.
+    pub format: FontFormat,
+    /// Unicode codepoint → Glyph ID mapping (from cmap table).
+    /// Used by the writer to encode text as CID values matching the font's glyph indices.
+    pub unicode_to_gid: HashMap<u32, u16>,
+    /// CID → width in 1/1000 em units. Used for /W array in CIDFont dictionary.
+    /// If empty, /DW 1000 is used for all glyphs (full-width).
+    pub cid_widths: HashMap<u16, u16>,
+}
+
+/// Font binary format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontFormat {
+    /// TrueType (.ttf) — embedded via /FontFile2
+    TrueType,
+    /// OpenType CFF (.otf) — embedded via /FontFile3 /Subtype /CIDFontType0C
+    OpenTypeCff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]

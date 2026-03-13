@@ -269,6 +269,148 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
 }
 
 // ---------------------------------------------------------------------------
+// docx → PDF conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a .docx file to PDF bytes.
+/// Parses the docx, runs layout, and converts positioned elements to PDF.
+#[wasm_bindgen]
+pub fn docx_to_pdf(data: &[u8]) -> Result<Vec<u8>, JsError> {
+    let doc = oxidocs_core::parse_docx(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    let engine = oxidocs_core::layout::LayoutEngine::new();
+    let layout = engine.layout(&doc);
+
+    let pdf_doc = layout_to_pdf(&layout, &doc);
+    Ok(oxipdf_core::write_pdf(&pdf_doc))
+}
+
+fn layout_to_pdf(
+    layout: &oxidocs_core::layout::LayoutResult,
+    doc: &oxidocs_core::Document,
+) -> oxipdf_core::ir::PdfDocument {
+    use oxipdf_core::ir::*;
+
+    let title = doc.pages.first()
+        .and_then(|p| p.blocks.first())
+        .and_then(|b| match b {
+            oxidocs_core::ir::Block::Paragraph(p) if p.style.heading_level == Some(1) => {
+                Some(p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+            }
+            _ => None,
+        });
+
+    let pages = layout.pages.iter().map(|lp| {
+        let width = lp.width as f64;
+        let height = lp.height as f64;
+        let mut contents = Vec::new();
+
+        for elem in &lp.elements {
+            match &elem.content {
+                oxidocs_core::layout::LayoutContent::Text {
+                    text, font_size, font_family, bold, color, ..
+                } => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let base_font = font_family.as_deref().unwrap_or("Helvetica");
+                    let font_name = if *bold {
+                        match base_font {
+                            "Helvetica" => "Helvetica-Bold".to_string(),
+                            "Times New Roman" => "Times-Bold".to_string(),
+                            "Courier New" | "Courier" => "Courier-Bold".to_string(),
+                            other => other.to_string(),
+                        }
+                    } else {
+                        match base_font {
+                            "Times New Roman" => "Times-Roman".to_string(),
+                            "Courier New" => "Courier".to_string(),
+                            other => other.to_string(),
+                        }
+                    };
+
+                    let fill_color = color.as_ref()
+                        .and_then(|c| parse_hex_color(c))
+                        .unwrap_or(Color::Gray(0.0));
+
+                    contents.push(ContentElement::Text(TextSpan {
+                        x: elem.x as f64,
+                        y: elem.y as f64,
+                        text: text.clone(),
+                        font_name,
+                        font_size: *font_size as f64,
+                        fill_color,
+                    }));
+                }
+                oxidocs_core::layout::LayoutContent::Image { data, .. } => {
+                    if data.is_empty() {
+                        continue;
+                    }
+                    contents.push(ContentElement::Image(ImageData {
+                        x: elem.x as f64,
+                        y: elem.y as f64,
+                        width: elem.width as f64,
+                        height: elem.height as f64,
+                        data: data.clone(),
+                        color_space: ColorSpace::DeviceRgb,
+                        bits_per_component: 8,
+                    }));
+                }
+                oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2 } => {
+                    contents.push(ContentElement::Path(PathData {
+                        operations: vec![
+                            PathOp::MoveTo(*x1 as f64, *y1 as f64),
+                            PathOp::LineTo(*x2 as f64, *y2 as f64),
+                        ],
+                        stroke: Some(StrokeStyle {
+                            color: Color::Gray(0.0),
+                            width: 0.5,
+                            line_cap: LineCap::Butt,
+                            line_join: LineJoin::Miter,
+                        }),
+                        fill: None,
+                    }));
+                }
+            }
+        }
+
+        Page {
+            width,
+            height,
+            media_box: Rectangle { llx: 0.0, lly: 0.0, urx: width, ury: height },
+            crop_box: None,
+            contents,
+            rotation: 0,
+        }
+    }).collect();
+
+    PdfDocument {
+        version: PdfVersion::new(1, 7),
+        info: DocumentInfo {
+            title,
+            producer: Some("Oxi (docx→PDF)".to_string()),
+            ..Default::default()
+        },
+        pages,
+        outline: Vec::new(),
+        embedded_fonts: std::collections::HashMap::new(),
+    }
+}
+
+/// Parse "#RRGGBB" hex color to PDF Color.
+fn parse_hex_color(hex: &str) -> Option<oxipdf_core::ir::Color> {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f64 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f64 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f64 / 255.0;
+    Some(oxipdf_core::ir::Color::Rgb(r, g, b))
+}
+
+// ---------------------------------------------------------------------------
 // PDF bindings (oxipdf-core)
 // ---------------------------------------------------------------------------
 
@@ -317,6 +459,7 @@ pub fn create_pdf(title: &str, text: &str) -> Vec<u8> {
             rotation: 0,
         }],
         outline: Vec::new(),
+        embedded_fonts: std::collections::HashMap::new(),
     };
     oxipdf_core::write_pdf(&doc)
 }

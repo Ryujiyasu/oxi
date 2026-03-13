@@ -238,6 +238,7 @@ mod tests {
                 rotation: 0,
             }],
             outline: Vec::new(),
+            embedded_fonts: std::collections::HashMap::new(),
         };
         let pdf_bytes = crate::write_pdf(&doc);
 
