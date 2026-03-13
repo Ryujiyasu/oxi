@@ -26,30 +26,71 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
 <style>
+:root {
+    /* Oxi brand palette — distinct from MS Office */
+    --oxi-primary: #5b4fc7;       /* Oxi violet */
+    --oxi-primary-dark: #463bab;
+    --oxi-primary-light: #ede8ff;
+    --oxi-accent: #00b4d8;        /* Cyan accent */
+    --oxi-text: #1e1e2e;
+    --oxi-text-secondary: #555;
+    --oxi-bg: #f5f5f7;
+    --oxi-surface: #ffffff;
+    --oxi-border: #d6d6d6;
+    --oxi-hover: #e8e5f5;
+    /* Format accent colors (softer than MS) */
+    --oxi-docs: #5b4fc7;         /* Oxi Docs — violet */
+    --oxi-cells: #0fa87e;        /* Oxi Cells — teal */
+    --oxi-slides: #e0603e;       /* Oxi Slides — warm coral */
+    --oxi-pdf: #c75050;          /* Oxi PDF — muted red */
+    /* Dark mode vars (overridden by .dark) */
+    --bg: var(--oxi-bg);
+    --surface: var(--oxi-surface);
+    --text: var(--oxi-text);
+    --text-secondary: var(--oxi-text-secondary);
+    --border: var(--oxi-border);
+    --ribbon-bg: #f3f3f3;
+    --ribbon-tab-bg: var(--surface);
+    --ribbon-hover: var(--oxi-hover);
+    --title-bar-bg: var(--oxi-primary);
+}
+.dark {
+    --bg: #1e1e2e;
+    --surface: #2a2a3c;
+    --text: #e0e0e8;
+    --text-secondary: #a0a0b0;
+    --border: #3a3a4c;
+    --ribbon-bg: #252535;
+    --ribbon-tab-bg: #2a2a3c;
+    --ribbon-hover: #3a3a50;
+    --title-bar-bg: #16162a;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-    background: #f0f0f0;
-    color: #333;
+    background: var(--bg);
+    color: var(--text);
+    transition: background 0.2s, color 0.2s;
 }
-/* Title bar — Office style */
+/* Title bar — Oxi style */
 .title-bar {
     display: flex;
     align-items: center;
-    height: 32px;
-    background: #2b579a; /* Word blue default */
+    height: 36px;
+    background: var(--title-bar-bg);
     color: white;
     font-size: 12px;
-    padding: 0 8px;
+    padding: 0 12px;
     user-select: none;
 }
-.title-bar.docx { background: #2b579a; }
-.title-bar.xlsx { background: #217346; }
-.title-bar.pptx { background: #d24726; }
-.title-bar.pdf { background: #e2574c; }
+.title-bar.docx { background: var(--oxi-docs); }
+.title-bar.xlsx { background: var(--oxi-cells); }
+.title-bar.pptx { background: var(--oxi-slides); }
+.title-bar.pdf { background: var(--oxi-pdf); }
+.dark .title-bar { background: var(--title-bar-bg); }
 .title-bar .qat {
     display: flex;
-    gap: 2px;
+    gap: 4px;
     align-items: center;
 }
 .title-bar .qat button {
@@ -57,11 +98,11 @@ body {
     border: none;
     color: rgba(255,255,255,0.85);
     cursor: pointer;
-    font-size: 13px;
-    padding: 2px 6px;
-    border-radius: 2px;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 4px;
 }
-.title-bar .qat button:hover { background: rgba(255,255,255,0.15); }
+.title-bar .qat button:hover { background: rgba(255,255,255,0.18); }
 .title-bar .title-text {
     flex: 1;
     text-align: center;
@@ -74,7 +115,7 @@ body {
 }
 .title-bar .title-right {
     display: flex;
-    gap: 4px;
+    gap: 6px;
     align-items: center;
 }
 .title-bar .title-right button {
@@ -84,12 +125,12 @@ body {
     cursor: pointer;
     font-size: 12px;
     padding: 2px 8px;
-    border-radius: 2px;
+    border-radius: 4px;
 }
-.title-bar .title-right button:hover { background: rgba(255,255,255,0.15); }
-/* Legacy header for landing page */
+.title-bar .title-right button:hover { background: rgba(255,255,255,0.18); }
+/* Landing header */
 header {
-    background: #2b579a;
+    background: var(--oxi-primary);
     color: white;
     padding: 10px 16px;
     display: flex;
@@ -113,7 +154,7 @@ header span { font-size: 12px; opacity: 0.7; }
     max-width: 1100px;
     margin: 16px auto;
     padding: 0 16px;
-    padding-bottom: 32px; /* space for fixed status bar */
+    padding-bottom: 36px; /* space for fixed status bar */
 }
 .container.xlsx-active {
     max-width: 100%;
@@ -129,8 +170,8 @@ header span { font-size: 12px; opacity: 0.7; }
     transition: border-color 0.2s, background 0.2s;
 }
 .drop-zone:hover, .drop-zone.dragover {
-    border-color: #4a6cf7;
-    background: #f8f9ff;
+    border-color: var(--oxi-primary);
+    background: var(--oxi-primary-light);
 }
 .drop-zone p { font-size: 16px; color: #666; }
 .drop-zone .hint { font-size: 13px; color: #999; margin-top: 8px; }
@@ -155,9 +196,9 @@ input[type="file"] { display: none; }
     transition: all 0.15s;
 }
 .sample-buttons button:hover {
-    border-color: #4a6cf7;
-    color: #4a6cf7;
-    background: #f8f9ff;
+    border-color: var(--oxi-primary);
+    color: var(--oxi-primary);
+    background: var(--oxi-primary-light);
 }
 #status {
     margin-top: 16px;
@@ -199,18 +240,18 @@ input[type="file"] { display: none; }
     transition: background 0.15s;
 }
 .toolbar button.primary {
-    background: #4a6cf7;
+    background: var(--oxi-primary);
     color: white;
 }
 .toolbar button.primary:hover {
-    background: #3a5ce7;
+    background: var(--oxi-primary-dark);
 }
 
-/* Ribbon menu bar — Office style */
+/* Ribbon menu bar — Oxi style */
 .ribbon {
     display: none;
-    background: #f3f3f3;
-    border-bottom: 1px solid #d6d6d6;
+    background: var(--ribbon-bg);
+    border-bottom: 1px solid var(--border);
     padding: 0;
     margin-top: 0;
     overflow: hidden;
@@ -219,83 +260,87 @@ input[type="file"] { display: none; }
 .ribbon-tabs {
     display: flex;
     gap: 0;
-    background: white;
-    border-bottom: 1px solid #d6d6d6;
+    background: var(--ribbon-tab-bg);
+    border-bottom: 1px solid var(--border);
     padding-left: 0;
 }
 .ribbon-tab-file {
-    padding: 6px 18px;
+    padding: 7px 20px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     color: white;
     border: none;
-    background: #2b579a;
+    background: var(--oxi-primary);
     letter-spacing: 0.3px;
+    border-radius: 0;
 }
-.ribbon-tab-file:hover { opacity: 0.9; }
-.ribbon.docx .ribbon-tab-file { background: #2b579a; }
-.ribbon.xlsx .ribbon-tab-file { background: #217346; }
-.ribbon.pptx .ribbon-tab-file { background: #d24726; }
-.ribbon.pdf .ribbon-tab-file { background: #e2574c; }
+.ribbon-tab-file:hover { filter: brightness(1.1); }
+.ribbon.docx .ribbon-tab-file { background: var(--oxi-docs); }
+.ribbon.xlsx .ribbon-tab-file { background: var(--oxi-cells); }
+.ribbon.pptx .ribbon-tab-file { background: var(--oxi-slides); }
+.ribbon.pdf .ribbon-tab-file { background: var(--oxi-pdf); }
 .ribbon-tab {
-    padding: 6px 14px;
+    padding: 7px 16px;
     font-size: 13px;
     font-weight: 400;
     cursor: pointer;
-    color: #444;
+    color: var(--text-secondary);
     border: none;
     background: transparent;
-    border-bottom: 3px solid transparent;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    border-bottom: 2px solid transparent;
+    letter-spacing: 0.3px;
 }
-.ribbon-tab:hover { background: #e8e8e8; }
+.ribbon-tab:hover { background: var(--ribbon-hover); }
 .ribbon-tab.active {
-    color: #333;
-    background: #f3f3f3;
-    border-bottom-color: #2b579a;
-    font-weight: 500;
+    color: var(--text);
+    background: var(--ribbon-bg);
+    border-bottom-color: var(--oxi-primary);
+    font-weight: 600;
 }
+.ribbon.docx .ribbon-tab.active { border-bottom-color: var(--oxi-docs); }
+.ribbon.xlsx .ribbon-tab.active { border-bottom-color: var(--oxi-cells); }
+.ribbon.pptx .ribbon-tab.active { border-bottom-color: var(--oxi-slides); }
+.ribbon.pdf .ribbon-tab.active { border-bottom-color: var(--oxi-pdf); }
 .ribbon-content {
     display: flex;
     align-items: stretch;
     gap: 0;
-    padding: 4px 4px 2px 4px;
+    padding: 4px 6px 2px 6px;
     min-height: 80px;
-    background: #f3f3f3;
+    background: var(--ribbon-bg);
 }
 .ribbon-group {
     display: flex;
     flex-direction: column;
-    padding: 0 6px;
-    border-right: 1px solid #d8d8d8;
+    padding: 0 8px;
+    border-right: 1px solid var(--border);
     min-width: 0;
 }
 .ribbon-group:last-child { border-right: none; }
 .ribbon-group-items {
     display: flex;
     align-items: center;
-    gap: 1px;
+    gap: 2px;
     flex: 1;
 }
 .ribbon-group-label {
     font-size: 10px;
-    color: #888;
+    color: var(--text-secondary);
     text-align: center;
     padding: 2px 0 1px 0;
-    border-top: 1px solid #e0e0e0;
+    border-top: 1px solid var(--border);
     margin-top: auto;
 }
 .ribbon-btn {
     padding: 3px 6px;
     border: 1px solid transparent;
-    border-radius: 2px;
+    border-radius: 4px;
     background: transparent;
     cursor: pointer;
     font-size: 13px;
-    color: #444;
-    transition: all 0.08s;
+    color: var(--text);
+    transition: all 0.1s;
     min-width: 26px;
     text-align: center;
     display: flex;
@@ -304,12 +349,12 @@ input[type="file"] { display: none; }
     justify-content: center;
 }
 .ribbon-btn:hover {
-    background: #c8daf5;
-    border-color: #a8c0e0;
+    background: var(--ribbon-hover);
+    border-color: rgba(91,79,199,0.2);
 }
 .ribbon-btn.active {
-    background: #b0c8e8;
-    border-color: #90b0d0;
+    background: var(--oxi-primary-light);
+    border-color: rgba(91,79,199,0.3);
 }
 .ribbon-btn-large {
     padding: 4px 8px;
@@ -338,7 +383,7 @@ input[type="file"] { display: none; }
     height: 26px;
 }
 .ribbon-select:hover { border-color: #888; }
-.ribbon-select:focus { border-color: #4a6cf7; }
+.ribbon-select:focus { border-color: var(--oxi-primary); }
 .ribbon-font-family { width: 130px; }
 .ribbon-font-size { width: 48px; }
 /* Color picker button */
@@ -387,12 +432,12 @@ input[type="file"] { display: none; }
 }
 .color-swatch:hover { border-color: #333; transform: scale(1.15); }
 
-/* Status bar / zoom — Office style */
+/* Status bar / zoom — Oxi style */
 .status-bar {
     display: none;
     align-items: center;
     justify-content: space-between;
-    background: #2b579a;
+    background: var(--oxi-primary-dark);
     padding: 2px 12px;
     font-size: 12px;
     color: rgba(255,255,255,0.9);
@@ -402,12 +447,13 @@ input[type="file"] { display: none; }
     left: 0;
     right: 0;
     z-index: 50;
-    height: 24px;
+    height: 26px;
 }
-.status-bar.docx { background: #2b579a; }
-.status-bar.xlsx { background: #217346; }
-.status-bar.pptx { background: #d24726; }
-.status-bar.pdf { background: #e2574c; }
+.status-bar.docx { background: var(--oxi-docs); }
+.status-bar.xlsx { background: var(--oxi-cells); }
+.status-bar.pptx { background: var(--oxi-slides); }
+.status-bar.pdf { background: var(--oxi-pdf); }
+.dark .status-bar { background: #16162a; }
 .status-bar.visible { display: flex; }
 .status-bar .status-left { display: flex; gap: 16px; }
 .status-bar .zoom-controls { display: flex; align-items: center; gap: 6px; }
@@ -450,7 +496,7 @@ input[type="file"] { display: none; }
     font-size: 13px;
     outline: none;
 }
-.find-replace-dialog input[type="text"]:focus { border-color: #4a6cf7; }
+.find-replace-dialog input[type="text"]:focus { border-color: var(--oxi-primary); }
 .find-replace-dialog .fr-buttons {
     display: flex;
     gap: 6px;
@@ -466,18 +512,96 @@ input[type="file"] { display: none; }
     font-size: 12px;
 }
 .find-replace-dialog .fr-buttons button:hover { background: #e0e0e0; }
-.find-replace-dialog .fr-buttons button.primary { background: #4a6cf7; color: white; border-color: #4a6cf7; }
+.find-replace-dialog .fr-buttons button.primary { background: var(--oxi-primary); color: white; border-color: var(--oxi-primary); }
 .find-replace-dialog .fr-close {
     position: absolute; top: 8px; right: 8px;
     background: none; border: none; font-size: 16px; cursor: pointer; color: #888;
 }
 .find-replace-dialog .fr-close:hover { color: #333; }
 .find-replace-dialog .fr-status { font-size: 11px; color: #888; margin-top: 4px; }
-/* Format-specific ribbon colors */
-.ribbon.docx .ribbon-tab.active { border-bottom-color: #2b579a; }
-.ribbon.xlsx .ribbon-tab.active { border-bottom-color: #217346; }
-.ribbon.pptx .ribbon-tab.active { border-bottom-color: #d24726; }
-.ribbon.pdf .ribbon-tab.active { border-bottom-color: #e2574c; }
+/* Backstage overlay */
+.backstage-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 300;
+    background: var(--bg);
+}
+.backstage-overlay.open { display: flex; }
+.backstage-sidebar {
+    width: 260px;
+    background: var(--oxi-primary);
+    color: white;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+.dark .backstage-sidebar { background: #16162a; }
+.backstage-sidebar .bs-brand {
+    padding: 20px 24px 16px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+.backstage-sidebar .bs-item {
+    padding: 12px 24px;
+    font-size: 14px;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: rgba(255,255,255,0.85);
+    text-align: left;
+    width: 100%;
+    transition: background 0.1s;
+}
+.backstage-sidebar .bs-item:hover { background: rgba(255,255,255,0.12); }
+.backstage-sidebar .bs-item.active { background: rgba(255,255,255,0.18); font-weight: 600; }
+.backstage-sidebar .bs-back {
+    padding: 12px 24px;
+    font-size: 22px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: white;
+    text-align: left;
+    width: 100%;
+}
+.backstage-sidebar .bs-back:hover { background: rgba(255,255,255,0.1); }
+.backstage-main {
+    flex: 1;
+    padding: 40px;
+    overflow-y: auto;
+    background: var(--bg);
+    color: var(--text);
+}
+.backstage-main h2 { font-size: 22px; font-weight: 300; margin-bottom: 24px; color: var(--oxi-primary); }
+.dark .backstage-main h2 { color: var(--oxi-accent); }
+.backstage-main .bs-section { margin-bottom: 28px; }
+.backstage-main .bs-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); }
+.backstage-main .bs-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+}
+.backstage-main .bs-row:hover { background: var(--ribbon-hover); margin: 0 -8px; padding: 10px 8px; border-radius: 6px; }
+.backstage-main .bs-row .bs-icon { font-size: 20px; width: 32px; text-align: center; }
+.backstage-main .bs-row .bs-label { font-size: 14px; }
+.backstage-main .bs-row .bs-desc { font-size: 12px; color: var(--text-secondary); }
+/* Dark mode toggle in title bar */
+.dark-mode-toggle {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    transition: all 0.2s;
+}
+.dark-mode-toggle:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.5); }
 
 /* PDF text viewer */
 .pdf-page {
@@ -620,7 +744,7 @@ input[type="file"] { display: none; }
     cursor: text;
 }
 .edit-page .edit-run:focus {
-    border-bottom-color: #4a6cf7;
+    border-bottom-color: var(--oxi-primary);
 }
 .edit-page .edit-table {
     border-collapse: collapse;
@@ -795,18 +919,45 @@ input[type="file"] { display: none; }
     color: #888;
     margin-top: 4px;
 }
+/* Dark mode overrides */
+.dark .drop-zone { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .drop-zone p { color: var(--text-secondary); }
+.dark .drop-zone .hint { color: #888; }
+.dark .sample-buttons { color: var(--text-secondary); }
+.dark .sample-buttons button { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .page-wrapper { box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+.dark .edit-page { background: var(--surface); color: var(--text); }
+.dark .ribbon-select { background: var(--surface); color: var(--text); border-color: #555; }
+.dark .ribbon-color-btn { color: var(--text); }
+.dark .color-palette { background: var(--surface); border-color: #555; }
+.dark .find-replace-dialog { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .find-replace-dialog input[type="text"] { background: #1e1e2e; color: var(--text); border-color: #555; }
+.dark .find-replace-dialog .fr-buttons button { background: #333; color: var(--text); border-color: #555; }
+.dark #status.info { background: #1e2e4a; color: #7ab8f5; }
+.dark #status.error { background: #3a1e1e; color: #f08080; }
+.dark .spreadsheet-wrapper { background: var(--surface); }
+.dark .spreadsheet-wrapper th { background: #333; color: var(--text-secondary); border-color: #555; }
+.dark .spreadsheet-wrapper td { background: var(--surface); color: var(--text); border-color: #444; }
+.dark .formula-bar { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .formula-bar .cell-ref { background: #333; color: var(--text); }
+.dark .formula-bar .formula-input { background: var(--surface); color: var(--text); }
+.dark .sheet-tabs { background: #333; }
+.dark .sheet-tab { background: #444; color: var(--text-secondary); border-color: #555; }
+.dark .sheet-tab.active { background: var(--surface); color: var(--oxi-accent); }
+.dark header { background: #16162a; }
 </style>
 </head>
 <body>
 
 <div class="title-bar" id="titleBar" style="display:none">
     <div class="qat">
-        <button id="qatSave" title="Save (Ctrl+S)">💾</button>
-        <button id="qatUndo" title="Undo (Ctrl+Z)">↩</button>
-        <button id="qatRedo" title="Redo (Ctrl+Y)">↪</button>
+        <button id="qatSave" title="Save (Ctrl+S)">&#x1F4BE;</button>
+        <button id="qatUndo" title="Undo (Ctrl+Z)">&#x21A9;</button>
+        <button id="qatRedo" title="Redo (Ctrl+Y)">&#x21AA;</button>
     </div>
     <div class="title-text" id="titleText">Oxi</div>
     <div class="title-right">
+        <button class="dark-mode-toggle" id="darkModeToggle" onclick="toggleDarkMode()" title="Toggle Dark Mode">&#x263D;</button>
         <button id="langToggle" onclick="toggleLang()">日本語</button>
     </div>
 </div>
@@ -814,6 +965,7 @@ input[type="file"] { display: none; }
     <img src="../docs/icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
     <h1>Oxi</h1>
     <span data-i18n="subtitle">Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
+    <button class="dark-mode-toggle" id="darkModeLanding" onclick="toggleDarkMode()">&#x263D;</button>
     <button id="langToggleLanding" onclick="toggleLang()">日本語</button>
 </header>
 
@@ -869,6 +1021,24 @@ input[type="file"] { display: none; }
     <div class="fr-status" id="frStatus"></div>
 </div>
 
+<!-- Backstage view (File menu) -->
+<div class="backstage-overlay" id="backstageOverlay">
+    <div class="backstage-sidebar" id="backstageSidebar">
+        <button class="bs-back" id="bsBack" title="Back">&larr;</button>
+        <div class="bs-brand">Oxi</div>
+        <button class="bs-item active" data-bs="info">Info</button>
+        <button class="bs-item" data-bs="new">New</button>
+        <button class="bs-item" data-bs="open">Open</button>
+        <button class="bs-item" data-bs="save">Save</button>
+        <button class="bs-item" data-bs="export">Export</button>
+        <button class="bs-item" data-bs="settings">Settings</button>
+        <button class="bs-item" data-bs="about">About</button>
+    </div>
+    <div class="backstage-main" id="backstageMain">
+        <!-- Content populated by JS -->
+    </div>
+</div>
+
 <script>
 // === I18N ===
 const I18N = {
@@ -905,16 +1075,22 @@ const I18N = {
         hankoPreview: 'Preview',
         signatures: 'Digital Signatures',
         noSignatures: 'No signatures found',
-        // Ribbon
+        // Ribbon — Oxi-original tab/group names
         file: 'File',
         home: 'Home', insert: 'Insert', layout: 'Layout', view: 'View',
         formulas: 'Formulas', data: 'Data', review: 'Review',
-        undo: 'Undo', clipboard: 'Clipboard', font: 'Font',
-        paragraph: 'Paragraph', editing: 'Editing',
-        alignment: 'Alignment', number: 'Number',
-        tables: 'Tables', illustrations: 'Illustrations', links: 'Links',
-        pageSetup: 'Page Setup', views: 'Views',
+        tools: 'Tools', format: 'Format',
+        undo: 'History', clipboard: 'Clipboard', font: 'Typography',
+        paragraph: 'Paragraph', editing: 'Find',
+        alignment: 'Align', number: 'Number',
+        tables: 'Tables', illustrations: 'Media', links: 'Links',
+        pageSetup: 'Page', views: 'Views',
         toggleLang: '日本語',
+        // Backstage
+        bsInfo: 'Document Info', bsNew: 'New', bsOpen: 'Open',
+        bsSave: 'Save', bsExport: 'Export', bsSettings: 'Settings', bsAbout: 'About Oxi',
+        bsTheme: 'Theme', bsThemeLight: 'Light', bsThemeDark: 'Dark', bsThemeAuto: 'Auto',
+        bsAiProvider: 'AI Provider', bsNone: 'None',
     },
     ja: {
         subtitle: 'ドキュメント ビューア & エディタ — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
@@ -949,16 +1125,22 @@ const I18N = {
         hankoPreview: 'プレビュー',
         signatures: '電子署名',
         noSignatures: '署名が見つかりません',
-        // Ribbon
+        // Ribbon — Oxi独自のタブ/グループ名
         file: 'ファイル',
         home: 'ホーム', insert: '挿入', layout: 'レイアウト', view: '表示',
-        formulas: '数式', data: 'データ', review: '校閲',
-        undo: '元に戻す', clipboard: 'クリップボード', font: 'フォント',
-        paragraph: '段落', editing: '編集',
+        formulas: '数式', data: 'データ', review: 'レビュー',
+        tools: 'ツール', format: '書式',
+        undo: '履歴', clipboard: 'クリップボード', font: '文字',
+        paragraph: '段落', editing: '検索',
         alignment: '配置', number: '数値',
-        tables: '表', illustrations: '図', links: 'リンク',
-        pageSetup: 'ページ設定', views: '表示形式',
+        tables: '表', illustrations: 'メディア', links: 'リンク',
+        pageSetup: 'ページ', views: '表示形式',
         toggleLang: 'English',
+        // Backstage
+        bsInfo: 'ドキュメント情報', bsNew: '新規', bsOpen: '開く',
+        bsSave: '保存', bsExport: 'エクスポート', bsSettings: '設定', bsAbout: 'Oxiについて',
+        bsTheme: 'テーマ', bsThemeLight: 'ライト', bsThemeDark: 'ダーク', bsThemeAuto: '自動',
+        bsAiProvider: 'AIプロバイダー', bsNone: 'なし',
     }
 };
 
@@ -990,6 +1172,142 @@ function toggleLang() {
 }
 
 applyI18n();
+
+// === DARK MODE ===
+let darkMode = localStorage.getItem('oxi-dark-mode') === 'true';
+function applyDarkMode() {
+    document.documentElement.classList.toggle('dark', darkMode);
+    const btn = document.getElementById('darkModeToggle');
+    if (btn) btn.textContent = darkMode ? '\u2600' : '\u263D';
+    // Also update landing page toggle if present
+    const lbtn = document.getElementById('darkModeLanding');
+    if (lbtn) lbtn.textContent = darkMode ? '\u2600 Light' : '\u263D Dark';
+}
+function toggleDarkMode() {
+    darkMode = !darkMode;
+    localStorage.setItem('oxi-dark-mode', darkMode);
+    applyDarkMode();
+}
+applyDarkMode();
+
+// === BACKSTAGE VIEW ===
+function openBackstage() {
+    const overlay = document.getElementById('backstageOverlay');
+    overlay.classList.add('open');
+    showBackstagePanel('info');
+    // Update sidebar labels
+    const sidebar = document.getElementById('backstageSidebar');
+    const items = sidebar.querySelectorAll('.bs-item');
+    const keys = ['bsInfo','bsNew','bsOpen','bsSave','bsExport','bsSettings','bsAbout'];
+    items.forEach((item, i) => { if (keys[i]) item.textContent = t(keys[i]); });
+}
+function closeBackstage() {
+    document.getElementById('backstageOverlay').classList.remove('open');
+}
+document.getElementById('bsBack').addEventListener('click', closeBackstage);
+document.querySelectorAll('.bs-item').forEach(item => {
+    item.addEventListener('click', () => {
+        document.querySelectorAll('.bs-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        showBackstagePanel(item.dataset.bs);
+    });
+});
+
+function showBackstagePanel(panel) {
+    const main = document.getElementById('backstageMain');
+    if (panel === 'info') {
+        main.innerHTML = `<h2>${t('bsInfo')}</h2>
+            <div class="bs-section">
+                <div class="bs-row"><span class="bs-icon">&#x1F4C4;</span><div><div class="bs-label">${currentFileType ? (currentFileType.toUpperCase() + ' Document') : 'No file open'}</div><div class="bs-desc">Oxi Document Engine v0.1</div></div></div>
+            </div>`;
+    } else if (panel === 'settings') {
+        const aiProvider = localStorage.getItem('oxi-ai-provider') || 'none';
+        main.innerHTML = `<h2>${t('bsSettings')}</h2>
+            <div class="bs-section">
+                <h3>${t('bsTheme')}</h3>
+                <div style="display:flex;gap:8px;margin-bottom:16px">
+                    <button class="bs-theme-btn" data-theme="light" style="padding:8px 20px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${!darkMode?'var(--oxi-primary-light)':'var(--surface)'};color:var(--text)">${t('bsThemeLight')}</button>
+                    <button class="bs-theme-btn" data-theme="dark" style="padding:8px 20px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${darkMode?'var(--oxi-primary-light)':'var(--surface)'};color:var(--text)">${t('bsThemeDark')}</button>
+                </div>
+            </div>
+            <div class="bs-section">
+                <h3>${t('bsAiProvider')}</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Connect an AI provider for smart document assistance.</p>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='none'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="none" ${aiProvider==='none'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>${t('bsNone')}</strong>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='google'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="google" ${aiProvider==='google'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>Google (Gemini)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; Google Login required</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='microsoft'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="microsoft" ${aiProvider==='microsoft'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>Microsoft (Copilot)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; Microsoft Login required</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='anthropic'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="anthropic" ${aiProvider==='anthropic'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>Anthropic (Claude)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; API Key</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='openai'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="openai" ${aiProvider==='openai'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>OpenAI (ChatGPT)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; API Key</span>
+                    </label>
+                </div>
+            </div>`;
+        // Theme button handlers
+        main.querySelectorAll('.bs-theme-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                darkMode = btn.dataset.theme === 'dark';
+                localStorage.setItem('oxi-dark-mode', darkMode);
+                applyDarkMode();
+                showBackstagePanel('settings'); // refresh
+            });
+        });
+        // AI provider handlers
+        main.querySelectorAll('input[name="ai-provider"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                localStorage.setItem('oxi-ai-provider', radio.value);
+                showBackstagePanel('settings'); // refresh
+            });
+        });
+    } else if (panel === 'about') {
+        main.innerHTML = `<h2>${t('bsAbout')}</h2>
+            <div class="bs-section">
+                <div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">
+                    <div style="width:48px;height:48px;background:var(--oxi-primary);border-radius:12px;display:flex;align-items:center;justify-content:center;color:white;font-size:24px;font-weight:700">O</div>
+                    <div>
+                        <div style="font-size:20px;font-weight:600">Oxi</div>
+                        <div style="font-size:13px;color:var(--text-secondary)">Open-source document suite</div>
+                    </div>
+                </div>
+                <p style="font-size:13px;color:var(--text-secondary);line-height:1.6">
+                    Built with Rust + WebAssembly. Parse, render, and edit .docx / .xlsx / .pptx files natively in the browser.<br>
+                    MIT License &bull; <a href="https://github.com/Ryujiyasu/oxi" style="color:var(--oxi-primary)">GitHub</a>
+                </p>
+            </div>`;
+    } else if (panel === 'save') {
+        if (typeof downloadDocument === 'function') downloadDocument();
+        closeBackstage();
+    } else if (panel === 'new') {
+        main.innerHTML = `<h2>${t('bsNew')}</h2>
+            <div class="bs-section"><h3>Templates</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="bs-row" id="bsNewBlank" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px">
+                        <span class="bs-icon" style="font-size:32px">&#x1F4C4;</span>
+                        <span class="bs-label">Blank Document</span>
+                    </div>
+                </div>
+            </div>`;
+        const blankBtn = document.getElementById('bsNewBlank');
+        if (blankBtn) blankBtn.addEventListener('click', () => { closeBackstage(); if (typeof createNewDocument === 'function') createNewDocument(); });
+    } else {
+        main.innerHTML = `<h2>${panel.charAt(0).toUpperCase() + panel.slice(1)}</h2><p style="color:var(--text-secondary)">Coming soon...</p>`;
+    }
+}
+// Close backstage on Escape
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const bs = document.getElementById('backstageOverlay');
+        if (bs.classList.contains('open')) { closeBackstage(); e.stopPropagation(); }
+    }
+});
 </script>
 
 <script type="module">
@@ -1534,8 +1852,7 @@ function buildRibbon(format) {
     fileTab.className = 'ribbon-tab-file';
     fileTab.textContent = t('file');
     fileTab.onclick = () => {
-        // Could open a backstage view — for now just download
-        if (typeof downloadDocument === 'function') downloadDocument();
+        openBackstage();
     };
     tabs.appendChild(fileTab);
 
