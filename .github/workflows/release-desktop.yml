@@ -1,0 +1,144 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build WASM
+        run: cd crates/oxi-wasm && wasm-pack build --target web --release
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: |
+            crates/oxi-wasm/pkg/oxi_wasm.js
+            crates/oxi-wasm/pkg/oxi_wasm_bg.wasm
+
+  build-desktop:
+    needs: build-wasm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-arm64
+          - platform: macos-13
+            target: x86_64-apple-darwin
+            label: macos-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: crates/oxi-wasm/pkg
+
+      - name: Assemble dist-desktop
+        shell: bash
+        run: |
+          mkdir -p dist-desktop/web
+          mkdir -p dist-desktop/crates/oxi-wasm/pkg
+          cp web/index.html dist-desktop/web/
+          cp crates/oxi-wasm/pkg/oxi_wasm.js dist-desktop/crates/oxi-wasm/pkg/
+          cp crates/oxi-wasm/pkg/oxi_wasm_bg.wasm dist-desktop/crates/oxi-wasm/pkg/
+          if [ -d docs ]; then
+            mkdir -p dist-desktop/docs
+            cp docs/*.png dist-desktop/docs/ 2>/dev/null || true
+            cp docs/*.ico dist-desktop/docs/ 2>/dev/null || true
+          fi
+          cat > dist-desktop/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html><head><meta http-equiv="refresh" content="0;url=web/index.html"></head></html>
+          EOF
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Build Tauri app
+        run: cargo tauri build --target ${{ matrix.target }}
+        working-directory: crates/oxi-desktop
+
+      - name: Upload artifacts (Windows)
+        if: matrix.label == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxi-${{ matrix.label }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/msi/*.msi
+            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+
+      - name: Upload artifacts (macOS)
+        if: startsWith(matrix.label, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxi-${{ matrix.label }}
+          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+      - name: Upload artifacts (Linux)
+        if: matrix.label == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxi-${{ matrix.label }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+
+  create-release:
+    needs: build-desktop
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}

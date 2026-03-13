@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "Oxi",
+  "version": "0.1.0",
+  "identifier": "com.oxi.app",
+  "build": {
+    "frontendDist": "../../../dist-desktop",
+    "devUrl": "http://localhost:8080/web/"
+  },
+  "app": {
+    "title": "Oxi - Document Viewer & Editor",
+    "windows": [
+      {
+        "title": "Oxi",
+        "width": 1280,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../../../docs/favicon-32x32.png",
+      "../../../docs/icon-64.png",
+      "../../../docs/oxi-logo.png",
+      "../../../docs/favicon.ico"
+    ],
+    "windows": {
+      "wix": {
+        "language": ["en-US", "ja-JP"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-dev", "libgtk-3-0"]
+      }
+    }
+  }
+}
