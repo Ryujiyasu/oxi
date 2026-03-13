@@ -10,3 +10,6 @@ tools/metrics/output/
 node_modules/
 e2e/test-results/
 dist-desktop/
+tools/golden-test/documents/
+tools/golden-test/target/
+tools/golden-test/compare_tmp/

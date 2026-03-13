@@ -30,16 +30,23 @@ def test_libreoffice(filepath, tmp_dir):
     """Try to open/convert a file with LibreOffice. Returns (success, error_msg, time_ms)."""
     start = time.time()
     try:
+        profile_dir = tmp_dir / "lo_profile"
+        profile_dir.mkdir(exist_ok=True)
+        out_dir = tmp_dir / "lo_out"
+        out_dir.mkdir(exist_ok=True)
+        profile_url = "file:///" + str(profile_dir).replace("\\", "/")
         result = subprocess.run(
-            [SOFFICE, "--headless", "--convert-to", "pdf", "--outdir", str(tmp_dir), str(filepath)],
+            [SOFFICE, "--headless", "--convert-to", "pdf",
+             "--outdir", str(out_dir),
+             f"-env:UserInstallation={profile_url}",
+             str(filepath)],
             capture_output=True, text=True, timeout=TIMEOUT,
-            env={**os.environ, "HOME": str(tmp_dir)}  # Avoid profile lock
         )
         elapsed_ms = int((time.time() - start) * 1000)
 
         # Check if PDF was created
         pdf_name = filepath.stem + ".pdf"
-        pdf_path = tmp_dir / pdf_name
+        pdf_path = out_dir / pdf_name
         if pdf_path.exists():
             pdf_path.unlink()  # Clean up
             return True, None, elapsed_ms
