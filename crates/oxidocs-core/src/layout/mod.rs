@@ -1,6 +1,6 @@
 mod kinsoku;
 
-use crate::font::FontMetrics;
+use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
 
 /// Result of layout: positioned elements across pages
@@ -48,7 +48,7 @@ pub enum LayoutContent {
 
 pub struct LayoutEngine {
     default_font_size: f32,
-    default_metrics: FontMetrics,
+    registry: FontMetricsRegistry,
 }
 
 /// Word's default heading font sizes (in points)
@@ -67,8 +67,8 @@ fn heading_default_font_size(level: u8) -> f32 {
 impl LayoutEngine {
     pub fn new() -> Self {
         Self {
-            default_font_size: 11.0, // Word default: 11pt Calibri
-            default_metrics: FontMetrics::default_latin(),
+            default_font_size: 11.0,
+            registry: FontMetricsRegistry::load(),
         }
     }
 
@@ -85,22 +85,39 @@ impl LayoutEngine {
 
     /// Resolve font size for a run, considering paragraph style defaults and heading level
     fn resolve_font_size(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> f32 {
-        // 1. Explicit run font size
         if let Some(fs) = run_style.font_size {
             return fs;
         }
-        // 2. Default run style from paragraph style definition
         if let Some(ref drs) = para_style.default_run_style {
             if let Some(fs) = drs.font_size {
                 return fs;
             }
         }
-        // 3. Heading level default
         if let Some(level) = para_style.heading_level {
             return heading_default_font_size(level);
         }
-        // 4. Document default
         self.default_font_size
+    }
+
+    /// Resolve font family for a run
+    fn resolve_font_family<'a>(&self, run_style: &'a RunStyle, para_style: &'a ParagraphStyle) -> Option<&'a str> {
+        if let Some(ref ff) = run_style.font_family {
+            return Some(ff.as_str());
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if let Some(ref ff) = drs.font_family {
+                return Some(ff.as_str());
+            }
+        }
+        None
+    }
+
+    /// Get font metrics for a run (uses registry with font-family resolution)
+    fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        match self.resolve_font_family(run_style, para_style) {
+            Some(family) => self.registry.get(family),
+            None => self.registry.default_metrics(),
+        }
     }
 
     /// Resolve bold for a run, considering paragraph style defaults
@@ -113,7 +130,6 @@ impl LayoutEngine {
                 return true;
             }
         }
-        // Headings 1-2 are bold by default in Word
         if let Some(level) = para_style.heading_level {
             return level <= 2;
         }
@@ -130,6 +146,8 @@ impl LayoutEngine {
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut cursor_y = start_y;
 
+        let grid_pitch = page.grid_line_pitch;
+
         for block in &page.blocks {
             match block {
                 Block::Paragraph(para) => {
@@ -143,6 +161,7 @@ impl LayoutEngine {
                         page,
                         &mut pages,
                         &mut elements,
+                        grid_pitch,
                     );
                     elements.extend(para_elements);
                 }
@@ -152,12 +171,12 @@ impl LayoutEngine {
                         start_x,
                         &mut cursor_y,
                         content_width,
+                        grid_pitch,
                     );
                     elements.extend(table_elements);
                 }
                 Block::Image(img) => {
                     if cursor_y + img.height > start_y + content_height {
-                        // Page break
                         pages.push(LayoutPage {
                             width: page.size.width,
                             height: page.size.height,
@@ -202,6 +221,7 @@ impl LayoutEngine {
         page: &Page,
         pages: &mut Vec<LayoutPage>,
         current_elements: &mut Vec<LayoutElement>,
+        grid_pitch: Option<f32>,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
@@ -216,17 +236,17 @@ impl LayoutEngine {
 
         // Render list marker if present
         if let Some(ref marker) = para.style.list_marker {
-            let marker_font_size = self.resolve_font_size(
-                para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
-                &para.style,
-            );
+            let default_style = RunStyle::default();
+            let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
+            let marker_font_size = self.resolve_font_size(marker_style, &para.style);
+            let marker_metrics = self.metrics_for(marker_style, &para.style);
             let marker_width: f32 = marker
                 .chars()
-                .map(|c| self.char_width(c, marker_font_size))
+                .map(|c| marker_metrics.char_width_pt(c, marker_font_size))
                 .sum();
             let list_indent = para.style.list_indent.unwrap_or(18.0);
             let marker_x = start_x + indent_left - list_indent;
-            let line_height = self.line_height(marker_font_size, para.style.line_spacing);
+            let line_height = self.line_height(marker_font_size, para.style.line_spacing, marker_metrics, para.style.snap_to_grid, grid_pitch);
 
             // Page break check for marker
             if *cursor_y + line_height > page_top + content_height {
@@ -266,9 +286,10 @@ impl LayoutEngine {
             .map(|r| (r.text.as_str(), &r.style))
             .collect();
 
-        // Resolve font size for line breaking (use paragraph-level defaults)
+        // Resolve font size for line breaking
+        let default_style = RunStyle::default();
         let para_font_size = self.resolve_font_size(
-            para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+            para.runs.first().map(|r| &r.style).unwrap_or(&default_style),
             &para.style,
         );
 
@@ -276,12 +297,10 @@ impl LayoutEngine {
         let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style);
 
         for (line_idx, line) in lines.iter().enumerate() {
-            let font_size = line
-                .fragments
-                .first()
-                .and_then(|f| f.style.font_size)
-                .unwrap_or(para_font_size);
-            let line_height = self.line_height(font_size, para.style.line_spacing);
+            let first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
+            let font_size = first_style.font_size.unwrap_or(para_font_size);
+            let metrics = self.metrics_for(first_style, &para.style);
+            let line_height = self.line_height(font_size, para.style.line_spacing, metrics, para.style.snap_to_grid, grid_pitch);
 
             // Page break check
             if *cursor_y + line_height > page_top + content_height {
@@ -291,8 +310,6 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
                 current_elements.extend(std::mem::take(&mut elements));
-                // Move carried-over elements to new page will happen naturally
-                // Reset elements for fresh page
                 elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
             }
@@ -307,7 +324,7 @@ impl LayoutEngine {
                 Alignment::Left => 0.0,
                 Alignment::Center => (available_width - extra_indent - line_text_width) / 2.0,
                 Alignment::Right => available_width - extra_indent - line_text_width,
-                Alignment::Justify => 0.0, // handled via inter-fragment spacing below
+                Alignment::Justify => 0.0,
             };
 
             // For justify: distribute extra space between fragments (not on last line)
@@ -317,7 +334,6 @@ impl LayoutEngine {
             {
                 let slack = available_width - extra_indent - line_text_width;
                 if slack > 0.0 {
-                    // Count spaces (whitespace-only fragments) for distributing gaps
                     let gap_count = line
                         .fragments
                         .iter()
@@ -326,7 +342,6 @@ impl LayoutEngine {
                     if gap_count > 0 {
                         slack / gap_count as f32
                     } else {
-                        // No space fragments: distribute evenly between all fragments
                         slack / (line.fragments.len() - 1) as f32
                     }
                 } else {
@@ -360,7 +375,7 @@ impl LayoutEngine {
                 });
                 x += frag.width;
 
-                // Add justify spacing after space fragments (or between all fragments if no spaces)
+                // Add justify spacing
                 if justify_extra > 0.0 && frag_idx < line.fragments.len() - 1 {
                     let has_space_gaps = line.fragments.iter().any(|f| f.text.trim().is_empty());
                     if has_space_gaps {
@@ -396,19 +411,18 @@ impl LayoutEngine {
 
         for &(text, style) in fragments {
             let font_size = self.resolve_font_size(style, para_style);
+            let metrics = self.metrics_for(style, para_style);
 
-            // Process text character by character for proper line breaking
             let mut word = String::new();
             let mut word_width: f32 = 0.0;
 
             for ch in text.chars() {
-                let char_width = self.char_width(ch, font_size);
+                let char_width = metrics.char_width_pt(ch, font_size);
 
                 if ch == ' ' || ch == '\n' {
                     // Flush current word
                     if !word.is_empty() {
                         if current_width + word_width > available_width && !current_line.fragments.is_empty() {
-                            // Line break before this word
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0;
                             _is_first_line = false;
@@ -428,8 +442,7 @@ impl LayoutEngine {
                         current_width = 0.0;
                         _is_first_line = false;
                     } else {
-                        // Space
-                        let space_width = self.char_width(' ', font_size);
+                        let space_width = metrics.char_width_pt(' ', font_size);
                         current_line.fragments.push(LineFragment {
                             text: " ".to_string(),
                             width: space_width,
@@ -439,7 +452,6 @@ impl LayoutEngine {
                     }
                 } else if kinsoku::is_cjk(ch) {
                     // CJK characters can break at any point
-                    // Flush pending word first
                     if !word.is_empty() {
                         if current_width + word_width > available_width && !current_line.fragments.is_empty() {
                             lines.push(std::mem::take(&mut current_line));
@@ -456,11 +468,8 @@ impl LayoutEngine {
                         word_width = 0.0;
                     }
 
-                    // Check if this CJK char fits on current line
                     if current_width + char_width > available_width && !current_line.fragments.is_empty() {
-                        // Apply kinsoku rules before breaking
                         if kinsoku::is_line_start_prohibited(ch) && !current_line.fragments.is_empty() {
-                            // This char can't start a new line, keep it on current line
                             current_line.fragments.push(LineFragment {
                                 text: ch.to_string(),
                                 width: char_width,
@@ -476,17 +485,13 @@ impl LayoutEngine {
                         _is_first_line = false;
                     }
 
-                    // Check line-end prohibition: if this char shouldn't end a line,
-                    // don't allow a break after it
                     if kinsoku::is_line_end_prohibited(ch) {
-                        // Keep this char on the current line and prevent break after it
                         current_line.fragments.push(LineFragment {
                             text: ch.to_string(),
                             width: char_width,
                             style: style.clone(),
                         });
                         current_width += char_width;
-                        // Don't allow line break after this char — continue to next
                         continue;
                     }
 
@@ -497,7 +502,6 @@ impl LayoutEngine {
                     });
                     current_width += char_width;
                 } else {
-                    // Latin character - accumulate into word
                     word.push(ch);
                     word_width += char_width;
                 }
@@ -531,16 +535,49 @@ impl LayoutEngine {
         lines
     }
 
-    fn char_width(&self, ch: char, font_size: f32) -> f32 {
-        self.default_metrics.char_width(ch) * font_size / self.default_metrics.size
-    }
+    /// Calculate line height considering:
+    /// 1. Font metrics (base single-line height)
+    /// 2. Paragraph default font minimum (from style/docDefaults)
+    /// 3. Line spacing multiplier (w:line/240, e.g. 1.15 for default)
+    /// 4. Document grid snapping (linePitch)
+    ///
+    /// Word determines line height as the max of the run font's height
+    /// and the paragraph's default font height (from the style/theme).
+    /// Then applies the spacing multiplier and optionally snaps to grid.
+    fn line_height(
+        &self,
+        font_size: f32,
+        line_spacing: Option<f32>,
+        metrics: &FontMetrics,
+        snap_to_grid: bool,
+        grid_pitch: Option<f32>,
+    ) -> f32 {
+        // Run font's base height
+        let run_base = metrics.line_height_pt(font_size);
 
-    fn line_height(&self, font_size: f32, line_spacing: Option<f32>) -> f32 {
-        let base = font_size * 1.2; // approximate line height
-        match line_spacing {
+        // Paragraph default font height acts as a minimum.
+        // In real docx files, this comes from the paragraph style's resolved
+        // font (often inherited from docDefaults/theme, typically Cambria 11pt
+        // for Latin or MS Mincho 11pt for East Asia).
+        let default_base = self.registry.default_metrics().line_height_pt(self.default_font_size);
+
+        let base = run_base.max(default_base);
+
+        let spaced = match line_spacing {
             Some(factor) => base * factor,
             None => base,
+        };
+
+        // Apply grid snapping: round up to next multiple of grid pitch
+        if snap_to_grid {
+            if let Some(pitch) = grid_pitch {
+                if pitch > 0.0 {
+                    return (spaced / pitch).ceil() * pitch;
+                }
+            }
         }
+
+        spaced
     }
 
     fn layout_table(
@@ -549,11 +586,11 @@ impl LayoutEngine {
         start_x: f32,
         cursor_y: &mut f32,
         content_width: f32,
+        grid_pitch: Option<f32>,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
         let num_cols = table.rows.first().map_or(1, |r| r.cells.len().max(1));
         let col_width = content_width / num_cols as f32;
-        let _table_start_y = *cursor_y;
 
         for row in &table.rows {
             let mut row_height: f32 = 0.0;
@@ -566,11 +603,13 @@ impl LayoutEngine {
                     if let Block::Paragraph(para) = block {
                         for run in &para.runs {
                             let font_size = self.resolve_font_size(&run.style, &para.style);
-                            let line_height = self.line_height(font_size, para.style.line_spacing);
+                            let metrics = self.metrics_for(&run.style, &para.style);
+                            let line_height = self.line_height(font_size, para.style.line_spacing, metrics, para.style.snap_to_grid, grid_pitch);
                             cell_y += line_height;
                         }
                         if para.runs.is_empty() {
-                            cell_y += self.line_height(self.default_font_size, None);
+                            let default_metrics = self.registry.default_metrics();
+                            cell_y += self.line_height(self.default_font_size, None, default_metrics, true, grid_pitch);
                         }
                     }
                 }
@@ -579,7 +618,8 @@ impl LayoutEngine {
             }
 
             if row_height == 0.0 {
-                row_height = self.line_height(self.default_font_size, None);
+                let default_metrics = self.registry.default_metrics();
+                row_height = self.line_height(self.default_font_size, None, default_metrics, true, grid_pitch);
             }
 
             // Second pass: render cells
@@ -591,15 +631,16 @@ impl LayoutEngine {
                     if let Block::Paragraph(para) = block {
                         for run in &para.runs {
                             let font_size = self.resolve_font_size(&run.style, &para.style);
-                            let lh = self.line_height(font_size, para.style.line_spacing);
+                            let metrics = self.metrics_for(&run.style, &para.style);
+                            let lh = self.line_height(font_size, para.style.line_spacing, metrics, para.style.snap_to_grid, grid_pitch);
                             let text_width = run
                                 .text
                                 .chars()
-                                .map(|c| self.char_width(c, font_size))
+                                .map(|c| metrics.char_width_pt(c, font_size))
                                 .sum();
 
                             elements.push(LayoutElement {
-                                x: cell_x + 2.0, // small padding
+                                x: cell_x + 2.0,
                                 y: text_y,
                                 width: text_width,
                                 height: lh,

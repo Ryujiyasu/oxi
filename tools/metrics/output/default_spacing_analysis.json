@@ -1,0 +1,290 @@
+[
+  {
+    "font": "游明朝",
+    "font_id": "yumin",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.684,
+    "median_baseline_gap": 19.029,
+    "gap_over_size": 1.8123
+  },
+  {
+    "font": "游明朝",
+    "font_id": "yumin",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 11.924,
+    "median_baseline_gap": 20.411,
+    "gap_over_size": 1.8556
+  },
+  {
+    "font": "游明朝",
+    "font_id": "yumin",
+    "size_pt": 12,
+    "line_count": 4,
+    "avg_line_height": 12.499,
+    "median_baseline_gap": 23.1,
+    "gap_over_size": 1.925
+  },
+  {
+    "font": "游明朝",
+    "font_id": "yumin",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.233,
+    "median_baseline_gap": 26.94,
+    "gap_over_size": 1.9243
+  },
+  {
+    "font": "游ゴシック",
+    "font_id": "yugothic",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.684,
+    "median_baseline_gap": 19.049,
+    "gap_over_size": 1.8142
+  },
+  {
+    "font": "游ゴシック",
+    "font_id": "yugothic",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 11.924,
+    "median_baseline_gap": 20.411,
+    "gap_over_size": 1.8556
+  },
+  {
+    "font": "游ゴシック",
+    "font_id": "yugothic",
+    "size_pt": 12,
+    "line_count": 4,
+    "avg_line_height": 12.499,
+    "median_baseline_gap": 23.1,
+    "gap_over_size": 1.925
+  },
+  {
+    "font": "游ゴシック",
+    "font_id": "yugothic",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.233,
+    "median_baseline_gap": 26.94,
+    "gap_over_size": 1.9243
+  },
+  {
+    "font": "Century",
+    "font_id": "century",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 12.159,
+    "median_baseline_gap": 14.462,
+    "gap_over_size": 1.3773
+  },
+  {
+    "font": "Century",
+    "font_id": "century",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 12.52,
+    "median_baseline_gap": 15.381,
+    "gap_over_size": 1.3983
+  },
+  {
+    "font": "Century",
+    "font_id": "century",
+    "size_pt": 12,
+    "line_count": 4,
+    "avg_line_height": 13.328,
+    "median_baseline_gap": 16.58,
+    "gap_over_size": 1.3817
+  },
+  {
+    "font": "Century",
+    "font_id": "century",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 15.323,
+    "median_baseline_gap": 19.38,
+    "gap_over_size": 1.3843
+  },
+  {
+    "font": "Times New Roman",
+    "font_id": "tnr",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.965,
+    "median_baseline_gap": 14.248,
+    "gap_over_size": 1.357
+  },
+  {
+    "font": "Times New Roman",
+    "font_id": "tnr",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 12.218,
+    "median_baseline_gap": 15.381,
+    "gap_over_size": 1.3983
+  },
+  {
+    "font": "Times New Roman",
+    "font_id": "tnr",
+    "size_pt": 12,
+    "line_count": 4,
+    "avg_line_height": 12.859,
+    "median_baseline_gap": 16.779,
+    "gap_over_size": 1.3982
+  },
+  {
+    "font": "Times New Roman",
+    "font_id": "tnr",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.806,
+    "median_baseline_gap": 19.413,
+    "gap_over_size": 1.3866
+  },
+  {
+    "font": "Calibri",
+    "font_id": "calibri",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.731,
+    "median_baseline_gap": 14.248,
+    "gap_over_size": 1.357
+  },
+  {
+    "font": "Calibri",
+    "font_id": "calibri",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 12.001,
+    "median_baseline_gap": 15.381,
+    "gap_over_size": 1.3983
+  },
+  {
+    "font": "Calibri",
+    "font_id": "calibri",
+    "size_pt": 12,
+    "line_count": 4,
+    "avg_line_height": 12.575,
+    "median_baseline_gap": 17.757,
+    "gap_over_size": 1.4798
+  },
+  {
+    "font": "Calibri",
+    "font_id": "calibri",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.058,
+    "median_baseline_gap": 20.88,
+    "gap_over_size": 1.4914
+  },
+  {
+    "font": "Arial",
+    "font_id": "arial",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.986,
+    "median_baseline_gap": 14.248,
+    "gap_over_size": 1.357
+  },
+  {
+    "font": "Arial",
+    "font_id": "arial",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 12.24,
+    "median_baseline_gap": 15.381,
+    "gap_over_size": 1.3983
+  },
+  {
+    "font": "Arial",
+    "font_id": "arial",
+    "size_pt": 12,
+    "line_count": 4,
+    "avg_line_height": 12.907,
+    "median_baseline_gap": 16.671,
+    "gap_over_size": 1.3892
+  },
+  {
+    "font": "Arial",
+    "font_id": "arial",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.862,
+    "median_baseline_gap": 19.277,
+    "gap_over_size": 1.3769
+  },
+  {
+    "font": "ＭＳ 明朝",
+    "font_id": "msmincho",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.684,
+    "median_baseline_gap": 14.268,
+    "gap_over_size": 1.3589
+  },
+  {
+    "font": "ＭＳ 明朝",
+    "font_id": "msmincho",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 11.924,
+    "median_baseline_gap": 15.401,
+    "gap_over_size": 1.4001
+  },
+  {
+    "font": "ＭＳ 明朝",
+    "font_id": "msmincho",
+    "size_pt": 12,
+    "line_count": 5,
+    "avg_line_height": 12.347,
+    "median_baseline_gap": 17.9,
+    "gap_over_size": 1.4917
+  },
+  {
+    "font": "ＭＳ 明朝",
+    "font_id": "msmincho",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.135,
+    "median_baseline_gap": 20.88,
+    "gap_over_size": 1.4914
+  },
+  {
+    "font": "ＭＳ ゴシック",
+    "font_id": "msgothic",
+    "size_pt": 10.5,
+    "line_count": 4,
+    "avg_line_height": 11.684,
+    "median_baseline_gap": 14.268,
+    "gap_over_size": 1.3589
+  },
+  {
+    "font": "ＭＳ ゴシック",
+    "font_id": "msgothic",
+    "size_pt": 11,
+    "line_count": 4,
+    "avg_line_height": 11.924,
+    "median_baseline_gap": 15.401,
+    "gap_over_size": 1.4001
+  },
+  {
+    "font": "ＭＳ ゴシック",
+    "font_id": "msgothic",
+    "size_pt": 12,
+    "line_count": 5,
+    "avg_line_height": 12.347,
+    "median_baseline_gap": 17.9,
+    "gap_over_size": 1.4917
+  },
+  {
+    "font": "ＭＳ ゴシック",
+    "font_id": "msgothic",
+    "size_pt": 14,
+    "line_count": 6,
+    "avg_line_height": 14.135,
+    "median_baseline_gap": 20.88,
+    "gap_over_size": 1.4914
+  }
+]

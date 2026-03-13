@@ -1,3 +1,4 @@
 [workspace]
 members = ["crates/oxi-common", "crates/oxicells-core", "crates/oxidocs-core", "crates/oxi-wasm", "crates/oxislides-core"]
+exclude = ["tools/font-metrics-gen"]
 resolver = "2"

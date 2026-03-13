@@ -1,0 +1,322 @@
+[
+  {
+    "font_id": "arial",
+    "size_pt": 10.5,
+    "single_nogrid": 12.208,
+    "x115_nogrid": 14.248,
+    "single_grid": 17.092,
+    "default": 19.772,
+    "win_height": 11.73,
+    "typo_height": 11.428
+  },
+  {
+    "font_id": "arial",
+    "size_pt": 11,
+    "single_nogrid": 13.281,
+    "x115_nogrid": 15.381,
+    "single_grid": 17.526,
+    "default": 20.206,
+    "win_height": 12.289,
+    "typo_height": 11.972
+  },
+  {
+    "font_id": "arial",
+    "size_pt": 12,
+    "single_nogrid": 14.391,
+    "x115_nogrid": 16.671,
+    "single_grid": 17.877,
+    "default": 20.577,
+    "win_height": 13.406,
+    "typo_height": 13.061
+  },
+  {
+    "font_id": "arial",
+    "size_pt": 14,
+    "single_nogrid": 16.537,
+    "x115_nogrid": 19.277,
+    "single_grid": 26.417,
+    "default": 27.797,
+    "win_height": 15.641,
+    "typo_height": 15.237
+  },
+  {
+    "font_id": "calibri",
+    "size_pt": 10.5,
+    "single_nogrid": 12.208,
+    "x115_nogrid": 14.248,
+    "single_grid": 16.589,
+    "default": 19.289,
+    "win_height": 12.817,
+    "typo_height": 12.817
+  },
+  {
+    "font_id": "calibri",
+    "size_pt": 11,
+    "single_nogrid": 13.281,
+    "x115_nogrid": 15.381,
+    "single_grid": 17.001,
+    "default": 19.701,
+    "win_height": 13.428,
+    "typo_height": 13.428
+  },
+  {
+    "font_id": "calibri",
+    "size_pt": 12,
+    "single_nogrid": 15.417,
+    "x115_nogrid": 17.757,
+    "single_grid": 17.877,
+    "default": 20.577,
+    "win_height": 14.648,
+    "typo_height": 14.648
+  },
+  {
+    "font_id": "calibri",
+    "size_pt": 14,
+    "single_nogrid": 18.12,
+    "x115_nogrid": 20.88,
+    "single_grid": 28.284,
+    "default": 29.604,
+    "win_height": 17.09,
+    "typo_height": 17.09
+  },
+  {
+    "font_id": "century",
+    "size_pt": 10.5,
+    "single_nogrid": 12.522,
+    "x115_nogrid": 14.462,
+    "single_grid": 17.942,
+    "default": 20.622,
+    "win_height": 12.617,
+    "typo_height": 11.233
+  },
+  {
+    "font_id": "century",
+    "size_pt": 11,
+    "single_nogrid": 13.281,
+    "x115_nogrid": 15.381,
+    "single_grid": 17.905,
+    "default": 20.565,
+    "win_height": 13.218,
+    "typo_height": 11.768
+  },
+  {
+    "font_id": "century",
+    "size_pt": 12,
+    "single_nogrid": 14.42,
+    "x115_nogrid": 16.58,
+    "single_grid": 17.877,
+    "default": 20.577,
+    "win_height": 14.42,
+    "typo_height": 12.838
+  },
+  {
+    "font_id": "century",
+    "size_pt": 14,
+    "single_nogrid": 16.86,
+    "x115_nogrid": 19.38,
+    "single_grid": 25.585,
+    "default": 26.965,
+    "win_height": 16.823,
+    "typo_height": 14.978
+  },
+  {
+    "font_id": "msgothic",
+    "size_pt": 10.5,
+    "single_nogrid": 12.208,
+    "x115_nogrid": 14.268,
+    "single_grid": 16.609,
+    "default": 19.289,
+    "win_height": 10.5,
+    "typo_height": 10.5
+  },
+  {
+    "font_id": "msgothic",
+    "size_pt": 11,
+    "single_nogrid": 13.301,
+    "x115_nogrid": 15.401,
+    "single_grid": 17.021,
+    "default": 19.701,
+    "win_height": 11.0,
+    "typo_height": 11.0
+  },
+  {
+    "font_id": "msgothic",
+    "size_pt": 12,
+    "single_nogrid": 15.56,
+    "x115_nogrid": 17.9,
+    "single_grid": 18.02,
+    "default": 20.7,
+    "win_height": 12.0,
+    "typo_height": 12.0
+  },
+  {
+    "font_id": "msgothic",
+    "size_pt": 14,
+    "single_nogrid": 18.18,
+    "x115_nogrid": 20.88,
+    "single_grid": 36.0,
+    "default": 36.0,
+    "win_height": 14.0,
+    "typo_height": 14.0
+  },
+  {
+    "font_id": "msmincho",
+    "size_pt": 10.5,
+    "single_nogrid": 12.208,
+    "x115_nogrid": 14.268,
+    "single_grid": 16.609,
+    "default": 19.289,
+    "win_height": 10.5,
+    "typo_height": 10.5
+  },
+  {
+    "font_id": "msmincho",
+    "size_pt": 11,
+    "single_nogrid": 13.301,
+    "x115_nogrid": 15.401,
+    "single_grid": 17.021,
+    "default": 19.701,
+    "win_height": 11.0,
+    "typo_height": 11.0
+  },
+  {
+    "font_id": "msmincho",
+    "size_pt": 12,
+    "single_nogrid": 15.56,
+    "x115_nogrid": 17.9,
+    "single_grid": 18.02,
+    "default": 20.7,
+    "win_height": 12.0,
+    "typo_height": 12.0
+  },
+  {
+    "font_id": "msmincho",
+    "size_pt": 14,
+    "single_nogrid": 18.18,
+    "x115_nogrid": 20.88,
+    "single_grid": 36.0,
+    "default": 36.0,
+    "win_height": 14.0,
+    "typo_height": 14.0
+  },
+  {
+    "font_id": "tnr",
+    "size_pt": 10.5,
+    "single_nogrid": 12.208,
+    "x115_nogrid": 14.248,
+    "single_grid": 16.945,
+    "default": 19.625,
+    "win_height": 11.628,
+    "typo_height": 11.12
+  },
+  {
+    "font_id": "tnr",
+    "size_pt": 11,
+    "single_nogrid": 13.281,
+    "x115_nogrid": 15.381,
+    "single_grid": 17.372,
+    "default": 20.052,
+    "win_height": 12.182,
+    "typo_height": 11.65
+  },
+  {
+    "font_id": "tnr",
+    "size_pt": 12,
+    "single_nogrid": 14.499,
+    "x115_nogrid": 16.779,
+    "single_grid": 17.877,
+    "default": 20.577,
+    "win_height": 13.289,
+    "typo_height": 12.709
+  },
+  {
+    "font_id": "tnr",
+    "size_pt": 14,
+    "single_nogrid": 16.673,
+    "x115_nogrid": 19.413,
+    "single_grid": 26.553,
+    "default": 27.933,
+    "win_height": 15.504,
+    "typo_height": 14.827
+  },
+  {
+    "font_id": "yugothic",
+    "size_pt": 10.5,
+    "single_nogrid": 16.409,
+    "x115_nogrid": 19.049,
+    "single_grid": 16.829,
+    "default": 19.509,
+    "win_height": 13.515,
+    "typo_height": 15.75
+  },
+  {
+    "font_id": "yugothic",
+    "size_pt": 11,
+    "single_nogrid": 17.671,
+    "x115_nogrid": 20.411,
+    "single_grid": 35.251,
+    "default": 35.251,
+    "win_height": 14.158,
+    "typo_height": 16.5
+  },
+  {
+    "font_id": "yugothic",
+    "size_pt": 12,
+    "single_nogrid": 20.04,
+    "x115_nogrid": 23.1,
+    "single_grid": 36.0,
+    "default": 36.0,
+    "win_height": 15.445,
+    "typo_height": 18.0
+  },
+  {
+    "font_id": "yugothic",
+    "size_pt": 14,
+    "single_nogrid": 23.4,
+    "x115_nogrid": 26.94,
+    "single_grid": 36.0,
+    "default": 36.0,
+    "win_height": 18.02,
+    "typo_height": 21.0
+  },
+  {
+    "font_id": "yumin",
+    "size_pt": 10.5,
+    "single_nogrid": 16.409,
+    "x115_nogrid": 19.029,
+    "single_grid": 16.829,
+    "default": 19.509,
+    "win_height": 13.515,
+    "typo_height": 15.75
+  },
+  {
+    "font_id": "yumin",
+    "size_pt": 11,
+    "single_nogrid": 17.671,
+    "x115_nogrid": 20.411,
+    "single_grid": 35.251,
+    "default": 35.251,
+    "win_height": 14.158,
+    "typo_height": 16.5
+  },
+  {
+    "font_id": "yumin",
+    "size_pt": 12,
+    "single_nogrid": 20.04,
+    "x115_nogrid": 23.1,
+    "single_grid": 36.0,
+    "default": 36.0,
+    "win_height": 15.445,
+    "typo_height": 18.0
+  },
+  {
+    "font_id": "yumin",
+    "size_pt": 14,
+    "single_nogrid": 23.4,
+    "x115_nogrid": 26.94,
+    "single_grid": 36.0,
+    "default": 36.0,
+    "win_height": 18.02,
+    "typo_height": 21.0
+  }
+]

@@ -13,6 +13,11 @@ pub struct Page {
     pub blocks: Vec<Block>,
     pub size: PageSize,
     pub margin: Margin,
+    /// Document grid line pitch in points (from w:docGrid w:linePitch).
+    /// When set with grid_type "lines" or "linesAndChars", line spacing
+    /// snaps to multiples of this pitch.
+    #[serde(default)]
+    pub grid_line_pitch: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +119,8 @@ impl Default for Alignment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyle {
     pub heading_level: Option<u8>,
+    /// Line spacing multiplier (w:line / 240 for auto mode, e.g. 1.15 for w:line="276").
+    /// None means single spacing (1.0).
     pub line_spacing: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
@@ -126,7 +133,12 @@ pub struct ParagraphStyle {
     pub list_marker: Option<String>,
     /// Hanging indent for the list marker in points
     pub list_indent: Option<f32>,
+    /// Whether this paragraph snaps to the document grid (default: true).
+    #[serde(default = "default_true")]
+    pub snap_to_grid: bool,
 }
+
+fn default_true() -> bool { true }
 
 impl Default for ParagraphStyle {
     fn default() -> Self {
@@ -141,6 +153,7 @@ impl Default for ParagraphStyle {
             default_run_style: None,
             list_marker: None,
             list_indent: None,
+            snap_to_grid: true,
         }
     }
 }

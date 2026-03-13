@@ -42,11 +42,11 @@ foreach ($file in $docxFiles) {
     Write-Host "[$current/$total] Converting: $($file.Name)"
 
     try {
-        $doc = $word.Documents.Open($docxPath)
+        $doc = $word.Documents.Open([string]$docxPath)
 
-        # wdFormatPDF = 17
-        $doc.SaveAs([ref]$pdfPath, [ref]17)
-        $doc.Close([ref]$false)
+        # ExportAsFixedFormat: OutputFileName, ExportFormat (0=PDF), ...
+        $doc.ExportAsFixedFormat([string]$pdfPath, 0)
+        $doc.Close(0)  # wdDoNotSaveChanges
 
         Write-Host "         -> $pdfName [OK]"
     }

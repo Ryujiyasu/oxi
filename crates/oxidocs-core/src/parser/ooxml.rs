@@ -43,15 +43,18 @@ impl OoxmlParser {
         let (blocks, sect_pr) = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
 
-        let (page_size, margin) = sect_pr.unwrap_or_else(|| {
-            (PageSize::default(), Margin::default())
+        let sect = sect_pr.unwrap_or(SectionProperties {
+            page_size: PageSize::default(),
+            margin: Margin::default(),
+            grid_line_pitch: None,
         });
 
         Ok(Document {
             pages: vec![Page {
                 blocks,
-                size: page_size,
-                margin,
+                size: sect.page_size,
+                margin: sect.margin,
+                grid_line_pitch: sect.grid_line_pitch,
             }],
             styles,
             metadata,
@@ -149,14 +152,14 @@ impl OoxmlParser {
         &mut self,
         ctx: &ParseContext,
         styles: &StyleSheet,
-    ) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), ParseError> {
+    ) -> Result<(Vec<Block>, Option<SectionProperties>), ParseError> {
         let xml = self.read_part("word/document.xml")?;
         parse_body(&xml, ctx, styles)
     }
 }
 
 /// Parse the w:body content of document.xml
-fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Vec<Block>, Option<(PageSize, Margin)>), ParseError> {
+fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Vec<Block>, Option<SectionProperties>), ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut blocks = Vec::new();
     let mut sect_pr = None;
@@ -382,6 +385,14 @@ fn parse_paragraph_properties(
                                     "both" | "distribute" => Alignment::Justify,
                                     _ => Alignment::Left,
                                 };
+                            }
+                        }
+                    }
+                    "snapToGrid" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.snap_to_grid = val.as_ref() != "0" && val.as_ref() != "false";
                             }
                         }
                     }
@@ -965,12 +976,21 @@ fn parse_cell_width(reader: &mut Reader<&[u8]>) -> Result<Option<f32>, ParseErro
     Ok(width)
 }
 
-/// Parse w:sectPr (section properties - page size and margins)
+/// Parsed section properties
+struct SectionProperties {
+    page_size: PageSize,
+    margin: Margin,
+    /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
+    grid_line_pitch: Option<f32>,
+}
+
+/// Parse w:sectPr (section properties - page size, margins, document grid)
 fn parse_section_properties(
     reader: &mut Reader<&[u8]>,
-) -> Result<(PageSize, Margin), ParseError> {
+) -> Result<SectionProperties, ParseError> {
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
+    let mut grid_line_pitch: Option<f32> = None;
     let mut depth = 0;
 
     loop {
@@ -1029,6 +1049,27 @@ fn parse_section_properties(
                             }
                         }
                     }
+                    "docGrid" => {
+                        let mut grid_type = String::new();
+                        let mut line_pitch = 0u32;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "type" => grid_type = val.to_string(),
+                                "linePitch" => {
+                                    line_pitch = val.parse().unwrap_or(0);
+                                }
+                                _ => {}
+                            }
+                        }
+                        // Only apply grid for "lines" or "linesAndChars" types
+                        if (grid_type == "lines" || grid_type == "linesAndChars")
+                            && line_pitch > 0
+                        {
+                            grid_line_pitch = Some(line_pitch as f32 / 20.0);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1046,7 +1087,11 @@ fn parse_section_properties(
         }
     }
 
-    Ok((page_size, margin))
+    Ok(SectionProperties {
+        page_size,
+        margin,
+        grid_line_pitch,
+    })
 }
 
 /// Extract local name from a potentially namespaced XML tag
