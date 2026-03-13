@@ -17,16 +17,24 @@ pub struct OoxmlParser {
 
 /// Context passed through parsing functions for resource resolution
 struct ParseContext {
-    /// Relationship ID -> Relationship mapping (reserved for future use)
+    /// Relationship ID -> Relationship mapping
     _rels: HashMap<String, Relationship>,
     /// Relationship ID -> binary data (images, etc.)
     media: HashMap<String, Vec<u8>>,
     /// Relationship ID -> content type (e.g., "image/png")
     media_types: HashMap<String, String>,
+    /// Relationship ID -> hyperlink URL (external links)
+    hyperlinks: HashMap<String, String>,
     /// Numbering definitions from word/numbering.xml
     numbering: NumberingDefinitions,
     /// Counters for numbered lists: (numId, ilvl) -> current count
     list_counters: std::cell::RefCell<HashMap<(String, u8), u32>>,
+    /// Footnote ID -> paragraphs (from word/footnotes.xml)
+    footnotes: HashMap<String, Vec<Block>>,
+    /// Endnote ID -> paragraphs (from word/endnotes.xml)
+    endnotes: HashMap<String, Vec<Block>>,
+    /// Comment ID -> Comment (from word/comments.xml)
+    comments: HashMap<String, Comment>,
 }
 
 impl OoxmlParser {
@@ -40,32 +48,44 @@ impl OoxmlParser {
         let styles = self.parse_styles()?;
         let numbering = self.parse_numbering()?;
         let ctx = self.build_context(numbering)?;
-        let (blocks, sect_pr) = self.parse_document_xml(&ctx, &styles)?;
+        let sections = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
 
-        let sect = sect_pr.unwrap_or(SectionProperties {
-            page_size: PageSize::default(),
-            margin: Margin::default(),
-            grid_line_pitch: None,
-            header_refs: Vec::new(),
-            footer_refs: Vec::new(),
-        });
+        let mut pages = Vec::new();
+        for section in sections {
+            let header = self.parse_header_footer_blocks(&section.properties.header_refs, &ctx, &styles);
+            let footer = self.parse_header_footer_blocks(&section.properties.footer_refs, &ctx, &styles);
 
-        // Parse header/footer content from relationship references
-        let header = self.parse_header_footer_blocks(&sect.header_refs, &ctx, &styles);
-        let footer = self.parse_header_footer_blocks(&sect.footer_refs, &ctx, &styles);
+            // Collect referenced footnotes and endnotes for this section
+            let mut footnotes_list = Vec::new();
+            let mut endnotes_list = Vec::new();
+            collect_note_refs(&section.blocks, &ctx, &mut footnotes_list, &mut endnotes_list);
+            footnotes_list.sort_by_key(|f| f.number);
+            endnotes_list.sort_by_key(|f| f.number);
 
-        Ok(Document {
-            pages: vec![Page {
-                blocks,
-                size: sect.page_size,
-                margin: sect.margin,
-                grid_line_pitch: sect.grid_line_pitch,
+            pages.push(Page {
+                blocks: section.blocks,
+                size: section.properties.page_size,
+                margin: section.properties.margin,
+                grid_line_pitch: section.properties.grid_line_pitch,
                 header,
                 footer,
-            }],
+                footnotes: footnotes_list,
+                endnotes: endnotes_list,
+                floating_images: section.floating_images,
+                text_boxes: section.text_boxes,
+                columns: section.properties.columns,
+            });
+        }
+
+        // Collect all comments referenced in the document
+        let all_comments: Vec<Comment> = ctx.comments.values().cloned().collect();
+
+        Ok(Document {
+            pages,
             styles,
             metadata,
+            comments: all_comments,
         })
     }
 
@@ -133,10 +153,12 @@ impl OoxmlParser {
             Err(e) => return Err(e),
         };
 
-        // Pre-load media referenced by image relationships
+        // Pre-load media and hyperlinks from relationships
         let mut media = HashMap::new();
         let mut media_types = HashMap::new();
+        let mut hyperlinks = HashMap::new();
         let image_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+        let hyperlink_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
         for (id, rel) in &rels {
             if rel.rel_type == image_rel_type {
                 // Validate relationship target path against traversal attacks
@@ -160,15 +182,42 @@ impl OoxmlParser {
                     media_types.insert(id.clone(), ct.to_string());
                     media.insert(id.clone(), data);
                 }
+            } else if rel.rel_type == hyperlink_rel_type {
+                hyperlinks.insert(id.clone(), rel.target.clone());
             }
         }
+
+        // Parse footnotes
+        let footnotes = match self.read_part("word/footnotes.xml") {
+            Ok(xml) => parse_notes_xml(&xml)?,
+            Err(ParseError::MissingPart(_)) => HashMap::new(),
+            Err(e) => return Err(e),
+        };
+
+        // Parse endnotes
+        let endnotes = match self.read_part("word/endnotes.xml") {
+            Ok(xml) => parse_notes_xml(&xml)?,
+            Err(ParseError::MissingPart(_)) => HashMap::new(),
+            Err(e) => return Err(e),
+        };
+
+        // Parse comments
+        let comments = match self.read_part("word/comments.xml") {
+            Ok(xml) => parse_comments_xml(&xml)?,
+            Err(ParseError::MissingPart(_)) => HashMap::new(),
+            Err(e) => return Err(e),
+        };
 
         Ok(ParseContext {
             _rels: rels,
             media,
             media_types,
+            hyperlinks,
             numbering,
             list_counters: std::cell::RefCell::new(HashMap::new()),
+            footnotes,
+            endnotes,
+            comments,
         })
     }
 
@@ -188,17 +237,28 @@ impl OoxmlParser {
         &mut self,
         ctx: &ParseContext,
         styles: &StyleSheet,
-    ) -> Result<(Vec<Block>, Option<SectionProperties>), ParseError> {
+    ) -> Result<Vec<ParsedSection>, ParseError> {
         let xml = self.read_part("word/document.xml")?;
         parse_body(&xml, ctx, styles)
     }
 }
 
-/// Parse the w:body content of document.xml
-fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Vec<Block>, Option<SectionProperties>), ParseError> {
+/// A section: blocks + properties. Multiple sections make multiple pages.
+struct ParsedSection {
+    blocks: Vec<Block>,
+    properties: SectionProperties,
+    floating_images: Vec<Image>,
+    text_boxes: Vec<TextBox>,
+}
+
+/// Parse the w:body content of document.xml into sections
+fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<ParsedSection>, ParseError> {
     let mut reader = Reader::from_str(xml);
-    let mut blocks = Vec::new();
-    let mut sect_pr = None;
+    let mut sections: Vec<ParsedSection> = Vec::new();
+    let mut current_blocks = Vec::new();
+    let mut current_floating_images: Vec<Image> = Vec::new();
+    let mut current_text_boxes: Vec<TextBox> = Vec::new();
+    let mut final_sect_pr = None;
     let mut depth = 0;
     let mut in_body = false;
 
@@ -212,15 +272,25 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Vec
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let para = parse_paragraph(&mut reader, ctx, styles)?;
-                        blocks.push(Block::Paragraph(para));
+                        let (para, sect_break) = parse_paragraph(&mut reader, ctx, styles)?;
+                        current_blocks.push(Block::Paragraph(para));
+                        // If this paragraph contained a section break, start a new section
+                        if let Some(sp) = sect_break {
+                            sections.push(ParsedSection {
+                                blocks: std::mem::take(&mut current_blocks),
+                                properties: sp,
+                                floating_images: std::mem::take(&mut current_floating_images),
+                                text_boxes: std::mem::take(&mut current_text_boxes),
+                            });
+                        }
                     }
                     "tbl" if in_body && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
-                        blocks.push(Block::Table(table));
+                        current_blocks.push(Block::Table(table));
                     }
                     "sectPr" if in_body && depth == 0 => {
-                        sect_pr = Some(parse_section_properties(&mut reader)?);
+                        // Final section properties (for the last section)
+                        final_sect_pr = Some(parse_section_properties(&mut reader)?);
                     }
                     _ if in_body => {
                         depth += 1;
@@ -241,17 +311,35 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Vec
         }
     }
 
-    Ok((blocks, sect_pr))
+    // Remaining blocks form the last section
+    let last_sp = final_sect_pr.unwrap_or(SectionProperties {
+        page_size: PageSize::default(),
+        margin: Margin::default(),
+        grid_line_pitch: None,
+        header_refs: Vec::new(),
+        footer_refs: Vec::new(),
+        columns: None,
+    });
+    sections.push(ParsedSection {
+        blocks: current_blocks,
+        properties: last_sp,
+        floating_images: current_floating_images,
+        text_boxes: current_text_boxes,
+    });
+
+    Ok(sections)
 }
 
-/// Parse a w:p element (paragraph)
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<Paragraph, ParseError> {
+/// Parse a w:p element (paragraph).
+/// Returns (Paragraph, optional SectionProperties if this paragraph ends a section).
+fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Paragraph, Option<SectionProperties>), ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut style_id: Option<String> = None;
     let mut num_pr_ref: Option<NumPrRef> = None;
+    let mut para_sect_pr: Option<SectionProperties> = None;
     let mut depth = 0;
 
     loop {
@@ -260,21 +348,104 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, a, sid, npr) = parse_paragraph_properties(reader)?;
+                        let (s, a, sid, npr, spr) = parse_paragraph_properties(reader)?;
                         style = s;
                         alignment = a;
                         style_id = sid;
                         num_pr_ref = npr;
+                        para_sect_pr = spr;
                     }
                     "r" if depth == 0 => {
-                        let (run, img) = parse_run(reader, ctx)?;
+                        let (run, img) = parse_run(reader, ctx, None)?;
                         runs.push(run);
                         if let Some(image) = img {
                             images.push(image);
                         }
                     }
+                    "hyperlink" if depth == 0 => {
+                        // w:hyperlink r:id="rIdN" or w:anchor="bookmarkName"
+                        let mut link_url: Option<String> = None;
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            if key == "r:id" || key.ends_with(":id") {
+                                if let Some(url) = ctx.hyperlinks.get(&val) {
+                                    link_url = Some(url.clone());
+                                }
+                            } else if key == "w:anchor" || key == "anchor" {
+                                link_url = Some(format!("#{}", val));
+                            }
+                        }
+                        let hyperlink_runs = parse_hyperlink_runs(reader, ctx, link_url)?;
+                        runs.extend(hyperlink_runs);
+                    }
+                    // Track changes: inserted content
+                    "ins" if depth == 0 => {
+                        let mut author = None;
+                        let mut date = None;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "author" => author = Some(val),
+                                "date" => date = Some(val),
+                                _ => {}
+                            }
+                        }
+                        let tc = TrackedChange { change_type: "insert".into(), author, date };
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, "ins", tc)?;
+                        runs.extend(tracked_runs);
+                    }
+                    // Track changes: deleted content
+                    "del" if depth == 0 => {
+                        let mut author = None;
+                        let mut date = None;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "author" => author = Some(val),
+                                "date" => date = Some(val),
+                                _ => {}
+                            }
+                        }
+                        let tc = TrackedChange { change_type: "delete".into(), author, date };
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, "del", tc)?;
+                        runs.extend(tracked_runs);
+                    }
                     _ => {
                         depth += 1;
+                    }
+                }
+            }
+            Event::Empty(e) => {
+                if depth == 0 {
+                    let local = local_name(e.name().as_ref());
+                    match local.as_str() {
+                        "commentRangeStart" => {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                if key == "id" {
+                                    let id = String::from_utf8_lossy(&attr.value).to_string();
+                                    // Mark the next run as having a comment start
+                                    if let Some(last_run) = runs.last_mut() {
+                                        last_run.comment_range_start.push(id);
+                                    }
+                                }
+                            }
+                        }
+                        "commentRangeEnd" => {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                if key == "id" {
+                                    let id = String::from_utf8_lossy(&attr.value).to_string();
+                                    if let Some(last_run) = runs.last_mut() {
+                                        last_run.comment_range_end.push(id);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -340,11 +511,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // For now, store the first image inline with the paragraph
     let _ = images; // TODO: Better image-in-paragraph representation
 
-    Ok(Paragraph {
+    Ok((Paragraph {
         runs,
         style,
         alignment,
-    })
+    }, para_sect_pr))
 }
 
 /// Numbering reference parsed from w:numPr
@@ -353,14 +524,16 @@ struct NumPrRef {
     ilvl: u8,
 }
 
-/// Parse w:pPr (paragraph properties)
+/// Parse w:pPr (paragraph properties).
+/// Returns: (style, alignment, style_id, numPr, optional section properties for section break)
 fn parse_paragraph_properties(
     reader: &mut Reader<&[u8]>,
-) -> Result<(ParagraphStyle, Alignment, Option<String>, Option<NumPrRef>), ParseError> {
+) -> Result<(ParagraphStyle, Alignment, Option<String>, Option<NumPrRef>, Option<SectionProperties>), ParseError> {
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut style_id: Option<String> = None;
     let mut num_pr: Option<NumPrRef> = None;
+    let mut sect_pr: Option<SectionProperties> = None;
     let mut depth = 0;
 
     loop {
@@ -395,6 +568,10 @@ fn parse_paragraph_properties(
                     }
                     "tabs" if depth == 0 => {
                         style.tab_stops = parse_tab_stops(reader)?;
+                    }
+                    "sectPr" if depth == 0 => {
+                        // Section break within paragraph — marks end of a section
+                        sect_pr = Some(parse_section_properties(reader)?);
                     }
                     _ => {
                         depth += 1;
@@ -527,7 +704,7 @@ fn parse_paragraph_properties(
         }
     }
 
-    Ok((style, alignment, style_id, num_pr))
+    Ok((style, alignment, style_id, num_pr, sect_pr))
 }
 
 /// Parse w:numPr element
@@ -642,7 +819,8 @@ fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>, ParseErro
 }
 
 /// Parse a w:r element (run). Returns the Run, optionally an Image, and field info.
-fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Option<Image>), ParseError> {
+/// `url` is set when this run is inside a w:hyperlink element.
+fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>) -> Result<(Run, Option<Image>), ParseError> {
     let mut text = String::new();
     let mut style = RunStyle::default();
     let mut image = None;
@@ -650,6 +828,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
     let mut in_text = false;
     let mut in_instr_text = false;
     let mut instr_text = String::new();
+    let mut footnote_ref: Option<u32> = None;
+    let mut endnote_ref: Option<u32> = None;
+    let mut ruby: Option<Ruby> = None;
 
     loop {
         match reader.read_event()? {
@@ -667,6 +848,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
                     }
                     "drawing" if depth == 0 => {
                         image = parse_drawing(reader, ctx)?;
+                    }
+                    "ruby" if depth == 0 => {
+                        ruby = Some(parse_ruby(reader)?);
                     }
                     _ => {
                         depth += 1;
@@ -700,7 +884,34 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
                     "tab" => text.push('\t'),
                     "fldChar" => {
                         // fldChar with fldCharType="separate" or "end" — no action needed
-                        // The instrText content is captured by the instrText handler
+                    }
+                    "footnoteReference" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "id" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if let Ok(id) = val.parse::<u32>() {
+                                    if id > 0 { // Skip separator/continuation notes (id=0)
+                                        footnote_ref = Some(id);
+                                        text = format!("[{}]", id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "endnoteReference" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "id" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if let Ok(id) = val.parse::<u32>() {
+                                    if id > 0 {
+                                        endnote_ref = Some(id);
+                                        text = format!("[{}]", id);
+                                    }
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -714,15 +925,138 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(Run, Opt
     if !instr_text.is_empty() {
         let field = instr_text.trim();
         if field.contains("PAGE") && !field.contains("NUMPAGES") {
-            text = "#".to_string(); // Placeholder for page number
+            text = "#".to_string();
         } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
-            text = "#".to_string(); // Placeholder for total pages
+            text = "#".to_string();
         } else if field.contains("DATE") || field.contains("TIME") {
             text = field.to_string();
         }
     }
 
-    Ok((Run { text, style }, image))
+    // If ruby was parsed, use its base text as the run text
+    if let Some(ref r) = ruby {
+        if text.is_empty() {
+            text = r.base.clone();
+        }
+    }
+
+    Ok((Run {
+        text, style, url, footnote_ref, endnote_ref,
+        comment_range_start: Vec::new(),
+        comment_range_end: Vec::new(),
+        tracked_change: None,
+        ruby,
+    }, image))
+}
+
+/// Parse runs inside a w:hyperlink element
+fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>) -> Result<Vec<Run>, ParseError> {
+    let mut runs = Vec::new();
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "r" && depth == 0 {
+                    let (run, _img) = parse_run(reader, ctx, url.clone())?;
+                    runs.push(run);
+                } else {
+                    depth += 1;
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "hyperlink" && depth == 0 {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(runs)
+}
+
+/// Parse word/footnotes.xml or word/endnotes.xml into a map of id -> blocks
+fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut notes: HashMap<String, Vec<Block>> = HashMap::new();
+    let mut current_id: Option<String> = None;
+    let mut current_blocks: Vec<Block> = Vec::new();
+    let mut depth = 0;
+    let mut in_note = false;
+
+    // Create a minimal context for parsing (no media/hyperlinks in notes)
+    let note_ctx = ParseContext {
+        _rels: HashMap::new(),
+        media: HashMap::new(),
+        media_types: HashMap::new(),
+        hyperlinks: HashMap::new(),
+        numbering: super::numbering::NumberingDefinitions::default(),
+        list_counters: std::cell::RefCell::new(HashMap::new()),
+        footnotes: HashMap::new(),
+        endnotes: HashMap::new(),
+        comments: HashMap::new(),
+    };
+    let empty_styles = StyleSheet::default();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "footnote" | "endnote" if !in_note => {
+                        in_note = true;
+                        depth = 0;
+                        current_blocks.clear();
+                        current_id = None;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "id" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                current_id = Some(val);
+                            }
+                        }
+                    }
+                    "p" if in_note && depth == 0 => {
+                        let (para, _) = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        current_blocks.push(Block::Paragraph(para));
+                    }
+                    _ if in_note => {
+                        depth += 1;
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "footnote" | "endnote" if in_note && depth == 0 => {
+                        if let Some(id) = current_id.take() {
+                            // Skip separator notes (id 0 and -1)
+                            if id != "0" && id != "-1" {
+                                notes.insert(id, std::mem::take(&mut current_blocks));
+                            }
+                        }
+                        in_note = false;
+                    }
+                    _ if in_note && depth > 0 => {
+                        depth -= 1;
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(notes)
 }
 
 /// Parse a w:drawing element to extract image info
@@ -732,6 +1066,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
     let mut alt_text = None;
     let mut rel_id = None;
     let mut depth = 0;
+    // Floating image info
+    let mut is_anchor = false;
+    let mut pos_x: f32 = 0.0;
+    let mut pos_y: f32 = 0.0;
+    let mut h_relative: Option<String> = None;
+    let mut v_relative: Option<String> = None;
+    let mut wrap_type: Option<WrapType> = None;
+    let mut in_pos_h = false;
+    let mut in_pos_v = false;
+    let mut in_pos_offset = false;
 
     loop {
         match reader.read_event()? {
@@ -739,6 +1083,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
                 let local = local_name(e.name().as_ref());
                 depth += 1;
                 match local.as_str() {
+                    "anchor" => {
+                        is_anchor = true;
+                    }
                     "docPr" => {
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
@@ -747,12 +1094,47 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
                             }
                         }
                     }
+                    "positionH" => {
+                        in_pos_h = true;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "relativeFrom" {
+                                h_relative = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "positionV" => {
+                        in_pos_v = true;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "relativeFrom" {
+                                v_relative = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "posOffset" => {
+                        in_pos_offset = true;
+                    }
                     _ => {}
+                }
+            }
+            Event::Text(e) => {
+                if in_pos_offset {
+                    let content = e.unescape().unwrap_or_default();
+                    if let Ok(v) = content.parse::<f32>() {
+                        let pt = v / 12700.0; // EMU to points
+                        if in_pos_h { pos_x = pt; }
+                        else if in_pos_v { pos_y = pt; }
+                    }
                 }
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "wrapNone" => { wrap_type = Some(WrapType::None); }
+                    "wrapSquare" => { wrap_type = Some(WrapType::Square); }
+                    "wrapTight" => { wrap_type = Some(WrapType::Tight); }
+                    "wrapTopAndBottom" => { wrap_type = Some(WrapType::TopAndBottom); }
                     "extent" => {
                         // wp:extent cx/cy are in EMUs (English Metric Units)
                         // 1 inch = 914400 EMUs, 1 point = 12700 EMUs
@@ -816,6 +1198,12 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "positionH" => { in_pos_h = false; }
+                    "positionV" => { in_pos_v = false; }
+                    "posOffset" => { in_pos_offset = false; }
+                    _ => {}
+                }
                 if local == "drawing" && depth == 0 {
                     break;
                 }
@@ -832,12 +1220,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
     if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
+        let position = if is_anchor {
+            Some(FloatingPosition { x: pos_x, y: pos_y, h_relative, v_relative })
+        } else {
+            None
+        };
         Ok(Some(Image {
             data,
             width,
             height,
             alt_text,
             content_type,
+            position,
+            wrap_type,
         }))
     } else {
         Ok(None)
@@ -1124,7 +1519,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let para = parse_paragraph(reader, ctx, styles)?;
+                        let (para, _) = parse_paragraph(reader, ctx, styles)?;
                         blocks.push(Block::Paragraph(para));
                     }
                     "tcPr" if depth == 0 => {
@@ -1264,6 +1659,8 @@ struct SectionProperties {
     header_refs: Vec<String>,
     /// Reference IDs for footer parts
     footer_refs: Vec<String>,
+    /// Column layout
+    columns: Option<ColumnLayout>,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -1275,6 +1672,7 @@ fn parse_section_properties(
     let mut grid_line_pitch: Option<f32> = None;
     let mut header_refs = Vec::new();
     let mut footer_refs = Vec::new();
+    let mut columns: Option<ColumnLayout> = None;
     let mut depth = 0;
 
     loop {
@@ -1370,6 +1768,24 @@ fn parse_section_properties(
                             }
                         }
                     }
+                    "cols" => {
+                        let mut num = 1u32;
+                        let mut space: Option<f32> = None;
+                        let mut equal_width = true;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "num" => { num = val.parse().unwrap_or(1); }
+                                "space" => { space = val.parse::<f32>().ok().map(|v| v / 20.0); }
+                                "equalWidth" => { equal_width = val.as_ref() != "0" && val.as_ref() != "false"; }
+                                _ => {}
+                            }
+                        }
+                        if num > 1 {
+                            columns = Some(ColumnLayout { num, space, equal_width });
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1393,6 +1809,7 @@ fn parse_section_properties(
         grid_line_pitch,
         header_refs,
         footer_refs,
+        columns,
     })
 }
 
@@ -1413,7 +1830,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let para = parse_paragraph(&mut reader, ctx, styles)?;
+                        let (para, _) = parse_paragraph(&mut reader, ctx, styles)?;
                         blocks.push(Block::Paragraph(para));
                     }
                     "tbl" if in_root && depth == 0 => {
@@ -1440,6 +1857,240 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
     }
 
     Ok(blocks)
+}
+
+/// Recursively collect footnote/endnote references from blocks
+fn collect_note_refs(blocks: &[Block], ctx: &ParseContext, footnotes: &mut Vec<Footnote>, endnotes: &mut Vec<Footnote>) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(para) => {
+                for run in &para.runs {
+                    if let Some(fn_id) = run.footnote_ref {
+                        let id_str = fn_id.to_string();
+                        if let Some(note_blocks) = ctx.footnotes.get(&id_str) {
+                            if !footnotes.iter().any(|f| f.number == fn_id) {
+                                footnotes.push(Footnote {
+                                    number: fn_id,
+                                    blocks: note_blocks.clone(),
+                                });
+                            }
+                        }
+                    }
+                    if let Some(en_id) = run.endnote_ref {
+                        let id_str = en_id.to_string();
+                        if let Some(note_blocks) = ctx.endnotes.get(&id_str) {
+                            if !endnotes.iter().any(|f| f.number == en_id) {
+                                endnotes.push(Footnote {
+                                    number: en_id,
+                                    blocks: note_blocks.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        collect_note_refs(&cell.blocks, ctx, footnotes, endnotes);
+                    }
+                }
+            }
+            Block::Image(_) => {}
+        }
+    }
+}
+
+/// Parse runs inside w:ins or w:del (tracked changes)
+fn parse_tracked_change_runs(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    end_tag: &str,
+    tc: TrackedChange,
+) -> Result<Vec<Run>, ParseError> {
+    let mut runs = Vec::new();
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "r" && depth == 0 {
+                    let (mut run, _img) = parse_run(reader, ctx, None)?;
+                    run.tracked_change = Some(tc.clone());
+                    runs.push(run);
+                } else {
+                    depth += 1;
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == end_tag && depth == 0 {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(runs)
+}
+
+/// Parse w:ruby element (furigana)
+fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
+    let mut base_text = String::new();
+    let mut ruby_text = String::new();
+    let mut ruby_font_size: Option<f32> = None;
+    let mut depth = 0;
+    let mut in_rt = false; // ruby text (annotation)
+    let mut in_ruby_base = false; // base text
+    let mut in_ruby_pr = false; // ruby properties
+    let mut in_t = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "rt" if depth == 0 => { in_rt = true; }
+                    "rubyBase" if depth == 0 => { in_ruby_base = true; }
+                    "rubyPr" if depth == 0 => { in_ruby_pr = true; }
+                    "t" => { in_t = true; }
+                    _ => {}
+                }
+                depth += 1;
+            }
+            Event::Text(e) => {
+                if in_t {
+                    let content = e.unescape().unwrap_or_default();
+                    if in_rt {
+                        ruby_text.push_str(&content);
+                    } else if in_ruby_base {
+                        base_text.push_str(&content);
+                    }
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "sz" && in_ruby_pr {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let val = String::from_utf8_lossy(&attr.value);
+                            ruby_font_size = val.parse::<f32>().ok().map(|v| v / 2.0);
+                        }
+                    }
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "ruby" if depth == 1 => {
+                        depth -= 1;
+                        break;
+                    }
+                    "rt" => { in_rt = false; }
+                    "rubyBase" => { in_ruby_base = false; }
+                    "rubyPr" => { in_ruby_pr = false; }
+                    "t" => { in_t = false; }
+                    _ => {}
+                }
+                if depth > 0 { depth -= 1; }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(Ruby {
+        base: base_text,
+        text: ruby_text,
+        font_size: ruby_font_size,
+    })
+}
+
+/// Parse word/comments.xml
+fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut comments: HashMap<String, Comment> = HashMap::new();
+    let mut depth = 0;
+    let mut in_comment = false;
+    let mut current_id = String::new();
+    let mut current_author: Option<String> = None;
+    let mut current_date: Option<String> = None;
+    let mut current_blocks: Vec<Block> = Vec::new();
+
+    let note_ctx = ParseContext {
+        _rels: HashMap::new(),
+        media: HashMap::new(),
+        media_types: HashMap::new(),
+        hyperlinks: HashMap::new(),
+        numbering: super::numbering::NumberingDefinitions::default(),
+        list_counters: std::cell::RefCell::new(HashMap::new()),
+        footnotes: HashMap::new(),
+        endnotes: HashMap::new(),
+        comments: HashMap::new(),
+    };
+    let empty_styles = StyleSheet::default();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "comment" if !in_comment => {
+                        in_comment = true;
+                        depth = 0;
+                        current_blocks.clear();
+                        current_id.clear();
+                        current_author = None;
+                        current_date = None;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "id" => current_id = val,
+                                "author" => current_author = Some(val),
+                                "date" => current_date = Some(val),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "p" if in_comment && depth == 0 => {
+                        let (para, _) = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        current_blocks.push(Block::Paragraph(para));
+                    }
+                    _ if in_comment => {
+                        depth += 1;
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "comment" && in_comment && depth == 0 {
+                    if !current_id.is_empty() {
+                        comments.insert(current_id.clone(), Comment {
+                            id: current_id.clone(),
+                            author: current_author.take(),
+                            date: current_date.take(),
+                            blocks: std::mem::take(&mut current_blocks),
+                        });
+                    }
+                    in_comment = false;
+                } else if in_comment && depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(comments)
 }
 
 /// Extract local name from a potentially namespaced XML tag

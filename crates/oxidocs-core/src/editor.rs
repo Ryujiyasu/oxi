@@ -134,6 +134,8 @@ impl DocxEditor {
         let mut in_paragraph = false;
         let mut in_run = false;
         let mut in_text = false;
+        // Whether we already wrote replacement text for the current <w:t> element
+        let mut text_replaced = false;
         // Depth tracking for nested elements (tables etc.) — we only edit top-level paragraphs
         let mut table_depth: usize = 0;
 
@@ -165,6 +167,7 @@ impl DocxEditor {
                         }
                         "t" if in_run && table_depth == 0 => {
                             in_text = true;
+                            text_replaced = false;
                         }
                         _ if in_body && !in_paragraph && table_depth == 0 && body_depth == 0 => {
                             body_depth += 1;
@@ -191,6 +194,13 @@ impl DocxEditor {
                             run_idx += 1;
                         }
                         "t" if in_text && table_depth == 0 => {
+                            // If the original <w:t> was empty and we have an edit,
+                            // inject the replacement text before closing the element.
+                            if !text_replaced {
+                                if let Some(new_text) = self.edits.get(&(para_idx, run_idx)) {
+                                    writer.write_event(Event::Text(BytesText::new(new_text)))?;
+                                }
+                            }
                             in_text = false;
                         }
                         _ if body_depth > 0 && !in_paragraph && table_depth == 0 => {
@@ -205,6 +215,7 @@ impl DocxEditor {
                         // Check if this (para_idx, run_idx) has an edit
                         if let Some(new_text) = self.edits.get(&(para_idx, run_idx)) {
                             writer.write_event(Event::Text(BytesText::new(new_text)))?;
+                            text_replaced = true;
                         } else {
                             writer.write_event(Event::Text(e.clone()))?;
                         }
@@ -387,6 +398,7 @@ mod tests {
                 pages: vec![],
                 styles: Default::default(),
                 metadata: Default::default(),
+                comments: vec![],
             },
             edits: HashMap::from([
                 ((0, 0), "New Title".to_string()),

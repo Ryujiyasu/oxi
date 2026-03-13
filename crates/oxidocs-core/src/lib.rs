@@ -8,6 +8,83 @@ pub use editor::DocxEditor;
 pub use ir::Document;
 pub use parser::parse_docx;
 
+/// Create a minimal blank .docx file as bytes.
+/// The generated file contains a single empty paragraph and can be
+/// parsed by `parse_docx` and edited by `DocxEditor`.
+pub fn create_blank_docx() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    use zip::write::{SimpleFileOptions, ZipWriter};
+
+    let buf = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let opts = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    // [Content_Types].xml
+    zip.start_file("[Content_Types].xml", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>"#).unwrap();
+
+    // _rels/.rels
+    zip.start_file("_rels/.rels", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#).unwrap();
+
+    // word/_rels/document.xml.rels
+    zip.start_file("word/_rels/document.xml.rels", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"#).unwrap();
+
+    // word/document.xml - single empty paragraph
+    zip.start_file("word/document.xml", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r><w:t></w:t></w:r>
+    </w:p>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+    </w:sectPr>
+  </w:body>
+</w:document>"#).unwrap();
+
+    // word/styles.xml - Normal style with Calibri 11pt
+    zip.start_file("word/styles.xml", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault>
+      <w:rPr>
+        <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+        <w:sz w:val="22"/>
+      </w:rPr>
+    </w:rPrDefault>
+    <w:pPrDefault>
+      <w:pPr>
+        <w:spacing w:after="160" w:line="259" w:lineRule="auto"/>
+      </w:pPr>
+    </w:pPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+  </w:style>
+</w:styles>"#).unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +192,40 @@ mod tests {
         assert!((first.x - 72.0).abs() < 1.0); // left margin
         // y may be offset by heading space_before from style definition
         assert!(first.y >= 72.0 && first.y < 100.0); // top margin + possible heading spacing
+    }
+
+    #[test]
+    fn test_create_blank_docx() {
+        let bytes = create_blank_docx();
+        assert!(!bytes.is_empty());
+
+        // Should be parseable
+        let doc = parse_docx(&bytes).expect("blank docx should parse");
+        assert_eq!(doc.pages.len(), 1);
+
+        // Should have at least one block
+        let page = &doc.pages[0];
+        assert!(!page.blocks.is_empty());
+
+        // Should be A4 size
+        assert!((page.size.width - 595.3).abs() < 0.1);
+        assert!((page.size.height - 841.9).abs() < 0.1);
+
+        // Should be editable
+        let mut editor = DocxEditor::new(&bytes).expect("should create editor");
+        editor.apply_edits(&[editor::TextEdit {
+            paragraph_index: 0,
+            run_index: 0,
+            new_text: "Hello World".to_string(),
+        }]);
+        let saved = editor.save().expect("should save");
+        let doc2 = parse_docx(&saved).expect("edited blank should parse");
+        match &doc2.pages[0].blocks[0] {
+            ir::Block::Paragraph(p) => {
+                assert_eq!(p.runs[0].text, "Hello World");
+            }
+            _ => panic!("expected paragraph"),
+        }
     }
 
     #[test]

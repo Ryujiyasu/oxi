@@ -6,6 +6,9 @@ pub struct Document {
     pub pages: Vec<Page>,
     pub styles: StyleSheet,
     pub metadata: DocumentMetadata,
+    /// Comments referenced in the document
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +27,21 @@ pub struct Page {
     /// Footer content (paragraphs from footer part)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footer: Vec<Block>,
+    /// Footnotes referenced in this page
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footnotes: Vec<Footnote>,
+    /// Endnotes referenced in this page
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endnotes: Vec<Footnote>,
+    /// Floating images (anchored, not inline)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floating_images: Vec<Image>,
+    /// Text boxes
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_boxes: Vec<TextBox>,
+    /// Column layout for this section
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<ColumnLayout>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +62,27 @@ pub struct Paragraph {
 pub struct Run {
     pub text: String,
     pub style: RunStyle,
+    /// Hyperlink URL (external) or anchor (internal bookmark)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Footnote reference number (1-based)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footnote_ref: Option<u32>,
+    /// Endnote reference number (1-based)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endnote_ref: Option<u32>,
+    /// Comment IDs that start at this run
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_range_start: Vec<String>,
+    /// Comment IDs that end at this run
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_range_end: Vec<String>,
+    /// Tracked change info (insertion/deletion)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracked_change: Option<TrackedChange>,
+    /// Ruby (furigana) annotation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruby: Option<Ruby>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +174,109 @@ pub struct Image {
     pub height: f32,
     pub alt_text: Option<String>,
     pub content_type: Option<String>,
+    /// Floating position (None = inline image)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<FloatingPosition>,
+    /// Text wrapping mode
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_type: Option<WrapType>,
+}
+
+/// Position for a floating (anchored) element
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FloatingPosition {
+    /// Horizontal offset in points from anchor
+    pub x: f32,
+    /// Vertical offset in points from anchor
+    pub y: f32,
+    /// Horizontal anchor reference (e.g. "column", "page", "margin")
+    #[serde(default)]
+    pub h_relative: Option<String>,
+    /// Vertical anchor reference
+    #[serde(default)]
+    pub v_relative: Option<String>,
+}
+
+/// Text wrapping mode for floating elements
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WrapType {
+    /// No wrapping (in front/behind text)
+    None,
+    /// Square wrapping
+    Square,
+    /// Tight wrapping
+    Tight,
+    /// Top and bottom only
+    TopAndBottom,
+}
+
+/// A text box (from w:txbxContent or wps:txbx)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextBox {
+    /// Content paragraphs inside the text box
+    pub blocks: Vec<Block>,
+    /// Width in points
+    pub width: f32,
+    /// Height in points
+    pub height: f32,
+    /// Position (floating)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<FloatingPosition>,
+    /// Border style
+    #[serde(default)]
+    pub border: bool,
+    /// Background color (hex)
+    #[serde(default)]
+    pub fill: Option<String>,
+}
+
+/// A comment annotation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Comment {
+    /// Comment ID
+    pub id: String,
+    /// Author name
+    pub author: Option<String>,
+    /// Date string
+    pub date: Option<String>,
+    /// Comment text paragraphs
+    pub blocks: Vec<Block>,
+}
+
+/// A tracked change (insertion or deletion)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackedChange {
+    /// "insert" or "delete"
+    pub change_type: String,
+    /// Author of the change
+    pub author: Option<String>,
+    /// Date of the change
+    pub date: Option<String>,
+}
+
+/// Ruby (furigana) annotation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ruby {
+    /// Base text (the main character(s))
+    pub base: String,
+    /// Annotation text (furigana reading)
+    pub text: String,
+    /// Font size of the ruby text in points
+    #[serde(default)]
+    pub font_size: Option<f32>,
+}
+
+/// Column layout definition (from w:cols)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnLayout {
+    /// Number of columns
+    pub num: u32,
+    /// Space between columns in points
+    #[serde(default)]
+    pub space: Option<f32>,
+    /// Whether columns have equal width
+    #[serde(default)]
+    pub equal_width: bool,
 }
 
 /// A tab stop definition
@@ -299,4 +441,13 @@ pub struct DocumentMetadata {
     pub title: Option<String>,
     pub author: Option<String>,
     pub description: Option<String>,
+}
+
+/// A footnote or endnote
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Footnote {
+    /// Note number (1-based, matching the reference in the body)
+    pub number: u32,
+    /// Content paragraphs of the note
+    pub blocks: Vec<Block>,
 }

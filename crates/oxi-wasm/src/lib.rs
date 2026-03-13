@@ -6,6 +6,13 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+/// Create a blank .docx file and return it as bytes.
+/// Can be used to create a new document from scratch.
+#[wasm_bindgen]
+pub fn create_blank_docx() -> Vec<u8> {
+    oxidocs_core::create_blank_docx()
+}
+
 #[wasm_bindgen]
 pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
     let doc = oxidocs_core::parse_docx(data)

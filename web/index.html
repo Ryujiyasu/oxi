@@ -646,6 +646,7 @@ input[type="file"] { display: none; }
         <p class="hint" data-i18n="dropHint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
     <div class="sample-buttons" id="sampleButtons">
+        <button onclick="createNewDocument()" style="font-weight:bold">+ New Document</button>
         <span data-i18n="trySample">Try a sample:</span>
         <button onclick="loadSample('sample.docx')">Word (.docx)</button>
         <button onclick="loadSample('sample.xlsx')">Excel (.xlsx)</button>
@@ -800,7 +801,7 @@ applyI18n();
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', or 'pptx'
@@ -1507,6 +1508,17 @@ function renderEditableDocx(doc) {
     for (const page of doc.pages) {
         const pageDiv = document.createElement('div');
         pageDiv.className = 'edit-page';
+        pageDiv.style.position = 'relative'; // For floating images & text boxes
+
+        // Column layout support
+        let blocksContainer = pageDiv;
+        if (page.columns && page.columns.num > 1) {
+            const colWrapper = document.createElement('div');
+            colWrapper.style.columnCount = page.columns.num;
+            if (page.columns.space) colWrapper.style.columnGap = page.columns.space + 'pt';
+            colWrapper.style.columnRule = '1px solid #e0e0e0';
+            blocksContainer = colWrapper;
+        }
 
         // Render header
         if (page.header && page.header.length > 0) {
@@ -1624,10 +1636,56 @@ function renderEditableDocx(doc) {
                         const span = document.createElement('span');
                         span.className = 'edit-run';
                         span.contentEditable = 'true';
-                        span.textContent = segments[si];
+
+                        // Ruby (furigana) rendering
+                        if (run.ruby) {
+                            span.contentEditable = 'false';
+                            const rubyEl = document.createElement('ruby');
+                            rubyEl.textContent = run.ruby.base;
+                            const rt = document.createElement('rt');
+                            rt.textContent = run.ruby.text;
+                            if (run.ruby.font_size) rt.style.fontSize = run.ruby.font_size + 'pt';
+                            rubyEl.appendChild(rt);
+                            span.textContent = '';
+                            span.appendChild(rubyEl);
+                        } else {
+                            span.textContent = segments[si];
+                        }
+
                         span.dataset.para = bodyParaIdx;
                         span.dataset.run = ri;
                         if (si === 0) span.dataset.original = run.text;
+
+                    // Tracked changes styling
+                    if (run.tracked_change) {
+                        span.contentEditable = 'false';
+                        if (run.tracked_change.change_type === 'insert') {
+                            span.style.color = '#2e7d32';
+                            span.style.textDecoration = 'underline';
+                            span.style.textDecorationColor = '#2e7d32';
+                            span.title = 'Inserted' + (run.tracked_change.author ? ' by ' + run.tracked_change.author : '') + (run.tracked_change.date ? ' on ' + run.tracked_change.date : '');
+                        } else if (run.tracked_change.change_type === 'delete') {
+                            span.style.color = '#c62828';
+                            span.style.textDecoration = 'line-through';
+                            span.style.textDecorationColor = '#c62828';
+                            span.title = 'Deleted' + (run.tracked_change.author ? ' by ' + run.tracked_change.author : '') + (run.tracked_change.date ? ' on ' + run.tracked_change.date : '');
+                        }
+                    }
+
+                    // Comment range highlighting
+                    if (run.comment_range_start && run.comment_range_start.length > 0) {
+                        span.style.backgroundColor = span.style.backgroundColor || 'rgba(255, 212, 0, 0.3)';
+                        span.dataset.commentIds = run.comment_range_start.join(',');
+                    }
+
+                    // Footnote/endnote reference styling
+                    if (run.footnote_ref || run.endnote_ref) {
+                        span.style.verticalAlign = 'super';
+                        span.style.fontSize = '0.7em';
+                        span.style.color = '#0563C1';
+                        span.contentEditable = 'false';
+                        span.title = (run.footnote_ref ? 'Footnote ' : 'Endnote ') + (run.footnote_ref || run.endnote_ref);
+                    }
 
                     // Preserve visual styling
                     if (run.style) {
@@ -1639,7 +1697,7 @@ function renderEditableDocx(doc) {
                                 ? span.style.textDecoration + ' line-through'
                                 : 'line-through';
                         }
-                        if (run.style.color) span.style.color = '#' + run.style.color;
+                        if (run.style.color && !run.url) span.style.color = '#' + run.style.color;
                         if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
                         if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
                         if (run.style.highlight) {
@@ -1665,6 +1723,19 @@ function renderEditableDocx(doc) {
                         }
                     }
 
+                    // Hyperlink wrapping
+                    if (run.url) {
+                        span.style.color = '#0563C1';
+                        span.style.textDecoration = 'underline';
+                        span.style.cursor = 'pointer';
+                        span.title = run.url;
+                        span.addEventListener('click', (e) => {
+                            if (e.ctrlKey || e.metaKey) {
+                                window.open(run.url, '_blank', 'noopener,noreferrer');
+                            }
+                        });
+                    }
+
                     // Prevent Enter from creating new DOM nodes inside span
                     span.addEventListener('keydown', (e) => {
                         if (e.key === 'Enter') e.preventDefault();
@@ -1682,7 +1753,7 @@ function renderEditableDocx(doc) {
                     paraDiv.appendChild(span);
                 }
 
-                pageDiv.appendChild(paraDiv);
+                blocksContainer.appendChild(paraDiv);
                 bodyParaIdx++;
 
             } else if (block.Table) {
@@ -1814,7 +1885,7 @@ function renderEditableDocx(doc) {
                     }
                     tableEl.appendChild(tr);
                 }
-                pageDiv.appendChild(tableEl);
+                blocksContainer.appendChild(tableEl);
 
             } else if (block.Image) {
                 const img = block.Image;
@@ -1827,9 +1898,159 @@ function renderEditableDocx(doc) {
                     imgEl.style.maxWidth = '100%';
                     imgEl.style.height = 'auto';
                     imgEl.style.margin = '8px 0';
-                    pageDiv.appendChild(imgEl);
+                    blocksContainer.appendChild(imgEl);
                 }
             }
+        }
+
+        // Append column wrapper if multi-column
+        if (blocksContainer !== pageDiv) {
+            pageDiv.appendChild(blocksContainer);
+        }
+
+        // Render floating images
+        if (page.floating_images && page.floating_images.length > 0) {
+            for (const fImg of page.floating_images) {
+                if (fImg.data && fImg.data.length > 0) {
+                    const fImgEl = document.createElement('img');
+                    const ct = fImg.content_type || 'image/png';
+                    let binary = '';
+                    for (let i = 0; i < fImg.data.length; i++) binary += String.fromCharCode(fImg.data[i]);
+                    fImgEl.src = `data:${ct};base64,${btoa(binary)}`;
+                    fImgEl.style.position = 'absolute';
+                    if (fImg.position) {
+                        fImgEl.style.left = fImg.position.x + 'pt';
+                        fImgEl.style.top = fImg.position.y + 'pt';
+                    }
+                    fImgEl.style.width = fImg.width + 'pt';
+                    fImgEl.style.height = fImg.height + 'pt';
+                    if (fImg.alt_text) fImgEl.alt = fImg.alt_text;
+                    // Wrap type affects z-index
+                    if (fImg.wrap_type === 'None') {
+                        fImgEl.style.zIndex = '10';
+                    } else {
+                        fImgEl.style.zIndex = '1';
+                    }
+                    pageDiv.appendChild(fImgEl);
+                }
+            }
+        }
+
+        // Render text boxes
+        if (page.text_boxes && page.text_boxes.length > 0) {
+            for (const tb of page.text_boxes) {
+                const tbDiv = document.createElement('div');
+                tbDiv.style.position = 'absolute';
+                if (tb.position) {
+                    tbDiv.style.left = tb.position.x + 'pt';
+                    tbDiv.style.top = tb.position.y + 'pt';
+                }
+                tbDiv.style.width = tb.width + 'pt';
+                tbDiv.style.minHeight = tb.height + 'pt';
+                if (tb.border) tbDiv.style.border = '1px solid #000';
+                if (tb.fill) tbDiv.style.backgroundColor = '#' + tb.fill;
+                tbDiv.style.padding = '4pt';
+                tbDiv.style.overflow = 'hidden';
+                tbDiv.style.zIndex = '5';
+                tbDiv.style.boxSizing = 'border-box';
+                for (const tbBlock of tb.blocks) {
+                    if (tbBlock.Paragraph) {
+                        const tbPara = document.createElement('div');
+                        if (tbBlock.Paragraph.alignment === 'Center') tbPara.style.textAlign = 'center';
+                        else if (tbBlock.Paragraph.alignment === 'Right') tbPara.style.textAlign = 'right';
+                        else if (tbBlock.Paragraph.alignment === 'Justify') tbPara.style.textAlign = 'justify';
+                        for (const run of tbBlock.Paragraph.runs) {
+                            const span = document.createElement('span');
+                            span.textContent = run.text;
+                            if (run.style) {
+                                if (run.style.bold) span.style.fontWeight = 'bold';
+                                if (run.style.italic) span.style.fontStyle = 'italic';
+                                if (run.style.underline) span.style.textDecoration = 'underline';
+                                if (run.style.color) span.style.color = '#' + run.style.color;
+                                if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                                if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                            }
+                            tbPara.appendChild(span);
+                        }
+                        if (tbBlock.Paragraph.runs.length === 0) tbPara.innerHTML = '&nbsp;';
+                        tbDiv.appendChild(tbPara);
+                    }
+                }
+                pageDiv.appendChild(tbDiv);
+            }
+        }
+
+        // Render footnotes
+        if (page.footnotes && page.footnotes.length > 0) {
+            const fnDiv = document.createElement('div');
+            fnDiv.className = 'edit-footnotes';
+            fnDiv.style.borderTop = '1px solid #999';
+            fnDiv.style.marginTop = '12pt';
+            fnDiv.style.paddingTop = '6pt';
+            fnDiv.style.fontSize = '9pt';
+            fnDiv.style.color = '#333';
+            for (const fn of page.footnotes) {
+                const noteDiv = document.createElement('div');
+                noteDiv.style.marginBottom = '2pt';
+                const numSpan = document.createElement('span');
+                numSpan.textContent = fn.number + '. ';
+                numSpan.style.fontWeight = 'bold';
+                numSpan.style.verticalAlign = 'super';
+                numSpan.style.fontSize = '0.8em';
+                noteDiv.appendChild(numSpan);
+                for (const block of fn.blocks) {
+                    if (block.Paragraph) {
+                        for (const run of block.Paragraph.runs) {
+                            const span = document.createElement('span');
+                            span.textContent = run.text;
+                            if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                            if (run.style && run.style.italic) span.style.fontStyle = 'italic';
+                            noteDiv.appendChild(span);
+                        }
+                    }
+                }
+                fnDiv.appendChild(noteDiv);
+            }
+            pageDiv.appendChild(fnDiv);
+        }
+
+        // Render endnotes
+        if (page.endnotes && page.endnotes.length > 0) {
+            const enDiv = document.createElement('div');
+            enDiv.className = 'edit-endnotes';
+            enDiv.style.borderTop = '2px solid #999';
+            enDiv.style.marginTop = '12pt';
+            enDiv.style.paddingTop = '6pt';
+            enDiv.style.fontSize = '9pt';
+            enDiv.style.color = '#333';
+            const enTitle = document.createElement('div');
+            enTitle.textContent = 'Endnotes';
+            enTitle.style.fontWeight = 'bold';
+            enTitle.style.marginBottom = '4pt';
+            enDiv.appendChild(enTitle);
+            for (const en of page.endnotes) {
+                const noteDiv = document.createElement('div');
+                noteDiv.style.marginBottom = '2pt';
+                const numSpan = document.createElement('span');
+                numSpan.textContent = en.number + '. ';
+                numSpan.style.fontWeight = 'bold';
+                numSpan.style.verticalAlign = 'super';
+                numSpan.style.fontSize = '0.8em';
+                noteDiv.appendChild(numSpan);
+                for (const block of en.blocks) {
+                    if (block.Paragraph) {
+                        for (const run of block.Paragraph.runs) {
+                            const span = document.createElement('span');
+                            span.textContent = run.text;
+                            if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                            if (run.style && run.style.italic) span.style.fontStyle = 'italic';
+                            noteDiv.appendChild(span);
+                        }
+                    }
+                }
+                enDiv.appendChild(noteDiv);
+            }
+            pageDiv.appendChild(enDiv);
         }
 
         // Render footer
@@ -1861,6 +2082,48 @@ function renderEditableDocx(doc) {
         }
 
         container.appendChild(pageDiv);
+    }
+
+    // Render comments panel (document-level)
+    if (doc.comments && doc.comments.length > 0) {
+        const commentsDiv = document.createElement('div');
+        commentsDiv.className = 'edit-comments-panel';
+        commentsDiv.style.maxWidth = '800px';
+        commentsDiv.style.margin = '16px auto';
+        commentsDiv.style.padding = '12pt';
+        commentsDiv.style.background = '#fffde7';
+        commentsDiv.style.border = '1px solid #fdd835';
+        commentsDiv.style.borderRadius = '8px';
+        const commTitle = document.createElement('div');
+        commTitle.textContent = 'Comments';
+        commTitle.style.fontWeight = 'bold';
+        commTitle.style.marginBottom = '8pt';
+        commTitle.style.fontSize = '11pt';
+        commentsDiv.appendChild(commTitle);
+        for (const comment of doc.comments) {
+            const cDiv = document.createElement('div');
+            cDiv.style.marginBottom = '6pt';
+            cDiv.style.paddingBottom = '6pt';
+            cDiv.style.borderBottom = '1px solid #e0d68a';
+            const metaSpan = document.createElement('span');
+            metaSpan.style.fontWeight = 'bold';
+            metaSpan.style.fontSize = '9pt';
+            metaSpan.style.color = '#555';
+            metaSpan.textContent = (comment.author || 'Unknown') + (comment.date ? ' (' + comment.date.substring(0, 10) + ')' : '') + ': ';
+            cDiv.appendChild(metaSpan);
+            for (const cBlock of comment.blocks) {
+                if (cBlock.Paragraph) {
+                    for (const run of cBlock.Paragraph.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        span.style.fontSize = '10pt';
+                        cDiv.appendChild(span);
+                    }
+                }
+            }
+            commentsDiv.appendChild(cDiv);
+        }
+        container.appendChild(commentsDiv);
     }
 }
 
@@ -2464,6 +2727,34 @@ fileInput.addEventListener('change', () => {
 });
 
 initialize();
+
+// === NEW DOCUMENT ===
+function createNewDocument() {
+    if (!wasmReady) {
+        showStatus(t('wasmLoading'), 'info');
+        return;
+    }
+    try {
+        const bytes = create_blank_docx();
+        currentFileBytes = bytes.buffer;
+        currentFileType = 'docx';
+        currentDocIR = parse_document(bytes);
+
+        toolbar.classList.add('visible');
+        btnDownload.textContent = `${t('download')} .docx`;
+        buildRibbon('docx');
+        statusBar.classList.add('visible');
+        currentZoom = 100;
+        applyZoom();
+        document.querySelector('.container').classList.remove('xlsx-active');
+
+        renderEditableDocx(currentDocIR);
+        showStatus('New document created', 'info');
+    } catch(e) {
+        showStatus('Error: ' + e.message, 'error');
+        console.error(e);
+    }
+}
 
 // === SAMPLE LOADER ===
 async function loadSample(filename) {
