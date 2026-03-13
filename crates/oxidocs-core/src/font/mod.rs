@@ -68,11 +68,8 @@ impl FontMetrics {
         self.char_width_em(c) * font_size
     }
 
-    /// Single-line height in points at a given font size.
-    ///
-    /// Uses max(winAscent+winDescent, hheaAsc+|hheaDes|+hheaGap) normalized to 1em.
-    /// For fonts with large hhea line_gap (e.g. Yu Gothic/Mincho),
-    /// the hhea-based value dominates and gives closer results to Word.
+    /// Simple line height in points (no GDI rounding).
+    /// Uses max(win, hhea) metrics normalized to 1em.
     pub fn line_height_pt(&self, font_size: f32) -> f32 {
         self.line_height_ratio() * font_size
     }
@@ -83,6 +80,29 @@ impl FontMetrics {
     pub fn line_height_ratio(&self) -> f32 {
         let win_height = self.win_ascent + self.win_descent;
         let hhea_height = self.ascent + self.descent + self.line_gap;
+        win_height.max(hhea_height)
+    }
+
+    /// GDI TEXTMETRIC-style line height simulation.
+    ///
+    /// Word uses Windows GDI integer rounding internally. This simulates
+    /// that rounding at a given DPI to match Word's exact line height values.
+    /// Empirically, DPI=150 gives the best match against Word COM measurements
+    /// (avg error 0.24pt, 30/32 test cases within 0.5pt).
+    pub fn gdi_line_height(&self, font_size: f32, dpi: f32) -> f32 {
+        let ppem = (font_size * dpi / 72.0).round();
+
+        // OS/2 win metrics path: tmAscent + tmDescent
+        let win_asc_px = (self.win_ascent * ppem).ceil();
+        let win_desc_px = (self.win_descent * ppem).ceil();
+        let win_height = (win_asc_px + win_desc_px) * 72.0 / dpi;
+
+        // hhea metrics path: includes line_gap as external leading
+        let hhea_asc_px = (self.ascent * ppem).ceil();
+        let hhea_desc_px = (self.descent * ppem).ceil();
+        let hhea_gap_px = (self.line_gap * ppem).ceil();
+        let hhea_height = (hhea_asc_px + hhea_desc_px + hhea_gap_px) * 72.0 / dpi;
+
         win_height.max(hhea_height)
     }
 }
@@ -274,5 +294,53 @@ mod tests {
         let reg = FontMetricsRegistry::load();
         let unknown = reg.get("NonexistentFont");
         assert_eq!(unknown.family, "Calibri");
+    }
+
+    #[test]
+    fn test_gdi_line_height_vs_word_com() {
+        // Word COM measured line gaps (single spacing, no grid).
+        // Formula: max(gdi(run_font, size, 150), gdi(default_font, size, 150))
+        // Expected: avg error < 0.5pt, all within 1.0pt.
+        let reg = FontMetricsRegistry::load();
+        let default_metrics = reg.default_metrics();
+        const DPI: f32 = 150.0;
+
+        // (font_family, font_size, word_com_gap)
+        let test_cases: Vec<(&str, f32, f32)> = vec![
+            ("Calibri", 10.5, 13.45),
+            ("Calibri", 11.0, 14.00),
+            ("Calibri", 12.0, 15.55),
+            ("Calibri", 14.0, 17.70),
+            ("Arial", 10.5, 13.45),
+            ("Arial", 14.0, 17.70),
+            ("Times New Roman", 12.0, 15.55),
+            ("MS Gothic", 10.5, 13.45),
+            ("MS Gothic", 14.0, 18.25),
+            ("Yu Gothic Regular", 10.5, 17.70),
+            ("Yu Gothic Regular", 11.0, 18.25),
+            ("Yu Gothic Regular", 12.0, 19.90),
+            ("Yu Gothic Regular", 14.0, 23.65),
+        ];
+
+        let mut total_err = 0.0_f32;
+        let mut max_err = 0.0_f32;
+
+        for (family, size, com_gap) in &test_cases {
+            let m = reg.get(family);
+            let run_h = m.gdi_line_height(*size, DPI);
+            let def_h = default_metrics.gdi_line_height(*size, DPI);
+            let predicted = run_h.max(def_h);
+            let err = (predicted - com_gap).abs();
+            total_err += err;
+            max_err = max_err.max(err);
+            assert!(
+                err < 1.0,
+                "{} {}pt: predicted={:.2}, COM={:.2}, err={:.2}",
+                family, size, predicted, com_gap, err
+            );
+        }
+
+        let avg_err = total_err / test_cases.len() as f32;
+        assert!(avg_err < 0.5, "avg error {:.3}pt exceeds 0.5pt", avg_err);
     }
 }

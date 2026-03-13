@@ -297,6 +297,9 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
+    // Store style ID for contextual spacing comparison
+    style.style_id = style_id;
+
     // Append images as separate blocks after the paragraph runs
     // For now, store the first image inline with the paragraph
     let _ = images; // TODO: Better image-in-paragraph representation
@@ -395,6 +398,18 @@ fn parse_paragraph_properties(
                                 style.snap_to_grid = val.as_ref() != "0" && val.as_ref() != "false";
                             }
                         }
+                    }
+                    "contextualSpacing" => {
+                        // w:contextualSpacing: presence alone means true,
+                        // or explicit val="1"/"true"
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.contextual_spacing = enabled;
                     }
                     "spacing" => {
                         for attr in e.attributes().flatten() {

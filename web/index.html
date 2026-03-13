@@ -1400,6 +1400,19 @@ function renderEditableDocx(doc) {
                 else if (align === 'Right') paraDiv.classList.add('align-right');
                 else if (align === 'Justify') paraDiv.classList.add('align-justify');
 
+                // Paragraph spacing
+                if (para.style) {
+                    const sb = para.style.space_before || 0;
+                    const sa = para.style.space_after || 0;
+                    if (sb > 0) paraDiv.style.marginTop = sb + 'pt';
+                    if (sa > 0) paraDiv.style.marginBottom = sa + 'pt';
+
+                    // Line spacing
+                    if (para.style.line_spacing) {
+                        paraDiv.style.lineHeight = String(para.style.line_spacing);
+                    }
+                }
+
                 // Indentation
                 if (para.style && para.style.indent_left) {
                     paraDiv.style.paddingLeft = para.style.indent_left + 'pt';

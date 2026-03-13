@@ -136,6 +136,12 @@ pub struct ParagraphStyle {
     /// Whether this paragraph snaps to the document grid (default: true).
     #[serde(default = "default_true")]
     pub snap_to_grid: bool,
+    /// w:contextualSpacing: suppress space_before/after between paragraphs of the same style.
+    #[serde(default)]
+    pub contextual_spacing: bool,
+    /// Style ID (e.g. "Normal", "Heading1") for contextual spacing comparison.
+    #[serde(default)]
+    pub style_id: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -154,6 +160,8 @@ impl Default for ParagraphStyle {
             list_marker: None,
             list_indent: None,
             snap_to_grid: true,
+            contextual_spacing: false,
+            style_id: None,
         }
     }
 }

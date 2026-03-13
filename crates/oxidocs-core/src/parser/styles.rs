@@ -119,6 +119,15 @@ fn parse_style_definition(
                         }
                         _ => {}
                     }
+                } else if local == "contextualSpacing" {
+                    let mut enabled = true;
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let val = String::from_utf8_lossy(&attr.value);
+                            enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                        }
+                    }
+                    style.contextual_spacing = enabled;
                 } else if local == "spacing" {
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());

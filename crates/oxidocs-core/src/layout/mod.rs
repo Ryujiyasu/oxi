@@ -145,6 +145,7 @@ impl LayoutEngine {
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut cursor_y = start_y;
+        let mut prev_para_style_id: Option<String> = None;
 
         let grid_pitch = page.grid_line_pitch;
 
@@ -162,8 +163,10 @@ impl LayoutEngine {
                         &mut pages,
                         &mut elements,
                         grid_pitch,
+                        prev_para_style_id.as_deref(),
                     );
                     elements.extend(para_elements);
+                    prev_para_style_id = para.style.style_id.clone();
                 }
                 Block::Table(table) => {
                     let table_elements = self.layout_table(
@@ -222,11 +225,28 @@ impl LayoutEngine {
         pages: &mut Vec<LayoutPage>,
         current_elements: &mut Vec<LayoutElement>,
         grid_pitch: Option<f32>,
+        prev_style_id: Option<&str>,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
-        // Apply paragraph spacing
-        let space_before = para.style.space_before.unwrap_or(0.0);
+        // Apply paragraph spacing (space_before)
+        let mut space_before = para.style.space_before.unwrap_or(0.0);
+
+        // Contextual spacing: suppress space_before when previous paragraph
+        // has the same style and both have contextualSpacing enabled.
+        if para.style.contextual_spacing {
+            if let (Some(cur_id), Some(prev_id)) = (para.style.style_id.as_deref(), prev_style_id) {
+                if cur_id == prev_id {
+                    space_before = 0.0;
+                }
+            }
+        }
+
+        // Suppress space_before at the top of a page
+        if (*cursor_y - page_top).abs() < 0.01 {
+            space_before = 0.0;
+        }
+
         *cursor_y += space_before;
 
         let indent_left = para.style.indent_left.unwrap_or(0.0);
@@ -552,14 +572,19 @@ impl LayoutEngine {
         snap_to_grid: bool,
         grid_pitch: Option<f32>,
     ) -> f32 {
-        // Run font's base height
-        let run_base = metrics.line_height_pt(font_size);
+        // Word uses GDI TEXTMETRIC integer rounding internally.
+        // DPI=150 gives best empirical match (avg 0.24pt error vs Word COM).
+        const GDI_DPI: f32 = 150.0;
 
-        // Paragraph default font height acts as a minimum.
-        // In real docx files, this comes from the paragraph style's resolved
-        // font (often inherited from docDefaults/theme, typically Cambria 11pt
-        // for Latin or MS Mincho 11pt for East Asia).
-        let default_base = self.registry.default_metrics().line_height_pt(self.default_font_size);
+        // Run font's GDI-rounded height
+        let run_base = metrics.gdi_line_height(font_size, GDI_DPI);
+
+        // Default font height at the RUN's font size (not at 11pt!).
+        // Word computes a minimum line height from the paragraph mark's font,
+        // which inherits from docDefaults/theme. This minimum scales with the
+        // run's font size, ensuring consistent line height even for fonts with
+        // small vertical metrics (e.g. MS Gothic with ratio=1.0).
+        let default_base = self.registry.default_metrics().gdi_line_height(font_size, GDI_DPI);
 
         let base = run_base.max(default_base);
 
