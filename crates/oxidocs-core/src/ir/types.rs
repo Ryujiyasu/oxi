@@ -18,6 +18,12 @@ pub struct Page {
     /// snaps to multiples of this pitch.
     #[serde(default)]
     pub grid_line_pitch: Option<f32>,
+    /// Header content (paragraphs from header part)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header: Vec<Block>,
+    /// Footer content (paragraphs from footer part)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footer: Vec<Block>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,13 +103,30 @@ pub struct Table {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
+    /// Row height in points (w:trHeight)
+    #[serde(default)]
+    pub height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCell {
     pub blocks: Vec<Block>,
     pub width: Option<f32>,
+    /// Horizontal merge span (w:gridSpan), default 1
+    #[serde(default = "default_one")]
+    pub grid_span: u32,
+    /// Vertical merge: "restart" starts a new merged cell, "continue" is merged into above
+    #[serde(default)]
+    pub v_merge: Option<String>,
+    /// Cell shading/background color (hex)
+    #[serde(default)]
+    pub shading: Option<String>,
+    /// Vertical alignment within cell
+    #[serde(default)]
+    pub v_align: Option<String>,
 }
+
+fn default_one() -> u32 { 1 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Image {

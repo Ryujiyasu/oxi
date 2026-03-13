@@ -1383,6 +1383,34 @@ function renderEditableDocx(doc) {
         const pageDiv = document.createElement('div');
         pageDiv.className = 'edit-page';
 
+        // Render header
+        if (page.header && page.header.length > 0) {
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'edit-header';
+            headerDiv.style.borderBottom = '1px solid #e0e0e0';
+            headerDiv.style.marginBottom = '8pt';
+            headerDiv.style.paddingBottom = '4pt';
+            headerDiv.style.color = '#666';
+            headerDiv.style.fontSize = '9pt';
+            for (const hBlock of page.header) {
+                if (hBlock.Paragraph) {
+                    const hPara = document.createElement('div');
+                    if (hBlock.Paragraph.alignment === 'Center') hPara.style.textAlign = 'center';
+                    else if (hBlock.Paragraph.alignment === 'Right') hPara.style.textAlign = 'right';
+                    for (const run of hBlock.Paragraph.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                        if (run.style && run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                        hPara.appendChild(span);
+                    }
+                    if (hBlock.Paragraph.runs.length === 0) hPara.innerHTML = '&nbsp;';
+                    headerDiv.appendChild(hPara);
+                }
+            }
+            pageDiv.appendChild(headerDiv);
+        }
+
         for (const block of page.blocks) {
             if (block.Paragraph) {
                 const para = block.Paragraph;
@@ -1526,21 +1554,74 @@ function renderEditableDocx(doc) {
                 const table = block.Table;
                 const tableEl = document.createElement('table');
                 tableEl.className = 'edit-table';
+                if (!table.style || !table.style.border) {
+                    tableEl.style.borderCollapse = 'collapse';
+                }
 
                 for (const row of table.rows) {
                     const tr = document.createElement('tr');
+                    if (row.height) tr.style.height = row.height + 'pt';
                     for (const cell of row.cells) {
+                        // Skip cells that are vertical merge continuations
+                        if (cell.v_merge === 'continue') continue;
+
                         const td = document.createElement('td');
-                        // Table cells contain blocks — render text but not editable (for now)
+                        // Cell width
+                        if (cell.width) td.style.width = cell.width + 'pt';
+                        // Horizontal merge (gridSpan)
+                        if (cell.grid_span && cell.grid_span > 1) {
+                            td.colSpan = cell.grid_span;
+                        }
+                        // Vertical merge: count continuation cells below
+                        if (cell.v_merge === 'restart') {
+                            // We can't easily count rowspan from here, but mark it
+                            // Real rowspan would need a pre-pass; for now just mark restart
+                        }
+                        // Cell shading
+                        if (cell.shading) td.style.backgroundColor = '#' + cell.shading;
+                        // Vertical alignment
+                        if (cell.v_align) {
+                            td.style.verticalAlign = cell.v_align === 'center' ? 'middle' : cell.v_align;
+                        }
+
+                        // Full run styling in table cells
                         for (const cellBlock of cell.blocks) {
                             if (cellBlock.Paragraph) {
-                                for (const run of cellBlock.Paragraph.runs) {
+                                const cellPara = cellBlock.Paragraph;
+                                const cellParaDiv = document.createElement('div');
+                                if (cellPara.alignment === 'Center') cellParaDiv.style.textAlign = 'center';
+                                else if (cellPara.alignment === 'Right') cellParaDiv.style.textAlign = 'right';
+                                else if (cellPara.alignment === 'Justify') cellParaDiv.style.textAlign = 'justify';
+                                if (cellPara.style && cellPara.style.line_spacing) {
+                                    cellParaDiv.style.lineHeight = String(cellPara.style.line_spacing);
+                                }
+                                for (const run of cellPara.runs) {
                                     const span = document.createElement('span');
                                     span.textContent = run.text;
-                                    if (run.style && run.style.bold) span.style.fontWeight = 'bold';
-                                    if (run.style && run.style.italic) span.style.fontStyle = 'italic';
-                                    td.appendChild(span);
+                                    if (run.style) {
+                                        if (run.style.bold) span.style.fontWeight = 'bold';
+                                        if (run.style.italic) span.style.fontStyle = 'italic';
+                                        if (run.style.underline) span.style.textDecoration = 'underline';
+                                        if (run.style.strikethrough) {
+                                            span.style.textDecoration = (span.style.textDecoration || '') + ' line-through';
+                                        }
+                                        if (run.style.color) span.style.color = '#' + run.style.color;
+                                        if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                                        if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                                        if (run.style.highlight) {
+                                            span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
+                                        }
+                                        if (run.style.vertical_align === 'Superscript') {
+                                            span.style.verticalAlign = 'super';
+                                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                                        } else if (run.style.vertical_align === 'Subscript') {
+                                            span.style.verticalAlign = 'sub';
+                                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                                        }
+                                    }
+                                    cellParaDiv.appendChild(span);
                                 }
+                                td.appendChild(cellParaDiv);
                             }
                         }
                         tr.appendChild(td);
@@ -1548,7 +1629,6 @@ function renderEditableDocx(doc) {
                     tableEl.appendChild(tr);
                 }
                 pageDiv.appendChild(tableEl);
-                // Tables don't increment bodyParaIdx (they are separate blocks)
 
             } else if (block.Image) {
                 const img = block.Image;
@@ -1564,6 +1644,34 @@ function renderEditableDocx(doc) {
                     pageDiv.appendChild(imgEl);
                 }
             }
+        }
+
+        // Render footer
+        if (page.footer && page.footer.length > 0) {
+            const footerDiv = document.createElement('div');
+            footerDiv.className = 'edit-footer';
+            footerDiv.style.borderTop = '1px solid #e0e0e0';
+            footerDiv.style.marginTop = '8pt';
+            footerDiv.style.paddingTop = '4pt';
+            footerDiv.style.color = '#666';
+            footerDiv.style.fontSize = '9pt';
+            for (const fBlock of page.footer) {
+                if (fBlock.Paragraph) {
+                    const fPara = document.createElement('div');
+                    if (fBlock.Paragraph.alignment === 'Center') fPara.style.textAlign = 'center';
+                    else if (fBlock.Paragraph.alignment === 'Right') fPara.style.textAlign = 'right';
+                    for (const run of fBlock.Paragraph.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                        if (run.style && run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                        fPara.appendChild(span);
+                    }
+                    if (fBlock.Paragraph.runs.length === 0) fPara.innerHTML = '&nbsp;';
+                    footerDiv.appendChild(fPara);
+                }
+            }
+            pageDiv.appendChild(footerDiv);
         }
 
         container.appendChild(pageDiv);

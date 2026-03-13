@@ -47,7 +47,13 @@ impl OoxmlParser {
             page_size: PageSize::default(),
             margin: Margin::default(),
             grid_line_pitch: None,
+            header_refs: Vec::new(),
+            footer_refs: Vec::new(),
         });
+
+        // Parse header/footer content from relationship references
+        let header = self.parse_header_footer_blocks(&sect.header_refs, &ctx, &styles);
+        let footer = self.parse_header_footer_blocks(&sect.footer_refs, &ctx, &styles);
 
         Ok(Document {
             pages: vec![Page {
@@ -55,10 +61,40 @@ impl OoxmlParser {
                 size: sect.page_size,
                 margin: sect.margin,
                 grid_line_pitch: sect.grid_line_pitch,
+                header,
+                footer,
             }],
             styles,
             metadata,
         })
+    }
+
+    /// Parse header or footer XML parts referenced by relationship IDs
+    fn parse_header_footer_blocks(
+        &mut self,
+        ref_ids: &[String],
+        ctx: &ParseContext,
+        styles: &StyleSheet,
+    ) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        for ref_id in ref_ids {
+            // Look up the relationship target path
+            let target = ctx._rels.get(ref_id)
+                .map(|r| r.target.clone());
+            if let Some(target) = target {
+                let part_path = if target.starts_with('/') {
+                    target[1..].to_string()
+                } else {
+                    format!("word/{}", target)
+                };
+                if let Ok(xml) = self.read_part(&part_path) {
+                    if let Ok(parsed) = parse_header_footer_xml(&xml, ctx, styles) {
+                        blocks.extend(parsed);
+                    }
+                }
+            }
+        }
+        blocks
     }
 
     fn read_part(&mut self, name: &str) -> Result<String, ParseError> {
@@ -961,6 +997,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
 /// Parse a w:tr element (table row)
 fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<TableRow, ParseError> {
     let mut cells = Vec::new();
+    let mut height: Option<f32> = None;
     let mut depth = 0;
 
     loop {
@@ -974,6 +1011,17 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     }
                     _ => {
                         depth += 1;
+                    }
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "trHeight" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let val = String::from_utf8_lossy(&attr.value);
+                            height = val.parse::<f32>().ok().map(|v| v / 20.0);
+                        }
                     }
                 }
             }
@@ -991,13 +1039,13 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    Ok(TableRow { cells })
+    Ok(TableRow { cells, height })
 }
 
 /// Parse a w:tc element (table cell)
 fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<TableCell, ParseError> {
     let mut blocks = Vec::new();
-    let mut width = None;
+    let mut cell_props = CellProperties::default();
     let mut depth = 0;
 
     loop {
@@ -1010,7 +1058,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                         blocks.push(Block::Paragraph(para));
                     }
                     "tcPr" if depth == 0 => {
-                        width = parse_cell_width(reader)?;
+                        cell_props = parse_cell_properties(reader)?;
                     }
                     _ => {
                         depth += 1;
@@ -1031,28 +1079,92 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
         }
     }
 
-    Ok(TableCell { blocks, width })
+    Ok(TableCell {
+        blocks,
+        width: cell_props.width,
+        grid_span: cell_props.grid_span,
+        v_merge: cell_props.v_merge,
+        shading: cell_props.shading,
+        v_align: cell_props.v_align,
+    })
 }
 
-/// Parse w:tcPr for cell width
-fn parse_cell_width(reader: &mut Reader<&[u8]>) -> Result<Option<f32>, ParseError> {
-    let mut width = None;
+#[derive(Default)]
+struct CellProperties {
+    width: Option<f32>,
+    grid_span: u32,
+    v_merge: Option<String>,
+    shading: Option<String>,
+    v_align: Option<String>,
+}
+
+/// Parse w:tcPr (table cell properties)
+fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, ParseError> {
+    let mut props = CellProperties { grid_span: 1, ..Default::default() };
     let mut depth = 0;
 
     loop {
         match reader.read_event()? {
-            Event::Start(_) => {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "vMerge" {
+                    // vMerge as Start element (with attributes or children)
+                    let mut val = "continue".to_string();
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            val = String::from_utf8_lossy(&attr.value).to_string();
+                        }
+                    }
+                    props.v_merge = Some(val);
+                }
                 depth += 1;
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "tcW" {
-                    for attr in e.attributes().flatten() {
-                        if local_name(attr.key.as_ref()) == "w" {
-                            let val = String::from_utf8_lossy(&attr.value);
-                            width = val.parse::<f32>().ok().map(|v| v / 20.0);
+                match local.as_str() {
+                    "tcW" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "w" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                props.width = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
                         }
                     }
+                    "gridSpan" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                props.grid_span = val.parse().unwrap_or(1);
+                            }
+                        }
+                    }
+                    "vMerge" => {
+                        let mut val = "continue".to_string();
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                val = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                        props.v_merge = Some(val);
+                    }
+                    "shd" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "fill" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if val != "auto" {
+                                    props.shading = Some(val);
+                                }
+                            }
+                        }
+                    }
+                    "vAlign" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                props.v_align = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Event::End(e) => {
@@ -1069,7 +1181,7 @@ fn parse_cell_width(reader: &mut Reader<&[u8]>) -> Result<Option<f32>, ParseErro
         }
     }
 
-    Ok(width)
+    Ok(props)
 }
 
 /// Parsed section properties
@@ -1078,6 +1190,10 @@ struct SectionProperties {
     margin: Margin,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
+    /// Reference IDs for header parts
+    header_refs: Vec<String>,
+    /// Reference IDs for footer parts
+    footer_refs: Vec<String>,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -1087,6 +1203,8 @@ fn parse_section_properties(
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
     let mut grid_line_pitch: Option<f32> = None;
+    let mut header_refs = Vec::new();
+    let mut footer_refs = Vec::new();
     let mut depth = 0;
 
     loop {
@@ -1166,6 +1284,22 @@ fn parse_section_properties(
                             grid_line_pitch = Some(line_pitch as f32 / 20.0);
                         }
                     }
+                    "headerReference" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "id" {
+                                header_refs.push(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "footerReference" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "id" {
+                                footer_refs.push(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1187,7 +1321,55 @@ fn parse_section_properties(
         page_size,
         margin,
         grid_line_pitch,
+        header_refs,
+        footer_refs,
     })
+}
+
+/// Parse a header or footer XML part (w:hdr or w:ftr element)
+fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<Block>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut blocks = Vec::new();
+    let mut depth = 0;
+    let mut in_root = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "hdr" | "ftr" => {
+                        in_root = true;
+                        depth = 0;
+                    }
+                    "p" if in_root && depth == 0 => {
+                        let para = parse_paragraph(&mut reader, ctx, styles)?;
+                        blocks.push(Block::Paragraph(para));
+                    }
+                    "tbl" if in_root && depth == 0 => {
+                        let table = parse_table(&mut reader, ctx, styles)?;
+                        blocks.push(Block::Table(table));
+                    }
+                    _ if in_root => {
+                        depth += 1;
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "hdr" || local == "ftr" {
+                    in_root = false;
+                } else if in_root && depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(blocks)
 }
 
 /// Extract local name from a potentially namespaced XML tag
