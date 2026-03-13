@@ -1461,6 +1461,7 @@ async function initialize() {
     try {
         await init();
         wasmReady = true;
+        window.__oxiWasmReady = true;
         console.log('Wasm initialized');
     } catch(e) {
         showStatus('Failed to load Wasm: ' + e.message, 'error');

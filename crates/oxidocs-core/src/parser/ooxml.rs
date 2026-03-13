@@ -404,6 +404,25 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             }
                         }
                     }
+                    // mc:AlternateContent at body level (e.g., SmartArt diagrams)
+                    "AlternateContent" if in_body && depth == 0 => {
+                        let ac = parse_alternate_content(&mut reader, &ctx, &styles)?;
+                        if let Some(drawing) = ac {
+                            if let Some(image) = drawing.image {
+                                if image.position.is_some() {
+                                    current_floating_images.push(image);
+                                } else {
+                                    current_blocks.push(Block::Image(image));
+                                }
+                            }
+                            if let Some(shape) = drawing.shape {
+                                current_shapes.push(shape);
+                            }
+                            if let Some(tb) = drawing.text_box {
+                                current_text_boxes.push(tb);
+                            }
+                        }
+                    }
                     "sectPr" if in_body && depth == 0 => {
                         // Final section properties (for the last section)
                         final_sect_pr = Some(parse_section_properties(&mut reader)?);
@@ -554,6 +573,21 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         let tc = TrackedChange { change_type: "delete".into(), author, date };
                         let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "del", tc)?;
                         runs.extend(tracked_runs);
+                    }
+                    // mc:AlternateContent at paragraph level (e.g., SmartArt, ink)
+                    "AlternateContent" if depth == 0 => {
+                        let ac = parse_alternate_content(reader, ctx, styles)?;
+                        if let Some(drawing) = ac {
+                            if let Some(image) = drawing.image {
+                                images.push(image);
+                            }
+                            if let Some(shape) = drawing.shape {
+                                found_shapes.push(shape);
+                            }
+                            if let Some(tb) = drawing.text_box {
+                                found_text_boxes.push(tb);
+                            }
+                        }
                     }
                     // OMML math expressions
                     "oMathPara" | "oMath" if depth == 0 => {
@@ -1199,6 +1233,13 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             drawing_result = ac;
                         }
                     }
+                    // OLE object — extract preview image from embedded VML shape
+                    "object" if depth == 0 => {
+                        let ole = parse_ole_object(reader, ctx)?;
+                        if drawing_result.is_none() {
+                            drawing_result = Some(ole);
+                        }
+                    }
                     "ruby" if depth == 0 => {
                         ruby = Some(parse_ruby(reader)?);
                     }
@@ -1441,6 +1482,13 @@ struct DrawingResult {
     image: Option<Image>,
     shape: Option<Shape>,
     text_box: Option<TextBox>,
+}
+
+impl DrawingResult {
+    /// Returns true if at least one component (image, shape, or text_box) is present
+    fn has_content(&self) -> bool {
+        self.image.is_some() || self.shape.is_some() || self.text_box.is_some()
+    }
 }
 
 /// Parse a w:drawing element to extract image, shape, or text box info
@@ -2021,6 +2069,91 @@ fn parse_css_length_opt(s: &str) -> Option<f32> {
     if v > 0.0 { Some(v) } else { None }
 }
 
+/// Parse w:object (OLE embedded object) — extract preview image from VML shape inside
+fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<DrawingResult, ParseError> {
+    let mut rel_id: Option<String> = None;
+    let mut width: f32 = 0.0;
+    let mut height: f32 = 0.0;
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                depth += 1;
+                match local.as_str() {
+                    // VML shape inside OLE object — parse style for dimensions
+                    "shape" | "rect" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "style" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                for part in val.split(';') {
+                                    let part = part.trim();
+                                    if let Some(w) = part.strip_prefix("width:") {
+                                        width = parse_css_length(w.trim());
+                                    } else if let Some(h) = part.strip_prefix("height:") {
+                                        height = parse_css_length(h.trim());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    // v:imagedata — the preview image of the OLE object
+                    "imagedata" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:id" || key.ends_with(":id") {
+                                rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    // OLEObject element — skip gracefully
+                    "OLEObject" => {}
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "object" && depth == 0 {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    // Build image from the preview if available
+    let image = if let Some(rid) = rel_id {
+        let data = ctx.media.get(&rid).cloned().unwrap_or_default();
+        let content_type = ctx.media_types.get(&rid).cloned();
+        Some(Image {
+            data,
+            width,
+            height,
+            alt_text: Some("OLE Object".to_string()),
+            content_type,
+            position: None,
+            wrap_type: None,
+            crop: None,
+        })
+    } else {
+        None
+    };
+
+    Ok(DrawingResult { image, shape: None, text_box: None })
+}
+
 /// Parse mc:AlternateContent — prefer mc:Choice (DrawingML), fall back to mc:Fallback (VML)
 fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<Option<DrawingResult>, ParseError> {
     let mut result: Option<DrawingResult> = None;
@@ -2043,13 +2176,16 @@ fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, style
                     }
                     "drawing" if in_choice && depth == 1 => {
                         let dr = parse_drawing(reader, ctx, styles)?;
-                        if result.is_none() {
+                        // Only keep if it produced something useful (image, shape, or text box)
+                        if result.is_none() && dr.has_content() {
                             result = Some(dr);
                         }
                     }
                     "pict" if (in_choice || in_fallback) && depth == 1 && result.is_none() => {
                         let dr = parse_vml_pict(reader, ctx)?;
-                        result = Some(dr);
+                        if dr.has_content() {
+                            result = Some(dr);
+                        }
                     }
                     _ => {
                         depth += 1;

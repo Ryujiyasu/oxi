@@ -7,3 +7,5 @@ tools/metrics/docx_tests/
 tools/metrics/docx_tests_default/
 tools/metrics/docx_tests_isolated/
 tools/metrics/output/
+node_modules/
+e2e/test-results/
