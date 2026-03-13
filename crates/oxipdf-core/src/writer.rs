@@ -144,15 +144,91 @@ impl PdfWriter {
         .unwrap();
         self.end_obj();
 
-        // Write font objects (Type1 base fonts for now).
+        // Determine which fonts need CIDFont (have non-ASCII text).
+        let mut cid_font_chars: std::collections::HashMap<String, std::collections::BTreeSet<u16>> =
+            std::collections::HashMap::new();
+        for page in &doc.pages {
+            for el in &page.contents {
+                if let ContentElement::Text(span) = el {
+                    let name = escape_name(&span.font_name);
+                    if span.text.chars().any(|c| c as u32 > 0x7F) {
+                        let entry = cid_font_chars.entry(name).or_default();
+                        for ch in span.text.chars() {
+                            entry.insert(ch as u16);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Write font objects.
         for (name, obj_num) in &font_objs {
-            self.begin_obj(*obj_num);
-            write!(
-                self.buf,
-                "<< /Type /Font /Subtype /Type1 /BaseFont /{name} >>\n"
-            )
-            .unwrap();
-            self.end_obj();
+            if let Some(used_chars) = cid_font_chars.get(name) {
+                // Type0 composite font for CJK/Unicode text.
+                let cid_font_num = self.alloc_obj();
+                let tounicode_num = self.alloc_obj();
+                let descriptor_num = self.alloc_obj();
+
+                // Type0 font dictionary
+                self.begin_obj(*obj_num);
+                write!(
+                    self.buf,
+                    "<< /Type /Font /Subtype /Type0 /BaseFont /{name} \
+                     /Encoding /Identity-H \
+                     /DescendantFonts [{cid_font_num} 0 R] \
+                     /ToUnicode {tounicode_num} 0 R >>\n"
+                )
+                .unwrap();
+                self.end_obj();
+
+                // CIDFont dictionary
+                self.begin_obj(cid_font_num);
+                write!(
+                    self.buf,
+                    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} \
+                     /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
+                     /FontDescriptor {descriptor_num} 0 R \
+                     /DW 1000 >>\n"
+                )
+                .unwrap();
+                self.end_obj();
+
+                // Font descriptor (minimal, enough for PDF readers to look up system font)
+                self.begin_obj(descriptor_num);
+                write!(
+                    self.buf,
+                    "<< /Type /FontDescriptor /FontName /{name} \
+                     /Flags 4 /ItalicAngle 0 \
+                     /Ascent 880 /Descent -120 /CapHeight 740 \
+                     /StemV 80 \
+                     /FontBBox [-100 -250 1100 900] >>\n"
+                )
+                .unwrap();
+                self.end_obj();
+
+                // ToUnicode CMap stream
+                let cmap_data = build_tounicode_cmap(used_chars);
+                let cmap_compressed = compress(&cmap_data);
+                self.begin_obj(tounicode_num);
+                write!(
+                    self.buf,
+                    "<< /Length {} /Filter /FlateDecode >>\nstream\n",
+                    cmap_compressed.len()
+                )
+                .unwrap();
+                self.buf.extend_from_slice(&cmap_compressed);
+                write!(self.buf, "\nendstream\n").unwrap();
+                self.end_obj();
+            } else {
+                // Simple Type1 base font for ASCII-only text.
+                self.begin_obj(*obj_num);
+                write!(
+                    self.buf,
+                    "<< /Type /Font /Subtype /Type1 /BaseFont /{name} >>\n"
+                )
+                .unwrap();
+                self.end_obj();
+            }
         }
 
         // Write image XObjects.
@@ -191,7 +267,7 @@ impl PdfWriter {
             let (page_num, stream_num) = page_objs[i];
 
             // Build content stream data (with image references).
-            let content_data = build_content_stream_with_images(page, &page_images[i]);
+            let content_data = build_content_stream_with_images(page, &page_images[i], &cid_font_chars);
             let compressed = compress(&content_data);
 
             // Write content stream object.
@@ -276,6 +352,7 @@ impl PdfWriter {
 fn build_content_stream_with_images(
     page: &Page,
     images: &[(usize, u32)],
+    cid_fonts: &std::collections::HashMap<String, std::collections::BTreeSet<u16>>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut img_counter = 0usize;
@@ -283,18 +360,18 @@ fn build_content_stream_with_images(
     for (idx, element) in page.contents.iter().enumerate() {
         match element {
             ContentElement::Text(span) => {
+                let font_key = escape_name(&span.font_name);
                 write_color_op(&mut buf, &span.fill_color, false);
                 write!(buf, "BT\n").unwrap();
-                write!(
-                    buf,
-                    "/{} {} Tf\n",
-                    escape_name(&span.font_name),
-                    span.font_size
-                )
-                .unwrap();
+                write!(buf, "/{} {} Tf\n", font_key, span.font_size).unwrap();
                 let pdf_y = page.height - span.y;
                 write!(buf, "{} {} Td\n", span.x, pdf_y).unwrap();
-                write!(buf, "({}) Tj\n", escape_pdf_string(&span.text)).unwrap();
+                if cid_fonts.contains_key(&font_key) {
+                    // CIDFont: encode as UTF-16BE hex string
+                    write!(buf, "<{}> Tj\n", encode_utf16be_hex(&span.text)).unwrap();
+                } else {
+                    write!(buf, "({}) Tj\n", escape_pdf_string(&span.text)).unwrap();
+                }
                 write!(buf, "ET\n").unwrap();
             }
             ContentElement::Path(path) => {
@@ -395,6 +472,47 @@ fn escape_name(s: &str) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// Build a ToUnicode CMap that maps CIDs (= UTF-16 code units) back to Unicode.
+/// This allows PDF readers to extract text when copying/searching.
+fn build_tounicode_cmap(used_chars: &std::collections::BTreeSet<u16>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write!(buf, "/CIDInit /ProcSet findresource begin\n").unwrap();
+    write!(buf, "12 dict begin\n").unwrap();
+    write!(buf, "begincmap\n").unwrap();
+    write!(buf, "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n")
+        .unwrap();
+    write!(buf, "/CMapName /Adobe-Identity-UCS def\n").unwrap();
+    write!(buf, "/CMapType 2 def\n").unwrap();
+    write!(buf, "1 begincodespacerange\n").unwrap();
+    write!(buf, "<0000> <FFFF>\n").unwrap();
+    write!(buf, "endcodespacerange\n").unwrap();
+
+    // Write bfchar entries in chunks of 100 (PDF spec limit).
+    let chars: Vec<u16> = used_chars.iter().copied().collect();
+    for chunk in chars.chunks(100) {
+        write!(buf, "{} beginbfchar\n", chunk.len()).unwrap();
+        for &code in chunk {
+            write!(buf, "<{:04X}> <{:04X}>\n", code, code).unwrap();
+        }
+        write!(buf, "endbfchar\n").unwrap();
+    }
+
+    write!(buf, "endcmap\n").unwrap();
+    write!(buf, "CMapName currentdict /CMap defineresource pop\n").unwrap();
+    write!(buf, "end\nend\n").unwrap();
+    buf
+}
+
+/// Encode a string as UTF-16BE hex for use with CIDFont (Identity-H encoding).
+fn encode_utf16be_hex(s: &str) -> String {
+    let mut hex = String::new();
+    for code_unit in s.encode_utf16() {
+        use std::fmt::Write;
+        write!(hex, "{:04X}", code_unit).unwrap();
+    }
+    hex
 }
 
 fn compress(data: &[u8]) -> Vec<u8> {
@@ -590,6 +708,91 @@ mod tests {
         // Should be parseable.
         let parsed = crate::parse_pdf(&bytes).unwrap();
         assert_eq!(parsed.pages.len(), 1);
+    }
+
+    #[test]
+    fn test_write_pdf_japanese_cidfont() {
+        let doc = PdfDocument {
+            version: PdfVersion::new(1, 7),
+            info: DocumentInfo {
+                title: Some("日本語テスト".into()),
+                ..Default::default()
+            },
+            pages: vec![Page {
+                width: 595.0,
+                height: 842.0,
+                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 595.0, ury: 842.0 },
+                crop_box: None,
+                contents: vec![ContentElement::Text(TextSpan {
+                    x: 72.0,
+                    y: 72.0,
+                    text: "こんにちは世界".into(),
+                    font_name: "MSGothic".into(),
+                    font_size: 12.0,
+                    fill_color: Color::Gray(0.0),
+                })],
+                rotation: 0,
+            }],
+            outline: Vec::new(),
+        };
+        let bytes = write_pdf(&doc);
+        let s = String::from_utf8_lossy(&bytes);
+        // Should use Type0/CIDFont, not Type1
+        assert!(s.contains("/Subtype /Type0"), "expected Type0 font");
+        assert!(s.contains("/Encoding /Identity-H"), "expected Identity-H encoding");
+        assert!(s.contains("/Subtype /CIDFontType2"), "expected CIDFontType2");
+        assert!(s.contains("/ToUnicode"), "expected ToUnicode reference");
+        // Content stream should have hex string, not parenthesized string
+        // Verify the PDF is structurally valid by parsing
+        let parsed = crate::parse_pdf(&bytes).unwrap();
+        assert_eq!(parsed.pages.len(), 1);
+    }
+
+    #[test]
+    fn test_write_pdf_mixed_ascii_and_japanese() {
+        let doc = PdfDocument {
+            version: PdfVersion::new(1, 7),
+            info: DocumentInfo::default(),
+            pages: vec![Page {
+                width: 612.0,
+                height: 792.0,
+                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                crop_box: None,
+                contents: vec![
+                    ContentElement::Text(TextSpan {
+                        x: 72.0, y: 72.0,
+                        text: "Hello".into(),
+                        font_name: "Helvetica".into(),
+                        font_size: 12.0,
+                        fill_color: Color::Gray(0.0),
+                    }),
+                    ContentElement::Text(TextSpan {
+                        x: 72.0, y: 100.0,
+                        text: "日本語テキスト".into(),
+                        font_name: "MSGothic".into(),
+                        font_size: 12.0,
+                        fill_color: Color::Gray(0.0),
+                    }),
+                ],
+                rotation: 0,
+            }],
+            outline: Vec::new(),
+        };
+        let bytes = write_pdf(&doc);
+        let s = String::from_utf8_lossy(&bytes);
+        // Helvetica should be Type1, MSGothic should be Type0
+        assert!(s.contains("/Subtype /Type1"), "expected Type1 for ASCII font");
+        assert!(s.contains("/Subtype /Type0"), "expected Type0 for CJK font");
+    }
+
+    #[test]
+    fn test_encode_utf16be_hex() {
+        // ASCII
+        assert_eq!(encode_utf16be_hex("A"), "0041");
+        // Japanese
+        assert_eq!(encode_utf16be_hex("あ"), "3042");
+        // Mixed
+        assert_eq!(encode_utf16be_hex("Aあ"), "00413042");
     }
 
     #[test]
