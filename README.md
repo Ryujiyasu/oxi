@@ -216,6 +216,32 @@ const signatures = pdf_verify_signatures(pdfBytes);
 
 署名プロバイダーはプラグイン設計 (`SignatureProvider` trait) で、将来的にマイナンバーカード (JPKI) 等にも拡張可能。
 
+## ゴールデンテスト — 官公庁ドキュメント互換性
+
+日本の官公庁 (総務省, 経産省, 財務省, 国税庁, 金融庁, 統計局 等) から収集した実際の Office ファイルでパース成功率をテスト:
+
+| | Oxi | ファイル数 |
+|---|---|---|
+| **全体** | **100.0%** | 90 |
+| DOCX | 100.0% | 10 |
+| XLSX | 100.0% | 80 |
+| PPTX | — | 0 |
+
+> **テスト内容**: 各ファイルをパースして IR (中間表現) に変換。エラーなしで完了すれば成功。
+> SmartArt, 数式 (OMML), OLE オブジェクト, マクロを含むファイルもグレースフルに処理。
+
+テストツール: [`tools/golden-test/`](tools/golden-test/) — ドキュメント収集スクリプト + Rust テストハーネス
+
+```bash
+# ドキュメント収集
+cd tools/golden-test
+python collect_documents.py --target 1000
+
+# パース成功率テスト
+cargo build --release
+./target/release/golden-test ./documents
+```
+
 ## ロードマップ
 
 ### v1 — 基盤 (現在)
