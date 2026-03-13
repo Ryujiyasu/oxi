@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+const BASE = 'http://localhost:8080/web/';
+
 test('page loads and has content', async ({ page }) => {
-  const response = await page.goto('/');
+  const response = await page.goto(BASE);
   console.log('Status:', response?.status());
 
   // Take screenshot of what we see

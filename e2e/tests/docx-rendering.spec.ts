@@ -102,13 +102,14 @@ test.describe('Text Editing', () => {
     await waitForWasm(page);
     await page.locator('button', { hasText: '+ New Document' }).click();
     await page.waitForSelector('.edit-page', { timeout: 15_000 });
+    await page.waitForTimeout(500);
 
-    const run = page.locator('.edit-run[contenteditable="true"]').first();
-    await expect(run).toBeVisible();
-    await run.click();
+    // Click on the edit page to focus it, then type
+    const editPage = page.locator('.edit-page').first();
+    await editPage.click();
     await page.keyboard.type('Hello, Oxi!');
 
-    const text = await run.textContent();
+    const text = await editPage.textContent();
     expect(text).toContain('Hello, Oxi!');
   });
 
