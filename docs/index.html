@@ -3944,41 +3944,78 @@ function renderPdfViewer(doc, rawData) {
     const viewer = document.getElementById('pages-container');
     viewer.innerHTML = '';
 
-    // Document info panel
-    const meta = document.createElement('div');
-    meta.className = 'pdf-meta';
+    // Document info bar (compact)
     const info = doc.info || {};
-    meta.innerHTML = `
-        <h3>📄 PDF Document</h3>
-        <table>
-            ${info.title ? `<tr><td><strong>Title</strong></td><td>${info.title}</td></tr>` : ''}
-            ${info.author ? `<tr><td><strong>Author</strong></td><td>${info.author}</td></tr>` : ''}
-            ${info.producer ? `<tr><td><strong>Producer</strong></td><td>${info.producer}</td></tr>` : ''}
-            ${info.creator ? `<tr><td><strong>Creator</strong></td><td>${info.creator}</td></tr>` : ''}
-            <tr><td><strong>Pages</strong></td><td>${doc.pages.length}</td></tr>
-            <tr><td><strong>Version</strong></td><td>${doc.version ? `${doc.version.major}.${doc.version.minor}` : '?'}</td></tr>
-        </table>
-    `;
-    viewer.appendChild(meta);
+    const infoBar = document.createElement('div');
+    infoBar.className = 'pdf-meta';
+    const infoItems = [
+        info.title && `<strong>${info.title}</strong>`,
+        info.author && `by ${info.author}`,
+        `${doc.pages.length} pages`,
+        doc.version && `PDF ${doc.version.major}.${doc.version.minor}`
+    ].filter(Boolean).join(' · ');
+    infoBar.innerHTML = infoItems;
+    infoBar.style.cssText = 'padding:8px 16px;font-size:13px;color:#555;border-bottom:1px solid #e0e0e0;';
+    viewer.appendChild(infoBar);
 
-    // Signature panel
+    // Signature panel (compact)
     try {
         const sigs = pdf_verify_signatures(rawData);
-        const sigPanel = document.createElement('div');
-        sigPanel.className = 'pdf-sig-panel';
         if (sigs && sigs.length > 0) {
+            const sigPanel = document.createElement('div');
+            sigPanel.className = 'pdf-sig-panel';
             sigPanel.innerHTML = '<h3>' + I18N[currentLang].signatures + '</h3>' +
                 sigs.map(s => `<div class="sig-entry">
                     <span class="sig-name">${s.signer_name || 'Unknown'}</span>
                     <span class="sig-status ${s.integrity_valid ? 'valid' : 'invalid'}">${s.integrity_valid ? '✓' : '✗'}</span>
                 </div>`).join('');
-        } else {
-            sigPanel.innerHTML = '<h3>' + I18N[currentLang].signatures + '</h3><p>' + I18N[currentLang].noSignatures + '</p>';
+            viewer.appendChild(sigPanel);
         }
-        viewer.appendChild(sigPanel);
     } catch(e) { console.warn('Signature check:', e); }
 
-    // Hanko stamp generator
+    // Render each page on a Canvas
+    const SCALE = 1.5; // render at 1.5x for crispness
+    doc.pages.forEach((page, i) => {
+        const pageWrapper = document.createElement('div');
+        pageWrapper.className = 'pdf-page';
+        pageWrapper.style.cssText = 'margin:20px auto;box-shadow:0 2px 8px rgba(0,0,0,0.15);background:#fff;position:relative;';
+
+        const canvas = document.createElement('canvas');
+        const w = page.width || 595;
+        const h = page.height || 842;
+        canvas.width = w * SCALE;
+        canvas.height = h * SCALE;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        canvas.style.display = 'block';
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(SCALE, SCALE);
+
+        // White background
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+
+        // Draw content elements
+        (page.contents || []).forEach(elem => {
+            if (elem.Path) {
+                drawPdfPath(ctx, elem.Path);
+            } else if (elem.Text) {
+                drawPdfText(ctx, elem.Text, h);
+            }
+        });
+
+        // Page number label
+        const label = document.createElement('div');
+        label.className = 'pdf-page-header';
+        label.textContent = `Page ${i + 1}`;
+
+        pageWrapper.appendChild(canvas);
+        pageWrapper.appendChild(label);
+        viewer.appendChild(pageWrapper);
+    });
+
+    // Hanko panel at the bottom
     const hankoPanel = document.createElement('div');
     hankoPanel.className = 'hanko-panel';
     hankoPanel.innerHTML = `
@@ -3998,7 +4035,6 @@ function renderPdfViewer(doc, rawData) {
     `;
     viewer.appendChild(hankoPanel);
 
-    // Hanko preview logic
     const updateHanko = () => {
         const name = document.getElementById('hankoName').value || '印';
         const svg = preview_hanko(name);
@@ -4007,30 +4043,76 @@ function renderPdfViewer(doc, rawData) {
     document.getElementById('hankoPreviewBtn').addEventListener('click', updateHanko);
     document.getElementById('hankoName').addEventListener('input', updateHanko);
     updateHanko();
+}
 
-    // Pages with text content
-    doc.pages.forEach((page, i) => {
-        const pageDiv = document.createElement('div');
-        pageDiv.className = 'pdf-page';
-        const header = document.createElement('div');
-        header.className = 'pdf-page-header';
-        header.textContent = `Page ${i + 1}`;
-        pageDiv.appendChild(header);
+function colorToCss(color) {
+    if (!color) return '#000';
+    if (color.Gray !== undefined) {
+        const g = Math.round(color.Gray * 255);
+        return `rgb(${g},${g},${g})`;
+    }
+    if (color.Rgb) {
+        const [r, g, b] = color.Rgb;
+        return `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+    }
+    if (color.Cmyk) {
+        const [c, m, y, k] = color.Cmyk;
+        const r = 255 * (1-c) * (1-k);
+        const g = 255 * (1-m) * (1-k);
+        const b = 255 * (1-y) * (1-k);
+        return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+    }
+    return '#000';
+}
 
-        const content = document.createElement('div');
-        content.style.whiteSpace = 'pre-wrap';
-        content.style.fontFamily = 'monospace';
-        content.style.fontSize = '13px';
-        content.style.padding = '12px';
+function drawPdfText(ctx, span, pageHeight) {
+    const x = span.x;
+    // PDF y=0 is bottom; Canvas y=0 is top
+    const y = pageHeight - span.y;
+    const fontSize = span.font_size || 12;
 
-        const texts = (page.contents || [])
-            .filter(c => c.Text)
-            .map(c => c.Text.text)
-            .join('\n');
-        content.textContent = texts || '(no text content)';
-        pageDiv.appendChild(content);
-        viewer.appendChild(pageDiv);
+    // Map PDF font names to CSS
+    let fontFamily = 'serif';
+    const fn = (span.font_name || '').toLowerCase();
+    if (fn.includes('arial') || fn.includes('helvetica') || fn.includes('gothic') || fn.includes('sans')) {
+        fontFamily = 'sans-serif';
+    } else if (fn.includes('courier') || fn.includes('mono')) {
+        fontFamily = 'monospace';
+    } else if (fn.includes('mincho') || fn.includes('times') || fn.includes('serif')) {
+        fontFamily = 'serif';
+    }
+
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    ctx.fillStyle = colorToCss(span.fill_color);
+    ctx.fillText(span.text, x, y);
+}
+
+function drawPdfPath(ctx, path) {
+    if (!path.operations || path.operations.length === 0) return;
+
+    ctx.beginPath();
+    path.operations.forEach(op => {
+        if (op.MoveTo) {
+            ctx.moveTo(op.MoveTo[0], op.MoveTo[1]);
+        } else if (op.LineTo) {
+            ctx.lineTo(op.LineTo[0], op.LineTo[1]);
+        } else if (op.CurveTo) {
+            const [x1, y1, x2, y2, x3, y3] = op.CurveTo;
+            ctx.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+        } else if (op === 'ClosePath' || op.ClosePath !== undefined) {
+            ctx.closePath();
+        }
     });
+
+    if (path.fill) {
+        ctx.fillStyle = colorToCss(path.fill);
+        ctx.fill();
+    }
+    if (path.stroke) {
+        ctx.strokeStyle = colorToCss(path.stroke.color);
+        ctx.lineWidth = path.stroke.width || 1;
+        ctx.stroke();
+    }
 }
 
 // Event handlers
