@@ -4010,6 +4010,11 @@ async function loadSample(filename) {
         console.error(e);
     }
 }
+
+// Expose module functions to global scope for inline onclick handlers
+window.createNewDocument = createNewDocument;
+window.loadSample = loadSample;
+window.downloadDocument = downloadEdited;
 </script>
 </body>
 </html>
