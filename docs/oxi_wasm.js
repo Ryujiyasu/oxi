@@ -1,6 +1,36 @@
 /* @ts-self-types="./oxi_wasm.d.ts" */
 
 /**
+ * Create a blank .docx file and return it as bytes.
+ * Can be used to create a new document from scratch.
+ * @returns {Uint8Array}
+ */
+export function create_blank_docx() {
+    const ret = wasm.create_blank_docx();
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * Generate a PDF from scratch with the given text content.
+ * Returns the PDF bytes.
+ * @param {string} title
+ * @param {string} text
+ * @returns {Uint8Array}
+ */
+export function create_pdf(title, text) {
+    const ptr0 = passStringToWasm0(title, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.create_pdf(ptr0, len0, ptr1, len1);
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
  * Edit a .docx file and return the modified bytes.
  *
  * `data`: original .docx bytes
@@ -59,6 +89,33 @@ export function edit_xlsx(data, edits) {
     return v2;
 }
 
+/**
+ * Generate a hanko stamp SVG.
+ *
+ * `config`: JS object with StampConfig fields:
+ *   { name: "山田", style: "Round"|"Square"|"Oval", size: 100, date?: "2026.03.13" }
+ * @param {any} config
+ * @returns {string}
+ */
+export function generate_hanko_svg(config) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.generate_hanko_svg(config);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
 export function init() {
     wasm.init();
 }
@@ -92,6 +149,21 @@ export function parse_document(data) {
 }
 
 /**
+ * Parse a PDF file and return its structure as a JS object.
+ * @param {Uint8Array} data
+ * @returns {any}
+ */
+export function parse_pdf(data) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parse_pdf(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * @param {Uint8Array} data
  * @returns {any}
  */
@@ -117,6 +189,67 @@ export function parse_spreadsheet(data) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Extract all text from a PDF as a single string.
+ * @param {Uint8Array} data
+ * @returns {string}
+ */
+export function pdf_extract_text(data) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pdf_extract_text(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Verify signatures in a PDF. Returns an array of signature info objects.
+ * @param {Uint8Array} data
+ * @returns {any}
+ */
+export function pdf_verify_signatures(data) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.pdf_verify_signatures(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Preview a hanko stamp SVG with default config for the given name.
+ * @param {string} name
+ * @returns {string}
+ */
+export function preview_hanko(name) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.preview_hanko(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
 }
 
 function __wbg_get_imports() {
@@ -213,6 +346,10 @@ function __wbg_get_imports() {
             const ret = arg0.done;
             return ret;
         },
+        __wbg_entries_e8a20ff8c9757101: function(arg0) {
+            const ret = Object.entries(arg0);
+            return ret;
+        },
         __wbg_error_a6fa202b58aa1cd3: function(arg0, arg1) {
             let deferred0_0;
             let deferred0_1;
@@ -228,6 +365,10 @@ function __wbg_get_imports() {
             const ret = Reflect.get(arg0, arg1);
             return ret;
         }, arguments); },
+        __wbg_get_a8ee5c45dabc1b3b: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
         __wbg_get_unchecked_329cfe50afab7352: function(arg0, arg1) {
             const ret = arg0[arg1 >>> 0];
             return ret;
