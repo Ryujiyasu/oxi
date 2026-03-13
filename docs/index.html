@@ -3996,14 +3996,20 @@ function renderPdfViewer(doc, rawData) {
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, w, h);
 
+        // Flip to PDF coordinate system (origin at bottom-left)
+        ctx.save();
+        ctx.translate(0, h);
+        ctx.scale(1, -1);
+
         // Draw content elements
         (page.contents || []).forEach(elem => {
             if (elem.Path) {
                 drawPdfPath(ctx, elem.Path);
             } else if (elem.Text) {
-                drawPdfText(ctx, elem.Text, h);
+                drawPdfText(ctx, elem.Text);
             }
         });
+        ctx.restore();
 
         // Page number label
         const label = document.createElement('div');
@@ -4065,10 +4071,9 @@ function colorToCss(color) {
     return '#000';
 }
 
-function drawPdfText(ctx, span, pageHeight) {
+function drawPdfText(ctx, span) {
     const x = span.x;
-    // PDF y=0 is bottom; Canvas y=0 is top
-    const y = pageHeight - span.y;
+    const y = span.y;
     const fontSize = span.font_size || 12;
 
     // Map PDF font names to CSS
@@ -4082,9 +4087,14 @@ function drawPdfText(ctx, span, pageHeight) {
         fontFamily = 'serif';
     }
 
+    // Canvas is y-flipped to match PDF coords, so flip text back to render upright
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(1, -1);
     ctx.font = `${fontSize}px ${fontFamily}`;
     ctx.fillStyle = colorToCss(span.fill_color);
-    ctx.fillText(span.text, x, y);
+    ctx.fillText(span.text, 0, 0);
+    ctx.restore();
 }
 
 function drawPdfPath(ctx, path) {
