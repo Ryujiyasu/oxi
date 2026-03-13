@@ -29,8 +29,10 @@
 - **ダウンロード** — 編集済みファイルを元の ZIP にパッチして出力（再構築なし）
 - **PDF** — テキスト抽出、構造解析、PDF 生成
 - **日本語組版** — 禁則処理 (JIS X 4051)、MS ゴシック / MS 明朝 / 游ゴシック フォントメトリクス
-- **判子 / 印鑑** — デジタル印鑑生成 + PAdES PDF 電子署名
+- **判子 / 印鑑** — デジタル印鑑 (丸印・角印・小判型) を SVG 生成 + PAdES PDF 電子署名
 - **100% クライアントサイド** — すべて WebAssembly で処理、データはブラウザの外に出ない
+
+> **[Live Demo](https://ryujiyasu.github.io/oxi/)** で判子プレビュー・PDF 生成・テキスト抽出をすぐに試せます
 
 ## アーキテクチャ
 
@@ -74,25 +76,39 @@ Document → Page → Block (Paragraph | Table | Image) → Run
 
 ```js
 import init, {
-  parse_document,       // .docx → IR (JSON)
-  parse_spreadsheet,    // .xlsx → IR (JSON)
-  parse_presentation,   // .pptx → IR (JSON)
-  parse_pdf,            // PDF → 構造 (JSON)
-  pdf_extract_text,     // PDF → プレーンテキスト
-  layout_document,      // .docx → 座標付きレイアウト
-  edit_docx,            // テキスト編集 → 新しい .docx バイト列
-  edit_xlsx,            // セル編集 → 新しい .xlsx バイト列
-  edit_pptx,            // スライド編集 → 新しい .pptx バイト列
-  create_blank_docx,    // 空の .docx を生成
-  create_pdf,           // PDF を生成
+  // ドキュメント
+  parse_document,        // .docx → IR (JSON)
+  parse_spreadsheet,     // .xlsx → IR (JSON)
+  parse_presentation,    // .pptx → IR (JSON)
+  layout_document,       // .docx → 座標付きレイアウト
+  // 編集
+  edit_docx,             // テキスト編集 → 新しい .docx バイト列
+  edit_xlsx,             // セル編集 → 新しい .xlsx バイト列
+  edit_pptx,             // スライド編集 → 新しい .pptx バイト列
+  create_blank_docx,     // 空の .docx を生成
+  // PDF
+  parse_pdf,             // PDF → 構造 (JSON)
+  pdf_extract_text,      // PDF → プレーンテキスト
+  create_pdf,            // PDF を新規生成
+  pdf_verify_signatures, // PDF 署名検証
+  // 判子 (Hanko)
+  generate_hanko_svg,    // カスタム設定で判子 SVG 生成
+  preview_hanko,         // 名前だけで判子プレビュー
 } from "./oxi_wasm.js";
 
 await init();
 
+// ドキュメント処理
 const response = await fetch("sample.docx");
 const bytes = new Uint8Array(await response.arrayBuffer());
 const ir = parse_document(bytes);     // 言語非依存 IR (JSON)
 const layout = layout_document(bytes); // Canvas 描画用の座標付き要素
+
+// 判子プレビュー
+const stamp = preview_hanko("山田");   // SVG 文字列
+
+// PDF 生成
+const pdf = create_pdf("タイトル", "本文テキスト");
 ```
 
 ## クイックスタート
@@ -141,6 +157,64 @@ JIS X 4051 に基づく禁則処理を実装:
 - **フォントメトリクス** — MS ゴシック, MS 明朝, 游ゴシック, 游明朝 (win ascent/descent 対応)
 - **行高さ計算** — `max(winAsc + winDes, hheaAsc + hheaDes + hheaGap) / UPM × fontSize`
 - **文書グリッド** — `ceil(height / pitch) × pitch` によるグリッドスナップ
+
+## 判子 (Hanko) — デジタル印鑑
+
+`oxihanko` クレートで日本のビジネスに必須の印鑑を完全デジタル化:
+
+| スタイル | 用途 | 例 |
+|---------|------|-----|
+| **丸印** (Round) | 個人印・認印 | 名前 2 文字 → 横書き、3 文字以上 → 縦書き |
+| **角印** (Square) | 会社印・法人印 | 4 文字以下は 2×2 グリッド (右→左の伝統配置) |
+| **小判型** (Oval) | 銀行届出印 | 楕円スタイル |
+| **承認印** | 日付入り承認スタンプ | 名前 + 日付 + 区切り線 |
+
+**主な機能:**
+- SVG 出力 — 高解像度でスケーラブル
+- インク色: 朱色 (vermilion)・赤・黒・カスタム RGB
+- PDF 署名と連携 — 可視スタンプ付き PAdES 電子署名
+- WASM 経由でブラウザから直接生成
+
+```js
+// ブラウザで判子をリアルタイムプレビュー
+const svg = preview_hanko("山田");
+document.getElementById("stamp").innerHTML = svg;
+
+// カスタム設定で生成
+const svg = generate_hanko_svg({
+  name: "株式会社",
+  style: "Square",
+  color: { r: 227, g: 66, b: 52 },
+  size: 120
+});
+```
+
+**[Live Demo](https://ryujiyasu.github.io/oxi/)** → ファイルを開かずに「Hanko」タブで判子をすぐに試せます。
+
+## PDF エンジン
+
+`oxipdf-core` クレートで PDF 1.7 をフルサポート:
+
+| 機能 | 説明 |
+|------|------|
+| **パース** | PDF 構造解析 (xref, オブジェクト, コンテンツストリーム, CMap) |
+| **テキスト抽出** | ページ単位・ドキュメント全体のプレーンテキスト取得 |
+| **PDF 生成** | A4 ページにテキスト配置、メタデータ付き PDF を新規作成 |
+| **電子署名** | PAdES / PKCS#7 準拠の署名 & 検証 |
+| **判子署名** | `oxihanko` と連携し、可視印鑑付きで署名 |
+
+```js
+// PDF からテキスト抽出
+const text = pdf_extract_text(pdfBytes);
+
+// PDF を新規生成
+const pdfBytes = create_pdf("レポート", "Hello, World!");
+
+// 署名を検証
+const signatures = pdf_verify_signatures(pdfBytes);
+```
+
+署名プロバイダーはプラグイン設計 (`SignatureProvider` trait) で、将来的にマイナンバーカード (JPKI) 等にも拡張可能。
 
 ## ロードマップ
 
@@ -210,8 +284,10 @@ JIS X 4051 に基づく禁則処理を実装:
 - **Download** edited files — changes are patched into the original ZIP, not rebuilt from scratch
 - **PDF** text extraction, structure parsing, and PDF generation from scratch
 - **Japanese typography** — kinsoku shori (JIS X 4051), MS Gothic / MS Mincho / Yu Gothic font metrics
-- **Hanko / Inkan** — Japanese digital stamp generation and PAdES PDF signatures
+- **Hanko / Inkan** — Japanese digital stamp generation (round, square, oval) + PAdES PDF signatures
 - **100% client-side** — all processing runs in WebAssembly, nothing leaves your browser
+
+> Try hanko preview, PDF generation, and text extraction in the **[Live Demo](https://ryujiyasu.github.io/oxi/)**
 
 ## Architecture
 
@@ -255,25 +331,39 @@ All processing is exposed via `wasm-bindgen` and can be called directly from Jav
 
 ```js
 import init, {
-  parse_document,       // .docx → IR (JSON)
-  parse_spreadsheet,    // .xlsx → IR (JSON)
-  parse_presentation,   // .pptx → IR (JSON)
-  parse_pdf,            // PDF → structure (JSON)
-  pdf_extract_text,     // PDF → plain text
-  layout_document,      // .docx → positioned layout with coordinates
-  edit_docx,            // apply text edits → new .docx bytes
-  edit_xlsx,            // apply cell edits → new .xlsx bytes
-  edit_pptx,            // apply slide edits → new .pptx bytes
-  create_blank_docx,    // generate empty .docx
-  create_pdf,           // generate PDF from scratch
+  // Documents
+  parse_document,        // .docx → IR (JSON)
+  parse_spreadsheet,     // .xlsx → IR (JSON)
+  parse_presentation,    // .pptx → IR (JSON)
+  layout_document,       // .docx → positioned layout with coordinates
+  // Editing
+  edit_docx,             // apply text edits → new .docx bytes
+  edit_xlsx,             // apply cell edits → new .xlsx bytes
+  edit_pptx,             // apply slide edits → new .pptx bytes
+  create_blank_docx,     // generate empty .docx
+  // PDF
+  parse_pdf,             // PDF → structure (JSON)
+  pdf_extract_text,      // PDF → plain text
+  create_pdf,            // generate PDF from scratch
+  pdf_verify_signatures, // verify PDF signatures
+  // Hanko (Japanese stamps)
+  generate_hanko_svg,    // generate stamp SVG with custom config
+  preview_hanko,         // quick stamp preview by name
 } from "./oxi_wasm.js";
 
 await init();
 
+// Document processing
 const response = await fetch("sample.docx");
 const bytes = new Uint8Array(await response.arrayBuffer());
 const ir = parse_document(bytes);     // language-agnostic IR as JSON
 const layout = layout_document(bytes); // positioned elements for canvas rendering
+
+// Hanko stamp preview
+const stamp = preview_hanko("山田");   // SVG string
+
+// PDF generation
+const pdf = create_pdf("Report", "Hello, World!");
 ```
 
 ## Quick Start
@@ -312,6 +402,44 @@ python3 -m http.server 8080          # Serve at http://localhost:8080
 | Browser bindings | `wasm-bindgen` + `wasm-pack` |
 | Font metrics | Pre-computed from Windows system fonts (13 fonts, ~55 KB JSON) |
 | Web demo | Vanilla JS + Canvas (no framework dependencies) |
+
+## Hanko — Digital Japanese Stamps
+
+The `oxihanko` crate digitizes Japan's essential business seals:
+
+| Style | Use case | Layout |
+|-------|----------|--------|
+| **Round** (丸印) | Personal seal | 1-2 chars → horizontal, 3+ chars → vertical |
+| **Square** (角印) | Company seal | ≤4 chars in 2×2 grid (right-to-left traditional order) |
+| **Oval** (小判型) | Bank registration | Ellipse style |
+| **Approval** | Date stamp | Name + date + divider lines |
+
+- SVG output — scalable and high-resolution
+- Ink colors: vermilion, red, black, or custom RGB
+- Integrates with PDF signing — visible stamp embedded in PAdES signature
+- Available via WASM — generate stamps directly in the browser
+
+```js
+const svg = preview_hanko("山田");                    // quick preview
+const svg = generate_hanko_svg({                      // custom config
+  name: "株式会社", style: "Square",
+  color: { r: 227, g: 66, b: 52 }, size: 120
+});
+```
+
+## PDF Engine
+
+The `oxipdf-core` crate provides full PDF 1.7 support:
+
+| Feature | Description |
+|---------|-------------|
+| **Parse** | PDF structure analysis (xref, objects, content streams, CMap) |
+| **Text extraction** | Per-page and whole-document plain text |
+| **Generation** | Create new PDFs with text content and metadata |
+| **Digital signatures** | PAdES / PKCS#7 signing and verification |
+| **Hanko signing** | Visible stamp appearance via `oxihanko` integration |
+
+Signature providers use a plugin design (`SignatureProvider` trait), extensible to support hardware tokens like Japan's My Number Card (JPKI) in the future.
 
 ## Why Rust + Wasm?
 
