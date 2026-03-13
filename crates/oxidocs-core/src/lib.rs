@@ -165,8 +165,8 @@ mod tests {
         assert!(doc.styles.styles.contains_key("Heading1"));
 
         let h1 = &doc.styles.styles["Heading1"];
-        assert_eq!(h1.space_before, Some(12.0)); // 240 twips / 20 = 12pt
-        assert_eq!(h1.space_after, Some(6.0));    // 120 twips / 20 = 6pt
+        assert_eq!(h1.paragraph.space_before, Some(12.0)); // 240 twips / 20 = 12pt
+        assert_eq!(h1.paragraph.space_after, Some(6.0));    // 120 twips / 20 = 6pt
     }
 
     #[test]

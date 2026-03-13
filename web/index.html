@@ -418,7 +418,6 @@ input[type="file"] { display: none; }
 .edit-page {
     background: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    padding: 72px;
     max-width: 800px;
     width: 100%;
     min-height: 600px;
@@ -1510,6 +1509,18 @@ function renderEditableDocx(doc) {
         pageDiv.className = 'edit-page';
         pageDiv.style.position = 'relative'; // For floating images & text boxes
 
+        // Apply page dimensions from IR
+        if (page.size) {
+            pageDiv.style.width = page.size.width + 'pt';
+            pageDiv.style.maxWidth = page.size.width + 'pt';
+        }
+        if (page.margin) {
+            pageDiv.style.paddingTop = page.margin.top + 'pt';
+            pageDiv.style.paddingBottom = page.margin.bottom + 'pt';
+            pageDiv.style.paddingLeft = page.margin.left + 'pt';
+            pageDiv.style.paddingRight = page.margin.right + 'pt';
+        }
+
         // Column layout support
         let blocksContainer = pageDiv;
         if (page.columns && page.columns.num > 1) {
@@ -1585,6 +1596,25 @@ function renderEditableDocx(doc) {
                         paraDiv.style.pageBreakBefore = 'always';
                         paraDiv.style.borderTop = '2px dashed #ccc';
                         paraDiv.style.marginTop = '12pt';
+                    }
+                    // Paragraph borders
+                    if (para.style.borders) {
+                        const b = para.style.borders;
+                        const bdrCss = (d) => {
+                            if (!d) return '';
+                            const w = d.width ? d.width + 'pt' : '1pt';
+                            const c = d.color ? '#' + d.color : '#000';
+                            const s = d.style === 'double' ? 'double' :
+                                      d.style === 'dashed' ? 'dashed' :
+                                      d.style === 'dotted' ? 'dotted' : 'solid';
+                            return `${w} ${s} ${c}`;
+                        };
+                        if (b.top) paraDiv.style.borderTop = bdrCss(b.top);
+                        if (b.bottom) paraDiv.style.borderBottom = bdrCss(b.bottom);
+                        if (b.left) paraDiv.style.borderLeft = bdrCss(b.left);
+                        if (b.right) paraDiv.style.borderRight = bdrCss(b.right);
+                        paraDiv.style.paddingLeft = paraDiv.style.paddingLeft || '4pt';
+                        paraDiv.style.paddingRight = paraDiv.style.paddingRight || '4pt';
                     }
                 }
 
@@ -1691,7 +1721,24 @@ function renderEditableDocx(doc) {
                     if (run.style) {
                         if (run.style.bold) span.style.fontWeight = 'bold';
                         if (run.style.italic) span.style.fontStyle = 'italic';
-                        if (run.style.underline) span.style.textDecoration = 'underline';
+                        if (run.style.underline) {
+                            const uStyle = run.style.underline_style || 'single';
+                            const uMap = {
+                                'single': 'underline solid',
+                                'double': 'underline double',
+                                'thick': 'underline solid 2px',
+                                'dotted': 'underline dotted',
+                                'dash': 'underline dashed',
+                                'wave': 'underline wavy',
+                                'dottedHeavy': 'underline dotted 2px',
+                                'dashHeavy': 'underline dashed 2px',
+                                'wavyHeavy': 'underline wavy 2px',
+                                'dashDot': 'underline dashed',
+                                'dashDotDot': 'underline dashed',
+                                'words': 'underline solid',
+                            };
+                            span.style.textDecoration = uMap[uStyle] || 'underline';
+                        }
                         if (run.style.strikethrough) {
                             span.style.textDecoration = span.style.textDecoration
                                 ? span.style.textDecoration + ' line-through'
@@ -1761,6 +1808,24 @@ function renderEditableDocx(doc) {
                 const tableEl = document.createElement('table');
                 tableEl.className = 'edit-table';
                 tableEl.style.borderCollapse = 'collapse';
+
+                // Table width
+                if (table.style && table.style.width) {
+                    if (table.style.width_type === 'pct') {
+                        tableEl.style.width = table.style.width + '%';
+                    } else {
+                        tableEl.style.width = table.style.width + 'pt';
+                    }
+                }
+                // Table alignment
+                if (table.style && table.style.alignment) {
+                    if (table.style.alignment === 'center') {
+                        tableEl.style.marginLeft = 'auto';
+                        tableEl.style.marginRight = 'auto';
+                    } else if (table.style.alignment === 'right') {
+                        tableEl.style.marginLeft = 'auto';
+                    }
+                }
 
                 // Apply table border styles
                 if (table.style && table.style.border) {
@@ -1838,6 +1903,30 @@ function renderEditableDocx(doc) {
                         // Vertical alignment
                         if (cell.v_align) {
                             td.style.verticalAlign = cell.v_align === 'center' ? 'middle' : cell.v_align;
+                        }
+                        // Cell-specific borders
+                        if (cell.borders) {
+                            const cb = cell.borders;
+                            const bdrCss = (d) => {
+                                if (!d) return '';
+                                const w = d.width ? d.width + 'pt' : '1pt';
+                                const c = d.color ? '#' + d.color : '#000';
+                                const s = d.style === 'double' ? 'double' :
+                                          d.style === 'dashed' ? 'dashed' :
+                                          d.style === 'dotted' ? 'dotted' : 'solid';
+                                return `${w} ${s} ${c}`;
+                            };
+                            if (cb.top) td.style.borderTop = bdrCss(cb.top);
+                            if (cb.bottom) td.style.borderBottom = bdrCss(cb.bottom);
+                            if (cb.left) td.style.borderLeft = bdrCss(cb.left);
+                            if (cb.right) td.style.borderRight = bdrCss(cb.right);
+                        }
+                        // Cell margins
+                        if (cell.margins) {
+                            if (cell.margins.top) td.style.paddingTop = cell.margins.top + 'pt';
+                            if (cell.margins.bottom) td.style.paddingBottom = cell.margins.bottom + 'pt';
+                            if (cell.margins.left) td.style.paddingLeft = cell.margins.left + 'pt';
+                            if (cell.margins.right) td.style.paddingRight = cell.margins.right + 'pt';
                         }
 
                         // Full run styling in table cells

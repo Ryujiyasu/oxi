@@ -8,6 +8,7 @@ use zip::ZipArchive;
 use super::numbering::{parse_numbering, NumberingDefinitions};
 use super::relationships::{parse_relationships, Relationship};
 use super::styles::parse_styles;
+use super::theme::{parse_theme, ThemeColors};
 use super::ParseError;
 use crate::ir::{*, VerticalAlign};
 
@@ -35,6 +36,8 @@ struct ParseContext {
     endnotes: HashMap<String, Vec<Block>>,
     /// Comment ID -> Comment (from word/comments.xml)
     comments: HashMap<String, Comment>,
+    /// Theme colors from theme1.xml
+    theme: ThemeColors,
 }
 
 impl OoxmlParser {
@@ -208,6 +211,12 @@ impl OoxmlParser {
             Err(e) => return Err(e),
         };
 
+        // Parse theme colors
+        let theme = match self.read_part("word/theme/theme1.xml") {
+            Ok(xml) => parse_theme(&xml),
+            Err(_) => ThemeColors::default(),
+        };
+
         Ok(ParseContext {
             _rels: rels,
             media,
@@ -218,6 +227,7 @@ impl OoxmlParser {
             footnotes,
             endnotes,
             comments,
+            theme,
         })
     }
 
@@ -445,6 +455,9 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 }
                             }
                         }
+                        "bookmarkStart" | "bookmarkEnd" => {
+                            // Parsed but not acted on yet — bookmarks tracked for future use
+                        }
                         _ => {}
                     }
                 }
@@ -463,23 +476,38 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    // Apply style inheritance from StyleSheet
+    // Apply style inheritance from StyleSheet (basedOn already resolved)
     if let Some(ref sid) = style_id {
-        if let Some(defined_style) = styles.styles.get(sid) {
-            // Merge spacing from style definition (only if not explicitly set)
+        if let Some(defined) = styles.styles.get(sid) {
+            let ds = &defined.paragraph;
             if style.space_before.is_none() {
-                style.space_before = defined_style.space_before;
+                style.space_before = ds.space_before;
             }
             if style.space_after.is_none() {
-                style.space_after = defined_style.space_after;
+                style.space_after = ds.space_after;
             }
             if style.line_spacing.is_none() {
-                style.line_spacing = defined_style.line_spacing;
+                style.line_spacing = ds.line_spacing;
             }
-            // Carry over default run style from the style definition
             if style.default_run_style.is_none() {
-                style.default_run_style = defined_style.default_run_style.clone();
+                style.default_run_style = ds.default_run_style.clone();
             }
+            // Inherit keepNext, keepLines from style
+            if ds.keep_next { style.keep_next = true; }
+            if ds.keep_lines { style.keep_lines = true; }
+        }
+    }
+
+    // Apply docDefaults fallback
+    if style.default_run_style.is_none() {
+        style.default_run_style = styles.doc_default_run_style.clone();
+    }
+    if let Some(ref doc_para) = styles.doc_default_para_style {
+        if style.space_after.is_none() {
+            style.space_after = doc_para.space_after;
+        }
+        if style.line_spacing.is_none() {
+            style.line_spacing = doc_para.line_spacing;
         }
     }
 
@@ -569,8 +597,10 @@ fn parse_paragraph_properties(
                     "tabs" if depth == 0 => {
                         style.tab_stops = parse_tab_stops(reader)?;
                     }
+                    "pBdr" if depth == 0 => {
+                        style.borders = Some(parse_paragraph_borders(reader)?);
+                    }
                     "sectPr" if depth == 0 => {
-                        // Section break within paragraph — marks end of a section
                         sect_pr = Some(parse_section_properties(reader)?);
                     }
                     _ => {
@@ -687,6 +717,22 @@ fn parse_paragraph_properties(
                     "pageBreakBefore" => {
                         style.page_break_before = true;
                     }
+                    "keepNext" => {
+                        style.keep_next = true;
+                    }
+                    "keepLines" => {
+                        style.keep_lines = true;
+                    }
+                    "widowControl" => {
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.widow_control = enabled;
+                    }
                     _ => {}
                 }
             }
@@ -754,6 +800,73 @@ fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
     }
 
     Ok(NumPrRef { num_id, ilvl })
+}
+
+/// Parse w:pBdr element containing border children (top, bottom, left, right, between)
+fn parse_paragraph_borders(reader: &mut Reader<&[u8]>) -> Result<ParagraphBorders, ParseError> {
+    let mut borders = ParagraphBorders {
+        top: None, bottom: None, left: None, right: None, between: None,
+    };
+
+    loop {
+        match reader.read_event()? {
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                let bdr = parse_border_attrs(&e);
+                match local.as_str() {
+                    "top" => borders.top = bdr,
+                    "bottom" => borders.bottom = bdr,
+                    "left" | "start" => borders.left = bdr,
+                    "right" | "end" => borders.right = bdr,
+                    "between" => borders.between = bdr,
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "pBdr" {
+                    break;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(borders)
+}
+
+/// Parse border attributes from an element (w:sz, w:color, w:val)
+fn parse_border_attrs(e: &quick_xml::events::BytesStart) -> Option<BorderDef> {
+    let mut style = String::new();
+    let mut width: f32 = 0.0;
+    let mut color = None;
+
+    for attr in e.attributes().flatten() {
+        let key = local_name(attr.key.as_ref());
+        let val = String::from_utf8_lossy(&attr.value).to_string();
+        match key.as_str() {
+            "val" => {
+                if val == "none" || val == "nil" {
+                    return None;
+                }
+                style = val;
+            }
+            "sz" => {
+                width = val.parse::<f32>().unwrap_or(0.0) / 8.0;
+            }
+            "color" => {
+                if val != "auto" {
+                    color = Some(val);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if style.is_empty() {
+        return None;
+    }
+
+    Some(BorderDef { style, width, color })
 }
 
 /// Parse w:tabs element containing w:tab children
@@ -838,7 +951,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "rPr" if depth == 0 => {
-                        style = parse_run_properties(reader)?;
+                        style = parse_run_properties(reader, ctx)?;
                     }
                     "t" if depth == 0 => {
                         in_text = true;
@@ -880,7 +993,19 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
-                    "br" => text.push('\n'),
+                    "br" => {
+                        let mut br_type = None;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                br_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                        match br_type.as_deref() {
+                            Some("page") => text.push('\x0C'),   // form feed = page break
+                            Some("column") => text.push('\x0B'), // vertical tab = column break
+                            _ => text.push('\n'),                 // text wrap break
+                        }
+                    }
                     "tab" => text.push('\t'),
                     "fldChar" => {
                         // fldChar with fldCharType="separate" or "end" — no action needed
@@ -1002,6 +1127,7 @@ fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError>
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
         comments: HashMap::new(),
+        theme: ThemeColors::default(),
     };
     let empty_styles = StyleSheet::default();
 
@@ -1240,7 +1366,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
 }
 
 /// Parse w:rPr (run properties)
-fn parse_run_properties(reader: &mut Reader<&[u8]>) -> Result<RunStyle, ParseError> {
+fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<RunStyle, ParseError> {
     let mut style = RunStyle::default();
     let mut depth = 0;
 
@@ -1264,7 +1390,19 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>) -> Result<RunStyle, ParseErr
                 match local.as_str() {
                     "b" => style.bold = true,
                     "i" => style.italic = true,
-                    "u" => style.underline = true,
+                    "u" => {
+                        style.underline = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if val == "none" {
+                                    style.underline = false;
+                                } else {
+                                    style.underline_style = Some(val);
+                                }
+                            }
+                        }
+                    }
                     "strike" | "dstrike" => style.strikethrough = true,
                     "highlight" => {
                         for attr in e.attributes().flatten() {
@@ -1305,10 +1443,47 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>) -> Result<RunStyle, ParseErr
                         }
                     }
                     "color" => {
+                        let mut color_val = None;
+                        let mut theme_color = None;
+                        let mut theme_tint = None;
+                        let mut theme_shade = None;
                         for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "val" {
-                                style.color =
-                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "val" => color_val = Some(val),
+                                "themeColor" => theme_color = Some(val),
+                                "themeTint" => theme_tint = Some(val),
+                                "themeShade" => theme_shade = Some(val),
+                                _ => {}
+                            }
+                        }
+                        // Resolve theme color if available
+                        if let Some(ref tc) = theme_color {
+                            if let Some(resolved) = ctx.theme.resolve(tc) {
+                                let mut hex: String = resolved.clone();
+                                // Apply tint/shade
+                                if let Some(ref tint) = theme_tint {
+                                    if let Ok(t) = u8::from_str_radix(tint, 16) {
+                                        let tint_val = t as f64 / 255.0;
+                                        hex = ThemeColors::apply_tint_shade(&hex, tint_val);
+                                    }
+                                }
+                                if let Some(ref shade) = theme_shade {
+                                    if let Ok(s) = u8::from_str_radix(shade, 16) {
+                                        let shade_val = -(1.0 - s as f64 / 255.0);
+                                        hex = ThemeColors::apply_tint_shade(&hex, shade_val);
+                                    }
+                                }
+                                style.color = Some(hex);
+                            } else if let Some(ref cv) = color_val {
+                                if cv != "auto" {
+                                    style.color = Some(cv.clone());
+                                }
+                            }
+                        } else if let Some(ref cv) = color_val {
+                            if cv != "auto" {
+                                style.color = Some(cv.clone());
                             }
                         }
                     }
@@ -1418,13 +1593,11 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                if matches!(
-                    local.as_str(),
+                match local.as_str() {
                     "top" | "left" | "bottom" | "right" | "insideH" | "insideV" | "start" | "end"
-                ) {
-                    if in_borders || depth == 0 {
+                        if in_borders || depth == 0 =>
+                    {
                         style.border = true;
-                        // Extract border details from first border element encountered
                         if style.border_color.is_none() {
                             for attr in e.attributes().flatten() {
                                 let key = local_name(attr.key.as_ref());
@@ -1436,7 +1609,6 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                         }
                                     }
                                     "sz" => {
-                                        // sz is in 1/8 pt
                                         style.border_width = val.parse::<f32>().ok().map(|v| v / 8.0);
                                     }
                                     "val" => {
@@ -1449,6 +1621,47 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                             }
                         }
                     }
+                    "tblW" => {
+                        let mut w_val = None;
+                        let mut w_type = None;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "w" => w_val = Some(val),
+                                "type" => w_type = Some(val),
+                                _ => {}
+                            }
+                        }
+                        style.width_type = w_type.clone();
+                        if let Some(ref wv) = w_val {
+                            match w_type.as_deref() {
+                                Some("dxa") => {
+                                    style.width = wv.parse::<f32>().ok().map(|v| v / 20.0);
+                                }
+                                Some("pct") => {
+                                    // Percentage stored as 50ths of a percent
+                                    style.width = wv.parse::<f32>().ok().map(|v| v / 50.0);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "jc" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                style.alignment = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "tblStyle" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                style.style_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Event::Eof => break,
@@ -1551,6 +1764,8 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
         v_merge: cell_props.v_merge,
         shading: cell_props.shading,
         v_align: cell_props.v_align,
+        borders: cell_props.borders,
+        margins: cell_props.margins,
     })
 }
 
@@ -1561,6 +1776,8 @@ struct CellProperties {
     v_merge: Option<String>,
     shading: Option<String>,
     v_align: Option<String>,
+    borders: Option<CellBorders>,
+    margins: Option<CellMargins>,
 }
 
 /// Parse w:tcPr (table cell properties)
@@ -1572,17 +1789,27 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "vMerge" {
-                    // vMerge as Start element (with attributes or children)
-                    let mut val = "continue".to_string();
-                    for attr in e.attributes().flatten() {
-                        if local_name(attr.key.as_ref()) == "val" {
-                            val = String::from_utf8_lossy(&attr.value).to_string();
+                match local.as_str() {
+                    "vMerge" => {
+                        let mut val = "continue".to_string();
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                val = String::from_utf8_lossy(&attr.value).to_string();
+                            }
                         }
+                        props.v_merge = Some(val);
+                        depth += 1;
                     }
-                    props.v_merge = Some(val);
+                    "tcBorders" if depth == 0 => {
+                        props.borders = Some(parse_cell_borders(reader)?);
+                    }
+                    "tcMar" if depth == 0 => {
+                        props.margins = Some(parse_cell_margins(reader)?);
+                    }
+                    _ => {
+                        depth += 1;
+                    }
                 }
-                depth += 1;
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
@@ -1649,6 +1876,66 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
     Ok(props)
 }
 
+/// Parse w:tcBorders
+fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseError> {
+    let mut borders = CellBorders {
+        top: None, bottom: None, left: None, right: None,
+    };
+    loop {
+        match reader.read_event()? {
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                let bdr = parse_border_attrs(&e);
+                match local.as_str() {
+                    "top" => borders.top = bdr,
+                    "bottom" => borders.bottom = bdr,
+                    "left" | "start" => borders.left = bdr,
+                    "right" | "end" => borders.right = bdr,
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "tcBorders" { break; }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(borders)
+}
+
+/// Parse w:tcMar
+fn parse_cell_margins(reader: &mut Reader<&[u8]>) -> Result<CellMargins, ParseError> {
+    let mut margins = CellMargins {
+        top: None, bottom: None, left: None, right: None,
+    };
+    loop {
+        match reader.read_event()? {
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                let val = e.attributes().flatten()
+                    .find(|a| local_name(a.key.as_ref()) == "w")
+                    .and_then(|a| {
+                        String::from_utf8_lossy(&a.value).parse::<f32>().ok().map(|v| v / 20.0)
+                    });
+                match local.as_str() {
+                    "top" => margins.top = val,
+                    "bottom" => margins.bottom = val,
+                    "left" | "start" => margins.left = val,
+                    "right" | "end" => margins.right = val,
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "tcMar" { break; }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(margins)
+}
+
 /// Parsed section properties
 struct SectionProperties {
     page_size: PageSize,
@@ -1684,6 +1971,7 @@ fn parse_section_properties(
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pgSz" => {
+                        let mut orient = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -1698,8 +1986,13 @@ fn parse_section_properties(
                                         page_size.height = v / 20.0;
                                     }
                                 }
+                                "orient" => orient = Some(val.to_string()),
                                 _ => {}
                             }
+                        }
+                        // Landscape: ensure width > height
+                        if orient.as_deref() == Some("landscape") && page_size.width < page_size.height {
+                            std::mem::swap(&mut page_size.width, &mut page_size.height);
                         }
                     }
                     "pgMar" => {
@@ -2033,6 +2326,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
         comments: HashMap::new(),
+        theme: ThemeColors::default(),
     };
     let empty_styles = StyleSheet::default();
 

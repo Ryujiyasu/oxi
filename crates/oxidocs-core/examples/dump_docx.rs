@@ -58,9 +58,10 @@ fn main() {
     }
 
     println!("\n=== STYLES ===");
-    for (name, style) in &doc.styles.styles {
-        println!("  {} -> before={:?} after={:?} line_spacing={:?}", 
-            name, style.space_before, style.space_after, style.line_spacing);
+    for (name, def) in &doc.styles.styles {
+        let style = &def.paragraph;
+        println!("  {} -> before={:?} after={:?} line_spacing={:?} basedOn={:?}",
+            name, style.space_before, style.space_after, style.line_spacing, def.based_on);
     }
 
     println!("\n=== LAYOUT ===");

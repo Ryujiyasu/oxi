@@ -92,6 +92,9 @@ pub struct RunStyle {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// Underline style (e.g. "single", "double", "wave", "dash", "dotted", "thick")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline_style: Option<String>,
     pub strikethrough: bool,
     pub color: Option<String>,
     pub highlight: Option<String>,
@@ -115,6 +118,7 @@ impl Default for RunStyle {
             bold: false,
             italic: false,
             underline: false,
+            underline_style: None,
             strikethrough: false,
             color: None,
             highlight: None,
@@ -163,6 +167,38 @@ pub struct TableCell {
     /// Vertical alignment within cell
     #[serde(default)]
     pub v_align: Option<String>,
+    /// Cell-specific borders (override table borders)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borders: Option<CellBorders>,
+    /// Cell margins/padding in points
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margins: Option<CellMargins>,
+}
+
+/// Cell border definitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellBorders {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<BorderDef>,
+}
+
+/// Cell margin/padding
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellMargins {
+    #[serde(default)]
+    pub top: Option<f32>,
+    #[serde(default)]
+    pub bottom: Option<f32>,
+    #[serde(default)]
+    pub left: Option<f32>,
+    #[serde(default)]
+    pub right: Option<f32>,
 }
 
 fn default_one() -> u32 { 1 }
@@ -354,6 +390,44 @@ pub struct ParagraphStyle {
     /// Page break before this paragraph (w:pageBreakBefore)
     #[serde(default)]
     pub page_break_before: bool,
+    /// Paragraph borders
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borders: Option<ParagraphBorders>,
+    /// Keep with next paragraph on same page (w:keepNext)
+    #[serde(default)]
+    pub keep_next: bool,
+    /// Keep all lines of this paragraph together (w:keepLines)
+    #[serde(default)]
+    pub keep_lines: bool,
+    /// Widow/orphan control (w:widowControl, default true in Word)
+    #[serde(default = "default_true")]
+    pub widow_control: bool,
+}
+
+/// Paragraph border definitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParagraphBorders {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub between: Option<BorderDef>,
+}
+
+/// A single border definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BorderDef {
+    /// Border style (e.g. "single", "double", "dashed", "dotted", "thick")
+    pub style: String,
+    /// Width in points (w:sz is in 1/8 pt)
+    pub width: f32,
+    /// Color hex
+    pub color: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -377,6 +451,10 @@ impl Default for ParagraphStyle {
             tab_stops: Vec::new(),
             shading: None,
             page_break_before: false,
+            borders: None,
+            keep_next: false,
+            keep_lines: false,
+            widow_control: true,
         }
     }
 }
@@ -393,6 +471,18 @@ pub struct TableStyle {
     /// Border style (e.g. "single", "double", "dashed")
     #[serde(default)]
     pub border_style: Option<String>,
+    /// Table width in points (from w:tblW)
+    #[serde(default)]
+    pub width: Option<f32>,
+    /// Table width type: "dxa" (fixed), "pct" (percentage), "auto"
+    #[serde(default)]
+    pub width_type: Option<String>,
+    /// Table alignment (w:jc): "left", "center", "right"
+    #[serde(default)]
+    pub alignment: Option<String>,
+    /// Table style ID reference (w:tblStyle)
+    #[serde(default)]
+    pub style_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -433,7 +523,26 @@ impl Default for Margin {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StyleSheet {
-    pub styles: HashMap<String, ParagraphStyle>,
+    pub styles: HashMap<String, StyleDefinition>,
+    /// Default run properties from w:docDefaults/w:rPrDefault
+    pub doc_default_run_style: Option<RunStyle>,
+    /// Default paragraph properties from w:docDefaults/w:pPrDefault
+    pub doc_default_para_style: Option<ParagraphStyle>,
+}
+
+/// A named style definition with inheritance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StyleDefinition {
+    /// Style ID
+    pub style_id: String,
+    /// Parent style ID (w:basedOn)
+    #[serde(default)]
+    pub based_on: Option<String>,
+    /// Paragraph properties defined in this style
+    pub paragraph: ParagraphStyle,
+    /// Whether inheritance has been resolved
+    #[serde(skip, default)]
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

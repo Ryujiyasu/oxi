@@ -2,6 +2,7 @@ mod numbering;
 mod ooxml;
 mod relationships;
 mod styles;
+pub mod theme;
 
 use crate::ir::Document;
 use thiserror::Error;
