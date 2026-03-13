@@ -34,6 +34,8 @@ pub struct NumberingDefinitions {
     pub abstract_nums: HashMap<String, AbstractNum>,
     /// numId -> abstractNumId
     pub num_map: HashMap<String, String>,
+    /// numId -> (ilvl -> start override value)
+    pub level_overrides: HashMap<String, HashMap<u8, u32>>,
 }
 
 impl NumberingDefinitions {
@@ -74,7 +76,15 @@ impl NumberingDefinitions {
 
         // Numbered list: increment counter
         let key = (num_id.to_string(), ilvl);
-        let count = counters.entry(key).or_insert(0);
+        let count = counters.entry(key).or_insert_with(|| {
+            // Check for startOverride
+            if let Some(overrides) = self.level_overrides.get(num_id) {
+                if let Some(&start) = overrides.get(&ilvl) {
+                    return start - 1; // will be incremented below
+                }
+            }
+            0
+        });
         *count += 1;
         let current = *count;
 
@@ -186,8 +196,11 @@ pub fn parse_numbering(xml: &str) -> Result<NumberingDefinitions, ParseError> {
                                 num_id = String::from_utf8_lossy(&attr.value).to_string();
                             }
                         }
-                        let abstract_num_id = parse_num_element(&mut reader)?;
-                        defs.num_map.insert(num_id, abstract_num_id);
+                        let (abstract_num_id, overrides) = parse_num_element(&mut reader)?;
+                        defs.num_map.insert(num_id.clone(), abstract_num_id);
+                        if !overrides.is_empty() {
+                            defs.level_overrides.insert(num_id, overrides);
+                        }
                     }
                     _ => {}
                 }
@@ -331,14 +344,25 @@ fn parse_numbering_level(
     })
 }
 
-/// Parse a w:num element to get its abstractNumId
-fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<String, ParseError> {
+/// Parse a w:num element to get its abstractNumId and any lvlOverride/startOverride
+fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<(String, HashMap<u8, u32>), ParseError> {
     let mut abstract_num_id = String::new();
+    let mut overrides: HashMap<u8, u32> = HashMap::new();
     let mut depth = 0;
+    let mut current_override_ilvl: Option<u8> = None;
 
     loop {
         match reader.read_event()? {
-            Event::Start(_) => {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "lvlOverride" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "ilvl" {
+                            let val = String::from_utf8_lossy(&attr.value);
+                            current_override_ilvl = val.parse().ok();
+                        }
+                    }
+                }
                 depth += 1;
             }
             Event::Empty(e) => {
@@ -350,10 +374,24 @@ fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<String, ParseError> {
                                 String::from_utf8_lossy(&attr.value).to_string();
                         }
                     }
+                } else if local == "startOverride" {
+                    if let Some(ilvl) = current_override_ilvl {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if let Ok(start) = val.parse::<u32>() {
+                                    overrides.insert(ilvl, start);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "lvlOverride" {
+                    current_override_ilvl = None;
+                }
                 if local == "num" && depth == 0 {
                     break;
                 }
@@ -366,7 +404,7 @@ fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<String, ParseError> {
         }
     }
 
-    Ok(abstract_num_id)
+    Ok((abstract_num_id, overrides))
 }
 
 /// Unescape XML character references like &#x2022; and &#8226; and standard entities

@@ -45,6 +45,12 @@ pub struct Page {
     /// Column layout for this section
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns: Option<ColumnLayout>,
+    /// Page number format (e.g. "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_number_format: Option<String>,
+    /// Starting page number for this section
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_number_start: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +147,27 @@ pub struct RunStyle {
     /// Text imprint/engrave effect (w:imprint)
     #[serde(default)]
     pub imprint: bool,
+    /// Complex script font size in points (w:szCs, half-points / 2)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_cs: Option<f32>,
+    /// Complex script bold (w:bCs)
+    #[serde(default)]
+    pub bold_cs: bool,
+    /// Complex script italic (w:iCs)
+    #[serde(default)]
+    pub italic_cs: bool,
+    /// Character kerning threshold in points (w:kern, half-points / 2)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kern: Option<f32>,
+    /// Fit text width in points (w:fitText, twips / 20)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<f32>,
+    /// East Asian layout: combine (kumimoji)
+    #[serde(default)]
+    pub combine: bool,
+    /// East Asian layout: vertical-in-horizontal (tate-chu-yoko)
+    #[serde(default)]
+    pub vert_in_horz: bool,
 }
 
 impl Default for RunStyle {
@@ -168,6 +195,13 @@ impl Default for RunStyle {
             shadow: false,
             emboss: false,
             imprint: false,
+            font_size_cs: None,
+            bold_cs: false,
+            italic_cs: false,
+            kern: None,
+            fit_text: None,
+            combine: false,
+            vert_in_horz: false,
         }
     }
 }
@@ -357,6 +391,21 @@ pub struct Shape {
     /// Rotation in degrees
     #[serde(default)]
     pub rotation: Option<f32>,
+    /// Gradient fill stops (from a:gradFill)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gradient_stops: Vec<GradientStop>,
+    /// Gradient fill angle in degrees
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_angle: Option<f32>,
+}
+
+/// A gradient color stop
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GradientStop {
+    /// Position as 0-100 percentage
+    pub position: f32,
+    /// Color hex
+    pub color: String,
 }
 
 /// A comment annotation

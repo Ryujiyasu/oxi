@@ -181,6 +181,12 @@ fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.shading.is_none() {
         child.shading = parent.shading.clone();
     }
+    if child.font_size_cs.is_none() {
+        child.font_size_cs = parent.font_size_cs;
+    }
+    if child.kern.is_none() {
+        child.kern = parent.kern;
+    }
 }
 
 /// Parse a run properties block (<w:rPr>...</w:rPr>) and return RunStyle
@@ -331,6 +337,48 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
         "shadow" => rs.shadow = true,
         "emboss" => rs.emboss = true,
         "imprint" => rs.imprint = true,
+        "bCs" => rs.bold_cs = true,
+        "iCs" => rs.italic_cs = true,
+        "szCs" => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.font_size_cs = val.parse::<f32>().ok().map(|v| v / 2.0);
+                }
+            }
+        }
+        "kern" => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.kern = val.parse::<f32>().ok().map(|v| v / 2.0);
+                }
+            }
+        }
+        "fitText" => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.fit_text = val.parse::<f32>().ok().map(|v| v / 20.0);
+                }
+            }
+        }
+        "eastAsianLayout" => {
+            for attr in e.attributes().flatten() {
+                let key = local_name(attr.key.as_ref());
+                match key.as_str() {
+                    "combine" => {
+                        let val = String::from_utf8_lossy(&attr.value);
+                        rs.combine = val.as_ref() != "0" && val.as_ref() != "false";
+                    }
+                    "vert" => {
+                        let val = String::from_utf8_lossy(&attr.value);
+                        rs.vert_in_horz = val.as_ref() != "0" && val.as_ref() != "false";
+                    }
+                    _ => {}
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -550,6 +598,32 @@ fn parse_style_definition(
                                         run_style.shading = Some(val);
                                         has_run_style = true;
                                     }
+                                }
+                            }
+                        }
+                        "bCs" => {
+                            run_style.bold_cs = true;
+                            has_run_style = true;
+                        }
+                        "iCs" => {
+                            run_style.italic_cs = true;
+                            has_run_style = true;
+                        }
+                        "szCs" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.font_size_cs = val.parse::<f32>().ok().map(|v| v / 2.0);
+                                    has_run_style = true;
+                                }
+                            }
+                        }
+                        "kern" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.kern = val.parse::<f32>().ok().map(|v| v / 2.0);
+                                    has_run_style = true;
                                 }
                             }
                         }

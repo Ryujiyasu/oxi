@@ -951,6 +951,9 @@ function renderCellBlocks(blocks, container) {
                     if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
                     if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
                     if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
+                    if (run.style.kern) span.style.fontKerning = 'normal';
+                    if (run.style.fit_text) span.style.width = run.style.fit_text + 'pt';
+                    if (run.style.combine) { span.style.writingMode = 'horizontal-tb'; span.style.textCombineUpright = 'all'; }
                 }
                 cellParaDiv.appendChild(span);
             }
@@ -2039,6 +2042,25 @@ function renderEditableDocx(doc) {
                         if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
                         if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
                         if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
+                        // Kerning
+                        if (run.style.kern) span.style.fontKerning = 'normal';
+                        // Fit text to width
+                        if (run.style.fit_text) {
+                            span.style.display = 'inline-block';
+                            span.style.width = run.style.fit_text + 'pt';
+                            span.style.overflow = 'hidden';
+                            span.style.textOverflow = 'clip';
+                        }
+                        // East Asian layout: combine (kumimoji)
+                        if (run.style.combine) {
+                            span.style.writingMode = 'horizontal-tb';
+                            span.style.textCombineUpright = 'all';
+                        }
+                        // East Asian layout: vertical-in-horizontal (tate-chu-yoko)
+                        if (run.style.vert_in_horz) {
+                            span.style.writingMode = 'horizontal-tb';
+                            span.style.textCombineUpright = 'all';
+                        }
                     }
 
                     // Hyperlink wrapping
@@ -2388,8 +2410,12 @@ function renderEditableDocx(doc) {
                 shapeDiv.style.zIndex = '3';
                 shapeDiv.style.boxSizing = 'border-box';
 
-                // Fill
-                if (shape.fill) {
+                // Fill (gradient or solid)
+                if (shape.gradient_stops && shape.gradient_stops.length >= 2) {
+                    const angle = (shape.gradient_angle || 0) + 90; // CSS angle offset
+                    const stops = shape.gradient_stops.map(s => '#' + s.color + ' ' + s.position + '%').join(', ');
+                    shapeDiv.style.background = `linear-gradient(${angle}deg, ${stops})`;
+                } else if (shape.fill) {
                     shapeDiv.style.backgroundColor = '#' + shape.fill;
                 }
                 // Stroke

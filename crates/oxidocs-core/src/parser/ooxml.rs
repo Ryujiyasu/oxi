@@ -117,6 +117,8 @@ impl OoxmlParser {
                     text_boxes: section.text_boxes,
                     shapes: section.shapes,
                     columns: section.properties.columns,
+                    page_number_format: section.properties.page_number_format,
+                    page_number_start: section.properties.page_number_start,
                 });
             }
             page_index += 1;
@@ -434,6 +436,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         columns: None,
         title_pg: false,
         section_type: None,
+        page_number_format: None,
+        page_number_start: None,
     });
     sections.push(ParsedSection {
         blocks: current_blocks,
@@ -1464,6 +1468,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut rotation: Option<f32> = None;
     let mut has_no_fill = false;
     let mut has_no_stroke = false;
+    let mut gradient_stops: Vec<GradientStop> = Vec::new();
+    let mut gradient_angle: Option<f32> = None;
 
     loop {
         match reader.read_event()? {
@@ -1520,6 +1526,69 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         }
                         // We consumed ln's End, decrement outer depth
                         depth -= 1;
+                    }
+                    // Gradient fill
+                    "gradFill" => {
+                        let mut gf_depth = 1;
+                        let mut current_gs_pos: Option<f32> = None;
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    gf_depth += 1;
+                                    if sl == "gs" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "pos" {
+                                                let val = String::from_utf8_lossy(&attr.value);
+                                                current_gs_pos = val.parse::<f32>().ok().map(|v| v / 1000.0);
+                                            }
+                                        }
+                                    } else if sl == "lin" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "ang" {
+                                                let val = String::from_utf8_lossy(&attr.value);
+                                                gradient_angle = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::Empty(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "srgbClr" {
+                                        if let Some(pos) = current_gs_pos {
+                                            for attr in se.attributes().flatten() {
+                                                if local_name(attr.key.as_ref()) == "val" {
+                                                    gradient_stops.push(GradientStop {
+                                                        position: pos,
+                                                        color: String::from_utf8_lossy(&attr.value).to_string(),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    } else if sl == "lin" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "ang" {
+                                                let val = String::from_utf8_lossy(&attr.value);
+                                                gradient_angle = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                                            }
+                                        }
+                                    } else if sl == "gs" {
+                                        // Empty gs element — unlikely but handle gracefully
+                                    }
+                                }
+                                Ok(Event::End(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "gs" {
+                                        current_gs_pos = None;
+                                    }
+                                    gf_depth -= 1;
+                                    if gf_depth == 0 { break; }
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => {}
+                            }
+                        }
+                        depth -= 1; // consumed gradFill End
                     }
                     // Shape transform rotation (xfrm rot attribute in 60000ths of a degree)
                     "xfrm" => {
@@ -1768,6 +1837,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             stroke_width: if has_no_stroke { None } else { stroke_width },
             text_blocks: Vec::new(), // text goes to text_box
             rotation,
+            gradient_stops: gradient_stops.clone(),
+            gradient_angle,
         })
     } else {
         None
@@ -1918,6 +1989,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Draw
         stroke_width: if no_stroke { None } else { stroke_width_val },
         text_blocks,
         rotation: None,
+        gradient_stops: Vec::new(),
+        gradient_angle: None,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })
@@ -2134,6 +2207,30 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                         } else if key == "eastAsia" {
                             style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
+                        } else if key == "asciiTheme" || key == "hAnsiTheme" {
+                            if style.font_family.is_none() {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                let font = if val.starts_with("major") {
+                                    ctx.theme.major_font.clone()
+                                } else {
+                                    ctx.theme.minor_font.clone()
+                                };
+                                if let Some(f) = font {
+                                    style.font_family = Some(f);
+                                }
+                            }
+                        } else if key == "eastAsiaTheme" {
+                            if style.font_family_east_asia.is_none() {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                let font = if val.starts_with("major") {
+                                    ctx.theme.major_font_ea.clone().or_else(|| ctx.theme.major_font.clone())
+                                } else {
+                                    ctx.theme.minor_font_ea.clone().or_else(|| ctx.theme.minor_font.clone())
+                                };
+                                if let Some(f) = font {
+                                    style.font_family_east_asia = Some(f);
+                                }
+                            }
                         }
                     }
                 }
@@ -2199,6 +2296,30 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                             } else if key == "eastAsia" {
                                 style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if key == "asciiTheme" || key == "hAnsiTheme" {
+                                if style.font_family.is_none() {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    let font = if val.starts_with("major") {
+                                        ctx.theme.major_font.clone()
+                                    } else {
+                                        ctx.theme.minor_font.clone()
+                                    };
+                                    if let Some(f) = font {
+                                        style.font_family = Some(f);
+                                    }
+                                }
+                            } else if key == "eastAsiaTheme" {
+                                if style.font_family_east_asia.is_none() {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    let font = if val.starts_with("major") {
+                                        ctx.theme.major_font.clone()
+                                    } else {
+                                        ctx.theme.minor_font.clone()
+                                    };
+                                    if let Some(f) = font {
+                                        style.font_family_east_asia = Some(f);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2291,6 +2412,52 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                     }
                     "imprint" => {
                         style.imprint = true;
+                    }
+                    "szCs" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.font_size_cs = val.parse::<f32>().ok().map(|v| v / 2.0);
+                            }
+                        }
+                    }
+                    "bCs" => {
+                        style.bold_cs = true;
+                    }
+                    "iCs" => {
+                        style.italic_cs = true;
+                    }
+                    "kern" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.kern = val.parse::<f32>().ok().map(|v| v / 2.0);
+                            }
+                        }
+                    }
+                    "fitText" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.fit_text = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
+                        }
+                    }
+                    "eastAsianLayout" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            match key.as_str() {
+                                "combine" => {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    style.combine = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                                "vert" => {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    style.vert_in_horz = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -2868,6 +3035,10 @@ struct SectionProperties {
     title_pg: bool,
     /// Section break type: "nextPage" (default), "continuous", "evenPage", "oddPage"
     section_type: Option<String>,
+    /// Page number format (e.g. "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter")
+    page_number_format: Option<String>,
+    /// Starting page number for this section
+    page_number_start: Option<u32>,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -2882,6 +3053,8 @@ fn parse_section_properties(
     let mut columns: Option<ColumnLayout> = None;
     let mut title_pg = false;
     let mut section_type: Option<String> = None;
+    let mut page_number_format: Option<String> = None;
+    let mut page_number_start: Option<u32> = None;
     let mut depth = 0;
 
     loop {
@@ -3060,6 +3233,21 @@ fn parse_section_properties(
                             }
                         }
                     }
+                    "pgNumType" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "fmt" => {
+                                    page_number_format = Some(val.to_string());
+                                }
+                                "start" => {
+                                    page_number_start = val.parse::<u32>().ok();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     "cols" => {
                         let mut num = 1u32;
                         let mut space: Option<f32> = None;
@@ -3104,6 +3292,8 @@ fn parse_section_properties(
         columns,
         title_pg,
         section_type,
+        page_number_format,
+        page_number_start,
     })
 }
 

@@ -11,6 +11,10 @@ pub struct ThemeColors {
     pub major_font: Option<String>,
     /// Minor font (body)
     pub minor_font: Option<String>,
+    /// Major East Asian font
+    pub major_font_ea: Option<String>,
+    /// Minor East Asian font
+    pub minor_font_ea: Option<String>,
 }
 
 impl ThemeColors {
@@ -129,6 +133,26 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                             if local_name(attr.key.as_ref()) == "typeface" {
                                 theme.minor_font =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "ea" if in_major_font && theme.major_font_ea.is_none() => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "typeface" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if !val.is_empty() {
+                                    theme.major_font_ea = Some(val);
+                                }
+                            }
+                        }
+                    }
+                    "ea" if in_minor_font && theme.minor_font_ea.is_none() => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "typeface" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if !val.is_empty() {
+                                    theme.minor_font_ea = Some(val);
+                                }
                             }
                         }
                     }
