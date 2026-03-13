@@ -117,6 +117,24 @@ fn parse_style_definition(
                                 }
                             }
                         }
+                        "spacing" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.character_spacing =
+                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    has_run_style = true;
+                                }
+                            }
+                        }
+                        "smallCaps" => {
+                            run_style.small_caps = true;
+                            has_run_style = true;
+                        }
+                        "caps" => {
+                            run_style.all_caps = true;
+                            has_run_style = true;
+                        }
                         _ => {}
                     }
                 } else if local == "contextualSpacing" {

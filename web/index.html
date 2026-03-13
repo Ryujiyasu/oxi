@@ -1433,15 +1433,38 @@ function renderEditableDocx(doc) {
                     paraDiv.appendChild(markerSpan);
                 }
 
+                // Collect tab stop positions for this paragraph (in pt)
+                const tabStops = (para.style && para.style.tab_stops) || [];
+                // Default tab interval in Word is 0.5 inch = 36pt
+                const defaultTabInterval = 36;
+
                 for (let ri = 0; ri < para.runs.length; ri++) {
                     const run = para.runs[ri];
-                    const span = document.createElement('span');
-                    span.className = 'edit-run';
-                    span.contentEditable = 'true';
-                    span.textContent = run.text;
-                    span.dataset.para = bodyParaIdx;
-                    span.dataset.run = ri;
-                    span.dataset.original = run.text;
+
+                    // Split run text by tab characters and render each segment
+                    const segments = run.text.split('\t');
+                    for (let si = 0; si < segments.length; si++) {
+                        // Insert tab spacer before segments after the first
+                        if (si > 0) {
+                            const tabSpan = document.createElement('span');
+                            tabSpan.className = 'edit-tab';
+                            tabSpan.contentEditable = 'false';
+                            tabSpan.innerHTML = '\u00A0';
+                            tabSpan.style.display = 'inline-block';
+                            tabSpan.style.minWidth = defaultTabInterval + 'pt';
+                            tabSpan.style.userSelect = 'none';
+                            paraDiv.appendChild(tabSpan);
+                        }
+
+                        if (segments[si].length === 0 && si < segments.length - 1) continue;
+
+                        const span = document.createElement('span');
+                        span.className = 'edit-run';
+                        span.contentEditable = 'true';
+                        span.textContent = segments[si];
+                        span.dataset.para = bodyParaIdx;
+                        span.dataset.run = ri;
+                        if (si === 0) span.dataset.original = run.text;
 
                     // Preserve visual styling
                     if (run.style) {
@@ -1459,6 +1482,24 @@ function renderEditableDocx(doc) {
                         if (run.style.highlight) {
                             span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
                         }
+                        // Superscript / Subscript
+                        if (run.style.vertical_align === 'Superscript') {
+                            span.style.verticalAlign = 'super';
+                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                        } else if (run.style.vertical_align === 'Subscript') {
+                            span.style.verticalAlign = 'sub';
+                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                        }
+                        // Character spacing (tracking)
+                        if (run.style.character_spacing) {
+                            span.style.letterSpacing = run.style.character_spacing + 'pt';
+                        }
+                        // Small caps / All caps
+                        if (run.style.all_caps) {
+                            span.style.textTransform = 'uppercase';
+                        } else if (run.style.small_caps) {
+                            span.style.fontVariant = 'small-caps';
+                        }
                     }
 
                     // Prevent Enter from creating new DOM nodes inside span
@@ -1467,6 +1508,7 @@ function renderEditableDocx(doc) {
                     });
 
                     paraDiv.appendChild(span);
+                    } // end segments loop
                 }
 
                 // Empty paragraph — show placeholder

@@ -51,6 +51,15 @@ pub struct RunStyle {
     pub color: Option<String>,
     pub highlight: Option<String>,
     pub vertical_align: Option<VerticalAlign>,
+    /// Character spacing in points (w:spacing w:val in twips, converted to pt)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_spacing: Option<f32>,
+    /// Small capitals (w:smallCaps)
+    #[serde(default)]
+    pub small_caps: bool,
+    /// All capitals (w:caps)
+    #[serde(default)]
+    pub all_caps: bool,
 }
 
 impl Default for RunStyle {
@@ -65,6 +74,9 @@ impl Default for RunStyle {
             color: None,
             highlight: None,
             vertical_align: None,
+            character_spacing: None,
+            small_caps: false,
+            all_caps: false,
         }
     }
 }
@@ -100,6 +112,32 @@ pub struct Image {
     pub height: f32,
     pub alt_text: Option<String>,
     pub content_type: Option<String>,
+}
+
+/// A tab stop definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabStop {
+    /// Position in points from the left margin
+    pub position: f32,
+    /// Alignment at the tab stop
+    pub alignment: TabStopAlignment,
+    /// Leader character
+    #[serde(default)]
+    pub leader: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TabStopAlignment {
+    Left,
+    Center,
+    Right,
+    Decimal,
+}
+
+impl Default for TabStopAlignment {
+    fn default() -> Self {
+        Self::Left
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +180,9 @@ pub struct ParagraphStyle {
     /// Style ID (e.g. "Normal", "Heading1") for contextual spacing comparison.
     #[serde(default)]
     pub style_id: Option<String>,
+    /// Custom tab stops (w:tabs)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tab_stops: Vec<TabStop>,
 }
 
 fn default_true() -> bool { true }
@@ -162,6 +203,7 @@ impl Default for ParagraphStyle {
             snap_to_grid: true,
             contextual_spacing: false,
             style_id: None,
+            tab_stops: Vec::new(),
         }
     }
 }

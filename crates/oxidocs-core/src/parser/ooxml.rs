@@ -357,6 +357,9 @@ fn parse_paragraph_properties(
                         }
                         depth += 1;
                     }
+                    "tabs" if depth == 0 => {
+                        style.tab_stops = parse_tab_stops(reader)?;
+                    }
                     _ => {
                         depth += 1;
                     }
@@ -525,6 +528,68 @@ fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
     }
 
     Ok(NumPrRef { num_id, ilvl })
+}
+
+/// Parse w:tabs element containing w:tab children
+fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>, ParseError> {
+    let mut stops = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "tab" {
+                    let mut position: f32 = 0.0;
+                    let mut alignment = TabStopAlignment::Left;
+                    let mut leader: Option<String> = None;
+
+                    for attr in e.attributes().flatten() {
+                        let key = local_name(attr.key.as_ref());
+                        let val = String::from_utf8_lossy(&attr.value);
+                        match key.as_str() {
+                            "pos" => {
+                                // Position in twips (1/20 pt)
+                                position = val.parse::<f32>().unwrap_or(0.0) / 20.0;
+                            }
+                            "val" => {
+                                alignment = match val.as_ref() {
+                                    "center" => TabStopAlignment::Center,
+                                    "right" | "end" => TabStopAlignment::Right,
+                                    "decimal" => TabStopAlignment::Decimal,
+                                    _ => TabStopAlignment::Left,
+                                };
+                            }
+                            "leader" => {
+                                leader = match val.as_ref() {
+                                    "none" => None,
+                                    _ => Some(val.to_string()),
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    stops.push(TabStop {
+                        position,
+                        alignment,
+                        leader,
+                    });
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "tabs" {
+                    break;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    // Sort by position
+    stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(stops)
 }
 
 /// Parse a w:r element (run). Returns the Run and optionally an Image if a drawing was found.
@@ -776,6 +841,22 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>) -> Result<RunStyle, ParseErr
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
+                    }
+                    "spacing" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                // w:spacing w:val is in twips (1/20 pt)
+                                style.character_spacing =
+                                    val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
+                        }
+                    }
+                    "smallCaps" => {
+                        style.small_caps = true;
+                    }
+                    "caps" => {
+                        style.all_caps = true;
                     }
                     _ => {}
                 }
