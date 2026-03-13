@@ -234,8 +234,8 @@ mod tests {
         let doc = parse_docx(data).expect("should parse docx with image");
 
         let page = &doc.pages[0];
-        // 3 paragraphs: "Before image", image paragraph, "After image"
-        assert_eq!(page.blocks.len(), 3);
+        // 4 blocks: "Before image" paragraph, image paragraph, inline Image block, "After image" paragraph
+        assert_eq!(page.blocks.len(), 4);
 
         // First paragraph: "Before image"
         match &page.blocks[0] {
@@ -245,8 +245,11 @@ mod tests {
             _ => panic!("expected paragraph"),
         }
 
-        // Third paragraph: "After image"
-        match &page.blocks[2] {
+        // Third block: inline image
+        assert!(matches!(&page.blocks[2], ir::Block::Image(_)), "expected inline image block");
+
+        // Fourth paragraph: "After image"
+        match &page.blocks[3] {
             ir::Block::Paragraph(p) => {
                 assert_eq!(p.runs[0].text, "After image");
             }

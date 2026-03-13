@@ -379,6 +379,74 @@ input[type="file"] { display: none; }
 .ribbon.xlsx .ribbon-tab.active { border-bottom-color: #217346; }
 .ribbon.pptx { border-top: 3px solid #d24726; }
 .ribbon.pptx .ribbon-tab.active { border-bottom-color: #d24726; }
+.ribbon.pdf { border-top: 3px solid #e2574c; }
+.ribbon.pdf .ribbon-tab.active { border-bottom-color: #e2574c; }
+
+/* PDF text viewer */
+.pdf-page {
+    background: white;
+    margin: 16px auto;
+    padding: 48px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    max-width: 800px;
+    min-height: 400px;
+    font-family: serif;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.pdf-page-header {
+    font-size: 11px;
+    color: #999;
+    margin: 16px auto 4px;
+    max-width: 800px;
+    padding-left: 4px;
+}
+.pdf-sig-panel {
+    background: #fff8f0;
+    border: 1px solid #e8d4b8;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px auto;
+    max-width: 800px;
+}
+.pdf-sig-panel h3 { font-size: 14px; margin-bottom: 8px; color: #9a6700; }
+.pdf-sig-item { font-size: 13px; padding: 6px 0; border-bottom: 1px solid #f0e4d0; }
+.pdf-sig-item:last-child { border-bottom: none; }
+.pdf-meta { font-size: 12px; color: #666; margin-bottom: 4px; }
+
+/* Hanko panel */
+.hanko-panel {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px auto;
+    max-width: 800px;
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+}
+.hanko-controls { flex: 1; }
+.hanko-controls label { display: block; font-size: 13px; margin-bottom: 4px; color: #555; }
+.hanko-controls input, .hanko-controls select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    margin-bottom: 12px;
+}
+.hanko-preview {
+    width: 120px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed #ccc;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
 
 /* Excel formula bar */
 .formula-bar {
@@ -470,6 +538,8 @@ input[type="file"] { display: none; }
 .edit-page .edit-table .edit-run {
     display: inline;
 }
+.edit-page .edit-table thead { display: table-header-group; }
+@media print { .edit-page .edit-table thead { display: table-header-group; } }
 
 /* Spreadsheet styles */
 .sheet-tabs {
@@ -641,7 +711,7 @@ input[type="file"] { display: none; }
 
 <div class="container">
     <div class="drop-zone" id="dropZone">
-        <p data-i18n="dropText">Drop a .docx, .xlsx, or .pptx file here — or click to browse</p>
+        <p data-i18n="dropText">Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse</p>
         <p class="hint" data-i18n="dropHint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
     <div class="sample-buttons" id="sampleButtons">
@@ -650,8 +720,9 @@ input[type="file"] { display: none; }
         <button onclick="loadSample('sample.docx')">Word (.docx)</button>
         <button onclick="loadSample('sample.xlsx')">Excel (.xlsx)</button>
         <button onclick="loadSample('sample.pptx')">PowerPoint (.pptx)</button>
+        <button onclick="loadSample('sample.pdf')">PDF (.pdf)</button>
     </div>
-    <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx">
+    <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx,.pdf">
     <div class="toolbar" id="toolbar">
         <button id="btnDownload" class="primary" data-i18n="download">Download</button>
     </div>
@@ -694,8 +765,8 @@ input[type="file"] { display: none; }
 // === I18N ===
 const I18N = {
     en: {
-        subtitle: 'Document viewer & editor — .docx / .xlsx / .pptx (Rust + Wasm)',
-        dropText: 'Drop a .docx, .xlsx, or .pptx file here — or click to browse',
+        subtitle: 'Document viewer & editor — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
+        dropText: 'Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse',
         dropHint: 'Parsed, rendered, and edited entirely in your browser via WebAssembly',
         trySample: 'Try a sample:',
         download: 'Download',
@@ -711,7 +782,7 @@ const I18N = {
         parsing: 'Parsing and rendering...',
         loadingSample: 'Loading sample...',
         wasmLoading: 'Wasm is still loading...',
-        unsupported: 'Supported formats: .docx, .xlsx, .pptx',
+        unsupported: 'Supported formats: .docx, .xlsx, .pptx, .pdf',
         noChanges: 'No changes to save',
         noMatches: 'No matches found',
         matchOf: (cur, total) => `${cur} of ${total} matches`,
@@ -719,7 +790,13 @@ const I18N = {
         parsedDocx: (ms) => `Parsed in ${ms}ms — click text to edit`,
         parsedXlsx: (sheets, rows, ms) => `Parsed ${sheets} sheet(s), ${rows} rows in ${ms}ms`,
         parsedPptx: (slides, shapes, ms) => `Parsed ${slides} slide(s), ${shapes} shapes in ${ms}ms`,
+        parsedPdf: (pages, ms) => `Parsed ${pages} page(s) in ${ms}ms`,
         downloaded: (n) => `Downloaded with ${n} edit(s)`,
+        hankoName: 'Name (kanji)',
+        hankoStyle: 'Style',
+        hankoPreview: 'Preview',
+        signatures: 'Digital Signatures',
+        noSignatures: 'No signatures found',
         // Ribbon
         home: 'Home', insert: 'Insert', layout: 'Layout', view: 'View',
         formulas: 'Formulas', data: 'Data',
@@ -731,8 +808,8 @@ const I18N = {
         toggleLang: '日本語',
     },
     ja: {
-        subtitle: 'ドキュメント ビューア & エディタ — .docx / .xlsx / .pptx (Rust + Wasm)',
-        dropText: '.docx, .xlsx, .pptx ファイルをドロップ — またはクリックして選択',
+        subtitle: 'ドキュメント ビューア & エディタ — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
+        dropText: '.docx, .xlsx, .pptx, .pdf ファイルをドロップ — またはクリックして選択',
         dropHint: 'WebAssemblyによりブラウザ内で完結。サーバーにファイルは送信されません',
         trySample: 'サンプルを試す:',
         download: 'ダウンロード',
@@ -748,7 +825,7 @@ const I18N = {
         parsing: '解析・描画中...',
         loadingSample: 'サンプルを読み込み中...',
         wasmLoading: 'Wasmを読み込み中...',
-        unsupported: '対応形式: .docx, .xlsx, .pptx',
+        unsupported: '対応形式: .docx, .xlsx, .pptx, .pdf',
         noChanges: '変更がありません',
         noMatches: '一致なし',
         matchOf: (cur, total) => `${total}件中 ${cur}件目`,
@@ -756,7 +833,13 @@ const I18N = {
         parsedDocx: (ms) => `${ms}msで解析完了 — テキストをクリックして編集`,
         parsedXlsx: (sheets, rows, ms) => `${sheets}シート, ${rows}行を${ms}msで解析`,
         parsedPptx: (slides, shapes, ms) => `${slides}スライド, ${shapes}図形を${ms}msで解析`,
+        parsedPdf: (pages, ms) => `${pages}ページを${ms}msで解析`,
         downloaded: (n) => `${n}件の編集を含めてダウンロード`,
+        hankoName: '名前（漢字）',
+        hankoStyle: 'スタイル',
+        hankoPreview: 'プレビュー',
+        signatures: '電子署名',
+        noSignatures: '署名が見つかりません',
         // Ribbon
         home: 'ホーム', insert: '挿入', layout: 'レイアウト', view: '表示',
         formulas: '数式', data: 'データ',
@@ -800,10 +883,10 @@ applyI18n();
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
 
 let wasmReady = false;
-let currentFileType = null; // 'docx', 'xlsx', or 'pptx'
+let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
 let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
 
@@ -814,6 +897,96 @@ const HIGHLIGHT_COLORS = {
     darkYellow: '#808000', darkGray: '#808080', lightGray: '#C0C0C0',
     black: '#000000', white: '#FFFFFF',
 };
+
+// Render blocks inside a table cell (recursive for nested tables)
+function renderCellBlocks(blocks, container) {
+    for (const cellBlock of blocks) {
+        if (cellBlock.Paragraph) {
+            const cellPara = cellBlock.Paragraph;
+            const cellParaDiv = document.createElement('div');
+            if (cellPara.alignment === 'Center') cellParaDiv.style.textAlign = 'center';
+            else if (cellPara.alignment === 'Right') cellParaDiv.style.textAlign = 'right';
+            else if (cellPara.alignment === 'Justify') cellParaDiv.style.textAlign = 'justify';
+            if (cellPara.style && cellPara.style.line_spacing) {
+                if (cellPara.style.line_spacing_rule === 'exact') {
+                    cellParaDiv.style.lineHeight = cellPara.style.line_spacing + 'pt';
+                    cellParaDiv.style.overflow = 'hidden';
+                } else if (cellPara.style.line_spacing_rule === 'atLeast') {
+                    cellParaDiv.style.lineHeight = cellPara.style.line_spacing + 'pt';
+                } else {
+                    cellParaDiv.style.lineHeight = String(cellPara.style.line_spacing);
+                }
+            }
+            for (const run of cellPara.runs) {
+                const span = document.createElement('span');
+                span.textContent = run.text;
+                if (run.style) {
+                    if (run.style.bold) span.style.fontWeight = 'bold';
+                    if (run.style.italic) span.style.fontStyle = 'italic';
+                    if (run.style.underline) span.style.textDecoration = 'underline';
+                    if (run.style.strikethrough) {
+                        span.style.textDecoration = (span.style.textDecoration || '') + ' line-through';
+                    }
+                    if (run.style.color) span.style.color = '#' + run.style.color;
+                    if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                    if (run.style.font_family || run.style.font_family_east_asia) {
+                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
+                            const la = run.style.font_family || 'Calibri';
+                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                        }
+                    if (run.style.highlight) {
+                        span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
+                    } else if (run.style.shading) {
+                        span.style.backgroundColor = '#' + run.style.shading;
+                    }
+                    if (run.style.vertical_align === 'Superscript') {
+                        span.style.verticalAlign = 'super';
+                        span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                    } else if (run.style.vertical_align === 'Subscript') {
+                        span.style.verticalAlign = 'sub';
+                        span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                    }
+                    if (run.style.vanish) span.style.display = 'none';
+                    if (run.style.outline) { span.style.webkitTextStroke = '1px'; span.style.color = 'transparent'; }
+                    if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
+                    if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
+                    if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
+                }
+                cellParaDiv.appendChild(span);
+            }
+            container.appendChild(cellParaDiv);
+        } else if (cellBlock.Table) {
+            // Nested table
+            const nestedTable = cellBlock.Table;
+            const nestedEl = document.createElement('table');
+            nestedEl.className = 'edit-table';
+            nestedEl.style.borderCollapse = 'collapse';
+            nestedEl.style.width = '100%';
+            nestedEl.style.margin = '4px 0';
+            if (nestedTable.style && nestedTable.style.border) {
+                const bw = (nestedTable.style.border_width || 0.5) + 'pt';
+                const bc = nestedTable.style.border_color ? '#' + nestedTable.style.border_color : '#000';
+                nestedEl.style.border = `${bw} solid ${bc}`;
+            }
+            for (const nRow of nestedTable.rows) {
+                const nTr = document.createElement('tr');
+                for (const nCell of nRow.cells) {
+                    const nTd = document.createElement('td');
+                    if (nestedTable.style && nestedTable.style.border) {
+                        nTd.style.border = '0.5pt solid #000';
+                    }
+                    if (nCell.width) nTd.style.width = nCell.width + 'pt';
+                    if (nCell.grid_span > 1) nTd.colSpan = nCell.grid_span;
+                    if (nCell.shading) nTd.style.backgroundColor = '#' + nCell.shading;
+                    renderCellBlocks(nCell.blocks, nTd);
+                    nTr.appendChild(nTd);
+                }
+                nestedEl.appendChild(nTr);
+            }
+            container.appendChild(nestedEl);
+        }
+    }
+}
 
 async function initialize() {
     try {
@@ -1166,6 +1339,28 @@ function buildRibbon(format) {
             { name: 'Slide Show', groups: [
                 { label: 'Start', items: [
                     { text: '▶', title: 'From Beginning' }, { text: '▷', title: 'From Current Slide' },
+                ]},
+            ]},
+        ];
+    } else if (format === 'pdf') {
+        tabDefs = [
+            { name: 'View', groups: [
+                { label: 'Zoom', items: [
+                    { text: '🔍+', title: 'Zoom In', action: () => { currentZoom = Math.min(500, currentZoom + 25); applyZoom(); } },
+                    { text: '🔍−', title: 'Zoom Out', action: () => { currentZoom = Math.max(25, currentZoom - 25); applyZoom(); } },
+                    { text: '100%', title: 'Reset Zoom', action: () => { currentZoom = 100; applyZoom(); } },
+                ]},
+            ]},
+            { name: 'Hanko', groups: [
+                { label: 'Stamp', items: [
+                    { text: '◯', title: 'Round (丸印)' },
+                    { text: '□', title: 'Square (角印)' },
+                    { text: '⬭', title: 'Oval (小判型)' },
+                ]},
+            ]},
+            { name: 'Security', groups: [
+                { label: 'Signatures', items: [
+                    { text: '🔏', title: 'Verify Signatures' },
                 ]},
             ]},
         ];
@@ -1576,6 +1771,13 @@ function renderEditableDocx(doc) {
                 else if (align === 'Right') paraDiv.classList.add('align-right');
                 else if (align === 'Justify') paraDiv.classList.add('align-justify');
 
+                // Bidi / RTL
+                if (para.style && para.style.bidi) {
+                    paraDiv.style.direction = 'rtl';
+                    paraDiv.style.unicodeBidi = 'bidi-override';
+                    if (!align || align === 'Left') paraDiv.style.textAlign = 'right';
+                }
+
                 // Paragraph spacing
                 if (para.style) {
                     const sb = para.style.space_before || 0;
@@ -1585,11 +1787,33 @@ function renderEditableDocx(doc) {
 
                     // Line spacing
                     if (para.style.line_spacing) {
-                        paraDiv.style.lineHeight = String(para.style.line_spacing);
+                        if (para.style.line_spacing_rule === 'exact') {
+                            paraDiv.style.lineHeight = para.style.line_spacing + 'pt';
+                            paraDiv.style.overflow = 'hidden';
+                        } else if (para.style.line_spacing_rule === 'atLeast') {
+                            paraDiv.style.lineHeight = para.style.line_spacing + 'pt';
+                        } else {
+                            paraDiv.style.lineHeight = String(para.style.line_spacing);
+                        }
                     }
                     // Paragraph shading
                     if (para.style.shading) {
                         paraDiv.style.backgroundColor = '#' + para.style.shading;
+                    }
+                    // Keep lines together / keep with next
+                    if (para.style.keep_lines) {
+                        paraDiv.style.breakInside = 'avoid';
+                    }
+                    if (para.style.keep_next) {
+                        paraDiv.style.breakAfter = 'avoid';
+                    }
+                    // Widow/orphan control
+                    if (para.style.widow_control !== false) {
+                        paraDiv.style.widows = '2';
+                        paraDiv.style.orphans = '2';
+                    } else {
+                        paraDiv.style.widows = '1';
+                        paraDiv.style.orphans = '1';
                     }
                     // Page break before
                     if (para.style.page_break_before) {
@@ -1638,10 +1862,11 @@ function renderEditableDocx(doc) {
                     paraDiv.appendChild(markerSpan);
                 }
 
-                // Collect tab stop positions for this paragraph (in pt)
-                const tabStops = (para.style && para.style.tab_stops) || [];
+                // Collect tab stop positions for this paragraph (in pt), sorted by position
+                const tabStops = ((para.style && para.style.tab_stops) || []).slice().sort((a, b) => a.position - b.position);
                 // Default tab interval in Word is 0.5 inch = 36pt
                 const defaultTabInterval = 36;
+                let tabIndex = 0; // Track which tab stop we're at
 
                 for (let ri = 0; ri < para.runs.length; ri++) {
                     const run = para.runs[ri];
@@ -1656,7 +1881,32 @@ function renderEditableDocx(doc) {
                             tabSpan.contentEditable = 'false';
                             tabSpan.innerHTML = '\u00A0';
                             tabSpan.style.display = 'inline-block';
-                            tabSpan.style.minWidth = defaultTabInterval + 'pt';
+                            // Use defined tab stop position if available
+                            if (tabIndex < tabStops.length) {
+                                const ts = tabStops[tabIndex];
+                                tabSpan.style.minWidth = '8pt';
+                                // Position-based tab: set width to reach the tab stop
+                                const tabPos = ts.position;
+                                const prevPos = tabIndex > 0 ? tabStops[tabIndex - 1].position : 0;
+                                tabSpan.style.width = (tabPos - prevPos) + 'pt';
+                                // Tab alignment
+                                if (ts.alignment === 'Right') {
+                                    tabSpan.style.textAlign = 'right';
+                                } else if (ts.alignment === 'Center') {
+                                    tabSpan.style.textAlign = 'center';
+                                }
+                                // Leader character
+                                if (ts.leader === 'dot') {
+                                    tabSpan.style.borderBottom = '1px dotted #000';
+                                } else if (ts.leader === 'hyphen') {
+                                    tabSpan.style.borderBottom = '1px dashed #000';
+                                } else if (ts.leader === 'underscore') {
+                                    tabSpan.style.borderBottom = '1px solid #000';
+                                }
+                                tabIndex++;
+                            } else {
+                                tabSpan.style.minWidth = defaultTabInterval + 'pt';
+                            }
                             tabSpan.style.userSelect = 'none';
                             paraDiv.appendChild(tabSpan);
                         }
@@ -1743,12 +1993,21 @@ function renderEditableDocx(doc) {
                             span.style.textDecoration = span.style.textDecoration
                                 ? span.style.textDecoration + ' line-through'
                                 : 'line-through';
+                            if (run.style.double_strikethrough) {
+                                span.style.textDecorationStyle = 'double';
+                            }
                         }
                         if (run.style.color && !run.url) span.style.color = '#' + run.style.color;
                         if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
-                        if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                        if (run.style.font_family || run.style.font_family_east_asia) {
+                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
+                            const la = run.style.font_family || 'Calibri';
+                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                        }
                         if (run.style.highlight) {
                             span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
+                        } else if (run.style.shading) {
+                            span.style.backgroundColor = '#' + run.style.shading;
                         }
                         // Superscript / Subscript
                         if (run.style.vertical_align === 'Superscript') {
@@ -1768,6 +2027,18 @@ function renderEditableDocx(doc) {
                         } else if (run.style.small_caps) {
                             span.style.fontVariant = 'small-caps';
                         }
+                        // RTL run
+                        if (run.style.rtl) {
+                            span.style.direction = 'rtl';
+                            span.style.unicodeBidi = 'embed';
+                        }
+                        // Hidden text
+                        if (run.style.vanish) span.style.display = 'none';
+                        // Text effects
+                        if (run.style.outline) { span.style.webkitTextStroke = '1px'; span.style.color = span.style.color || 'transparent'; }
+                        if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
+                        if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
+                        if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
                     }
 
                     // Hyperlink wrapping
@@ -1778,9 +2049,20 @@ function renderEditableDocx(doc) {
                         span.title = run.url;
                         span.addEventListener('click', (e) => {
                             if (e.ctrlKey || e.metaKey) {
-                                window.open(run.url, '_blank', 'noopener,noreferrer');
+                                if (run.url.startsWith('#')) {
+                                    // Internal bookmark link
+                                    const anchor = document.getElementById('bk_' + run.url.substring(1));
+                                    if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                } else {
+                                    window.open(run.url, '_blank', 'noopener,noreferrer');
+                                }
                             }
                         });
+                    }
+
+                    // Bookmark anchor
+                    if (run.bookmark_name) {
+                        span.id = 'bk_' + run.bookmark_name;
                     }
 
                     // Prevent Enter from creating new DOM nodes inside span
@@ -1816,6 +2098,19 @@ function renderEditableDocx(doc) {
                     } else {
                         tableEl.style.width = table.style.width + 'pt';
                     }
+                }
+                // Table indent
+                if (table.style && table.style.indent) {
+                    tableEl.style.marginLeft = table.style.indent + 'pt';
+                }
+                // Table cell spacing
+                if (table.style && table.style.cell_spacing) {
+                    tableEl.style.borderCollapse = 'separate';
+                    tableEl.style.borderSpacing = table.style.cell_spacing + 'pt';
+                }
+                // Table layout mode (fixed vs auto)
+                if (table.style && table.style.layout === 'fixed') {
+                    tableEl.style.tableLayout = 'fixed';
                 }
                 // Table alignment
                 if (table.style && table.style.alignment) {
@@ -1867,10 +2162,29 @@ function renderEditableDocx(doc) {
                     }
                 }
 
+                const tblLook = table.style && table.style.tbl_look;
                 for (let ri = 0; ri < table.rows.length; ri++) {
                     const row = table.rows[ri];
                     const tr = document.createElement('tr');
                     if (row.height) tr.style.height = row.height + 'pt';
+                    if (row.cant_split) tr.style.breakInside = 'avoid';
+                    // Table conditional formatting: banded rows, first/last row
+                    if (tblLook) {
+                        if (tblLook.first_row && ri === 0) {
+                            tr.style.fontWeight = 'bold';
+                            tr.style.backgroundColor = '#4472C4';
+                            tr.style.color = '#FFFFFF';
+                        } else if (tblLook.last_row && ri === table.rows.length - 1) {
+                            tr.style.fontWeight = 'bold';
+                            tr.style.borderTop = '2pt solid #4472C4';
+                        } else if (tblLook.banded_rows) {
+                            const dataRow = tblLook.first_row ? ri - 1 : ri;
+                            const bandSize = tblLook.row_band_size || 1;
+                            if (Math.floor(dataRow / bandSize) % 2 === 1) {
+                                tr.style.backgroundColor = '#D9E2F3';
+                            }
+                        }
+                    }
                     let ci = 0;
                     for (const cell of row.cells) {
                         // Skip cells that are vertical merge continuations
@@ -1921,58 +2235,30 @@ function renderEditableDocx(doc) {
                             if (cb.left) td.style.borderLeft = bdrCss(cb.left);
                             if (cb.right) td.style.borderRight = bdrCss(cb.right);
                         }
-                        // Cell margins
-                        if (cell.margins) {
-                            if (cell.margins.top) td.style.paddingTop = cell.margins.top + 'pt';
-                            if (cell.margins.bottom) td.style.paddingBottom = cell.margins.bottom + 'pt';
-                            if (cell.margins.left) td.style.paddingLeft = cell.margins.left + 'pt';
-                            if (cell.margins.right) td.style.paddingRight = cell.margins.right + 'pt';
+                        // Cell margins (cell-level overrides table-level defaults)
+                        const cm = cell.margins || (table.style && table.style.default_cell_margins);
+                        if (cm) {
+                            if (cm.top) td.style.paddingTop = cm.top + 'pt';
+                            if (cm.bottom) td.style.paddingBottom = cm.bottom + 'pt';
+                            if (cm.left) td.style.paddingLeft = cm.left + 'pt';
+                            if (cm.right) td.style.paddingRight = cm.right + 'pt';
                         }
 
-                        // Full run styling in table cells
-                        for (const cellBlock of cell.blocks) {
-                            if (cellBlock.Paragraph) {
-                                const cellPara = cellBlock.Paragraph;
-                                const cellParaDiv = document.createElement('div');
-                                if (cellPara.alignment === 'Center') cellParaDiv.style.textAlign = 'center';
-                                else if (cellPara.alignment === 'Right') cellParaDiv.style.textAlign = 'right';
-                                else if (cellPara.alignment === 'Justify') cellParaDiv.style.textAlign = 'justify';
-                                if (cellPara.style && cellPara.style.line_spacing) {
-                                    cellParaDiv.style.lineHeight = String(cellPara.style.line_spacing);
-                                }
-                                for (const run of cellPara.runs) {
-                                    const span = document.createElement('span');
-                                    span.textContent = run.text;
-                                    if (run.style) {
-                                        if (run.style.bold) span.style.fontWeight = 'bold';
-                                        if (run.style.italic) span.style.fontStyle = 'italic';
-                                        if (run.style.underline) span.style.textDecoration = 'underline';
-                                        if (run.style.strikethrough) {
-                                            span.style.textDecoration = (span.style.textDecoration || '') + ' line-through';
-                                        }
-                                        if (run.style.color) span.style.color = '#' + run.style.color;
-                                        if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
-                                        if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
-                                        if (run.style.highlight) {
-                                            span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
-                                        }
-                                        if (run.style.vertical_align === 'Superscript') {
-                                            span.style.verticalAlign = 'super';
-                                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
-                                        } else if (run.style.vertical_align === 'Subscript') {
-                                            span.style.verticalAlign = 'sub';
-                                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
-                                        }
-                                    }
-                                    cellParaDiv.appendChild(span);
-                                }
-                                td.appendChild(cellParaDiv);
-                            }
-                        }
+                        // Render blocks inside table cells (supports nested tables)
+                        renderCellBlocks(cell.blocks, td);
                         tr.appendChild(td);
                         ci += (cell.grid_span || 1);
                     }
-                    tableEl.appendChild(tr);
+                    // Append to thead for header rows, tbody otherwise
+                    if (row.header) {
+                        let thead = tableEl.querySelector('thead');
+                        if (!thead) { thead = document.createElement('thead'); tableEl.appendChild(thead); }
+                        thead.appendChild(tr);
+                    } else {
+                        let tbody = tableEl.querySelector('tbody');
+                        if (!tbody) { tbody = document.createElement('tbody'); tableEl.appendChild(tbody); }
+                        tbody.appendChild(tr);
+                    }
                 }
                 blocksContainer.appendChild(tableEl);
 
@@ -1987,6 +2273,14 @@ function renderEditableDocx(doc) {
                     imgEl.style.maxWidth = '100%';
                     imgEl.style.height = 'auto';
                     imgEl.style.margin = '8px 0';
+                    // Image cropping via clip-path
+                    if (img.crop) {
+                        const t = img.crop.top || 0;
+                        const r = img.crop.right || 0;
+                        const b = img.crop.bottom || 0;
+                        const l = img.crop.left || 0;
+                        imgEl.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
+                    }
                     blocksContainer.appendChild(imgEl);
                 }
             }
@@ -2014,6 +2308,13 @@ function renderEditableDocx(doc) {
                     fImgEl.style.width = fImg.width + 'pt';
                     fImgEl.style.height = fImg.height + 'pt';
                     if (fImg.alt_text) fImgEl.alt = fImg.alt_text;
+                    if (fImg.crop) {
+                        const t = fImg.crop.top || 0;
+                        const r = fImg.crop.right || 0;
+                        const b = fImg.crop.bottom || 0;
+                        const l = fImg.crop.left || 0;
+                        fImgEl.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
+                    }
                     // Wrap type affects z-index
                     if (fImg.wrap_type === 'None') {
                         fImgEl.style.zIndex = '10';
@@ -2057,7 +2358,11 @@ function renderEditableDocx(doc) {
                                 if (run.style.underline) span.style.textDecoration = 'underline';
                                 if (run.style.color) span.style.color = '#' + run.style.color;
                                 if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
-                                if (run.style.font_family) span.style.fontFamily = run.style.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                                if (run.style.font_family || run.style.font_family_east_asia) {
+                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
+                            const la = run.style.font_family || 'Calibri';
+                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                        }
                             }
                             tbPara.appendChild(span);
                         }
@@ -2066,6 +2371,67 @@ function renderEditableDocx(doc) {
                     }
                 }
                 pageDiv.appendChild(tbDiv);
+            }
+        }
+
+        // Render shapes (DrawingML / VML)
+        if (page.shapes && page.shapes.length > 0) {
+            for (const shape of page.shapes) {
+                const shapeDiv = document.createElement('div');
+                shapeDiv.style.position = 'absolute';
+                if (shape.position) {
+                    shapeDiv.style.left = shape.position.x + 'pt';
+                    shapeDiv.style.top = shape.position.y + 'pt';
+                }
+                shapeDiv.style.width = shape.width + 'pt';
+                shapeDiv.style.height = shape.height + 'pt';
+                shapeDiv.style.zIndex = '3';
+                shapeDiv.style.boxSizing = 'border-box';
+
+                // Fill
+                if (shape.fill) {
+                    shapeDiv.style.backgroundColor = '#' + shape.fill;
+                }
+                // Stroke
+                if (shape.stroke_color || shape.stroke_width) {
+                    const sw = (shape.stroke_width || 0.75) + 'pt';
+                    const sc = shape.stroke_color ? '#' + shape.stroke_color : '#000';
+                    shapeDiv.style.border = `${sw} solid ${sc}`;
+                }
+                // Shape-specific styling
+                const st = shape.shape_type;
+                if (st === 'ellipse' || st === 'oval') {
+                    shapeDiv.style.borderRadius = '50%';
+                } else if (st === 'roundRect' || st === 'roundrect') {
+                    shapeDiv.style.borderRadius = '8pt';
+                } else if (st === 'line') {
+                    shapeDiv.style.borderTop = (shape.stroke_width || 1) + 'pt solid ' + (shape.stroke_color ? '#' + shape.stroke_color : '#000');
+                    shapeDiv.style.height = '0';
+                    shapeDiv.style.backgroundColor = 'transparent';
+                } else if (st === 'triangle' || st === 'rtTriangle') {
+                    // CSS triangle approximation
+                    shapeDiv.style.backgroundColor = 'transparent';
+                    shapeDiv.style.border = 'none';
+                    shapeDiv.style.width = '0';
+                    shapeDiv.style.height = '0';
+                    shapeDiv.style.borderLeft = (shape.width / 2) + 'pt solid transparent';
+                    shapeDiv.style.borderRight = (shape.width / 2) + 'pt solid transparent';
+                    shapeDiv.style.borderBottom = shape.height + 'pt solid ' + (shape.fill ? '#' + shape.fill : '#4472C4');
+                }
+                // Rotation
+                if (shape.rotation) {
+                    shapeDiv.style.transform = `rotate(${shape.rotation}deg)`;
+                }
+                // Text inside shape
+                if (shape.text_blocks && shape.text_blocks.length > 0) {
+                    shapeDiv.style.display = 'flex';
+                    shapeDiv.style.alignItems = 'center';
+                    shapeDiv.style.justifyContent = 'center';
+                    shapeDiv.style.padding = '4pt';
+                    shapeDiv.style.overflow = 'hidden';
+                    renderCellBlocks(shape.text_blocks, shapeDiv);
+                }
+                pageDiv.appendChild(shapeDiv);
             }
         }
 
@@ -2744,7 +3110,7 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
 // === FILE HANDLER ===
 async function handleFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
-    if (!['docx', 'xlsx', 'pptx'].includes(ext)) {
+    if (!['docx', 'xlsx', 'pptx', 'pdf'].includes(ext)) {
         showStatus(t('unsupported'), 'error');
         return;
     }
@@ -2789,11 +3155,109 @@ async function handleFile(file) {
             for (const s of currentDocIR.slides) totalShapes += s.shapes.length;
             showStatus(I18N[currentLang].parsedPptx(currentDocIR.slides.length, totalShapes, elapsed), 'info');
             renderEditablePptx(currentDocIR);
+        } else if (ext === 'pdf') {
+            currentDocIR = parse_pdf(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            showStatus(I18N[currentLang].parsedPdf(currentDocIR.pages.length, elapsed), 'info');
+            renderPdfViewer(currentDocIR, data);
         }
     } catch(e) {
         showStatus('Error: ' + e.message, 'error');
         console.error(e);
     }
+}
+
+function renderPdfViewer(doc, rawData) {
+    const viewer = document.getElementById('pages-container');
+    viewer.innerHTML = '';
+
+    // Document info panel
+    const meta = document.createElement('div');
+    meta.className = 'pdf-meta';
+    const info = doc.info || {};
+    meta.innerHTML = `
+        <h3>📄 PDF Document</h3>
+        <table>
+            ${info.title ? `<tr><td><strong>Title</strong></td><td>${info.title}</td></tr>` : ''}
+            ${info.author ? `<tr><td><strong>Author</strong></td><td>${info.author}</td></tr>` : ''}
+            ${info.producer ? `<tr><td><strong>Producer</strong></td><td>${info.producer}</td></tr>` : ''}
+            ${info.creator ? `<tr><td><strong>Creator</strong></td><td>${info.creator}</td></tr>` : ''}
+            <tr><td><strong>Pages</strong></td><td>${doc.pages.length}</td></tr>
+            <tr><td><strong>Version</strong></td><td>${doc.version ? `${doc.version.major}.${doc.version.minor}` : '?'}</td></tr>
+        </table>
+    `;
+    viewer.appendChild(meta);
+
+    // Signature panel
+    try {
+        const sigs = pdf_verify_signatures(rawData);
+        const sigPanel = document.createElement('div');
+        sigPanel.className = 'pdf-sig-panel';
+        if (sigs && sigs.length > 0) {
+            sigPanel.innerHTML = '<h3>' + I18N[currentLang].signatures + '</h3>' +
+                sigs.map(s => `<div class="sig-entry">
+                    <span class="sig-name">${s.signer_name || 'Unknown'}</span>
+                    <span class="sig-status ${s.integrity_valid ? 'valid' : 'invalid'}">${s.integrity_valid ? '✓' : '✗'}</span>
+                </div>`).join('');
+        } else {
+            sigPanel.innerHTML = '<h3>' + I18N[currentLang].signatures + '</h3><p>' + I18N[currentLang].noSignatures + '</p>';
+        }
+        viewer.appendChild(sigPanel);
+    } catch(e) { console.warn('Signature check:', e); }
+
+    // Hanko stamp generator
+    const hankoPanel = document.createElement('div');
+    hankoPanel.className = 'hanko-panel';
+    hankoPanel.innerHTML = `
+        <h3>Hanko Stamp Generator</h3>
+        <div class="hanko-controls">
+            <label>${I18N[currentLang].hankoName}: <input type="text" id="hankoName" value="山田" maxlength="8"></label>
+            <label>${I18N[currentLang].hankoStyle}:
+                <select id="hankoStyle">
+                    <option value="Round">Round (丸印)</option>
+                    <option value="Square">Square (角印)</option>
+                    <option value="Oval">Oval (小判型)</option>
+                </select>
+            </label>
+            <button id="hankoPreviewBtn">${I18N[currentLang].hankoPreview}</button>
+        </div>
+        <div class="hanko-preview" id="hankoPreviewArea"></div>
+    `;
+    viewer.appendChild(hankoPanel);
+
+    // Hanko preview logic
+    const updateHanko = () => {
+        const name = document.getElementById('hankoName').value || '印';
+        const svg = preview_hanko(name);
+        document.getElementById('hankoPreviewArea').innerHTML = svg;
+    };
+    document.getElementById('hankoPreviewBtn').addEventListener('click', updateHanko);
+    document.getElementById('hankoName').addEventListener('input', updateHanko);
+    updateHanko();
+
+    // Pages with text content
+    doc.pages.forEach((page, i) => {
+        const pageDiv = document.createElement('div');
+        pageDiv.className = 'pdf-page';
+        const header = document.createElement('div');
+        header.className = 'pdf-page-header';
+        header.textContent = `Page ${i + 1}`;
+        pageDiv.appendChild(header);
+
+        const content = document.createElement('div');
+        content.style.whiteSpace = 'pre-wrap';
+        content.style.fontFamily = 'monospace';
+        content.style.fontSize = '13px';
+        content.style.padding = '12px';
+
+        const texts = (page.contents || [])
+            .filter(c => c.Text)
+            .map(c => c.Text.text)
+            .join('\n');
+        content.textContent = texts || '(no text content)';
+        pageDiv.appendChild(content);
+        viewer.appendChild(pageDiv);
+    });
 }
 
 // Event handlers

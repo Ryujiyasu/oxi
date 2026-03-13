@@ -12,6 +12,8 @@ crate-type = ["cdylib", "rlib"]
 oxidocs-core = { path = "../oxidocs-core" }
 oxicells-core = { path = "../oxicells-core" }
 oxislides-core = { path = "../oxislides-core" }
+oxipdf-core = { path = "../oxipdf-core" }
+oxihanko = { path = "../oxihanko" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"

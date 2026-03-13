@@ -55,9 +55,34 @@ impl OoxmlParser {
         let metadata = self.parse_metadata();
 
         let mut pages = Vec::new();
+        let mut page_index = 0usize;
         for section in sections {
-            let header = self.parse_header_footer_blocks(&section.properties.header_refs, &ctx, &styles);
-            let footer = self.parse_header_footer_blocks(&section.properties.footer_refs, &ctx, &styles);
+            // Determine which header/footer type to use
+            // First page of a section with title_pg uses "first" type
+            let hdr_type = if section.properties.title_pg && page_index == 0 { "first" } else { "default" };
+            let use_headers: Vec<HdrFtrRef> = section.properties.header_refs.iter()
+                .filter(|r| r.ref_type == hdr_type)
+                .cloned()
+                .collect();
+            let use_footers: Vec<HdrFtrRef> = section.properties.footer_refs.iter()
+                .filter(|r| r.ref_type == hdr_type)
+                .cloned()
+                .collect();
+            // Fall back to "default" if no "first" type found
+            let header = if use_headers.is_empty() && hdr_type == "first" {
+                let fallback: Vec<HdrFtrRef> = section.properties.header_refs.iter()
+                    .filter(|r| r.ref_type == "default").cloned().collect();
+                self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+            } else {
+                self.parse_header_footer_blocks(&use_headers, &ctx, &styles)
+            };
+            let footer = if use_footers.is_empty() && hdr_type == "first" {
+                let fallback: Vec<HdrFtrRef> = section.properties.footer_refs.iter()
+                    .filter(|r| r.ref_type == "default").cloned().collect();
+                self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+            } else {
+                self.parse_header_footer_blocks(&use_footers, &ctx, &styles)
+            };
 
             // Collect referenced footnotes and endnotes for this section
             let mut footnotes_list = Vec::new();
@@ -66,19 +91,35 @@ impl OoxmlParser {
             footnotes_list.sort_by_key(|f| f.number);
             endnotes_list.sort_by_key(|f| f.number);
 
-            pages.push(Page {
-                blocks: section.blocks,
-                size: section.properties.page_size,
-                margin: section.properties.margin,
-                grid_line_pitch: section.properties.grid_line_pitch,
-                header,
-                footer,
-                footnotes: footnotes_list,
-                endnotes: endnotes_list,
-                floating_images: section.floating_images,
-                text_boxes: section.text_boxes,
-                columns: section.properties.columns,
-            });
+            // Continuous section: merge into previous page instead of creating a new one
+            if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty() {
+                let last: &mut Page = pages.last_mut().unwrap();
+                last.blocks.extend(section.blocks);
+                last.floating_images.extend(section.floating_images);
+                last.text_boxes.extend(section.text_boxes);
+                last.shapes.extend(section.shapes);
+                last.footnotes.extend(footnotes_list);
+                last.endnotes.extend(endnotes_list);
+                if section.properties.columns.is_some() {
+                    last.columns = section.properties.columns;
+                }
+            } else {
+                pages.push(Page {
+                    blocks: section.blocks,
+                    size: section.properties.page_size,
+                    margin: section.properties.margin,
+                    grid_line_pitch: section.properties.grid_line_pitch,
+                    header,
+                    footer,
+                    footnotes: footnotes_list,
+                    endnotes: endnotes_list,
+                    floating_images: section.floating_images,
+                    text_boxes: section.text_boxes,
+                    shapes: section.shapes,
+                    columns: section.properties.columns,
+                });
+            }
+            page_index += 1;
         }
 
         // Collect all comments referenced in the document
@@ -95,14 +136,14 @@ impl OoxmlParser {
     /// Parse header or footer XML parts referenced by relationship IDs
     fn parse_header_footer_blocks(
         &mut self,
-        ref_ids: &[String],
+        refs: &[HdrFtrRef],
         ctx: &ParseContext,
         styles: &StyleSheet,
     ) -> Vec<Block> {
         let mut blocks = Vec::new();
-        for ref_id in ref_ids {
+        for hdr_ref in refs {
             // Look up the relationship target path
-            let target = ctx._rels.get(ref_id)
+            let target = ctx._rels.get(&hdr_ref.rel_id)
                 .map(|r| r.target.clone());
             if let Some(target) = target {
                 let part_path = if target.starts_with('/') {
@@ -259,6 +300,7 @@ struct ParsedSection {
     properties: SectionProperties,
     floating_images: Vec<Image>,
     text_boxes: Vec<TextBox>,
+    shapes: Vec<Shape>,
 }
 
 /// Parse the w:body content of document.xml into sections
@@ -268,6 +310,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
     let mut current_blocks = Vec::new();
     let mut current_floating_images: Vec<Image> = Vec::new();
     let mut current_text_boxes: Vec<TextBox> = Vec::new();
+    let mut current_shapes: Vec<Shape> = Vec::new();
     let mut final_sect_pr = None;
     let mut depth = 0;
     let mut in_body = false;
@@ -282,21 +325,81 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let (para, sect_break) = parse_paragraph(&mut reader, ctx, styles)?;
-                        current_blocks.push(Block::Paragraph(para));
+                        let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                        current_blocks.push(Block::Paragraph(pr.paragraph));
+                        // Inline images become separate blocks after the paragraph
+                        current_blocks.extend(pr.inline_images);
+                        current_floating_images.extend(pr.floating_images);
+                        current_shapes.extend(pr.shapes);
+                        current_text_boxes.extend(pr.text_boxes);
                         // If this paragraph contained a section break, start a new section
-                        if let Some(sp) = sect_break {
+                        if let Some(sp) = pr.sect_pr {
                             sections.push(ParsedSection {
                                 blocks: std::mem::take(&mut current_blocks),
                                 properties: sp,
                                 floating_images: std::mem::take(&mut current_floating_images),
                                 text_boxes: std::mem::take(&mut current_text_boxes),
+                                shapes: std::mem::take(&mut current_shapes),
                             });
                         }
                     }
                     "tbl" if in_body && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
                         current_blocks.push(Block::Table(table));
+                    }
+                    "sdt" if in_body && depth == 0 => {
+                        // Structured Document Tag — skip sdtPr, process sdtContent
+                        let mut sdt_depth = 1u32;
+                        let mut in_sdt_content = false;
+                        loop {
+                            match reader.read_event()? {
+                                Event::Start(se) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "sdtContent" {
+                                        in_sdt_content = true;
+                                    } else if in_sdt_content {
+                                        match sl.as_str() {
+                                            "p" => {
+                                                let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                                                current_blocks.push(Block::Paragraph(pr.paragraph));
+                                                current_blocks.extend(pr.inline_images);
+                                                current_floating_images.extend(pr.floating_images);
+                                                current_shapes.extend(pr.shapes);
+                                                current_text_boxes.extend(pr.text_boxes);
+                                                if let Some(sp) = pr.sect_pr {
+                                                    sections.push(ParsedSection {
+                                                        blocks: std::mem::take(&mut current_blocks),
+                                                        properties: sp,
+                                                        floating_images: std::mem::take(&mut current_floating_images),
+                                                        text_boxes: std::mem::take(&mut current_text_boxes),
+                                                        shapes: std::mem::take(&mut current_shapes),
+                                                    });
+                                                }
+                                            }
+                                            "tbl" => {
+                                                let table = parse_table(&mut reader, ctx, styles)?;
+                                                current_blocks.push(Block::Table(table));
+                                            }
+                                            _ => { sdt_depth += 1; }
+                                        }
+                                    } else {
+                                        sdt_depth += 1;
+                                    }
+                                }
+                                Event::End(ee) => {
+                                    let sl = local_name(ee.name().as_ref());
+                                    if sl == "sdtContent" {
+                                        in_sdt_content = false;
+                                    } else if sl == "sdt" {
+                                        break;
+                                    } else if sdt_depth > 0 {
+                                        sdt_depth -= 1;
+                                    }
+                                }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
                     }
                     "sectPr" if in_body && depth == 0 => {
                         // Final section properties (for the last section)
@@ -329,12 +432,15 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
         columns: None,
+        title_pg: false,
+        section_type: None,
     });
     sections.push(ParsedSection {
         blocks: current_blocks,
         properties: last_sp,
         floating_images: current_floating_images,
         text_boxes: current_text_boxes,
+        shapes: current_shapes,
     });
 
     Ok(sections)
@@ -342,9 +448,21 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
 
 /// Parse a w:p element (paragraph).
 /// Returns (Paragraph, optional SectionProperties if this paragraph ends a section).
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<(Paragraph, Option<SectionProperties>), ParseError> {
+/// Parsed paragraph plus any floating elements found inside it
+struct ParagraphResult {
+    paragraph: Paragraph,
+    sect_pr: Option<SectionProperties>,
+    shapes: Vec<Shape>,
+    text_boxes: Vec<TextBox>,
+    inline_images: Vec<Block>,
+    floating_images: Vec<Image>,
+}
+
+fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
+    let mut found_shapes: Vec<Shape> = Vec::new();
+    let mut found_text_boxes: Vec<TextBox> = Vec::new();
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut style_id: Option<String> = None;
@@ -366,10 +484,18 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         para_sect_pr = spr;
                     }
                     "r" if depth == 0 => {
-                        let (run, img) = parse_run(reader, ctx, None)?;
+                        let (run, dr) = parse_run(reader, ctx, styles, None)?;
                         runs.push(run);
-                        if let Some(image) = img {
-                            images.push(image);
+                        if let Some(drawing) = dr {
+                            if let Some(image) = drawing.image {
+                                images.push(image);
+                            }
+                            if let Some(shape) = drawing.shape {
+                                found_shapes.push(shape);
+                            }
+                            if let Some(tb) = drawing.text_box {
+                                found_text_boxes.push(tb);
+                            }
                         }
                     }
                     "hyperlink" if depth == 0 => {
@@ -386,7 +512,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 link_url = Some(format!("#{}", val));
                             }
                         }
-                        let hyperlink_runs = parse_hyperlink_runs(reader, ctx, link_url)?;
+                        let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url)?;
                         runs.extend(hyperlink_runs);
                     }
                     // Track changes: inserted content
@@ -403,7 +529,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             }
                         }
                         let tc = TrackedChange { change_type: "insert".into(), author, date };
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, "ins", tc)?;
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "ins", tc)?;
                         runs.extend(tracked_runs);
                     }
                     // Track changes: deleted content
@@ -420,8 +546,26 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             }
                         }
                         let tc = TrackedChange { change_type: "delete".into(), author, date };
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, "del", tc)?;
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "del", tc)?;
                         runs.extend(tracked_runs);
+                    }
+                    // OMML math expressions
+                    "oMathPara" | "oMath" if depth == 0 => {
+                        let math_text = parse_omml(reader, &local)?;
+                        if !math_text.is_empty() {
+                            runs.push(Run {
+                                text: math_text,
+                                style: RunStyle { font_family: Some("Cambria Math".to_string()), ..RunStyle::default() },
+                                url: None,
+                                footnote_ref: None,
+                                endnote_ref: None,
+                                comment_range_start: Vec::new(),
+                                comment_range_end: Vec::new(),
+                                tracked_change: None,
+                                ruby: None,
+                                bookmark_name: None,
+                            });
+                        }
                     }
                     _ => {
                         depth += 1;
@@ -455,8 +599,35 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 }
                             }
                         }
-                        "bookmarkStart" | "bookmarkEnd" => {
-                            // Parsed but not acted on yet — bookmarks tracked for future use
+                        "bookmarkStart" => {
+                            let mut bk_name = None;
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                if key == "name" {
+                                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                                    if val != "_GoBack" {
+                                        bk_name = Some(val);
+                                    }
+                                }
+                            }
+                            if let Some(name) = bk_name {
+                                // Create an empty anchor run for the bookmark
+                                runs.push(Run {
+                                    text: String::new(),
+                                    style: RunStyle::default(),
+                                    url: None,
+                                    footnote_ref: None,
+                                    endnote_ref: None,
+                                    comment_range_start: Vec::new(),
+                                    comment_range_end: Vec::new(),
+                                    tracked_change: None,
+                                    ruby: None,
+                                    bookmark_name: Some(name),
+                                });
+                            }
+                        }
+                        "bookmarkEnd" => {
+                            // End marker; anchor is already placed at bookmarkStart
                         }
                         _ => {}
                     }
@@ -535,15 +706,29 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // Store style ID for contextual spacing comparison
     style.style_id = style_id;
 
-    // Append images as separate blocks after the paragraph runs
-    // For now, store the first image inline with the paragraph
-    let _ = images; // TODO: Better image-in-paragraph representation
+    // Separate inline images (no position) from floating images
+    let mut inline_images: Vec<Block> = Vec::new();
+    let mut floating_imgs: Vec<Image> = Vec::new();
+    for img in images {
+        if img.position.is_some() {
+            floating_imgs.push(img);
+        } else {
+            inline_images.push(Block::Image(img));
+        }
+    }
 
-    Ok((Paragraph {
-        runs,
-        style,
-        alignment,
-    }, para_sect_pr))
+    Ok(ParagraphResult {
+        paragraph: Paragraph {
+            runs,
+            style,
+            alignment,
+        },
+        sect_pr: para_sect_pr,
+        shapes: found_shapes,
+        text_boxes: found_text_boxes,
+        inline_images,
+        floating_images: floating_imgs,
+    })
 }
 
 /// Numbering reference parsed from w:numPr
@@ -658,6 +843,8 @@ fn parse_paragraph_properties(
                         style.contextual_spacing = enabled;
                     }
                     "spacing" => {
+                        let mut line_val: Option<f32> = None;
+                        let mut line_rule: Option<String> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -671,10 +858,30 @@ fn parse_paragraph_properties(
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                 }
                                 "line" => {
-                                    style.line_spacing =
-                                        val.parse::<f32>().ok().map(|v| v / 240.0);
+                                    line_val = val.parse::<f32>().ok();
+                                }
+                                "lineRule" => {
+                                    line_rule = Some(val.to_string());
                                 }
                                 _ => {}
+                            }
+                        }
+                        if let Some(lv) = line_val {
+                            match line_rule.as_deref() {
+                                Some("exact") => {
+                                    // Exact: value in twips, convert to points
+                                    style.line_spacing = Some(lv / 20.0);
+                                    style.line_spacing_rule = Some("exact".to_string());
+                                }
+                                Some("atLeast") => {
+                                    // At least: value in twips, convert to points
+                                    style.line_spacing = Some(lv / 20.0);
+                                    style.line_spacing_rule = Some("atLeast".to_string());
+                                }
+                                _ => {
+                                    // Auto: proportional, divide by 240
+                                    style.line_spacing = Some(lv / 240.0);
+                                }
                             }
                         }
                     }
@@ -732,6 +939,16 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.widow_control = enabled;
+                    }
+                    "bidi" => {
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.bidi = enabled;
                     }
                     _ => {}
                 }
@@ -933,10 +1150,10 @@ fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>, ParseErro
 
 /// Parse a w:r element (run). Returns the Run, optionally an Image, and field info.
 /// `url` is set when this run is inside a w:hyperlink element.
-fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>) -> Result<(Run, Option<Image>), ParseError> {
+fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>) -> Result<(Run, Option<DrawingResult>), ParseError> {
     let mut text = String::new();
     let mut style = RunStyle::default();
-    let mut image = None;
+    let mut drawing_result: Option<DrawingResult> = None;
     let mut depth = 0;
     let mut in_text = false;
     let mut in_instr_text = false;
@@ -960,7 +1177,21 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>
                         in_instr_text = true;
                     }
                     "drawing" if depth == 0 => {
-                        image = parse_drawing(reader, ctx)?;
+                        drawing_result = Some(parse_drawing(reader, ctx, styles)?);
+                    }
+                    // VML legacy picture/shape
+                    "pict" if depth == 0 => {
+                        let vml = parse_vml_pict(reader, ctx)?;
+                        if drawing_result.is_none() {
+                            drawing_result = Some(vml);
+                        }
+                    }
+                    // mc:AlternateContent — prefer Choice (DrawingML)
+                    "AlternateContent" if depth == 0 => {
+                        let ac = parse_alternate_content(reader, ctx, styles)?;
+                        if drawing_result.is_none() {
+                            drawing_result = ac;
+                        }
                     }
                     "ruby" if depth == 0 => {
                         ruby = Some(parse_ruby(reader)?);
@@ -1055,6 +1286,18 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>
             text = "#".to_string();
         } else if field.contains("DATE") || field.contains("TIME") {
             text = field.to_string();
+        } else if field.contains("TOC") || field.contains("HYPERLINK") {
+            // Table of contents / hyperlink fields — keep existing text (result display)
+        } else if field.contains("REF") || field.contains("NOTEREF") || field.contains("PAGEREF") {
+            // Cross-reference fields — show placeholder
+            if text.is_empty() {
+                text = "#".to_string();
+            }
+        } else if field.contains("AUTHOR") || field.contains("TITLE") || field.contains("SUBJECT") {
+            // Document property fields — show field name as placeholder
+            if text.is_empty() {
+                text = format!("[{}]", field.split_whitespace().next().unwrap_or(field));
+            }
         }
     }
 
@@ -1071,11 +1314,12 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>
         comment_range_end: Vec::new(),
         tracked_change: None,
         ruby,
-    }, image))
+        bookmark_name: None,
+    }, drawing_result))
 }
 
 /// Parse runs inside a w:hyperlink element
-fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Option<String>) -> Result<Vec<Run>, ParseError> {
+fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>) -> Result<Vec<Run>, ParseError> {
     let mut runs = Vec::new();
     let mut depth = 0;
 
@@ -1084,7 +1328,7 @@ fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, url: Opt
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (run, _img) = parse_run(reader, ctx, url.clone())?;
+                    let (run, _dr) = parse_run(reader, ctx, styles, url.clone())?;
                     runs.push(run);
                 } else {
                     depth += 1;
@@ -1150,7 +1394,8 @@ fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError>
                         }
                     }
                     "p" if in_note && depth == 0 => {
-                        let (para, _) = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
                     _ if in_note => {
@@ -1185,8 +1430,15 @@ fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError>
     Ok(notes)
 }
 
-/// Parse a w:drawing element to extract image info
-fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Option<Image>, ParseError> {
+/// Result from parsing a w:drawing element — may contain image, shape, and/or text box
+struct DrawingResult {
+    image: Option<Image>,
+    shape: Option<Shape>,
+    text_box: Option<TextBox>,
+}
+
+/// Parse a w:drawing element to extract image, shape, or text box info
+fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<DrawingResult, ParseError> {
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     let mut alt_text = None;
@@ -1199,9 +1451,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
     let mut h_relative: Option<String> = None;
     let mut v_relative: Option<String> = None;
     let mut wrap_type: Option<WrapType> = None;
+    let mut crop: Option<ImageCrop> = None;
     let mut in_pos_h = false;
     let mut in_pos_v = false;
     let mut in_pos_offset = false;
+    // Shape properties
+    let mut shape_type: Option<String> = None;
+    let mut shape_fill: Option<String> = None;
+    let mut stroke_color: Option<String> = None;
+    let mut stroke_width: Option<f32> = None;
+    let mut shape_text_blocks: Vec<Block> = Vec::new();
+    let mut rotation: Option<f32> = None;
+    let mut has_no_fill = false;
+    let mut has_no_stroke = false;
 
     loop {
         match reader.read_event()? {
@@ -1217,6 +1479,55 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "descr" {
                                 alt_text = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    // Shape line as Start element — may contain srgbClr child
+                    "ln" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "w" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                            }
+                        }
+                        // Parse children for stroke color
+                        let mut ln_depth = 1;
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(_)) => ln_depth += 1,
+                                Ok(Event::Empty(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "srgbClr" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "val" {
+                                                stroke_color = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                            }
+                                        }
+                                    } else if sl == "noFill" {
+                                        has_no_stroke = true;
+                                    }
+                                }
+                                Ok(Event::End(se)) => {
+                                    ln_depth -= 1;
+                                    if ln_depth == 0 {
+                                        break;
+                                    }
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => {}
+                            }
+                        }
+                        // We consumed ln's End, decrement outer depth
+                        depth -= 1;
+                    }
+                    // Shape transform rotation (xfrm rot attribute in 60000ths of a degree)
+                    "xfrm" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "rot" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                rotation = val.parse::<f32>().ok().map(|v| v / 60000.0);
                             }
                         }
                     }
@@ -1240,6 +1551,31 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
                     }
                     "posOffset" => {
                         in_pos_offset = true;
+                    }
+                    // DrawingML shape text content
+                    "txbxContent" => {
+                        // Parse text blocks inside shape
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "p" {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles) {
+                                            shape_text_blocks.push(Block::Paragraph(pr.paragraph));
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(se)) => {
+                                    if local_name(se.name().as_ref()) == "txbxContent" {
+                                        break;
+                                    }
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => {}
+                            }
+                        }
+                        // We consumed the txbxContent end tag, so decrement depth
+                        depth -= 1;
                     }
                     _ => {}
                 }
@@ -1291,6 +1627,27 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
                             }
                         }
                     }
+                    "srcRect" => {
+                        // a:srcRect — image crop percentages (in 1/1000th percent)
+                        let mut c = ImageCrop { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if let Ok(v) = val.parse::<f32>() {
+                                let pct = v / 1000.0; // Convert from 1/1000th percent to percent
+                                match key {
+                                    "t" => c.top = pct,
+                                    "r" => c.right = pct,
+                                    "b" => c.bottom = pct,
+                                    "l" => c.left = pct,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        if c.top > 0.0 || c.right > 0.0 || c.bottom > 0.0 || c.left > 0.0 {
+                            crop = Some(c);
+                        }
+                    }
                     "ext" => {
                         // a:ext cx/cy fallback for size
                         for attr in e.attributes().flatten() {
@@ -1319,6 +1676,39 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
                             }
                         }
                     }
+                    // Shape preset geometry (e.g. rect, ellipse, roundRect, triangle, etc.)
+                    "prstGeom" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "prst" {
+                                shape_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    // Shape solid fill color
+                    "srgbClr" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "val" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if shape_fill.is_none() && !has_no_fill {
+                                    shape_fill = Some(val);
+                                }
+                            }
+                        }
+                    }
+                    "noFill" => { has_no_fill = true; }
+                    "noLn" => { has_no_stroke = true; }
+                    // Shape line/outline properties (as empty element)
+                    "ln" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "w" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1342,27 +1732,387 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Optio
         }
     }
 
-    // Resolve the image data from the relationship
-    if let Some(rid) = rel_id {
+    let position = if is_anchor {
+        Some(FloatingPosition { x: pos_x, y: pos_y, h_relative, v_relative })
+    } else {
+        None
+    };
+
+    // Build image if we have a blip reference
+    let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
-        let position = if is_anchor {
-            Some(FloatingPosition { x: pos_x, y: pos_y, h_relative, v_relative })
-        } else {
-            None
-        };
-        Ok(Some(Image {
+        Some(Image {
             data,
             width,
             height,
             alt_text,
             content_type,
-            position,
+            position: position.clone(),
             wrap_type,
-        }))
+            crop,
+        })
     } else {
-        Ok(None)
+        None
+    };
+
+    // Build shape if we detected a preset geometry
+    let shape = if let Some(ref st) = shape_type {
+        Some(Shape {
+            shape_type: st.clone(),
+            width,
+            height,
+            position: position.clone(),
+            fill: if has_no_fill { None } else { shape_fill.clone() },
+            stroke_color: if has_no_stroke { None } else { stroke_color },
+            stroke_width: if has_no_stroke { None } else { stroke_width },
+            text_blocks: Vec::new(), // text goes to text_box
+            rotation,
+        })
+    } else {
+        None
+    };
+
+    // Build text box if we have text content in a shape
+    let text_box = if !shape_text_blocks.is_empty() {
+        Some(TextBox {
+            blocks: shape_text_blocks,
+            width,
+            height,
+            position,
+            border: !has_no_stroke,
+            fill: if has_no_fill { None } else { shape_fill.clone().or_else(|| shape_type.as_ref().map(|_| "FFFFFF".to_string())) },
+        })
+    } else {
+        None
+    };
+
+    Ok(DrawingResult { image, shape, text_box })
+}
+
+/// Parse VML w:pict element (legacy shapes/images)
+fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<DrawingResult, ParseError> {
+    let mut shape_type = None;
+    let mut width: f32 = 0.0;
+    let mut height: f32 = 0.0;
+    let mut fill_color: Option<String> = None;
+    let mut stroke_color_val: Option<String> = None;
+    let mut stroke_width_val: Option<f32> = None;
+    let mut no_stroke = false;
+    let mut rel_id: Option<String> = None;
+    let mut text_blocks: Vec<Block> = Vec::new();
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                depth += 1;
+                match local.as_str() {
+                    // VML shape types
+                    "shape" | "rect" | "oval" | "roundrect" | "line" => {
+                        shape_type = Some(match local.as_str() {
+                            "shape" => "rect", // generic shape defaults to rect
+                            "roundrect" => "roundRect",
+                            other => other,
+                        }.to_string());
+                        // Parse style attribute for width/height
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "style" => {
+                                    // Parse CSS-like style: "width:200pt;height:100pt"
+                                    for part in val.split(';') {
+                                        let part = part.trim();
+                                        if let Some(w) = part.strip_prefix("width:") {
+                                            width = parse_css_length(w.trim());
+                                        } else if let Some(h) = part.strip_prefix("height:") {
+                                            height = parse_css_length(h.trim());
+                                        }
+                                    }
+                                }
+                                "fillcolor" => fill_color = Some(val.trim_start_matches('#').to_string()),
+                                "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
+                                "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
+                                "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "imagedata" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:id" || key.ends_with(":id") {
+                                rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "fill" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "color" {
+                                fill_color = Some(String::from_utf8_lossy(&attr.value).trim_start_matches('#').to_string());
+                            }
+                        }
+                    }
+                    "stroke" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "color" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
+                                "weight" => stroke_width_val = parse_css_length_opt(&val),
+                                "on" => { if val == "f" || val == "false" { no_stroke = true; } }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "pict" && depth == 0 {
+                    break;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
     }
+
+    // Build image if we have a blip reference
+    let image = if let Some(rid) = rel_id {
+        let data = ctx.media.get(&rid).cloned().unwrap_or_default();
+        let content_type = ctx.media_types.get(&rid).cloned();
+        Some(Image {
+            data,
+            width,
+            height,
+            alt_text: None,
+            content_type,
+            position: None,
+            wrap_type: None,
+            crop: None,
+        })
+    } else {
+        None
+    };
+
+    let shape = shape_type.as_ref().map(|st| Shape {
+        shape_type: st.clone(),
+        width,
+        height,
+        position: None,
+        fill: fill_color.clone(),
+        stroke_color: if no_stroke { None } else { stroke_color_val },
+        stroke_width: if no_stroke { None } else { stroke_width_val },
+        text_blocks,
+        rotation: None,
+    });
+
+    Ok(DrawingResult { image, shape, text_box: None })
+}
+
+/// Parse CSS-like length value (e.g. "200pt", "2in", "100.5px")
+fn parse_css_length(s: &str) -> f32 {
+    let s = s.trim();
+    if let Some(v) = s.strip_suffix("pt") {
+        v.trim().parse().unwrap_or(0.0)
+    } else if let Some(v) = s.strip_suffix("in") {
+        v.trim().parse::<f32>().unwrap_or(0.0) * 72.0
+    } else if let Some(v) = s.strip_suffix("cm") {
+        v.trim().parse::<f32>().unwrap_or(0.0) * 28.3465
+    } else if let Some(v) = s.strip_suffix("mm") {
+        v.trim().parse::<f32>().unwrap_or(0.0) * 2.83465
+    } else if let Some(v) = s.strip_suffix("px") {
+        v.trim().parse::<f32>().unwrap_or(0.0) * 0.75 // 96dpi → 72pt
+    } else {
+        s.parse().unwrap_or(0.0)
+    }
+}
+
+fn parse_css_length_opt(s: &str) -> Option<f32> {
+    let v = parse_css_length(s);
+    if v > 0.0 { Some(v) } else { None }
+}
+
+/// Parse mc:AlternateContent — prefer mc:Choice (DrawingML), fall back to mc:Fallback (VML)
+fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<Option<DrawingResult>, ParseError> {
+    let mut result: Option<DrawingResult> = None;
+    let mut depth = 0;
+    let mut in_choice = false;
+    let mut in_fallback = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "Choice" if depth == 0 => {
+                        in_choice = true;
+                        depth += 1;
+                    }
+                    "Fallback" if depth == 0 => {
+                        in_fallback = true;
+                        depth += 1;
+                    }
+                    "drawing" if in_choice && depth == 1 => {
+                        let dr = parse_drawing(reader, ctx, styles)?;
+                        if result.is_none() {
+                            result = Some(dr);
+                        }
+                    }
+                    "pict" if (in_choice || in_fallback) && depth == 1 && result.is_none() => {
+                        let dr = parse_vml_pict(reader, ctx)?;
+                        result = Some(dr);
+                    }
+                    _ => {
+                        depth += 1;
+                    }
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "AlternateContent" && depth == 0 {
+                    break;
+                }
+                if local == "Choice" && in_choice {
+                    in_choice = false;
+                }
+                if local == "Fallback" && in_fallback {
+                    in_fallback = false;
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(result)
+}
+
+/// Parse OMML math element (m:oMath or m:oMathPara) into a text representation
+fn parse_omml(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<String, ParseError> {
+    let mut result = String::new();
+    let mut depth = 0;
+    let mut in_text = false;
+    // Track context for proper rendering
+    let mut context_stack: Vec<String> = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                depth += 1;
+                match local.as_str() {
+                    "t" => in_text = true,
+                    "f" => context_stack.push("frac".to_string()),
+                    "rad" => {
+                        result.push('\u{221A}'); // √
+                        context_stack.push("rad".to_string());
+                    }
+                    "sSup" => context_stack.push("sup".to_string()),
+                    "sSub" => context_stack.push("sub".to_string()),
+                    "d" => {
+                        // Delimiter (parentheses)
+                        let mut beg = '(';
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "begChr" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                beg = v.chars().next().unwrap_or('(');
+                            }
+                        }
+                        result.push(beg);
+                        context_stack.push("delim".to_string());
+                    }
+                    "nary" => {
+                        // N-ary (summation, product, integral)
+                        let mut chr = '\u{2211}'; // default: summation ∑
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "chr" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                chr = v.chars().next().unwrap_or('\u{2211}');
+                            }
+                        }
+                        result.push(chr);
+                        context_stack.push("nary".to_string());
+                    }
+                    "num" if context_stack.last().map_or(false, |c| c == "frac") => {
+                        // Numerator of fraction — will add / separator after
+                    }
+                    "den" if context_stack.last().map_or(false, |c| c == "frac") => {
+                        result.push('/');
+                    }
+                    "sup" if context_stack.last().map_or(false, |c| c == "sup") => {
+                        result.push('^');
+                    }
+                    "sub" if context_stack.last().map_or(false, |c| c == "sub") => {
+                        result.push('_');
+                    }
+                    _ => {}
+                }
+            }
+            Event::Text(e) => {
+                if in_text {
+                    let content = e.unescape().unwrap_or_default();
+                    result.push_str(&content);
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "t" {
+                    in_text = false;
+                }
+                if local == end_tag && depth == 0 {
+                    break;
+                }
+                match local.as_str() {
+                    "f" | "rad" | "sSup" | "sSub" | "nary" => {
+                        context_stack.pop();
+                    }
+                    "d" => {
+                        context_stack.pop();
+                        result.push(')');
+                    }
+                    _ => {}
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    // m:dPr begChr/endChr as empty element
+                    "begChr" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                // We already pushed '(' — if different, fix it
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(result)
 }
 
 /// Parse w:rPr (run properties)
@@ -1380,6 +2130,9 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                         let key = local_name(attr.key.as_ref());
                         if key == "ascii" || key == "hAnsi" {
                             style.font_family =
+                                Some(String::from_utf8_lossy(&attr.value).to_string());
+                        } else if key == "eastAsia" {
+                            style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                         }
                     }
@@ -1403,7 +2156,11 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                             }
                         }
                     }
-                    "strike" | "dstrike" => style.strikethrough = true,
+                    "strike" => style.strikethrough = true,
+                    "dstrike" => {
+                        style.strikethrough = true;
+                        style.double_strikethrough = true;
+                    }
                     "highlight" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
@@ -1438,6 +2195,9 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                             let key = local_name(attr.key.as_ref());
                             if key == "ascii" || key == "hAnsi" {
                                 style.font_family =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                            } else if key == "eastAsia" {
+                                style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
@@ -1502,6 +2262,35 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Resul
                     }
                     "caps" => {
                         style.all_caps = true;
+                    }
+                    "shd" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "fill" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if val != "auto" {
+                                    style.shading = Some(val);
+                                }
+                            }
+                        }
+                    }
+                    "rtl" => {
+                        style.rtl = true;
+                    }
+                    "vanish" | "webHidden" => {
+                        style.vanish = true;
+                    }
+                    "outline" => {
+                        style.outline = true;
+                    }
+                    "shadow" => {
+                        style.shadow = true;
+                    }
+                    "emboss" => {
+                        style.emboss = true;
+                    }
+                    "imprint" => {
+                        style.imprint = true;
                     }
                     _ => {}
                 }
@@ -1576,6 +2365,37 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                 if local == "tblBorders" {
                     style.border = true;
                     in_borders = true;
+                } else if local == "tblCellMar" {
+                    // Parse default cell margins
+                    let mut margins = CellMargins { top: None, bottom: None, left: None, right: None };
+                    loop {
+                        match reader.read_event() {
+                            Ok(Event::Empty(me)) => {
+                                let ml = local_name(me.name().as_ref());
+                                let mut w_val: Option<f32> = None;
+                                for attr in me.attributes().flatten() {
+                                    if local_name(attr.key.as_ref()) == "w" {
+                                        w_val = String::from_utf8_lossy(&attr.value).parse::<f32>().ok().map(|v| v / 20.0);
+                                    }
+                                }
+                                match ml.as_str() {
+                                    "top" => margins.top = w_val,
+                                    "bottom" => margins.bottom = w_val,
+                                    "left" | "start" => margins.left = w_val,
+                                    "right" | "end" => margins.right = w_val,
+                                    _ => {}
+                                }
+                            }
+                            Ok(Event::End(ee)) => {
+                                if local_name(ee.name().as_ref()) == "tblCellMar" { break; }
+                            }
+                            Ok(Event::Eof) => break,
+                            _ => {}
+                        }
+                    }
+                    style.default_cell_margins = Some(margins);
+                    // Don't increment depth — we consumed the End event
+                    continue;
                 }
                 depth += 1;
             }
@@ -1661,6 +2481,84 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                             }
                         }
                     }
+                    "tblStyleRowBandSize" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                if let Some(ref mut look) = style.tbl_look {
+                                    look.row_band_size = String::from_utf8_lossy(&attr.value).parse().unwrap_or(1);
+                                }
+                            }
+                        }
+                    }
+                    "tblStyleColBandSize" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                if let Some(ref mut look) = style.tbl_look {
+                                    look.col_band_size = String::from_utf8_lossy(&attr.value).parse().unwrap_or(1);
+                                }
+                            }
+                        }
+                    }
+                    "tblInd" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "w" {
+                                style.indent = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
+                        }
+                    }
+                    "tblCellSpacing" => {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "w" {
+                                style.cell_spacing = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
+                        }
+                    }
+                    "tblLook" => {
+                        let mut look = TableLook::default();
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "firstRow" => look.first_row = val.as_ref() == "1",
+                                "lastRow" => look.last_row = val.as_ref() == "1",
+                                "firstColumn" => look.first_column = val.as_ref() == "1",
+                                "lastColumn" => look.last_column = val.as_ref() == "1",
+                                "noHBand" => look.banded_rows = val.as_ref() != "1",
+                                "noVBand" => look.banded_columns = val.as_ref() != "1",
+                                "val" => {
+                                    // Hex bitmask fallback (e.g. "04A0")
+                                    if let Ok(v) = u32::from_str_radix(&val, 16) {
+                                        look.first_row = v & 0x0020 != 0;
+                                        look.last_row = v & 0x0040 != 0;
+                                        look.first_column = v & 0x0080 != 0;
+                                        look.last_column = v & 0x0100 != 0;
+                                        look.banded_rows = v & 0x0200 == 0; // noHBand inverted
+                                        look.banded_columns = v & 0x0400 == 0; // noVBand inverted
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        style.tbl_look = Some(look);
+                    }
+                    "tblLayout" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                style.layout = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "top" | "bottom" | "left" | "right" | "start" | "end"
+                        if !in_borders =>
+                    {
+                        // tblCellMar children (when not inside tblBorders)
+                        // These appear inside <w:tblCellMar> which is a Start element
+                        // but we handle them as Empty within depth tracking
+                    }
                     _ => {}
                 }
             }
@@ -1676,6 +2574,8 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
 fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<TableRow, ParseError> {
     let mut cells = Vec::new();
     let mut height: Option<f32> = None;
+    let mut header = false;
+    let mut cant_split = false;
     let mut depth = 0;
 
     loop {
@@ -1694,13 +2594,18 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "trHeight" {
-                    for attr in e.attributes().flatten() {
-                        if local_name(attr.key.as_ref()) == "val" {
-                            let val = String::from_utf8_lossy(&attr.value);
-                            height = val.parse::<f32>().ok().map(|v| v / 20.0);
+                match local.as_str() {
+                    "trHeight" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                height = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
                         }
                     }
+                    "tblHeader" => { header = true; }
+                    "cantSplit" => { cant_split = true; }
+                    _ => {}
                 }
             }
             Event::End(e) => {
@@ -1717,7 +2622,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    Ok(TableRow { cells, height })
+    Ok(TableRow { cells, height, header, cant_split })
 }
 
 /// Parse a w:tc element (table cell)
@@ -1732,8 +2637,12 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let (para, _) = parse_paragraph(reader, ctx, styles)?;
-                        blocks.push(Block::Paragraph(para));
+                        let pr = parse_paragraph(reader, ctx, styles)?;
+                        blocks.push(Block::Paragraph(pr.paragraph));
+                    }
+                    "tbl" if depth == 0 => {
+                        let table = parse_table(reader, ctx, styles)?;
+                        blocks.push(Block::Table(table));
                     }
                     "tcPr" if depth == 0 => {
                         cell_props = parse_cell_properties(reader)?;
@@ -1936,18 +2845,29 @@ fn parse_cell_margins(reader: &mut Reader<&[u8]>) -> Result<CellMargins, ParseEr
     Ok(margins)
 }
 
+/// A header/footer reference with its type
+#[derive(Debug, Clone)]
+struct HdrFtrRef {
+    rel_id: String,
+    ref_type: String, // "default", "first", "even"
+}
+
 /// Parsed section properties
 struct SectionProperties {
     page_size: PageSize,
     margin: Margin,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
-    /// Reference IDs for header parts
-    header_refs: Vec<String>,
-    /// Reference IDs for footer parts
-    footer_refs: Vec<String>,
+    /// Reference IDs for header parts (with type)
+    header_refs: Vec<HdrFtrRef>,
+    /// Reference IDs for footer parts (with type)
+    footer_refs: Vec<HdrFtrRef>,
     /// Column layout
     columns: Option<ColumnLayout>,
+    /// Whether this section has a different first page header/footer
+    title_pg: bool,
+    /// Section break type: "nextPage" (default), "continuous", "evenPage", "oddPage"
+    section_type: Option<String>,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -1957,15 +2877,68 @@ fn parse_section_properties(
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
     let mut grid_line_pitch: Option<f32> = None;
-    let mut header_refs = Vec::new();
-    let mut footer_refs = Vec::new();
+    let mut header_refs: Vec<HdrFtrRef> = Vec::new();
+    let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
     let mut columns: Option<ColumnLayout> = None;
+    let mut title_pg = false;
+    let mut section_type: Option<String> = None;
     let mut depth = 0;
 
     loop {
         match reader.read_event()? {
-            Event::Start(_) => {
-                depth += 1;
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "cols" && depth == 0 {
+                    // w:cols as Start element — has child w:col elements
+                    let mut num = 1u32;
+                    let mut space: Option<f32> = None;
+                    let mut equal_width = true;
+                    for attr in e.attributes().flatten() {
+                        let key = local_name(attr.key.as_ref());
+                        let val = String::from_utf8_lossy(&attr.value);
+                        match key.as_str() {
+                            "num" => { num = val.parse().unwrap_or(1); }
+                            "space" => { space = val.parse::<f32>().ok().map(|v| v / 20.0); }
+                            "equalWidth" => { equal_width = val.as_ref() != "0" && val.as_ref() != "false"; }
+                            _ => {}
+                        }
+                    }
+                    // Parse child w:col elements
+                    let mut col_defs = Vec::new();
+                    loop {
+                        match reader.read_event() {
+                            Ok(Event::Empty(ce)) => {
+                                let cl = local_name(ce.name().as_ref());
+                                if cl == "col" {
+                                    let mut col_w = 0.0f32;
+                                    let mut col_space: Option<f32> = None;
+                                    for attr in ce.attributes().flatten() {
+                                        let key = local_name(attr.key.as_ref());
+                                        let val = String::from_utf8_lossy(&attr.value);
+                                        match key.as_str() {
+                                            "w" => { col_w = val.parse::<f32>().unwrap_or(0.0) / 20.0; }
+                                            "space" => { col_space = val.parse::<f32>().ok().map(|v| v / 20.0); }
+                                            _ => {}
+                                        }
+                                    }
+                                    col_defs.push(ColumnDef { width: col_w, space: col_space });
+                                }
+                            }
+                            Ok(Event::End(ee)) => {
+                                if local_name(ee.name().as_ref()) == "cols" {
+                                    break;
+                                }
+                            }
+                            Ok(Event::Eof) => break,
+                            _ => {}
+                        }
+                    }
+                    if num > 1 {
+                        columns = Some(ColumnLayout { num, space, equal_width, columns: col_defs });
+                    }
+                } else {
+                    depth += 1;
+                }
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
@@ -2046,18 +3019,44 @@ fn parse_section_properties(
                         }
                     }
                     "headerReference" => {
+                        let mut rel_id = String::new();
+                        let mut ref_type = "default".to_string();
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "id" {
-                                header_refs.push(String::from_utf8_lossy(&attr.value).to_string());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "id" => rel_id = val,
+                                "type" => ref_type = val,
+                                _ => {}
                             }
+                        }
+                        if !rel_id.is_empty() {
+                            header_refs.push(HdrFtrRef { rel_id, ref_type });
                         }
                     }
                     "footerReference" => {
+                        let mut rel_id = String::new();
+                        let mut ref_type = "default".to_string();
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "id" {
-                                footer_refs.push(String::from_utf8_lossy(&attr.value).to_string());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "id" => rel_id = val,
+                                "type" => ref_type = val,
+                                _ => {}
+                            }
+                        }
+                        if !rel_id.is_empty() {
+                            footer_refs.push(HdrFtrRef { rel_id, ref_type });
+                        }
+                    }
+                    "titlePg" => {
+                        title_pg = true;
+                    }
+                    "type" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                section_type = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -2076,7 +3075,7 @@ fn parse_section_properties(
                             }
                         }
                         if num > 1 {
-                            columns = Some(ColumnLayout { num, space, equal_width });
+                            columns = Some(ColumnLayout { num, space, equal_width, columns: Vec::new() });
                         }
                     }
                     _ => {}
@@ -2103,6 +3102,8 @@ fn parse_section_properties(
         header_refs,
         footer_refs,
         columns,
+        title_pg,
+        section_type,
     })
 }
 
@@ -2123,8 +3124,8 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let (para, _) = parse_paragraph(&mut reader, ctx, styles)?;
-                        blocks.push(Block::Paragraph(para));
+                        let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                        blocks.push(Block::Paragraph(pr.paragraph));
                     }
                     "tbl" if in_root && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
@@ -2198,6 +3199,7 @@ fn collect_note_refs(blocks: &[Block], ctx: &ParseContext, footnotes: &mut Vec<F
 fn parse_tracked_change_runs(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
+    styles: &StyleSheet,
     end_tag: &str,
     tc: TrackedChange,
 ) -> Result<Vec<Run>, ParseError> {
@@ -2209,7 +3211,7 @@ fn parse_tracked_change_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (mut run, _img) = parse_run(reader, ctx, None)?;
+                    let (mut run, _dr) = parse_run(reader, ctx, styles, None)?;
                     run.tracked_change = Some(tc.clone());
                     runs.push(run);
                 } else {
@@ -2354,7 +3356,8 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                         }
                     }
                     "p" if in_comment && depth == 0 => {
-                        let (para, _) = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
                     _ if in_comment => {

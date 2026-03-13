@@ -132,6 +132,7 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     }
     if child.line_spacing.is_none() {
         child.line_spacing = parent.line_spacing;
+        child.line_spacing_rule = parent.line_spacing_rule.clone();
     }
     if child.space_before.is_none() {
         child.space_before = parent.space_before;
@@ -162,6 +163,9 @@ fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.font_family.is_none() {
         child.font_family = parent.font_family.clone();
     }
+    if child.font_family_east_asia.is_none() {
+        child.font_family_east_asia = parent.font_family_east_asia.clone();
+    }
     if child.font_size.is_none() {
         child.font_size = parent.font_size;
     }
@@ -173,6 +177,9 @@ fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     }
     if child.character_spacing.is_none() {
         child.character_spacing = parent.character_spacing;
+    }
+    if child.shading.is_none() {
+        child.shading = parent.shading.clone();
     }
 }
 
@@ -190,6 +197,9 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>) -> Result<RunStyle, Pa
                         let key = local_name(attr.key.as_ref());
                         if key == "ascii" || key == "hAnsi" {
                             rs.font_family =
+                                Some(String::from_utf8_lossy(&attr.value).to_string());
+                        } else if key == "eastAsia" {
+                            rs.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
                         }
                     }
@@ -260,6 +270,10 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             }
         }
         "strike" => rs.strikethrough = true,
+        "dstrike" => {
+            rs.strikethrough = true;
+            rs.double_strikethrough = true;
+        }
         "sz" => {
             for attr in e.attributes().flatten() {
                 if local_name(attr.key.as_ref()) == "val" {
@@ -284,6 +298,9 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 if key == "ascii" || key == "hAnsi" {
                     rs.font_family =
                         Some(String::from_utf8_lossy(&attr.value).to_string());
+                } else if key == "eastAsia" {
+                    rs.font_family_east_asia =
+                        Some(String::from_utf8_lossy(&attr.value).to_string());
                 }
             }
         }
@@ -297,6 +314,23 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
         }
         "smallCaps" => rs.small_caps = true,
         "caps" => rs.all_caps = true,
+        "shd" => {
+            for attr in e.attributes().flatten() {
+                let key = local_name(attr.key.as_ref());
+                if key == "fill" {
+                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    if val != "auto" {
+                        rs.shading = Some(val);
+                    }
+                }
+            }
+        }
+        "rtl" => rs.rtl = true,
+        "vanish" | "webHidden" => rs.vanish = true,
+        "outline" => rs.outline = true,
+        "shadow" => rs.shadow = true,
+        "emboss" => rs.emboss = true,
+        "imprint" => rs.imprint = true,
         _ => {}
     }
 }
@@ -306,6 +340,8 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
     let local = local_name(e.name().as_ref());
     match local.as_str() {
         "spacing" => {
+            let mut line_val: Option<f32> = None;
+            let mut line_rule: Option<String> = None;
             for attr in e.attributes().flatten() {
                 let key = local_name(attr.key.as_ref());
                 let val = String::from_utf8_lossy(&attr.value);
@@ -317,9 +353,27 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                         style.space_after = val.parse::<f32>().ok().map(|v| v / 20.0);
                     }
                     "line" => {
-                        style.line_spacing = val.parse::<f32>().ok().map(|v| v / 240.0);
+                        line_val = val.parse::<f32>().ok();
+                    }
+                    "lineRule" => {
+                        line_rule = Some(val.to_string());
                     }
                     _ => {}
+                }
+            }
+            if let Some(lv) = line_val {
+                match line_rule.as_deref() {
+                    Some("exact") => {
+                        style.line_spacing = Some(lv / 20.0);
+                        style.line_spacing_rule = Some("exact".to_string());
+                    }
+                    Some("atLeast") => {
+                        style.line_spacing = Some(lv / 20.0);
+                        style.line_spacing_rule = Some("atLeast".to_string());
+                    }
+                    _ => {
+                        style.line_spacing = Some(lv / 240.0);
+                    }
                 }
             }
         }
@@ -344,6 +398,16 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.widow_control = enabled;
+        }
+        "bidi" => {
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                }
+            }
+            style.bidi = enabled;
         }
         _ => {}
     }
@@ -374,6 +438,10 @@ fn parse_style_definition(
                             let key = local_name(attr.key.as_ref());
                             if key == "ascii" || key == "hAnsi" {
                                 run_style.font_family =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                                has_run_style = true;
+                            } else if key == "eastAsia" {
+                                run_style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
                                 has_run_style = true;
                             }
@@ -415,6 +483,11 @@ fn parse_style_definition(
                             run_style.strikethrough = true;
                             has_run_style = true;
                         }
+                        "dstrike" => {
+                            run_style.strikethrough = true;
+                            run_style.double_strikethrough = true;
+                            has_run_style = true;
+                        }
                         "sz" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
@@ -443,6 +516,10 @@ fn parse_style_definition(
                                     run_style.font_family =
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
                                     has_run_style = true;
+                                } else if key == "eastAsia" {
+                                    run_style.font_family_east_asia =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    has_run_style = true;
                                 }
                             }
                         }
@@ -463,6 +540,18 @@ fn parse_style_definition(
                         "caps" => {
                             run_style.all_caps = true;
                             has_run_style = true;
+                        }
+                        "shd" => {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                if key == "fill" {
+                                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                                    if val != "auto" {
+                                        run_style.shading = Some(val);
+                                        has_run_style = true;
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -489,6 +578,8 @@ fn parse_style_definition(
                             style.contextual_spacing = enabled;
                         }
                         "spacing" => {
+                            let mut line_val: Option<f32> = None;
+                            let mut line_rule: Option<String> = None;
                             for attr in e.attributes().flatten() {
                                 let key = local_name(attr.key.as_ref());
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -502,10 +593,27 @@ fn parse_style_definition(
                                             val.parse::<f32>().ok().map(|v| v / 20.0);
                                     }
                                     "line" => {
-                                        style.line_spacing =
-                                            val.parse::<f32>().ok().map(|v| v / 240.0);
+                                        line_val = val.parse::<f32>().ok();
+                                    }
+                                    "lineRule" => {
+                                        line_rule = Some(val.to_string());
                                     }
                                     _ => {}
+                                }
+                            }
+                            if let Some(lv) = line_val {
+                                match line_rule.as_deref() {
+                                    Some("exact") => {
+                                        style.line_spacing = Some(lv / 20.0);
+                                        style.line_spacing_rule = Some("exact".to_string());
+                                    }
+                                    Some("atLeast") => {
+                                        style.line_spacing = Some(lv / 20.0);
+                                        style.line_spacing_rule = Some("atLeast".to_string());
+                                    }
+                                    _ => {
+                                        style.line_spacing = Some(lv / 240.0);
+                                    }
                                 }
                             }
                         }
@@ -520,6 +628,16 @@ fn parse_style_definition(
                                 }
                             }
                             style.widow_control = enabled;
+                        }
+                        "bidi" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                            }
+                            style.bidi = enabled;
                         }
                         _ => {}
                     }

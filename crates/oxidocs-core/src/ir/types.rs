@@ -39,6 +39,9 @@ pub struct Page {
     /// Text boxes
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_boxes: Vec<TextBox>,
+    /// Geometric shapes (DrawingML / VML)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shapes: Vec<Shape>,
     /// Column layout for this section
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns: Option<ColumnLayout>,
@@ -83,11 +86,17 @@ pub struct Run {
     /// Ruby (furigana) annotation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruby: Option<Ruby>,
+    /// Bookmark anchor name (from w:bookmarkStart w:name)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bookmark_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunStyle {
     pub font_family: Option<String>,
+    /// East Asian font family (w:rFonts eastAsia) for CJK characters
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family_east_asia: Option<String>,
     pub font_size: Option<f32>,
     pub bold: bool,
     pub italic: bool,
@@ -96,6 +105,9 @@ pub struct RunStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underline_style: Option<String>,
     pub strikethrough: bool,
+    /// Double strikethrough (w:dstrike)
+    #[serde(default)]
+    pub double_strikethrough: bool,
     pub color: Option<String>,
     pub highlight: Option<String>,
     pub vertical_align: Option<VerticalAlign>,
@@ -108,24 +120,54 @@ pub struct RunStyle {
     /// All capitals (w:caps)
     #[serde(default)]
     pub all_caps: bool,
+    /// Character-level shading/background color (w:shd fill, hex)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shading: Option<String>,
+    /// Right-to-left text run (w:rtl)
+    #[serde(default)]
+    pub rtl: bool,
+    /// Hidden text (w:vanish)
+    #[serde(default)]
+    pub vanish: bool,
+    /// Text outline effect (w:outline)
+    #[serde(default)]
+    pub outline: bool,
+    /// Text shadow effect (w:shadow)
+    #[serde(default)]
+    pub shadow: bool,
+    /// Text emboss effect (w:emboss)
+    #[serde(default)]
+    pub emboss: bool,
+    /// Text imprint/engrave effect (w:imprint)
+    #[serde(default)]
+    pub imprint: bool,
 }
 
 impl Default for RunStyle {
     fn default() -> Self {
         Self {
             font_family: None,
+            font_family_east_asia: None,
             font_size: None,
             bold: false,
             italic: false,
             underline: false,
             underline_style: None,
             strikethrough: false,
+            double_strikethrough: false,
             color: None,
             highlight: None,
             vertical_align: None,
             character_spacing: None,
             small_caps: false,
             all_caps: false,
+            shading: None,
+            rtl: false,
+            vanish: false,
+            outline: false,
+            shadow: false,
+            emboss: false,
+            imprint: false,
         }
     }
 }
@@ -149,6 +191,12 @@ pub struct TableRow {
     /// Row height in points (w:trHeight)
     #[serde(default)]
     pub height: Option<f32>,
+    /// Repeat as header row at top of each page (w:tblHeader)
+    #[serde(default)]
+    pub header: bool,
+    /// Prevent row from breaking across pages (w:cantSplit)
+    #[serde(default)]
+    pub cant_split: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +264,22 @@ pub struct Image {
     /// Text wrapping mode
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrap_type: Option<WrapType>,
+    /// Crop percentages (a:srcRect) — top, right, bottom, left as 0-100%
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<ImageCrop>,
+}
+
+/// Image crop rectangle (percentages from each edge)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ImageCrop {
+    #[serde(default)]
+    pub top: f32,
+    #[serde(default)]
+    pub right: f32,
+    #[serde(default)]
+    pub bottom: f32,
+    #[serde(default)]
+    pub left: f32,
 }
 
 /// Position for a floating (anchored) element
@@ -266,6 +330,35 @@ pub struct TextBox {
     pub fill: Option<String>,
 }
 
+/// A geometric shape (DrawingML or VML)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Shape {
+    /// Shape type (e.g. "rect", "ellipse", "roundRect", "line", "arrow", etc.)
+    pub shape_type: String,
+    /// Width in points
+    pub width: f32,
+    /// Height in points
+    pub height: f32,
+    /// Position (floating)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<FloatingPosition>,
+    /// Fill color (hex)
+    #[serde(default)]
+    pub fill: Option<String>,
+    /// Outline/stroke color (hex)
+    #[serde(default)]
+    pub stroke_color: Option<String>,
+    /// Outline width in points
+    #[serde(default)]
+    pub stroke_width: Option<f32>,
+    /// Text content inside the shape (if any)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_blocks: Vec<Block>,
+    /// Rotation in degrees
+    #[serde(default)]
+    pub rotation: Option<f32>,
+}
+
 /// A comment annotation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Comment {
@@ -313,6 +406,19 @@ pub struct ColumnLayout {
     /// Whether columns have equal width
     #[serde(default)]
     pub equal_width: bool,
+    /// Individual column definitions (for unequal widths)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<ColumnDef>,
+}
+
+/// Individual column definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnDef {
+    /// Column width in points
+    pub width: f32,
+    /// Space after this column in points
+    #[serde(default)]
+    pub space: Option<f32>,
 }
 
 /// A tab stop definition
@@ -358,9 +464,15 @@ impl Default for Alignment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyle {
     pub heading_level: Option<u8>,
-    /// Line spacing multiplier (w:line / 240 for auto mode, e.g. 1.15 for w:line="276").
+    /// Line spacing value. Interpretation depends on line_spacing_rule:
+    /// - "auto": multiplier (w:line / 240, e.g. 1.15 for w:line="276")
+    /// - "exact": fixed height in points (w:line / 20)
+    /// - "atLeast": minimum height in points (w:line / 20)
     /// None means single spacing (1.0).
     pub line_spacing: Option<f32>,
+    /// Line spacing rule: "auto" (default), "exact", or "atLeast"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_spacing_rule: Option<String>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
     pub indent_left: Option<f32>,
@@ -402,6 +514,9 @@ pub struct ParagraphStyle {
     /// Widow/orphan control (w:widowControl, default true in Word)
     #[serde(default = "default_true")]
     pub widow_control: bool,
+    /// Bidirectional text / RTL paragraph (w:bidi)
+    #[serde(default)]
+    pub bidi: bool,
 }
 
 /// Paragraph border definitions
@@ -437,6 +552,7 @@ impl Default for ParagraphStyle {
         Self {
             heading_level: None,
             line_spacing: None,
+            line_spacing_rule: None,
             space_before: None,
             space_after: None,
             indent_left: None,
@@ -455,6 +571,7 @@ impl Default for ParagraphStyle {
             keep_next: false,
             keep_lines: false,
             widow_control: true,
+            bidi: false,
         }
     }
 }
@@ -483,6 +600,50 @@ pub struct TableStyle {
     /// Table style ID reference (w:tblStyle)
     #[serde(default)]
     pub style_id: Option<String>,
+    /// Table look flags (from w:tblLook)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tbl_look: Option<TableLook>,
+    /// Table indent from left margin in points (w:tblInd)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent: Option<f32>,
+    /// Cell spacing in points (w:tblCellSpacing)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_spacing: Option<f32>,
+    /// Table layout mode: "fixed" or "autofit" (w:tblLayout)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
+    /// Default cell margins in points (w:tblCellMar)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_cell_margins: Option<CellMargins>,
+}
+
+/// Table look conditional formatting flags (w:tblLook)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct TableLook {
+    /// Apply first row conditional style
+    #[serde(default)]
+    pub first_row: bool,
+    /// Apply last row conditional style
+    #[serde(default)]
+    pub last_row: bool,
+    /// Apply first column conditional style
+    #[serde(default)]
+    pub first_column: bool,
+    /// Apply last column conditional style
+    #[serde(default)]
+    pub last_column: bool,
+    /// Show horizontal banding (alternating row shading)
+    #[serde(default)]
+    pub banded_rows: bool,
+    /// Show vertical banding (alternating column shading)
+    #[serde(default)]
+    pub banded_columns: bool,
+    /// Row band size (number of rows per band, default 1)
+    #[serde(default = "default_one")]
+    pub row_band_size: u32,
+    /// Column band size (number of columns per band, default 1)
+    #[serde(default = "default_one")]
+    pub col_band_size: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

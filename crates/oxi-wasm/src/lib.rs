@@ -267,3 +267,89 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
 
     serde_wasm_bindgen::to_value(&js_result).map_err(|e| JsError::new(&e.to_string()))
 }
+
+// ---------------------------------------------------------------------------
+// PDF bindings (oxipdf-core)
+// ---------------------------------------------------------------------------
+
+/// Parse a PDF file and return its structure as a JS object.
+#[wasm_bindgen]
+pub fn parse_pdf(data: &[u8]) -> Result<JsValue, JsError> {
+    let doc = oxipdf_core::parse_pdf(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&doc).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Extract all text from a PDF as a single string.
+#[wasm_bindgen]
+pub fn pdf_extract_text(data: &[u8]) -> Result<String, JsError> {
+    let doc = oxipdf_core::parse_pdf(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(oxipdf_core::extract_text_string(&doc))
+}
+
+/// Generate a PDF from scratch with the given text content.
+/// Returns the PDF bytes.
+#[wasm_bindgen]
+pub fn create_pdf(title: &str, text: &str) -> Vec<u8> {
+    use oxipdf_core::ir::*;
+
+    let doc = PdfDocument {
+        version: PdfVersion::new(1, 7),
+        info: DocumentInfo {
+            title: Some(title.to_string()),
+            producer: Some("Oxi".to_string()),
+            ..Default::default()
+        },
+        pages: vec![Page {
+            width: 595.0,  // A4
+            height: 842.0,
+            media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 595.0, ury: 842.0 },
+            crop_box: None,
+            contents: vec![ContentElement::Text(TextSpan {
+                x: 72.0,
+                y: 72.0,
+                text: text.to_string(),
+                font_name: "Helvetica".to_string(),
+                font_size: 12.0,
+                fill_color: Color::Gray(0.0),
+            })],
+            rotation: 0,
+        }],
+        outline: Vec::new(),
+    };
+    oxipdf_core::write_pdf(&doc)
+}
+
+/// Verify signatures in a PDF. Returns an array of signature info objects.
+#[wasm_bindgen]
+pub fn pdf_verify_signatures(data: &[u8]) -> Result<JsValue, JsError> {
+    let sigs = oxipdf_core::verify_pdf_signatures(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&sigs).map_err(|e| JsError::new(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Hanko bindings (oxihanko)
+// ---------------------------------------------------------------------------
+
+/// Generate a hanko stamp SVG.
+///
+/// `config`: JS object with StampConfig fields:
+///   { name: "山田", style: "Round"|"Square"|"Oval", size: 100, date?: "2026.03.13" }
+#[wasm_bindgen]
+pub fn generate_hanko_svg(config: JsValue) -> Result<String, JsError> {
+    let stamp_config: oxihanko::StampConfig = serde_wasm_bindgen::from_value(config)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(oxihanko::generate_stamp_svg(&stamp_config))
+}
+
+/// Preview a hanko stamp SVG with default config for the given name.
+#[wasm_bindgen]
+pub fn preview_hanko(name: &str) -> String {
+    let config = oxihanko::StampConfig {
+        name: name.to_string(),
+        ..Default::default()
+    };
+    oxihanko::generate_stamp_svg(&config)
+}
