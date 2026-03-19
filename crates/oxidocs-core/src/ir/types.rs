@@ -364,6 +364,9 @@ pub struct Image {
     /// Crop percentages (a:srcRect) — top, right, bottom, left as 0-100%
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<ImageCrop>,
+    /// Index of the anchor paragraph block (for paragraph-relative positioning)
+    #[serde(default)]
+    pub anchor_block_index: usize,
 }
 
 /// Image crop rectangle (percentages from each edge)
@@ -782,6 +785,38 @@ pub struct TableStyle {
     /// Paragraph alignment from table style pPr (jc) — applied as fallback
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub para_alignment: Option<Alignment>,
+    /// Table floating position (w:tblpPr)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<TablePosition>,
+}
+
+/// Floating table position properties (w:tblpPr)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TablePosition {
+    /// Horizontal offset in points (w:tblpX)
+    #[serde(default)]
+    pub x: f32,
+    /// Vertical offset in points (w:tblpY)
+    #[serde(default)]
+    pub y: f32,
+    /// Horizontal anchor: "text", "margin", "page"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_anchor: Option<String>,
+    /// Vertical anchor: "text", "margin", "page"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_anchor: Option<String>,
+    /// Horizontal alignment spec: "left", "center", "right"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_align: Option<String>,
+    /// Distance from surrounding text (points)
+    #[serde(default)]
+    pub left_from_text: f32,
+    #[serde(default)]
+    pub right_from_text: f32,
+    #[serde(default)]
+    pub top_from_text: f32,
+    #[serde(default)]
+    pub bottom_from_text: f32,
 }
 
 /// Table look conditional formatting flags (w:tblLook)

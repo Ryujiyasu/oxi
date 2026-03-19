@@ -402,8 +402,8 @@ impl PdfWriter {
                          /ColorSpace /{cs_name} \
                          /BitsPerComponent {} \
                          /Length {} /Filter /FlateDecode >>\nstream\n",
-                        img.width as u32,
-                        img.height as u32,
+                        img.pixel_width,
+                        img.pixel_height,
                         img.bits_per_component,
                         compressed.len()
                     )

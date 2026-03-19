@@ -1086,9 +1086,26 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     }
                 }
 
-                oxidocs_core::layout::LayoutContent::Image { data, .. } => {
-                    // Image rendering requires PNG decoding — skip for now
-                    let _ = data;
+                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type } => {
+                    // Decode image (PNG/JPEG/etc.) to raw RGB pixels
+                    if !data.is_empty() {
+                        if let Ok(img) = image::load_from_memory(data) {
+                            let rgb = img.to_rgb8();
+                            let (pw, ph) = rgb.dimensions();
+                            let raw_pixels = rgb.into_raw();
+                            contents.push(ContentElement::Image(ImageData {
+                                x: elem.x as f64,
+                                y: elem.y as f64,
+                                width: elem.width as f64,
+                                height: elem.height as f64,
+                                data: raw_pixels,
+                                color_space: ColorSpace::DeviceRgb,
+                                bits_per_component: 8,
+                                pixel_width: pw,
+                                pixel_height: ph,
+                            }));
+                        }
+                    }
                 }
                 oxidocs_core::layout::LayoutContent::ClipStart => {
                     // Pass coordinates in page-top-down system; the PDF writer's

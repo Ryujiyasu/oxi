@@ -217,13 +217,18 @@ impl OoxmlParser {
         let hyperlink_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
         for (id, rel) in &rels {
             if rel.rel_type == image_rel_type {
+                // Skip external targets (e.g., file:/// URLs)
+                if rel.target.starts_with("file:") || rel.target.starts_with("http:") || rel.target.starts_with("https:") {
+                    continue;
+                }
                 // Validate relationship target path against traversal attacks
                 let path = match oxi_common::security::sanitize_rel_target("word", &rel.target) {
                     Ok(p) => p,
-                    Err(_) => continue, // Skip suspicious paths
+                    Err(e) => {
+                        continue;
+                    }
                 };
                 if let Ok(data) = self.read_binary_part(&path) {
-                    // Detect content type from file extension
                     let ct = match rel.target.rsplit('.').next().map(|s| s.to_lowercase()).as_deref() {
                         Some("png") => "image/png",
                         Some("jpg") | Some("jpeg") => "image/jpeg",
@@ -377,10 +382,13 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         current_blocks.push(Block::Paragraph(pr.paragraph));
                         // Inline images become separate blocks after the paragraph
                         current_blocks.extend(pr.inline_images);
-                        current_floating_images.extend(pr.floating_images);
-                        current_shapes.extend(pr.shapes);
-                        // Set anchor_block_index to the paragraph that contained the textbox
+                        // Set anchor_block_index for floating images
                         let anchor_idx = current_blocks.len().saturating_sub(1);
+                        for mut img in pr.floating_images {
+                            img.anchor_block_index = anchor_idx;
+                            current_floating_images.push(img);
+                        }
+                        current_shapes.extend(pr.shapes);
                         for mut tb in pr.text_boxes {
                             tb.anchor_block_index = anchor_idx;
                             current_text_boxes.push(tb);
@@ -416,9 +424,12 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                                 let pr = parse_paragraph(&mut reader, ctx, styles)?;
                                                 current_blocks.push(Block::Paragraph(pr.paragraph));
                                                 current_blocks.extend(pr.inline_images);
-                                                current_floating_images.extend(pr.floating_images);
-                                                current_shapes.extend(pr.shapes);
                                                 let anchor_idx2 = current_blocks.len().saturating_sub(1);
+                                                for mut img in pr.floating_images {
+                                                    img.anchor_block_index = anchor_idx2;
+                                                    current_floating_images.push(img);
+                                                }
+                                                current_shapes.extend(pr.shapes);
                                                 for mut tb in pr.text_boxes {
                                                     tb.anchor_block_index = anchor_idx2;
                                                     current_text_boxes.push(tb);
@@ -2255,6 +2266,15 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         // We consumed the txbxContent end tag, so decrement depth
                         depth -= 1;
                     }
+                    // a:blip as Start element (has child elements like a:extLst)
+                    "blip" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:embed" || key.ends_with(":embed") || key == "embed" {
+                                rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     // Shape preset geometry as Start element (has avLst child)
                     "prstGeom" => {
                         for attr in e.attributes().flatten() {
@@ -2505,6 +2525,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             position: position.clone(),
             wrap_type,
             crop,
+            anchor_block_index: 0,
         })
     } else {
         None
@@ -2675,6 +2696,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Draw
             position: None,
             wrap_type: None,
             crop: None,
+            anchor_block_index: 0,
         })
     } else {
         None
@@ -2797,6 +2819,7 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Dr
             position: None,
             wrap_type: None,
             crop: None,
+            anchor_block_index: 0,
         })
     } else {
         None
@@ -3586,6 +3609,31 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 style.layout = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
+                    }
+                    "tblpPr" => {
+                        let mut tp = TablePosition {
+                            x: 0.0, y: 0.0,
+                            h_anchor: None, v_anchor: None, h_align: None,
+                            left_from_text: 0.0, right_from_text: 0.0,
+                            top_from_text: 0.0, bottom_from_text: 0.0,
+                        };
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "tblpX" => tp.x = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "tblpY" => tp.y = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "tblpXSpec" => tp.h_align = Some(val.to_string()),
+                                "horzAnchor" => tp.h_anchor = Some(val.to_string()),
+                                "vertAnchor" => tp.v_anchor = Some(val.to_string()),
+                                "leftFromText" => tp.left_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "rightFromText" => tp.right_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "topFromText" => tp.top_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "bottomFromText" => tp.bottom_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                _ => {}
+                            }
+                        }
+                        style.position = Some(tp);
                     }
                     "top" | "bottom" | "left" | "right" | "start" | "end"
                         if !in_borders =>

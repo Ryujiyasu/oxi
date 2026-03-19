@@ -36,6 +36,7 @@ tools/metrics/docx_tests_default/
 tools/metrics/docx_tests_isolated/
 tools/metrics/output/
 node_modules/
+pipeline_data/
 e2e/test-results/
 dist-desktop/
 tools/golden-test/documents/

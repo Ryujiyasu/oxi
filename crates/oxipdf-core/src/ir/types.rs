@@ -200,9 +200,14 @@ pub struct ImageData {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    /// Raw pixel data (RGB/Gray/CMYK)
     pub data: Vec<u8>,
     pub color_space: ColorSpace,
     pub bits_per_component: u8,
+    /// Pixel width of the image data
+    pub pixel_width: u32,
+    /// Pixel height of the image data
+    pub pixel_height: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

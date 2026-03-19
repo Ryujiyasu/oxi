@@ -176,32 +176,25 @@ Tested against 504 real-world government documents (Japanese ministries) + gener
 
 ### v1 — Foundation (current)
 - [x] .docx / .xlsx / .pptx parser & language-agnostic IR
-- [x] Layout engine (paragraphs, tables, images, headers/footers, page borders)
-- [x] Japanese typography (kinsoku shori)
-- [x] Round-trip editing for all 3 formats
-- [x] PDF parse, text extraction, generation
-- [x] Hanko generation + PAdES digital signatures
-- [x] Wasm build + web demo
-- [ ] Advanced font metrics & CJK justification (.docx)
-- [ ] Formula evaluation / cell merging / charts (.xlsx)
-- [ ] Slide masters / transitions / animations (.pptx)
+- [x] .docx layout engine (paragraphs, tables, images, headers/footers, page borders)
+- [x] Japanese typography (kinsoku shori, CJK punctuation compression)
+- [x] Round-trip editing (.docx structural editing, .xlsx/.pptx basic text editing)
+- [x] PDF parse, text extraction, generation, PAdES signatures
+- [x] Hanko (Japanese digital stamp) SVG generation
+- [x] WASM build + web demo
+- [x] Basic formula evaluation (.xlsx: SUM, AVERAGE, IF, etc.)
+- [ ] .docx layout accuracy improvements (font metrics, CJK justification)
+- [ ] .xlsx layout engine (cell rendering, charts)
+- [ ] .pptx layout engine (slide rendering, masters)
 - [ ] Vertical writing & ruby (furigana)
 
-### v2 — Collaboration
-- CRDT (yrs) real-time co-editing
-- AI assist
-- End-to-end encryption
-- PWA / offline support
-
-### v3 — Platform
-- Plugin system
+### Future directions (exploratory)
+- Real-time collaboration (CRDT)
 - Desktop & mobile apps (Tauri)
-- Workflow automation
+- AI-assisted document processing
+- Plugin system
 
-### v4 — Enterprise
-- Compliance & audit trails
-- Industry-specific (legal, healthcare, government)
-- Developer ecosystem & marketplace
+See [docs/roadmap.md](docs/roadmap.md) for detailed future plans.
 
 ## Why Rust + Wasm?
 
