@@ -93,16 +93,24 @@ fn heading_default_font_size(level: u8) -> f32 {
 }
 
 /// Snap character spacing to pixel grid (DPI=96 fixed).
-/// Word rounds to integer pixels at 96 DPI.
-/// cs_pt is in points; convert to twips, snap, convert back.
+/// Character spacing pixel-snap: Word converts twips→pixels at 96 DPI
+/// using round-to-nearest integer division, then back to points.
+///
+/// Derived from COM measurement: comparing Word's actual character
+/// positions (Range.Information) against input spacing values.
+/// Example: cs=-0.45pt → -9tw → round(-9*96/1440) = -1px → -0.75pt
 fn snap_character_spacing(cs_pt: f32) -> f32 {
     let cs_twips = (cs_pt * 20.0).round() as i64;
-    // Pixel-rounded division: numer = a*b, then (numer + c/2) / c (positive) or (numer - c/2) / c (negative)
+    // round-to-nearest integer division (twips × 96 / 1440)
+    // For positive: (a*b + c/2) / c
+    // For negative: (a*b - c/2) / c, using floor division (not truncation)
     let numer = cs_twips * 96;
+    let denom = 1440_i64;
     let cs_px = if numer >= 0 {
-        (numer + 720) / 1440
+        (numer + denom / 2) / denom
     } else {
-        (numer - 720) / 1440
+        // Floor division for negative: -((-numer + denom/2) / denom)
+        -((-numer + denom / 2) / denom)
     };
     cs_px as f32 * 72.0 / 96.0
 }
@@ -405,6 +413,7 @@ impl LayoutEngine {
                     prev_para_style_id = para.style.style_id.clone();
                 }
                 Block::Table(table) => {
+                    // TODO: tblpPr (floating table positioning) needs proper anchor resolution
                     let pages_before = pages.len();
                     let table_elements = self.layout_table(
                         table,
@@ -476,6 +485,47 @@ impl LayoutEngine {
             let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
             if let Some(lp) = pages.get_mut(target_page) {
                 lp.elements.extend(tb_elements);
+            }
+        }
+
+        // Layout floating images and add to the correct layout page
+        for img in &page.floating_images {
+            if let Some(ref pos) = img.position {
+                let (abs_x, abs_y) = self.resolve_floating_image_position(img, page, &block_y_positions);
+                // Use the same page as the anchor block
+                let target_page = block_page_indices
+                    .get(img.anchor_block_index)
+                    .copied()
+                    .unwrap_or(0);
+                let el = LayoutElement {
+                    x: abs_x,
+                    y: abs_y,
+                    width: img.width,
+                    height: img.height,
+                    content: LayoutContent::Image {
+                        data: img.data.clone(),
+                        content_type: img.content_type.clone(),
+                    },
+                };
+                if let Some(lp) = pages.get_mut(target_page) {
+                    lp.elements.push(el);
+                } else if let Some(lp) = pages.last_mut() {
+                    lp.elements.push(el);
+                }
+            } else {
+                // No position info — treat as inline at end of last page
+                if let Some(lp) = pages.last_mut() {
+                    lp.elements.push(LayoutElement {
+                        x: start_x,
+                        y: 0.0,
+                        width: img.width,
+                        height: img.height,
+                        content: LayoutContent::Image {
+                            data: img.data.clone(),
+                            content_type: img.content_type.clone(),
+                        },
+                    });
+                }
             }
         }
 
@@ -596,6 +646,75 @@ impl LayoutEngine {
         let content_bottom = page.size.height - page.margin.bottom;
         let abs_y = if abs_y + text_box.height > content_bottom {
             (content_bottom - text_box.height).max(page.margin.top)
+        } else {
+            abs_y
+        };
+
+        (abs_x, abs_y)
+    }
+
+    /// Resolve absolute (x, y) position for a floating image.
+    fn resolve_floating_image_position(&self, img: &Image, page: &Page, block_y_positions: &[f32]) -> (f32, f32) {
+        let pos = match &img.position {
+            Some(p) => p,
+            None => return (page.margin.left, page.margin.top),
+        };
+
+        let content_width = page.size.width - page.margin.left - page.margin.right;
+
+        let abs_x = if let Some(ref align) = pos.h_align {
+            let (ref_left, ref_width) = match pos.h_relative.as_deref() {
+                Some("page") => (0.0, page.size.width),
+                Some("leftMargin") => (0.0, page.margin.left),
+                Some("rightMargin") => (page.size.width - page.margin.right, page.margin.right),
+                Some("margin") | Some("column") | _ => (page.margin.left, content_width),
+            };
+            match align.as_str() {
+                "left" => ref_left,
+                "center" => ref_left + (ref_width - img.width) / 2.0,
+                "right" => ref_left + ref_width - img.width,
+                _ => ref_left,
+            }
+        } else {
+            match pos.h_relative.as_deref() {
+                Some("page") => pos.x,
+                Some("margin") | Some("column") => page.margin.left + pos.x,
+                Some("leftMargin") | Some("leftMarginArea") => pos.x,
+                Some("rightMargin") | Some("rightMarginArea") => (page.size.width - page.margin.right) + pos.x,
+                _ => page.margin.left + pos.x,
+            }
+        };
+
+        let abs_y = if let Some(ref align) = pos.v_align {
+            let (ref_top, ref_height) = match pos.v_relative.as_deref() {
+                Some("page") => (0.0, page.size.height),
+                _ => (page.margin.top, page.size.height - page.margin.top - page.margin.bottom),
+            };
+            match align.as_str() {
+                "top" => ref_top,
+                "center" => ref_top + (ref_height - img.height) / 2.0,
+                "bottom" => ref_top + ref_height - img.height,
+                _ => ref_top,
+            }
+        } else {
+            match pos.v_relative.as_deref() {
+                Some("page") => pos.y,
+                Some("paragraph") | Some("line") => {
+                    let anchor_y = block_y_positions
+                        .get(img.anchor_block_index)
+                        .copied()
+                        .unwrap_or(page.margin.top);
+                    anchor_y + pos.y
+                }
+                Some("margin") => page.margin.top + pos.y,
+                _ => page.margin.top + pos.y,
+            }
+        };
+
+        // Clamp to page boundaries
+        let content_bottom = page.size.height - page.margin.bottom;
+        let abs_y = if abs_y + img.height > content_bottom {
+            (content_bottom - img.height).max(page.margin.top)
         } else {
             abs_y
         };
@@ -889,7 +1008,8 @@ impl LayoutEngine {
         // Word uses max(ascent) + max(descent) across all runs in a line,
         // NOT just the first run's metrics. (#1/#2 fix)
         let line_heights: Vec<f32> = lines.iter().map(|line| {
-            self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
+            let lh = self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch);
+            lh
         }).collect();
 
         for (line_idx, line) in lines.iter().enumerate() {
@@ -1575,7 +1695,7 @@ impl LayoutEngine {
         let col_widths = self.resolve_table_col_widths(table, content_width);
         let table_width: f32 = col_widths.iter().sum();
 
-        // Table alignment
+        // Table alignment (TODO: tblpPr horizontal positioning)
         let table_x = match table.style.alignment.as_deref() {
             Some("center") => start_x + (content_width - table_width) / 2.0,
             Some("right") => start_x + content_width - table_width,
@@ -1589,9 +1709,9 @@ impl LayoutEngine {
         let default_pad_t = default_pad.as_ref().and_then(|m| m.top).unwrap_or(0.0);
         let default_pad_b = default_pad.as_ref().and_then(|m| m.bottom).unwrap_or(0.0);
 
-        // Table cells DO snap to document grid (default Word mode)
-        // adjustLineHeightInTable is parsed from settings.xml but exact rendering effect TBD.
-        let table_grid_pitch: Option<f32> = grid_pitch;
+        // adjustLineHeightInTable=true: disable grid snap in table cells (Word 6.0 compat)
+        // adjustLineHeightInTable=false (default): table cells snap to document grid
+        let table_grid_pitch: Option<f32> = if self.adjust_line_height_in_table { None } else { grid_pitch };
 
         let num_rows = table.rows.len();
         for (row_idx, row) in table.rows.iter().enumerate() {
@@ -1654,37 +1774,13 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
-            // adjustLineHeightInTable (compat65): add grid_pitch/2 to content-driven row height
-            // Matches Word output: when content height exceeds trHeight, grid_pitch/2 is added.
-            // When trHeight exceeds content, trHeight is used directly (no addition).
-            let content_h_before_tr = row_height;
-
             // Apply trHeight constraint
+            // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
             if let Some(h) = row.height {
                 if row.height_rule.as_deref() == Some("exact") {
                     row_height = h;
                 } else {
                     row_height = row_height.max(h);
-                }
-            }
-
-            // Add grid pitch supplement when content drives the height
-            if self.adjust_line_height_in_table {
-                if let Some(pitch) = table_grid_pitch {
-                    if row.height.map_or(true, |h| content_h_before_tr > h) {
-                        row_height += pitch * 0.5;
-                    }
-                }
-            }
-
-            // Matches Word output: when trHeight is set with atLeast rule and cell content
-            // overflows (e.g. text wraps in narrow cells), Word caps the row height
-            // at trHeight. Overflow content is clipped, not expanded.
-            if let Some(h) = row.height {
-                if row.height_rule.as_deref() != Some("exact") && row_height > h * 1.5 {
-                    // Content significantly exceeds trHeight — likely text wrapping in narrow cell
-                    // Cap to trHeight (Word behavior: clip overflow, don't expand)
-                    row_height = h;
                 }
             }
 
@@ -1823,13 +1919,21 @@ impl LayoutEngine {
                         let p_indent_right = para.style.indent_right.unwrap_or(0.0);
                         let p_first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
                         let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
-                        let first_line_wrap_w = (wrap_w + p_first_line_indent.min(0.0)).max(0.0); // hanging reduces first line
+                        // Hanging indent (firstLineIndent < 0): first line starts further LEFT,
+                        // so it has MORE available width, not less.
+                        // first_line_left = indent_left + firstLineIndent (may be < indent_left)
+                        // first_line_wrap = inner_w - first_line_left - indent_right
+                        let first_line_wrap_w = if p_first_line_indent < 0.0 {
+                            (inner_w - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
+                        } else {
+                            (wrap_w - p_first_line_indent).max(0.0)
+                        };
 
                         // Collect runs into lines with greedy wrapping
                         // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing)
                         let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32)>> = Vec::new();
                         let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32)> = Vec::new();
-                        let mut line_x: f32 = if p_first_line_indent > 0.0 { p_first_line_indent } else { 0.0 };
+                        let mut line_x: f32 = 0.0;
                         let mut is_first_line = true;
 
                         for run in &para.runs {
@@ -1845,7 +1949,24 @@ impl LayoutEngine {
                             for ch in run.text.chars() {
                                 let cw = self.metrics_for_char(ch, &run.style, &para.style).char_width_pt(ch, font_size) + cs;
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
-                                if line_x + buf_w + cw > effective_wrap && !(current_line.is_empty() && buf.is_empty()) {
+                                // Trailing spaces don't trigger line wrapping (Word behavior)
+                                let is_space = ch == ' ' || ch == '\u{3000}';
+                                if !is_space && line_x + buf_w + cw > effective_wrap && !(current_line.is_empty() && buf.is_empty()) {
+                                    // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
+                                    if kinsoku::is_line_start_prohibited(ch) {
+                                        // Add to buffer and break AFTER this char
+                                        buf.push(ch);
+                                        buf_w += cw;
+                                        if !buf.is_empty() {
+                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs));
+                                            buf.clear();
+                                            buf_w = 0.0;
+                                        }
+                                        lines.push(std::mem::take(&mut current_line));
+                                        line_x = 0.0;
+                                        is_first_line = false;
+                                        continue;
+                                    }
                                     // Flush buffer to current line, then wrap
                                     if !buf.is_empty() {
                                         current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs));

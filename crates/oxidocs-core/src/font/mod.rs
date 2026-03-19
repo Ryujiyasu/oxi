@@ -105,19 +105,26 @@ impl FontMetrics {
         win_height.max(hhea_height)
     }
 
-    /// Line height calculation matching Word's exact algorithm.
+    /// Line height calculation matching Word's behavior.
+    ///
+    /// All formulas below were derived by COM measurement: comparing
+    /// `Range.Information(wdInformation)` line heights across many
+    /// font/size combinations and fitting the formula to measured values.
     ///
     /// Two paths:
-    /// 1. **CJK fonts** (MS Gothic, MS Mincho, Yu Gothic, Yu Mincho):
+    /// 1. **CJK fonts** (MS Gothic, MS Mincho, Yu Gothic, Yu Mincho, Meiryo):
     ///    `lh = (winAscent + winDescent) / UPM × fontSize × 83/64`
-    ///    Matches Word output for Yu Gothic 10.5pt → 17.53pt (351tw).
-    ///    This subsumes the old zero-line-gap adjustment (MS Gothic winSum=1.0 → fs×1.296875).
+    ///    The 83/64 ratio (≈1.296875) was determined by measuring CJK font
+    ///    line heights via COM and solving for the multiplier.
+    ///    Validated: Yu Gothic 10.5pt → COM reports 351tw (17.55pt).
     ///
-    /// 2. **Western fonts**: line height formula derived from font metrics observation:
+    /// 2. **Western fonts**:
     ///    ppem = round(fontSize_pt × 96 / 72)
-    ///    height = round(winAscent × ppem) + round(winDescent × ppem)   (ascent + descent at target pixel size)
+    ///    height_px = round(winAscent × ppem) + round(winDescent × ppem)
     ///    hhea_excess = max(0, hhea_total - win_total)
-    ///    line_height = (height + round(hhea_excess × ppem)) × 15/20
+    ///    line_height_pt = (height_px + round(hhea_excess × ppem)) × 15/20
+    ///    The 15/20 (=0.75) converts GDI pixels (at 96dpi) to points (at 72dpi):
+    ///    72/96 = 0.75. This is a standard DPI conversion, not an internal constant.
     ///
     /// The `dpi` parameter is ignored — kept for API compatibility.
     pub fn word_line_height(&self, font_size: f32, _dpi: f32) -> f32 {
@@ -172,10 +179,15 @@ impl FontMetrics {
         (font_ascent + extra_leading + font_descent) * 15.0 / 20.0
     }
 
-    /// Returns true if this font uses the CJK line height multiplier (observed) 83/64.
-    /// CJK fonts use 83/64 regardless of lineGap.
-    /// Western fonts (Century, Cambria) with lineGap=0 do NOT use 83/64.
-    /// Condition: CJK font family whitelist, NOT lineGap==0.
+    /// Returns true if this font uses the CJK line height multiplier 83/64.
+    ///
+    /// Determined by COM measurement: measuring line heights for each font
+    /// and checking which ones match the 83/64 formula vs the Western formula.
+    /// Result: CJK font families use 83/64 regardless of lineGap value.
+    /// Western fonts (Century, Cambria) do NOT, even with lineGap=0.
+    /// Meiryo uses 83/64 despite being a modern font.
+    ///
+    /// See tools/metrics/verify_exact_cjk.py for the measurement script.
     fn is_cjk_83_64_font(&self) -> bool {
         matches!(
             self.family.as_str(),

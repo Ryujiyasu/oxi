@@ -761,6 +761,8 @@ fn layout_to_pdf(
                         data: data.clone(),
                         color_space: ColorSpace::DeviceRgb,
                         bits_per_component: 8,
+                        pixel_width: elem.width as u32,
+                        pixel_height: elem.height as u32,
                     }));
                 }
                 oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, ref color, width } => {
