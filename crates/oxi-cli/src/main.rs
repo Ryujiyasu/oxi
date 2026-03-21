@@ -686,24 +686,33 @@ fn char_width(ch: char, font_size: f64) -> f64 {
 
 fn resolve_font(family: Option<&str>, bold: bool) -> String {
     let base = family.unwrap_or("Calibri");
-    // CJK fonts: map to ASCII-safe names for PDF compatibility
-    match base {
-        "ＭＳ ゴシック" | "MS ゴシック" | "MS Gothic" => return "MS-Gothic".to_string(),
-        "ＭＳ Ｐゴシック" | "MS PGothic" => return "MS-PGothic".to_string(),
-        "ＭＳ 明朝" | "MS 明朝" | "MS Mincho" => return "MS-Mincho".to_string(),
-        "ＭＳ Ｐ明朝" | "MS PMincho" => return "MS-PMincho".to_string(),
-        _ => {}
-    }
-    if base.contains("Gothic") || base.contains("Mincho") || base.contains("游")
+    // CJK fonts: use bold variant when bold is requested
+    let is_cjk = matches!(base,
+        "ＭＳ ゴシック" | "MS ゴシック" | "MS Gothic" |
+        "ＭＳ Ｐゴシック" | "MS PGothic" |
+        "ＭＳ 明朝" | "MS 明朝" | "MS Mincho" |
+        "ＭＳ Ｐ明朝" | "MS PMincho"
+    ) || base.contains("Gothic") || base.contains("Mincho") || base.contains("游")
         || base.contains("ＭＳ") || base.contains("ゴシック") || base.contains("明朝")
-        || base.contains("メイリオ") || base.contains("ヒラギノ")
-    {
-        return base.to_string();
+        || base.contains("メイリオ") || base.contains("ヒラギノ");
+
+    if is_cjk {
+        if bold {
+            return "OxiCJK-Bold".to_string();
+        }
+        return match base {
+            "ＭＳ ゴシック" | "MS ゴシック" | "MS Gothic" => "MS-Gothic".to_string(),
+            "ＭＳ Ｐゴシック" | "MS PGothic" => "MS-PGothic".to_string(),
+            "ＭＳ 明朝" | "MS 明朝" | "MS Mincho" => "MS-Mincho".to_string(),
+            "ＭＳ Ｐ明朝" | "MS PMincho" => "MS-PMincho".to_string(),
+            _ => base.to_string(),
+        };
     }
     // Use embedded Latin fonts for Calibri/Arial (matching LayoutEngine metrics)
     if bold {
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Bold".to_string(),
+            "Cambria" | "Century" => "OxiCambria-Bold".to_string(),
             "Times New Roman" | "Times" => "Times-Bold".to_string(),
             "Courier New" | "Courier" => "Courier-Bold".to_string(),
             other => other.to_string(),
@@ -711,6 +720,7 @@ fn resolve_font(family: Option<&str>, bold: bool) -> String {
     } else {
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Regular".to_string(),
+            "Cambria" | "Century" => "OxiCambria-Regular".to_string(),
             "Times New Roman" => "Times-Roman".to_string(),
             "Courier New" => "Courier".to_string(),
             other => other.to_string(),
@@ -2089,22 +2099,23 @@ fn estimate_cell_height(cell: &oxidocs_core::ir::TableCell, content_width: f64, 
 
 /// System font paths to search for CJK fonts (Regular)
 const CJK_FONT_PATHS: &[&str] = &[
+    // Prefer MS Gothic (most common in Japanese government documents)
+    "C:\\Windows\\Fonts\\msgothic.ttc",
+    "C:\\Windows\\Fonts\\YuGothR.ttc",
+    "C:\\Windows\\Fonts\\meiryo.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
     "/System/Library/Fonts/HiraginoSans-W3.ttc",
-    "C:\\Windows\\Fonts\\YuGothR.ttc",
-    "C:\\Windows\\Fonts\\msgothic.ttc",
-    "C:\\Windows\\Fonts\\meiryo.ttc",
 ];
 
 /// System font paths to search for CJK fonts (Bold)
 const CJK_FONT_PATHS_BOLD: &[&str] = &[
+    "C:\\Windows\\Fonts\\msgothic.ttc",
+    "C:\\Windows\\Fonts\\YuGothB.ttc",
+    "C:\\Windows\\Fonts\\meiryo.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
     "/System/Library/Fonts/HiraginoSans-W6.ttc",
-    "C:\\Windows\\Fonts\\YuGothB.ttc",
-    "C:\\Windows\\Fonts\\msgothic.ttc",
-    "C:\\Windows\\Fonts\\meiryo.ttc",
 ];
 
 /// System font paths for Latin fonts (Calibri)
@@ -2130,6 +2141,30 @@ fn build_embedded_fonts(doc: &oxidocs_core::Document) -> HashMap<String, Embedde
             collect_cjk_fonts_from_block(block, &mut needs_cjk_font, &mut font_names_used);
         }
     }
+
+    // Also collect document-level default fonts (from rPrDefault / styles)
+    if let Some(ref drs) = doc.styles.doc_default_run_style {
+        if let Some(ref ff) = drs.font_family_east_asia {
+            if !font_names_used.contains(ff) {
+                font_names_used.push(ff.clone());
+            }
+        }
+        if let Some(ref ff) = drs.font_family {
+            if !font_names_used.contains(ff) {
+                font_names_used.push(ff.clone());
+            }
+        }
+    }
+
+    // Embed Latin fonts (Calibri + Cambria) regardless of CJK usage
+    let mut used_chars_latin: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    for page in &doc.pages {
+        for block in &page.blocks {
+            collect_chars_from_block(block, &mut used_chars_latin);
+        }
+    }
+    embed_latin_fonts(&used_chars_latin, &mut fonts);
+    embed_cambria_fonts(&used_chars_latin, &mut fonts);
 
     if !needs_cjk_font {
         return fonts;
@@ -2223,10 +2258,33 @@ fn build_embedded_fonts(doc: &oxidocs_core::Document) -> HashMap<String, Embedde
         fonts.insert("OxiCJK-Bold".to_string(), font_result.clone());
     }
 
-    // Embed Latin font (Calibri) for proper character width matching
-    embed_latin_fonts(&used_chars, &mut fonts);
+    // Latin fonts already embedded above (before CJK check)
 
     fonts
+}
+
+/// Embed Cambria Regular and Bold for documents using Cambria/Century.
+fn embed_cambria_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut HashMap<String, EmbeddedFont>) {
+    let cambria_paths: &[(&str, &str)] = &[
+        ("C:\\Windows\\Fonts\\cambria.ttc", "C:\\Windows\\Fonts\\cambriab.ttf"),
+    ];
+    let pair = cambria_paths.iter().find(|(r, _)| std::path::Path::new(r).exists());
+    let (regular_path, bold_path) = match pair {
+        Some(p) => p,
+        None => return,
+    };
+    let latin_chars: std::collections::BTreeSet<char> = used_chars.iter()
+        .filter(|c| (**c as u32) < 0x2000)
+        .copied()
+        .collect();
+    if let Some(result) = subset_font_file(regular_path, &latin_chars, "cambria") {
+        eprintln!("Embedding Cambria font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
+        fonts.insert("OxiCambria-Regular".to_string(), result);
+    }
+    if let Some(result) = subset_font_file(bold_path, &latin_chars, "cambria-bold") {
+        eprintln!("Embedding Cambria Bold font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
+        fonts.insert("OxiCambria-Bold".to_string(), result);
+    }
 }
 
 /// Embed Calibri Regular and Bold for Latin text rendering.

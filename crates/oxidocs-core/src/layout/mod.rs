@@ -303,6 +303,7 @@ impl LayoutEngine {
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut cursor_y = start_y;
         let mut prev_para_style_id: Option<String> = None;
+        let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
         let mut block_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
@@ -311,8 +312,10 @@ impl LayoutEngine {
         let grid_pitch = page.grid_line_pitch;
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
-            // wrapTopAndBottom: for TABLE blocks, push below overlapping TextBoxes
-            if matches!(block, Block::Table(_)) {
+            // wrapTopAndBottom: for inline TABLE blocks, push below overlapping TextBoxes
+            // Skip for floating tables (tblpPr) as they have explicit positioning
+            let is_floating_table = matches!(block, Block::Table(t) if t.style.position.is_some());
+            if matches!(block, Block::Table(_)) && !is_floating_table {
                 for tb in &page.text_boxes {
                     if tb.anchor_block_index < block_idx {
                         if let Some(ref pos) = tb.position {
@@ -391,7 +394,7 @@ impl LayoutEngine {
                     }
 
                     let pages_before = pages.len();
-                    let para_elements = self.layout_paragraph(
+                    let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
                         &mut cursor_y,
@@ -403,7 +406,9 @@ impl LayoutEngine {
                         &mut elements,
                         grid_pitch,
                         prev_para_style_id.as_deref(), false,
+                        prev_space_after,
                     );
+                    prev_space_after = sa;
                     elements.extend(para_elements);
                     // Track page breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
@@ -413,7 +418,21 @@ impl LayoutEngine {
                     prev_para_style_id = para.style.style_id.clone();
                 }
                 Block::Table(table) => {
-                    // TODO: tblpPr (floating table positioning) needs proper anchor resolution
+                    // COM-confirmed: prev paragraph's space_after is always added before table
+                    cursor_y += prev_space_after;
+                    prev_space_after = 0.0;
+
+                    let is_floating = table.style.position.is_some();
+                    let saved_cursor_y = cursor_y;
+
+                    // Floating table (tblpPr): position relative to anchor
+                    if let Some(ref pos) = table.style.position {
+                        cursor_y = match pos.v_anchor.as_deref() {
+                            Some("page") => pos.y,
+                            Some("margin") => start_y + pos.y,
+                            _ => cursor_y + pos.y, // "text": offset from anchor para bottom
+                        };
+                    }
                     let pages_before = pages.len();
                     let table_elements = self.layout_table(
                         table,
@@ -429,13 +448,20 @@ impl LayoutEngine {
                         &mut elements,
                     );
                     elements.extend(table_elements);
-                    let pages_added = pages.len() - pages_before;
-                    if pages_added > 0 {
-                        current_page_idx += pages_added;
-                        *block_page_indices.last_mut().unwrap() = current_page_idx;
-                        *block_y_positions.last_mut().unwrap() = cursor_y;
+
+                    if is_floating {
+                        // Floating tables don't advance the text flow
+                        cursor_y = saved_cursor_y;
+                    } else {
+                        let pages_added = pages.len() - pages_before;
+                        if pages_added > 0 {
+                            current_page_idx += pages_added;
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                        }
                     }
                     prev_para_style_id = None;
+                    prev_space_after = 0.0;
                 }
                 Block::Image(img) => {
                     if cursor_y + img.height > start_y + content_height {
@@ -541,11 +567,11 @@ impl LayoutEngine {
                 let mut cy = header_y;
                 for block in &page.header {
                     if let Block::Paragraph(para) = block {
-                        let hdr_elements = self.layout_paragraph(
+                        let (hdr_elements, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None,
-                            false,
+                            false, 0.0,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -563,11 +589,11 @@ impl LayoutEngine {
                 let mut cy = footer_top;
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
-                        let ftr_elements = self.layout_paragraph(
+                        let (ftr_elements, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None,
-                            false,
+                            false, 0.0,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -642,13 +668,7 @@ impl LayoutEngine {
             }
         };
 
-        // Clamp to page boundaries: TextBox should not overflow beyond content area bottom
-        let content_bottom = page.size.height - page.margin.bottom;
-        let abs_y = if abs_y + text_box.height > content_bottom {
-            (content_bottom - text_box.height).max(page.margin.top)
-        } else {
-            abs_y
-        };
+        // Word allows textboxes to overflow beyond content area (clipped at page edge)
 
         (abs_x, abs_y)
     }
@@ -711,10 +731,9 @@ impl LayoutEngine {
             }
         };
 
-        // Clamp to page boundaries
-        let content_bottom = page.size.height - page.margin.bottom;
-        let abs_y = if abs_y + img.height > content_bottom {
-            (content_bottom - img.height).max(page.margin.top)
+        // Clamp to page boundaries (floating images can extend into margins)
+        let abs_y = if abs_y + img.height > page.size.height {
+            (page.size.height - img.height).max(0.0)
         } else {
             abs_y
         };
@@ -782,7 +801,7 @@ impl LayoutEngine {
             match block {
                 Block::Paragraph(para) => {
                     let clip_bottom = abs_y + text_box.height;
-                    let para_elements = self.layout_paragraph(
+                    let (para_elements, _) = self.layout_paragraph(
                         para,
                         inner_x,
                         &mut cursor_y,
@@ -795,6 +814,7 @@ impl LayoutEngine {
                         None, // TextBox paragraphs have explicit snap=0 and line spacing rules
                         None, // no prev style tracking
                         true, // in_textbox: suppress CJK compression
+                        0.0,
                     );
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
@@ -861,9 +881,20 @@ impl LayoutEngine {
             }
         }
 
+        // AutoFit: shrink height to actual content height
+        let content_used = cursor_y - abs_y + inset_b;
+        let actual_height = content_used.min(text_box.height);
+
+        // Patch background fill and clip elements with actual height
+        for el in elements.iter_mut() {
+            if el.x == abs_x && el.y == abs_y && el.height == text_box.height {
+                el.height = actual_height;
+            }
+        }
+
         // End clip region
         elements.push(LayoutElement {
-            x: abs_x, y: abs_y, width: text_box.width, height: text_box.height,
+            x: abs_x, y: abs_y, width: text_box.width, height: actual_height,
             content: LayoutContent::ClipEnd,
         });
 
@@ -885,12 +916,12 @@ impl LayoutEngine {
         grid_pitch: Option<f32>,
         prev_style_id: Option<&str>,
         #[allow(unused)] in_textbox: bool,
-    ) -> Vec<LayoutElement> {
+        prev_space_after: f32,
+    ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
         // Apply paragraph spacing (space_before).
-        // Word adds space_before and space_after independently (no CSS-style collapsing).
-        // beforeLines/afterLines: value/100 * linePitch, then grid-snap if applicable.
+        // Word uses max(prev_space_after, space_before) — spacing collapse.
         let mut space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
             let raw = bl / 100.0 * pitch;
             if para.style.snap_to_grid && pitch > 0.0 {
@@ -902,22 +933,27 @@ impl LayoutEngine {
             para.style.space_before.unwrap_or(0.0)
         };
 
-        // Contextual spacing: suppress space_before when previous paragraph
+        // Spacing collapse: max(prev_sa, cur_sb) instead of prev_sa + cur_sb.
+        // prev_space_after was NOT added to cursor_y by the caller.
+        let collapsed_spacing = space_before.max(prev_space_after);
+
+        // Contextual spacing: suppress spacing when previous paragraph
         // has the same style and both have contextualSpacing enabled.
+        let mut effective_spacing = collapsed_spacing;
         if para.style.contextual_spacing {
             if let (Some(cur_id), Some(prev_id)) = (para.style.style_id.as_deref(), prev_style_id) {
                 if cur_id == prev_id {
-                    space_before = 0.0;
+                    effective_spacing = 0.0;
                 }
             }
         }
 
         // Suppress space_before at the top of a page
         if (*cursor_y - page_top).abs() < 0.01 {
-            space_before = 0.0;
+            effective_spacing = 0.0;
         }
 
-        *cursor_y += space_before;
+        *cursor_y += effective_spacing;
 
         let indent_left = para.style.indent_left.unwrap_or(0.0);
         let indent_right = para.style.indent_right.unwrap_or(0.0);
@@ -928,11 +964,15 @@ impl LayoutEngine {
         if let Some(ref marker) = para.style.list_marker {
             let default_style = RunStyle::default();
             let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
-            let marker_font_size = self.resolve_font_size(marker_style, &para.style);
+            let mut marker_font_size = self.resolve_font_size(marker_style, &para.style);
+            // Symbol bullets (•) are rendered smaller than text in Word
+            if marker.contains('\u{2022}') || marker.contains('\u{25CF}') {
+                marker_font_size *= 2.0;
+            }
             let marker_metrics = self.metrics_for(marker_style, &para.style);
             let marker_width: f32 = marker
                 .chars()
-                .map(|c| marker_metrics.char_width_pt(c, marker_font_size))
+                .map(|c| self.registry.char_width_pt_with_fallback(c, marker_font_size, marker_metrics))
                 .sum();
             let list_indent = para.style.list_indent.unwrap_or(18.0);
             let marker_x = start_x + indent_left - list_indent;
@@ -965,9 +1005,15 @@ impl LayoutEngine {
                 *cursor_y = page_top;
             }
 
+            // Bullet markers are scaled up (2x) so adjust Y to align with text center
+            let marker_y_offset = if marker.contains('\u{2022}') || marker.contains('\u{25CF}') {
+                -marker_font_size * 0.15  // shift up slightly
+            } else {
+                0.0
+            };
             elements.push(LayoutElement {
                 x: marker_x,
-                y: *cursor_y,
+                y: *cursor_y + marker_y_offset,
                 width: marker_width,
                 height: line_height,
                 content: LayoutContent::Text {
@@ -1005,8 +1051,6 @@ impl LayoutEngine {
         let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style);
 
         // Widow/orphan control: pre-compute line heights for lookahead
-        // Word uses max(ascent) + max(descent) across all runs in a line,
-        // NOT just the first run's metrics. (#1/#2 fix)
         let line_heights: Vec<f32> = lines.iter().map(|line| {
             let lh = self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch);
             lh
@@ -1115,7 +1159,7 @@ impl LayoutEngine {
                             if kinsoku::is_cjk_compressible(ch) {
                                 let fs = frag.style.font_size.unwrap_or(para_font_size);
                                 let fm = self.metrics_for(&frag.style, &para.style);
-                                let char_w = fm.char_width_pt(ch, fs);
+                                let char_w = self.registry.char_width_pt_with_fallback(ch, fs, fm);
                                 let actual = char_w * 0.5;
                                 frag_width_adjustments[fi] -= actual;
                                 slack += actual; // reclaim freed space
@@ -1234,9 +1278,46 @@ impl LayoutEngine {
         } else {
             para.style.space_after.unwrap_or(0.0)
         };
-        *cursor_y += space_after;
+        // NOTE: space_after is NOT added to cursor_y here.
+        // It will be collapsed with the next paragraph's space_before via max(sa, sb).
 
-        elements
+        // Paragraph borders (e.g., Title style bottom border)
+        if let Some(ref borders) = para.style.borders {
+            let para_top = elements.first().map(|e| e.y).unwrap_or(start_x);
+            let para_bottom = *cursor_y;
+            let border_x = start_x;
+            let border_width = content_width;
+
+            if let Some(ref bottom) = borders.bottom {
+                let bw = bottom.width;
+                let color = bottom.color.clone().unwrap_or_else(|| "000000".to_string());
+                let border_y = para_bottom + bottom.space;
+                elements.push(LayoutElement {
+                    x: border_x,
+                    y: border_y,
+                    width: border_width,
+                    height: bw.max(0.5),
+                    content: LayoutContent::CellShading {
+                        color: format!("#{}", color),
+                    },
+                });
+            }
+            if let Some(ref top) = borders.top {
+                let bw = top.width;
+                let color = top.color.clone().unwrap_or_else(|| "000000".to_string());
+                elements.push(LayoutElement {
+                    x: border_x,
+                    y: para_top,
+                    width: border_width,
+                    height: bw.max(0.5),
+                    content: LayoutContent::CellShading {
+                        color: format!("#{}", color),
+                    },
+                });
+            }
+        }
+
+        (elements, space_after)
     }
 
     fn break_into_lines(
@@ -1288,7 +1369,7 @@ impl LayoutEngine {
             let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
             for ch in text.chars() {
                 let char_metrics = self.metrics_for_char(ch, style, para_style);
-                let char_width = char_metrics.char_width_pt(ch, font_size) + cs;
+                let char_width = self.registry.char_width_pt_with_fallback(ch, font_size, char_metrics) + cs;
 
                 if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace
@@ -1472,7 +1553,7 @@ impl LayoutEngine {
                                     decimal_offset = Some(segment_width + char_offset);
                                     break;
                                 }
-                                char_offset += metrics.char_width_pt(ch, fs);
+                                char_offset += self.registry.char_width_pt_with_fallback(ch, fs, metrics);
                             }
                         }
                         segment_width += line.fragments[j].width;
@@ -1531,14 +1612,40 @@ impl LayoutEngine {
         grid_pitch: Option<f32>,
         in_table_cell: bool,
     ) -> f32 {
-        // Word uses run font height only, no max with default.
-        let base = metrics.word_line_height(font_size, 96.0);
+        // For Single/auto spacing (no explicit line_spacing or factor=1.0),
+        // try COM-measured lookup table first (most accurate, includes GDI hinting)
+        let is_single = match (line_spacing_rule, line_spacing) {
+            (Some("exact"), _) | (Some("atLeast"), _) => false,
+            (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
+            _ => true,
+        };
 
-        // Apply line spacing rule:
-        // - exact: use line_spacing value directly as absolute height (pt), NO grid snap
-        // - atLeast: max(base, line_spacing), NO grid snap
-        // - auto/multiple/None: base * factor, then grid snap
-        //   snap = ROUND((lh + pitch/2) / pitch) * pitch
+        if is_single {
+            if in_table_cell {
+                // COM-confirmed: table cells use no-grid line height with floor(descent).
+                return metrics.word_line_height_table_cell(font_size);
+            } else {
+                if let Some(lh) = self.registry.com_line_height(
+                    &metrics.family, font_size,
+                    if snap_to_grid { grid_pitch } else { None }
+                ) {
+                    return lh;
+                }
+            }
+        }
+
+        // Fallback: calculate from font metrics.
+        // adjustLineHeightInTable=true: use standard height (no CJK 83/64).
+        // Table cells use floor(descent) instead of ceil(descent).
+        // Otherwise: use word_line_height (with CJK 83/64 for CJK fonts).
+        let base = if in_table_cell && self.adjust_line_height_in_table {
+            metrics.word_line_height_standard(font_size)
+        } else if in_table_cell {
+            metrics.word_line_height_table_cell(font_size)
+        } else {
+            metrics.word_line_height(font_size, 96.0)
+        };
+
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
             (Some("atLeast"), Some(val)) => base.max(val),
@@ -1547,8 +1654,6 @@ impl LayoutEngine {
                     Some(factor) => base * factor,
                     None => base,
                 };
-                // Apply grid snapping: ROUND((lh + pitch/2) / pitch) * pitch
-                // round-half-up: floor((lh + pitch/2) / pitch + 0.5) * pitch
                 if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
@@ -1589,19 +1694,30 @@ impl LayoutEngine {
         let mut max_ascent: f32 = 0.0;
         let mut max_descent: f32 = 0.0;
 
+        // adjustLineHeightInTable=true: use standard height without CJK 83/64
+        let use_standard = in_table_cell && self.adjust_line_height_in_table;
+
         if line.fragments.is_empty() {
-            // Empty line: use paragraph's first run or default
             let font_size = para_font_size;
             let metrics = self.registry.default_metrics();
-            max_ascent = metrics.word_ascent_pt(font_size);
-            max_descent = metrics.word_descent_pt(font_size);
+            if use_standard {
+                let h = metrics.word_line_height_standard(font_size);
+                max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
+                max_descent = h - max_ascent;
+            } else {
+                max_ascent = metrics.word_ascent_pt(font_size);
+                max_descent = metrics.word_descent_pt(font_size);
+            }
         } else {
             for frag in &line.fragments {
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                // #2: Use EastAsia font metrics for CJK text
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                let asc = metrics.word_ascent_pt(font_size);
-                let des = metrics.word_descent_pt(font_size);
+                let (asc, des) = if use_standard {
+                    let h = metrics.word_line_height_standard(font_size);
+                    (h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent), h * metrics.win_descent / (metrics.win_ascent + metrics.win_descent))
+                } else {
+                    (metrics.word_ascent_pt(font_size), metrics.word_descent_pt(font_size))
+                };
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
             }
@@ -1695,11 +1811,30 @@ impl LayoutEngine {
         let col_widths = self.resolve_table_col_widths(table, content_width);
         let table_width: f32 = col_widths.iter().sum();
 
-        // Table alignment (TODO: tblpPr horizontal positioning)
-        let table_x = match table.style.alignment.as_deref() {
-            Some("center") => start_x + (content_width - table_width) / 2.0,
-            Some("right") => start_x + content_width - table_width,
-            _ => start_x + table.style.indent.unwrap_or(0.0),
+        // Table positioning: tblpPr horizontal or inline alignment
+        let table_x = if let Some(ref pos) = table.style.position {
+            if let Some(ref h_align) = pos.h_align {
+                let (ref_left, ref_width) = match pos.h_anchor.as_deref() {
+                    Some("page") => (0.0, page_width),
+                    _ => (start_x, content_width), // "margin" or "text"
+                };
+                match h_align.as_str() {
+                    "center" => ref_left + (ref_width - table_width) / 2.0,
+                    "right" => ref_left + ref_width - table_width,
+                    _ => ref_left,
+                }
+            } else {
+                match pos.h_anchor.as_deref() {
+                    Some("page") => pos.x,
+                    _ => start_x + pos.x,
+                }
+            }
+        } else {
+            match table.style.alignment.as_deref() {
+                Some("center") => start_x + (content_width - table_width) / 2.0,
+                Some("right") => start_x + content_width - table_width,
+                _ => start_x + table.style.indent.unwrap_or(0.0),
+            }
         };
 
         // Default cell padding from table style or OOXML default (L/R=108tw=5.4pt, T/B=0)
@@ -1743,7 +1878,8 @@ impl LayoutEngine {
                     match block {
                         Block::Paragraph(para) => {
                             let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref());
-                            cell_content_h += para_h;
+                            let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
+                                                        cell_content_h += para_h;
                         }
                         Block::Table(nested) => {
                             // Estimate nested table height from rows
@@ -1762,7 +1898,7 @@ impl LayoutEngine {
                                     if nr.height_rule.as_deref() == Some("exact") { nr_h = h; }
                                     else { nr_h = nr_h.max(h); }
                                 }
-                                cell_content_h += nr_h;
+                                                                cell_content_h += nr_h;
                             }
                         }
                         _ => {}
@@ -1790,8 +1926,9 @@ impl LayoutEngine {
             }
 
             // Page break check: if this row won't fit, push current page and reset
-            // Default is cantSplit=false (allow break)
-            if *cursor_y + row_height > page_top + content_height && !elements.is_empty() {
+            // Allow break if there are elements from previous rows OR from before the table
+            let has_content = !elements.is_empty() || !current_elements.is_empty();
+            if *cursor_y + row_height > page_top + content_height && has_content {
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
@@ -1896,23 +2033,43 @@ impl LayoutEngine {
                 Block::Paragraph(para) => {
                 let para = para;
                     // Apply table style pPr as fallback (ECMA-376: table style pPr < paragraph style < direct)
+                    // Word resets line spacing to Single and space_after to 0 for table cell
+                    // paragraphs that inherit from Normal style (no direct spacing in pPr).
+                    // COM-measured: Normal outside table = ls=13.80(1.15x) sa=10,
+                    //               Normal inside table = ls=12.00(Single) sa=0.
                     let effective_line_spacing = para.style.line_spacing
                         .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing));
                     let effective_line_rule = para.style.line_spacing_rule.as_deref()
                         .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref()));
-                    let effective_space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
+                    // Reset inherited Normal-style spacing (1.15x, sa=10) to Single/0 in table cells.
+                    // BUT preserve style-defined exact/atLeast spacing (e.g. "一太郎" style).
+                    let style_has_explicit_rule = effective_line_rule == Some("exact") || effective_line_rule == Some("atLeast");
+                    let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
+                    let (effective_line_spacing, effective_line_rule) = if should_reset {
+                        // Use table style's lineSpacing if available (e.g. TableGrid: line=240 auto=Single).
+                        // COM-confirmed: this controls the actual cell line height.
+                        let tbl_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing);
+                        let tbl_lr = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref());
+                        (tbl_ls, tbl_lr)
+                    } else {
+                        (effective_line_spacing, effective_line_rule)
+                    };
+                    let effective_space_before = if should_reset {
+                        0.0
+                    } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
                         bl / 100.0 * pitch
                     } else {
                         para.style.space_before
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
                             .unwrap_or(0.0)
                     };
-                    let effective_space_after = para.style.space_after
-                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after));
-                    // Suppress space_before for the first paragraph in a cell (cell padding handles it)
-                    if content_h > 0.0 {
-                        content_h += effective_space_before;
-                    }
+                    let effective_space_after = if should_reset {
+                        None
+                    } else {
+                        para.style.space_after
+                            .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after))
+                    };
+                    content_h += effective_space_before;
                     {
                         // Paragraph indentation within cell (relative to cell content area)
                         let p_indent_left = para.style.indent_left.unwrap_or(0.0);
@@ -1947,7 +2104,8 @@ impl LayoutEngine {
                             let mut buf = String::new();
                             let mut buf_w: f32 = 0.0;
                             for ch in run.text.chars() {
-                                let cw = self.metrics_for_char(ch, &run.style, &para.style).char_width_pt(ch, font_size) + cs;
+                                let cm = self.metrics_for_char(ch, &run.style, &para.style);
+                                let cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm) + cs;
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
                                 let is_space = ch == ' ' || ch == '\u{3000}';
@@ -2044,7 +2202,7 @@ impl LayoutEngine {
                                         for ch in text.chars() {
                                             if kinsoku::is_cjk_compressible(ch) {
                                                 let fm = self.registry.default_metrics();
-                                                let char_w = fm.char_width_pt(ch, *fs);
+                                                let char_w = self.registry.char_width_pt_with_fallback(ch, *fs, fm);
                                                 let savings = char_w * 0.5;
                                                 frag_width_adj[fi] -= savings;
                                                 slack += savings;
@@ -2275,17 +2433,36 @@ impl LayoutEngine {
         let mut height = 0.0;
         // Table cells snap to grid in default Word mode
         let snap = para.style.snap_to_grid;
-        // Apply table style pPr as fallback
-        let eff_ls = para.style.line_spacing
+        // Apply table style pPr as fallback, with has_direct_spacing reset
+        let raw_ls = para.style.line_spacing
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing));
-        let eff_lr = para.style.line_spacing_rule.as_deref()
+        let raw_lr = para.style.line_spacing_rule.as_deref()
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
+        let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
+        let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
+        let (eff_ls, eff_lr): (Option<f32>, Option<&str>) = if should_reset {
+            // Use table style's lineSpacing if available (COM-confirmed).
+            let tbl_ls = table_para_style.and_then(|ps| ps.line_spacing);
+            let tbl_lr = table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref());
+            (tbl_ls, tbl_lr)
+        } else {
+            (raw_ls, raw_lr)
+        };
 
+        // estimate_para_height is called for table cell content.
+        // COM-confirmed: table cells use no-grid line height (grid snap disabled inside cells).
+        // Use COM table with grid_pitch=None to get no_grid value.
         if para.runs.is_empty() {
             let metrics = self.doc_default_metrics();
-            height += self.line_height(self.default_font_size, eff_ls, eff_lr, metrics, snap, grid_pitch);
+            // COM-confirmed: table cells use no-grid line height
+            let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
+            if is_single_empty {
+                // COM-confirmed: table cells use floor(descent), no grid snap
+                height += metrics.word_line_height_table_cell(self.default_font_size);
+            } else {
+                height += self.line_height_inner(self.default_font_size, eff_ls, eff_lr, metrics, false, None, true);
+            }
         } else {
-            // Estimate number of lines by measuring total text width vs available width
             let para_font_size = self.resolve_font_size(
                 para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
                 &para.style,
@@ -2295,13 +2472,25 @@ impl LayoutEngine {
             for run in &para.runs {
                 let font_size = self.resolve_font_size(&run.style, &para.style);
                 let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
-                // Estimate run width (including pixel-snapped character spacing)
                 let cs = snap_character_spacing(run.style.character_spacing.unwrap_or(0.0));
                 let run_w: f32 = run.text.chars()
-                    .map(|ch| self.metrics_for_char(ch, &run.style, &para.style).char_width_pt(ch, font_size) + cs)
+                    .map(|ch| {
+                        let m = self.metrics_for_char(ch, &run.style, &para.style);
+                        self.registry.char_width_pt_with_fallback(ch, font_size, m) + cs
+                    })
                     .sum();
                 total_text_w += run_w;
-                let lh = self.line_height(font_size, eff_ls, eff_lr, metrics, snap, grid_pitch);
+                // COM-confirmed: table cells use no-grid line height
+                let is_single_run = match (eff_lr, eff_ls) {
+                    (Some("exact"), _) | (Some("atLeast"), _) => false,
+                    (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
+                    _ => true,
+                };
+                let lh = if is_single_run {
+                    metrics.word_line_height_table_cell(font_size)
+                } else {
+                    self.line_height_inner(font_size, eff_ls, eff_lr, metrics, false, None, true)
+                };
                 if lh > max_line_height { max_line_height = lh; }
             }
             // Estimate line count (at least 1), accounting for indents
@@ -2330,16 +2519,21 @@ impl LayoutEngine {
             height += max_line_height * line_count as f32;
         }
 
-        height += if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
-            bl / 100.0 * pitch
+        if should_reset {
+            // Word resets inherited Normal-style spacing to 0 in table cells
+            // but preserves style-defined exact/atLeast spacing
         } else {
-            para.style.space_before
-                .or_else(|| table_para_style.and_then(|ps| ps.space_before))
-                .unwrap_or(0.0)
-        };
-        height += para.style.space_after
-            .or_else(|| table_para_style.and_then(|ps| ps.space_after))
-            .unwrap_or(0.0);
+            height += if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+                bl / 100.0 * pitch
+            } else {
+                para.style.space_before
+                    .or_else(|| table_para_style.and_then(|ps| ps.space_before))
+                    .unwrap_or(0.0)
+            };
+            height += para.style.space_after
+                .or_else(|| table_para_style.and_then(|ps| ps.space_after))
+                .unwrap_or(0.0);
+        }
         height
     }
 }

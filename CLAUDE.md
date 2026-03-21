@@ -49,6 +49,49 @@ cargo clippy                         # Lint
 cd crates/oxi-wasm && wasm-pack build --target web  # Wasm build
 ```
 
+## Ra: Word仕様自動解析ループ
+
+各セッション開始時に以下を確認し、自律的に仕様解析を継続する。
+
+### ステート管理
+- 仕様書: `docs/word_layout_spec_ra.md`
+- 計測データ: `pipeline_data/ra_manual_measurements.json`
+- SSIMベースライン: `pipeline_data/ssim_baseline.json`
+
+### 自律ループ手順
+1. `docs/word_layout_spec_ra.md` を読み、未解決の疑問を確認
+2. 最も影響の大きい未解決疑問を選択
+3. Python COM計測スクリプトを `tools/metrics/` に作成
+4. 実行して結果を `pipeline_data/ra_manual_measurements.json` に追記
+5. 結果を分析し、仕様書を更新
+6. 仕様が確定したドメインは Rust 実装に反映
+7. `python -m pipeline.verify` で SSIM リグレッションチェック
+8. net positive なら commit、negative なら revert
+9. 1 に戻る
+
+### ドメイン状況（2026-03-25）
+- **char_width**: フォールバック実装済み（MS UI Gothic）。現テスト文書では効果なし
+- **page_break**: widow/orphan、keepNext/keepTogether 既に実装済み
+- **spacing**: コラプス（max(sa,sb)）実装済み。net +0.71
+- **line_height**: テーブルセル内リセット実装済み。net +0.66
+- **grid_snap**: 実装済み
+- **SSIM: 0.7496 → 0.7900（+0.040）**
+- **残りの改善余地**: 0.7-0.8帯150ページ。原因はGDIヒンティングによる行高さ1px揺らぎの累積。計算式では予測不可能
+
+### 計測テンプレート
+行高さの正しい計測方法は「2段落のY座標差分」:
+```python
+y1 = doc.Paragraphs(1).Range.Information(6)  # wdVerticalPositionRelativeToPage
+y2 = doc.Paragraphs(2).Range.Information(6)
+gap = y2 - y1  # = line_height + spacing
+```
+`Format.LineSpacing` は設定値を返すだけで、実際のレンダリング高さではない。
+
+### 重要ルール
+- DLL解析禁止。COM API経由のブラックボックス測定のみ
+- 推測で実装しない。必ずCOM実測で値を確定してから実装
+- SSIMが下がる変更は revert（net positive ルール）
+
 ## License
 
 MIT. All third-party crate licenses must be MIT-compatible.

@@ -15,10 +15,13 @@ fn resolve_theme_font(theme_val: &str, theme: &ThemeColors) -> Option<String> {
 pub fn resolve_theme_font_pub(theme_val: &str, theme: &ThemeColors) -> Option<String> {
     if theme_val.contains("EastAsia") {
         // "majorEastAsia" or "minorEastAsia" → use East Asian font
+        // If theme has no EA font defined, default to MS Mincho (standard Japanese font)
         if theme_val.starts_with("major") {
-            theme.major_font_ea.clone().or_else(|| theme.major_font.clone())
+            theme.major_font_ea.clone()
+                .or_else(|| Some("MS Mincho".to_string()))
         } else {
-            theme.minor_font_ea.clone().or_else(|| theme.minor_font.clone())
+            theme.minor_font_ea.clone()
+                .or_else(|| Some("MS Mincho".to_string()))
         }
     } else {
         // "majorHAnsi" / "minorHAnsi" / "majorBidi" / "minorBidi" → Latin font
@@ -352,8 +355,13 @@ fn parse_para_properties_block(reader: &mut Reader<&[u8]>) -> Result<ParagraphSt
 
     loop {
         match reader.read_event()? {
-            Event::Start(_) => {
-                depth += 1;
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "pBdr" && depth == 1 {
+                    style.borders = Some(super::ooxml::parse_paragraph_borders(reader)?);
+                } else {
+                    depth += 1;
+                }
             }
             Event::Empty(e) => {
                 apply_para_property_empty(&e, &mut style);
@@ -710,6 +718,10 @@ fn parse_style_definition(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "pBdr" if !in_rpr && !in_num_pr => {
+                        style.borders = Some(super::ooxml::parse_paragraph_borders(reader)?);
+                        continue;
+                    }
                     "numPr" if !in_rpr => {
                         in_num_pr = true;
                         depth += 1;
