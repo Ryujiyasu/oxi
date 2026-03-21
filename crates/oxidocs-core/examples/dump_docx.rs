@@ -19,8 +19,9 @@ fn main() {
         println!("Blocks: {} | TextBoxes: {} | Shapes: {} | FloatingImages: {}",
             page.blocks.len(), page.text_boxes.len(), page.shapes.len(), page.floating_images.len());
         for (ti, tb) in page.text_boxes.iter().enumerate() {
-            println!("  TextBox[{}]: {:.1}x{:.1} anchor={} fill={:?} cr={:?} blocks={}",
-                ti, tb.width, tb.height, tb.anchor_block_index, tb.fill, tb.corner_radius, tb.blocks.len());
+            let pos_info = tb.position.as_ref().map(|p| format!(" pos=({:.1},{:.1}) vrel={:?} hrel={:?}", p.x, p.y, p.v_relative, p.h_relative)).unwrap_or_default();
+            println!("  TextBox[{}]: {:.1}x{:.1} anchor={} fill={:?} cr={:?} blocks={}{}",
+                ti, tb.width, tb.height, tb.anchor_block_index, tb.fill, tb.corner_radius, tb.blocks.len(), pos_info);
             for (tbi, tblock) in tb.blocks.iter().enumerate() {
                 if let ir::Block::Paragraph(tp) = tblock {
                     let ls_info = format!("ls={:?}/{:?} snap={}", tp.style.line_spacing, tp.style.line_spacing_rule, tp.style.snap_to_grid);

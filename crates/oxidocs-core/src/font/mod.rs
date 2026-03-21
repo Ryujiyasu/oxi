@@ -85,8 +85,8 @@ impl FontMetrics {
     /// COM measurement confirmed: this produces correct widths for all fonts
     /// including monospace CJK (MS Gothic/Mincho UPM=256).
     pub fn char_width_pt(&self, c: char, font_size: f32) -> f32 {
-        let advance_em = self.char_width_em(c);
         let ppem = (font_size * 96.0 / 72.0).round();
+        let advance_em = self.char_width_em(c);
         (advance_em * ppem).round() * 72.0 / 96.0
     }
 
@@ -179,6 +179,21 @@ impl FontMetrics {
         (font_ascent + extra_leading + font_descent) * 15.0 / 20.0
     }
 
+    /// Line height for table cells: uses floor for descent rounding.
+    /// COM measurement confirmed: table cell line height uses floor(winDescent/UPM * ppem)
+    /// instead of ceil, resulting in 1px smaller height for some font/size combinations.
+    pub fn word_line_height_table_cell(&self, font_size: f32) -> f32 {
+        let ppem = (font_size * 96.0 / 72.0).round();
+        let font_ascent = pixel_round(self.win_ascent, ppem);  // ceil
+        let font_descent = (self.win_descent * ppem).floor();    // floor for table cells
+        let base = (font_ascent + font_descent) * 72.0 / 96.0;
+        if self.is_cjk_83_64_font() {
+            base * 83.0 / 64.0
+        } else {
+            base
+        }
+    }
+
     /// Returns true if this font uses the CJK line height multiplier 83/64.
     ///
     /// Determined by COM measurement: measuring line heights for each font
@@ -204,6 +219,8 @@ impl FontMetrics {
 pub struct FontMetricsRegistry {
     fonts: HashMap<String, FontMetrics>,
     default_family: String,
+    /// COM-measured line heights: font → size_str → grid_key → height_pt
+    com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>>,
 }
 
 impl FontMetricsRegistry {
@@ -277,10 +294,63 @@ impl FontMetricsRegistry {
             }
         }
 
+        // Load COM-measured line height table
+        let com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>> = {
+            #[cfg(has_local_font_metrics)]
+            {
+                let lh_json = include_str!("data/com_line_height_table.json");
+                serde_json::from_str(lh_json).unwrap_or_default()
+            }
+            #[cfg(not(has_local_font_metrics))]
+            { HashMap::new() }
+        };
+
         Self {
             fonts,
             default_family: "Calibri".to_string(),
+            com_line_heights,
         }
+    }
+
+    /// Look up COM-measured line height for a font, size, and grid pitch.
+    /// Returns None if not in the table (falls back to calculation).
+    pub fn com_line_height(&self, family: &str, font_size: f32, grid_pitch: Option<f32>) -> Option<f32> {
+        let normalized = normalize_family_name(family);
+        let font_data = self.com_line_heights.get(family)
+            .or_else(|| self.com_line_heights.get(&normalized))?;
+
+        // Find exact or nearest size
+        let size_key = format_size_key(font_size);
+        let size_data = font_data.get(&size_key)?;
+
+        // Determine grid key
+        let grid_key = match grid_pitch {
+            None => "no_grid".to_string(),
+            Some(pitch) => {
+                let pitch_twips = (pitch * 20.0).round() as i32;
+                let key = format!("grid{}", pitch_twips);
+                if size_data.contains_key(&key) {
+                    key
+                } else if size_data.contains_key("default_grid") && pitch_twips == 360 {
+                    "default_grid".to_string()
+                } else {
+                    return None; // No matching grid pitch in table
+                }
+            }
+        };
+
+        size_data.get(&grid_key).copied()
+    }
+
+    /// Look up COM-measured line height for table cell (grid snap disabled).
+    pub fn com_line_height_table_cell(&self, family: &str, font_size: f32) -> Option<f32> {
+        let normalized = normalize_family_name(family);
+        let font_data = self.com_line_heights.get(family)
+            .or_else(|| self.com_line_heights.get(&normalized))?;
+        let size_key = format_size_key(font_size);
+        let size_data = font_data.get(&size_key)?;
+        size_data.get("table_cell").copied()
+            .or_else(|| size_data.get("no_grid").copied())
     }
 
     /// Get metrics for a font family. Falls back to default (Calibri) if not found.
@@ -309,6 +379,65 @@ impl FontMetricsRegistry {
     pub fn default_metrics(&self) -> &FontMetrics {
         self.get(&self.default_family)
     }
+
+    /// Character width with GDI font fallback.
+    /// When a CJK character is rendered with a Latin font (e.g. Calibri),
+    /// GDI substitutes MS UI Gothic. This method mimics that behavior.
+    pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
+        // If the font has this character's width measured, use it directly
+        if metrics.char_widths.contains_key(&c) {
+            return metrics.char_width_pt(c, font_size);
+        }
+
+        // CJK character + Latin font → GDI fallback to MS UI Gothic
+        if is_cjk_or_symbol(c) && !is_cjk_font_family(&metrics.family) {
+            if let Some(fallback) = self.fonts.get("MS UI Gothic")
+                .or_else(|| self.fonts.get("MS Gothic"))
+            {
+                return fallback.char_width_pt(c, font_size);
+            }
+        }
+
+        // Default: use the font's own heuristic
+        metrics.char_width_pt(c, font_size)
+    }
+}
+
+/// Check if a character is CJK or a symbol that GDI renders with an East Asian font.
+fn is_cjk_or_symbol(c: char) -> bool {
+    let cp = c as u32;
+    matches!(cp,
+        0x2E80..=0x9FFF |    // CJK radicals, kangxi, CJK unified ideographs
+        0x3000..=0x303F |    // CJK symbols and punctuation
+        0x3040..=0x309F |    // Hiragana
+        0x30A0..=0x30FF |    // Katakana
+        0x31F0..=0x31FF |    // Katakana phonetic extensions
+        0x3200..=0x33FF |    // Enclosed CJK, CJK compatibility
+        0xF900..=0xFAFF |    // CJK compatibility ideographs
+        0xFE30..=0xFE4F |    // CJK compatibility forms
+        0xFF00..=0xFFEF |    // Halfwidth and fullwidth forms
+        0x20000..=0x2A6DF |  // CJK unified ideographs extension B
+        0x2190..=0x21FF |    // Arrows
+        0x2200..=0x22FF |    // Mathematical operators
+        0x2500..=0x257F |    // Box drawing
+        0x2580..=0x259F |    // Block elements
+        0x25A0..=0x25FF |    // Geometric shapes
+        0x2600..=0x26FF |    // Miscellaneous symbols
+        0x2700..=0x27BF |    // Dingbats
+        0x2010..=0x2044      // General punctuation subset
+    )
+}
+
+/// Check if a font family is a CJK font (has native CJK glyphs).
+fn is_cjk_font_family(family: &str) -> bool {
+    matches!(family,
+        "MS Gothic" | "MS Mincho" | "MS PGothic" | "MS PMincho" |
+        "MS UI Gothic" | "Yu Gothic" | "Yu Mincho" | "Meiryo" |
+        "HGPGothicE" | "HGPMinchoE" | "HGGothicE" | "HGMinchoE" |
+        "HGSGothicE" | "HGSMinchoE" | "HGPGothicM" | "HGPMinchoB" |
+        "HGPSoeiKakugothicUB" | "HGSoeiKakugothicUB" |
+        "HGMaruGothicMPRO" | "HGSMaruGothicMPRO"
+    )
 }
 
 /// Strip weight/style suffixes to get the base family name.
@@ -326,6 +455,15 @@ fn base_family_name(name: &str) -> String {
     result
 }
 
+/// Format font size as JSON key (e.g. 10.5 → "10.5", 12.0 → "12.0")
+fn format_size_key(size: f32) -> String {
+    if size.fract() == 0.0 {
+        format!("{:.0}", size)  // "12" not "12.0"
+    } else {
+        format!("{}", size)     // "10.5"
+    }
+}
+
 /// Normalize common font family name aliases used in OOXML.
 fn normalize_family_name(name: &str) -> String {
     match name {
@@ -337,6 +475,7 @@ fn normalize_family_name(name: &str) -> String {
         "游ゴシック Medium" => "Yu Gothic Regular".to_string(),
         "游明朝" => "Yu Mincho Regular".to_string(),
         "游明朝 Demibold" => "Yu Mincho Demibold".to_string(),
+        "メイリオ" | "Meiryo UI" => "Meiryo".to_string(),
         _ => name.to_string(),
     }
 }
@@ -458,5 +597,50 @@ mod tests {
 
         let avg_err = total_err / test_cases.len() as f32;
         assert!(avg_err < 0.5, "avg error {:.3}pt exceeds 0.5pt", avg_err);
+    }
+}
+
+/// GDI hinting width overrides for UPM=256 fonts (MS Mincho/Gothic) at ppem=14.
+/// At ppem=14, GDI applies hinting that changes hiragana/katakana glyph widths
+/// from the nominal 14px to smaller values. This causes text wrapping differences.
+/// Measured via GetTextExtentPoint32W on Windows with MS Mincho/Gothic at -14px.
+fn gdi_kana_width_px_ppem14(c: char) -> Option<f32> {
+    match c {
+        'ぁ' => Some(10.0), 'あ' => Some(13.0), 'ぃ' => Some(11.0), 'い' => Some(13.0),
+        'ぅ' => Some(8.0),  'う' => Some(10.0), 'ぇ' => Some(11.0), 'え' => Some(13.0),
+        'ぉ' => Some(11.0), 'お' => Some(13.0), 'き' => Some(12.0), 'ぎ' => Some(13.0),
+        'く' => Some(8.0),  'ぐ' => Some(11.0), 'け' => Some(13.0), 'こ' => Some(11.0),
+        'ご' => Some(13.0), 'さ' => Some(11.0), 'ざ' => Some(12.0), 'し' => Some(11.0),
+        'じ' => Some(11.0), 'す' => Some(13.0), 'そ' => Some(13.0), 'ぞ' => Some(13.0),
+        'た' => Some(13.0), 'だ' => Some(13.0), 'ち' => Some(12.0), 'ぢ' => Some(13.0),
+        'っ' => Some(11.0), 'つ' => Some(13.0), 'づ' => Some(13.0), 'て' => Some(13.0),
+        'で' => Some(13.0), 'と' => Some(11.0), 'ど' => Some(12.0), 'な' => Some(13.0),
+        'に' => Some(13.0), 'ひ' => Some(13.0), 'び' => Some(13.0), 'ぴ' => Some(13.0),
+        'ま' => Some(12.0), 'も' => Some(11.0), 'ゃ' => Some(12.0), 'ゅ' => Some(12.0),
+        'ょ' => Some(10.0), 'よ' => Some(12.0), 'ら' => Some(11.0), 'り' => Some(10.0),
+        'る' => Some(12.0), 'ろ' => Some(12.0), 'ゎ' => Some(12.0), 'を' => Some(12.0),
+        'ん' => Some(13.0), 'ゔ' => Some(12.0), 'ゝ' => Some(10.0), 'ゞ' => Some(10.0),
+        'ァ' => Some(11.0), 'ア' => Some(13.0), 'ィ' => Some(9.0),  'イ' => Some(12.0),
+        'ゥ' => Some(11.0), 'ウ' => Some(13.0), 'ェ' => Some(10.0), 'エ' => Some(13.0),
+        'ォ' => Some(11.0), 'オ' => Some(13.0), 'カ' => Some(12.0), 'ガ' => Some(13.0),
+        'キ' => Some(13.0), 'ク' => Some(11.0), 'グ' => Some(13.0), 'ケ' => Some(13.0),
+        'ゲ' => Some(13.0), 'コ' => Some(11.0), 'ゴ' => Some(12.0), 'シ' => Some(13.0),
+        'ジ' => Some(13.0), 'ス' => Some(13.0), 'セ' => Some(13.0), 'ソ' => Some(11.0),
+        'ゾ' => Some(12.0), 'タ' => Some(11.0), 'ダ' => Some(13.0), 'チ' => Some(13.0),
+        'ヂ' => Some(13.0), 'ッ' => Some(10.0), 'ツ' => Some(12.0), 'ヅ' => Some(13.0),
+        'テ' => Some(12.0), 'デ' => Some(13.0), 'ト' => Some(9.0),  'ド' => Some(10.0),
+        'ナ' => Some(13.0), 'ニ' => Some(13.0), 'ヌ' => Some(12.0), 'ネ' => Some(13.0),
+        'ノ' => Some(10.0), 'ヒ' => Some(11.0), 'ビ' => Some(12.0), 'ピ' => Some(12.0),
+        'フ' => Some(11.0), 'ブ' => Some(12.0), 'プ' => Some(12.0), 'ヘ' => Some(13.0),
+        'ベ' => Some(13.0), 'ペ' => Some(13.0), 'ホ' => Some(13.0), 'ボ' => Some(13.0),
+        'ポ' => Some(13.0), 'マ' => Some(13.0), 'ミ' => Some(9.0),  'メ' => Some(10.0),
+        'モ' => Some(13.0), 'ャ' => Some(11.0), 'ュ' => Some(11.0), 'ユ' => Some(13.0),
+        'ョ' => Some(9.0),  'ヨ' => Some(10.0), 'ラ' => Some(11.0), 'リ' => Some(10.0),
+        'レ' => Some(12.0), 'ロ' => Some(12.0), 'ヮ' => Some(11.0), 'ワ' => Some(13.0),
+        'ヲ' => Some(11.0), 'ン' => Some(12.0), 'ヴ' => Some(13.0), 'ヵ' => Some(10.0),
+        'ヶ' => Some(11.0), 'ヷ' => Some(13.0), 'ヸ' => Some(13.0), 'ヺ' => Some(13.0),
+        '・' => Some(7.0),  'ー' => Some(13.0), 'ヽ' => Some(10.0), 'ヾ' => Some(10.0),
+        '゛' | '゜' => Some(7.0),
+        _ => None,
     }
 }

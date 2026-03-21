@@ -87,6 +87,25 @@ pub fn is_cjk(ch: char) -> bool {
         0x3300..=0x33FF |
         // Halfwidth and Fullwidth Forms
         0xFF00..=0xFFEF |
+        // General Punctuation (※, †, ‡, etc.) — Word uses East Asian font
+        0x2010..=0x2044 |
+        // Geometric Shapes (□, ○, ◎, ●, △, ▲, etc.)
+        0x25A0..=0x25FF |
+        // Miscellaneous Symbols (☆, ★, ♪, etc.)
+        0x2600..=0x26FF |
+        // Dingbats (✓, ✕, etc.)
+        0x2700..=0x27BF |
+        // Box Drawing (─, │, ┌, etc.)
+        0x2500..=0x257F |
+        // Block Elements (▀, ▄, █, etc.)
+        0x2580..=0x259F |
+        // Arrows (←, ↑, →, ↓, etc.)
+        0x2190..=0x21FF |
+        // Mathematical Operators (×, ÷, ±, etc.)
+        0x2200..=0x22FF |
+        // Latin-1 math symbols Word renders with East Asian font
+        0x00D7 | // × multiplication sign
+        0x00F7 | // ÷ division sign
         // CJK Unified Ideographs Extension B
         0x20000..=0x2A6DF
     )

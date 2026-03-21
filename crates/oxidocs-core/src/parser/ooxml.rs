@@ -74,18 +74,27 @@ impl OoxmlParser {
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
-            // Fall back to "default" if no "first" type found
-            let header = if use_headers.is_empty() && hdr_type == "first" {
+            // Fall back: if no matching type, try any available reference
+            let header = if use_headers.is_empty() {
+                // Try "default", then "first", then any
                 let fallback: Vec<HdrFtrRef> = section.properties.header_refs.iter()
                     .filter(|r| r.ref_type == "default").cloned().collect();
-                self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                if fallback.is_empty() {
+                    self.parse_header_footer_blocks(&section.properties.header_refs, &ctx, &styles)
+                } else {
+                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                }
             } else {
                 self.parse_header_footer_blocks(&use_headers, &ctx, &styles)
             };
-            let footer = if use_footers.is_empty() && hdr_type == "first" {
+            let footer = if use_footers.is_empty() {
                 let fallback: Vec<HdrFtrRef> = section.properties.footer_refs.iter()
                     .filter(|r| r.ref_type == "default").cloned().collect();
-                self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                if fallback.is_empty() {
+                    self.parse_header_footer_blocks(&section.properties.footer_refs, &ctx, &styles)
+                } else {
+                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                }
             } else {
                 self.parse_header_footer_blocks(&use_footers, &ctx, &styles)
             };
@@ -115,6 +124,7 @@ impl OoxmlParser {
                     size: section.properties.page_size,
                     margin: section.properties.margin,
                     grid_line_pitch: section.properties.grid_line_pitch,
+                    doc_grid_no_type: section.properties.doc_grid_no_type,
                     header,
                     footer,
                     footnotes: footnotes_list,
@@ -564,6 +574,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         page_size: PageSize::default(),
         margin: Margin::default(),
         grid_line_pitch: None,
+        doc_grid_no_type: false,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
         columns: None,
@@ -944,6 +955,28 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     style.num_ilvl = ds.num_ilvl;
                 }
             }
+            // Inherit paragraph borders from style
+            if style.borders.is_none() {
+                style.borders = ds.borders.clone();
+            }
+            // Inherit indents from style
+            if style.indent_left.is_none() {
+                style.indent_left = ds.indent_left;
+            }
+            if style.indent_right.is_none() {
+                style.indent_right = ds.indent_right;
+            }
+            if style.indent_first_line.is_none() {
+                style.indent_first_line = ds.indent_first_line;
+            }
+            // Inherit shading from style
+            if style.shading.is_none() {
+                style.shading = ds.shading.clone();
+            }
+            // Inherit page_break_before from style
+            if ds.page_break_before {
+                style.page_break_before = true;
+            }
         }
     }
 
@@ -1083,6 +1116,7 @@ fn parse_paragraph_properties(
                         num_pr = Some(parse_num_pr(reader)?);
                     }
                     "spacing" if depth == 0 => {
+                        style.has_direct_spacing = true;
                         let mut line_val: Option<f32> = None;
                         let mut line_rule: Option<String> = None;
                         for attr in e.attributes().flatten() {
@@ -1377,7 +1411,7 @@ fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
 }
 
 /// Parse w:pBdr element containing border children (top, bottom, left, right, between)
-fn parse_paragraph_borders(reader: &mut Reader<&[u8]>) -> Result<ParagraphBorders, ParseError> {
+pub(crate) fn parse_paragraph_borders(reader: &mut Reader<&[u8]>) -> Result<ParagraphBorders, ParseError> {
     let mut borders = ParagraphBorders {
         top: None, bottom: None, left: None, right: None, between: None,
     };
@@ -1413,6 +1447,7 @@ fn parse_border_attrs(e: &quick_xml::events::BytesStart) -> Option<BorderDef> {
     let mut style = String::new();
     let mut width: f32 = 0.0;
     let mut color = None;
+    let mut space: f32 = 0.0;
 
     for attr in e.attributes().flatten() {
         let key = local_name(attr.key.as_ref());
@@ -1434,6 +1469,9 @@ fn parse_border_attrs(e: &quick_xml::events::BytesStart) -> Option<BorderDef> {
                     color = Some(val);
                 }
             }
+            "space" => {
+                space = val.parse::<f32>().unwrap_or(0.0);
+            }
             _ => {}
         }
     }
@@ -1442,7 +1480,7 @@ fn parse_border_attrs(e: &quick_xml::events::BytesStart) -> Option<BorderDef> {
         return None;
     }
 
-    Some(BorderDef { style, width, color })
+    Some(BorderDef { style, width, color, space })
 }
 
 /// Parse w:tabs element containing w:tab children
@@ -3954,6 +3992,8 @@ struct SectionProperties {
     margin: Margin,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
+    /// docGrid exists but has no type attribute
+    doc_grid_no_type: bool,
     /// Reference IDs for header parts (with type)
     header_refs: Vec<HdrFtrRef>,
     /// Reference IDs for footer parts (with type)
@@ -3983,6 +4023,7 @@ fn parse_section_properties(
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
     let mut grid_line_pitch: Option<f32> = None;
+    let mut doc_grid_no_type = false;
     let mut header_refs: Vec<HdrFtrRef> = Vec::new();
     let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
     let mut columns: Option<ColumnLayout> = None;
@@ -4009,6 +4050,7 @@ fn parse_section_properties(
                                 let mut bdr_style = String::new();
                                 let mut bdr_width = 0.0f32;
                                 let mut bdr_color: Option<String> = None;
+                                let mut bdr_space = 0.0f32;
                                 for attr in be.attributes().flatten() {
                                     let key = local_name(attr.key.as_ref());
                                     let val = String::from_utf8_lossy(&attr.value);
@@ -4019,11 +4061,12 @@ fn parse_section_properties(
                                             let c = val.to_string();
                                             if c != "auto" { bdr_color = Some(c); }
                                         }
+                                        "space" => { bdr_space = val.parse::<f32>().unwrap_or(0.0); }
                                         _ => {}
                                     }
                                 }
                                 if bdr_style != "none" && bdr_style != "nil" && bdr_width > 0.0 {
-                                    let def = BorderDef { style: bdr_style, width: bdr_width, color: bdr_color };
+                                    let def = BorderDef { style: bdr_style, width: bdr_width, color: bdr_color, space: bdr_space };
                                     match bl.as_str() {
                                         "top" => pb.top = Some(def),
                                         "bottom" => pb.bottom = Some(def),
@@ -4191,6 +4234,9 @@ fn parse_section_properties(
                             && line_pitch > 0
                         {
                             grid_line_pitch = Some(line_pitch as f32 / 20.0);
+                        } else if grid_type.is_empty() && line_pitch > 0 {
+                            // docGrid exists with linePitch but no type attribute
+                            doc_grid_no_type = true;
                         }
                     }
                     "headerReference" => {
@@ -4289,6 +4335,7 @@ fn parse_section_properties(
         page_size,
         margin,
         grid_line_pitch,
+        doc_grid_no_type,
         header_refs,
         footer_refs,
         columns,
@@ -4325,6 +4372,41 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                     "tbl" if in_root && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
                         blocks.push(Block::Table(table));
+                    }
+                    "sdt" if in_root && depth == 0 => {
+                        // Structured Document Tag: skip sdtPr, process sdtContent children
+                        let mut sdt_depth = 1u32;
+                        let mut in_sdt_content = false;
+                        loop {
+                            match reader.read_event()? {
+                                Event::Start(se) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "sdtContent" && sdt_depth == 1 {
+                                        in_sdt_content = true;
+                                    } else if in_sdt_content && sl == "p" {
+                                        let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                                        blocks.push(Block::Paragraph(pr.paragraph));
+                                    } else if in_sdt_content && sl == "tbl" {
+                                        let table = parse_table(&mut reader, ctx, styles)?;
+                                        blocks.push(Block::Table(table));
+                                    } else {
+                                        sdt_depth += 1;
+                                    }
+                                }
+                                Event::End(ee) => {
+                                    let sl = local_name(ee.name().as_ref());
+                                    if sl == "sdtContent" {
+                                        in_sdt_content = false;
+                                    } else if sl == "sdt" && sdt_depth == 1 {
+                                        break;
+                                    } else if sdt_depth > 1 {
+                                        sdt_depth -= 1;
+                                    }
+                                }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
                     }
                     _ if in_root => {
                         depth += 1;

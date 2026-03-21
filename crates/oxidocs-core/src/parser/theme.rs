@@ -40,30 +40,67 @@ impl ThemeColors {
     }
 
     /// Apply tint/shade transformation to a hex color
+    /// Apply tint/shade using HSL color space (matches Word's behavior).
+    /// Positive values = tint (lighten towards white).
+    /// Negative values = shade (darken towards black).
+    /// Word uses HSL-based shade/tint, not simple RGB multiplication.
     pub fn apply_tint_shade(hex: &str, tint_shade: f64) -> String {
-        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
-        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
-        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f64 / 255.0;
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f64 / 255.0;
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f64 / 255.0;
 
-        let (r, g, b) = if tint_shade > 0.0 {
-            // Tint: move towards white
-            let t = tint_shade;
-            (
-                (r as f64 + (255.0 - r as f64) * t) as u8,
-                (g as f64 + (255.0 - g as f64) * t) as u8,
-                (b as f64 + (255.0 - b as f64) * t) as u8,
-            )
+        // Convert RGB to HSL
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let l = (max + min) / 2.0;
+
+        let (h, s) = if (max - min).abs() < 1e-10 {
+            (0.0, 0.0)
         } else {
-            // Shade: move towards black
-            let s = 1.0 + tint_shade;
+            let d = max - min;
+            let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+            let h = if (max - r).abs() < 1e-10 {
+                (g - b) / d + if g < b { 6.0 } else { 0.0 }
+            } else if (max - g).abs() < 1e-10 {
+                (b - r) / d + 2.0
+            } else {
+                (r - g) / d + 4.0
+            };
+            (h / 6.0, s)
+        };
+
+        // Apply tint/shade to luminance
+        let l2 = if tint_shade > 0.0 {
+            l * (1.0 - tint_shade) + tint_shade  // tint: move L towards 1.0
+        } else {
+            l * (1.0 + tint_shade)  // shade: multiply L by factor
+        };
+
+        // Convert HSL back to RGB
+        let hsl_to_rgb = |h: f64, s: f64, l: f64| -> (u8, u8, u8) {
+            if s.abs() < 1e-10 {
+                let v = (l * 255.0).round() as u8;
+                return (v, v, v);
+            }
+            let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+            let p = 2.0 * l - q;
+            let hue_to_rgb = |p: f64, q: f64, mut t: f64| -> f64 {
+                if t < 0.0 { t += 1.0; }
+                if t > 1.0 { t -= 1.0; }
+                if t < 1.0/6.0 { return p + (q - p) * 6.0 * t; }
+                if t < 1.0/2.0 { return q; }
+                if t < 2.0/3.0 { return p + (q - p) * (2.0/3.0 - t) * 6.0; }
+                p
+            };
             (
-                (r as f64 * s) as u8,
-                (g as f64 * s) as u8,
-                (b as f64 * s) as u8,
+                (hue_to_rgb(p, q, h + 1.0/3.0) * 255.0).round() as u8,
+                (hue_to_rgb(p, q, h) * 255.0).round() as u8,
+                (hue_to_rgb(p, q, h - 1.0/3.0) * 255.0).round() as u8,
             )
         };
 
-        format!("{:02X}{:02X}{:02X}", r, g, b)
+        let (r2, g2, b2) = hsl_to_rgb(h, s, l2);
+        format!("{:02X}{:02X}{:02X}", r2, g2, b2)
     }
 }
 

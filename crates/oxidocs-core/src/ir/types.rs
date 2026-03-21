@@ -26,6 +26,10 @@ pub struct Page {
     /// snaps to multiples of this pitch.
     #[serde(default)]
     pub grid_line_pitch: Option<f32>,
+    /// True when docGrid element exists but has NO type attribute.
+    /// CJK 83/64 multiplier is NOT applied; COM-measured Single heights used instead.
+    #[serde(default)]
+    pub doc_grid_no_type: bool,
     /// Header content (paragraphs from header part)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header: Vec<Block>,
@@ -615,6 +619,10 @@ pub struct ParagraphStyle {
     pub line_spacing_rule: Option<String>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
+    /// True when spacing was directly specified in paragraph's pPr (not just inherited from style).
+    /// Word resets inherited spacing to Single/0 inside table cells.
+    #[serde(default)]
+    pub has_direct_spacing: bool,
     /// w:spacing beforeLines — in 1/100 of a line (raw value from OOXML)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_lines: Option<f32>,
@@ -701,6 +709,9 @@ pub struct BorderDef {
     pub width: f32,
     /// Color hex
     pub color: Option<String>,
+    /// Distance from text in points (w:space)
+    #[serde(default)]
+    pub space: f32,
 }
 
 fn default_true() -> bool { true }
@@ -713,6 +724,7 @@ impl Default for ParagraphStyle {
             line_spacing_rule: None,
             space_before: None,
             space_after: None,
+            has_direct_spacing: false,
             before_lines: None,
             after_lines: None,
             indent_left: None,

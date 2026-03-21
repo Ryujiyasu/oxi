@@ -144,7 +144,7 @@ impl NumberingDefinitions {
 fn map_symbol_bullets(text: &str) -> String {
     text.chars().map(|ch| {
         match ch {
-            '\u{F0B7}' => '\u{2022}', // Symbol bullet → •
+            '\u{F0B7}' => '\u{2022}', // Symbol bullet → • (bullet)
             '\u{F06F}' => '\u{25CB}', // Symbol circle → ○
             '\u{F0A7}' => '\u{25AA}', // Symbol square → ▪
             '\u{F0FC}' => '\u{2713}', // Wingdings checkmark → ✓
