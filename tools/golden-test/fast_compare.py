@@ -74,9 +74,10 @@ def render_layout(docx_path: Path, out_png: Path):
                 'bold': parts[7] == '1',
                 'italic': parts[8] == '1',
                 'underline': parts[9] == '1',
-                'baseline_offset': float(parts[11]) * SCALE,
-                'color': parts[12],
-                'highlight': parts[13] if len(parts) > 13 else '',
+                'strikethrough': parts[10] == '1' if len(parts) > 10 else False,
+                'baseline_offset': 0,
+                'color': parts[11] if len(parts) > 11 else '#000000',
+                'highlight': parts[12] if len(parts) > 12 else '',
             }
         elif cmd == 'T' and pending_text:
             pending_text['text'] = '\t'.join(parts[1:])  # rejoin in case text had tabs

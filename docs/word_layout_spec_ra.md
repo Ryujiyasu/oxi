@@ -84,20 +84,31 @@ fn grid_snap(lh, pitch) -> f32:
 
 - adjustLineHeightInTable=false (デフォルト): CJK 83/64 + grid snap 有効
 - adjustLineHeightInTable=true: CJK 83/64 + grid snap 両方無効
-- **lineSpacing/spaceAfter/spaceBefore: Normalスタイルの継承値はリセット**
-  - COM確認: セル内段落は ls=12(Single), sa=0, sb=0
-  - 明示的にXMLで指定されていない限り、デフォルトに戻る
+- **lineSpacing/spaceAfter/spaceBefore: 自動リセットは無い**
+  - COM確認 (2026-03-29): docDefaults/Normalスタイル経由のsa/sb/lsは、テーブルセル・TextBox内でも保持される
+  - 以前「リセット」と見えた挙動はテーブルスタイルがNormalのspacingをオーバーライドした結果
+  - セル内段落のspacingはスタイル継承チェーン次第（テーブルセル固有の自動リセット機能ではない）
 
 ### 1.6 TextBox内
 
 - grid snap なし (grid_pitch = None として計算)
 - CJK 83/64 は適用
-- spacing リセット条件: テーブルセルと同様（未完全確認）
+- **spacingリセット: なし（テーブルセルと同様、スタイル継承チェーンに従う）** (COM確定 2026-03-29)
 
 ### 1.7 Mixed font run (CJK + Latin 混在行)
 
-- 行高さ = max(各runのfont行高さ)
-- COM計測は安定的に取得できず、1px程度の揺らぎあり
+```
+fn mixed_line_height(runs, grid_pitch) -> f32:
+    lh = max(word_line_height(run.font_metrics, run.font_size) for run in runs)
+    if grid_pitch > 0:
+        lh = grid_snap(lh, grid_pitch)
+    return lh
+```
+
+**COM実測確定 (2026-03-29):**
+- Latin(Calibri 10.5pt)=14.5pt, CJK(MS Gothic 10.5pt)=15.5pt → mixed=15.5pt = max ✓
+- grid snap は max の後に適用 (max → snap、not snap each → max)
+- Y位置に±0.5ptの揺らぎあり (COM測定精度の限界、仕様上の問題ではない)
 
 ---
 
@@ -139,9 +150,22 @@ fn effective_space_before(para, is_first_on_page) -> f32:
 
 ### 2.3 contextualSpacing
 
-- 同じスタイルの隣接段落間で space_after/space_before を 0 にする
-- 異なるスタイルでは効果なし
-- (COM計測でエラー発生、追加検証推奨)
+```
+fn apply_contextual_spacing(prev_para, next_para) -> (f32, f32):
+    // 片方でもcontextualSpacing=Trueかつ同一スタイルなら両方のsa/sbを0に
+    if (prev_para.contextual_spacing || next_para.contextual_spacing)
+       && prev_para.style == next_para.style:
+        return (0.0, 0.0)  // (effective_sa, effective_sb)
+    else:
+        return (prev_para.space_after, next_para.space_before)
+```
+
+**COM実測確定 (2026-03-29):**
+- 同一スタイル + ctx=ON: gap=15.5pt (行高さのみ、sa/sb完全抑制)
+- 同一スタイル + ctx=OFF: gap=27.5pt (行高さ+spacing)
+- 異なるスタイル + ctx=ON: gap=27.5pt (効果なし)
+- **片方のみctx=ON でも抑制される** (P1のみTrueでもP1-P2間のspacing=0)
+- asymmetric (sa=20,sb=10) ctx=ON: gap=15.5pt → 値に関わらず両方0に
 
 ### 2.4 beforeLines / afterLines
 
@@ -265,6 +289,141 @@ fn needs_page_break(cursor_y, line_height, page_bottom) -> bool:
 ### 5.5 spaceBeforeAutoSpacing
 
 ページ先頭の段落のspaceBeforeは**完全に抑制**される（0ptとして扱う）。
+
+---
+
+## 6. タブストップ (tab_stops)
+
+### 6.1 デフォルトタブ
+
+```
+fn default_tab_interval() -> f32:
+    // Document.DefaultTabStop (通常 36pt = 0.5 inch)
+    return doc.default_tab_stop  // twips / 20
+```
+
+**COM実測確定 (2026-03-29):** DefaultTabStop = 36pt
+
+### 6.2 タブ位置の基準
+
+タブ位置は**左マージン起点**の絶対位置（twips単位をpt変換）。
+
+```
+fn tab_position_pt(tab_pos_twips, margin_left_pt) -> f32:
+    // 位置は左マージンからの距離
+    return margin_left_pt + tab_pos_twips / 20.0
+```
+
+### 6.3 タブ種類別の配置
+
+```
+fn apply_tab(tab_type, tab_pos_pt, text_before_width, text_after) -> f32:
+    match tab_type:
+        "left":
+            // テキスト開始位置 = タブ位置
+            return tab_pos_pt
+        "center":
+            // テキスト中心 = タブ位置
+            return tab_pos_pt - text_after_width / 2.0
+        "right":
+            // テキスト右端 = タブ位置
+            return tab_pos_pt - text_after_width
+        "decimal":
+            // 小数点位置 = タブ位置
+            return tab_pos_pt - width_before_decimal_point
+```
+
+**COM実測確定 (2026-03-29):**
+- Left tab @72pt (1440tw): text starts at margin+72pt ✓
+- Center tab @216pt (4320tw): "Center"(~30pt) → x=201pt, center≈216pt ✓
+- Right tab @432pt (8640tw): "Right"(~23pt) → x=409pt, right≈432pt ✓
+- Decimal tab @216pt (4320tw): "123.45" → decimal point at ≈216pt ✓
+
+### 6.4 デフォルトタブの適用
+
+カスタムタブが定義されていない場合、DefaultTabStop間隔で自動タブ位置が生成される。
+
+```
+fn next_tab_position(current_x, margin_left, default_interval) -> f32:
+    // 現在位置より先の最初のデフォルトタブ位置
+    offset = current_x - margin_left
+    n = floor(offset / default_interval) + 1
+    return margin_left + n * default_interval
+```
+
+### 6.5 タブとindentの相互作用
+
+**タブ位置はマージン起点の絶対位置であり、indentの影響を受けない。**
+
+```
+fn next_tab(current_x_from_margin, tab_stops, indent) -> f32:
+    // current_x はマージンからの相対位置
+    // indent より前のタブ位置はスキップ
+    for tab in tab_stops:
+        if tab.position > current_x_from_margin && tab.position >= indent:
+            return tab.position  // マージンからの絶対位置
+    // カスタムタブがない場合、デフォルトタブへフォールバック
+    return next_default_tab(current_x_from_margin)
+```
+
+**COM実測確定 (2026-03-29):**
+- indent=0, tab@144: text at margin+144 ✓
+- indent=36, tab@144: text at margin+144 (タブ位置は変わらない) ✓
+- indent=72, tab@144: text at margin+144 ✓
+- indent=180, tab@144: **スキップ** (タブ位置 < indent)。tab@288を使用 ✓
+- firstLineIndent=36, tab@144: first line text at margin+144 ✓, P2(indent=0) at margin+144 ✓
+- hanging=36/indent=72: P1(effective=36) uses tab@144, P2(effective=72) uses tab@144 ✓
+
+### 6.6 タブリーダー
+
+- `dot`: 点線リーダー
+- `hyphen`: ダッシュリーダー
+- `underscore`: 下線リーダー
+- リーダー文字はタブ空白を埋める（目次等で使用）
+
+---
+
+## 7. マルチカラムレイアウト (columns)
+
+### 7.1 カラム位置計算
+
+```
+fn column_x_positions(margin_left, columns) -> Vec<f32>:
+    x = margin_left
+    positions = []
+    for i, col in columns:
+        positions.push(x)
+        x += col.width + col.space_after
+    return positions
+```
+
+**COM実測確定 (2026-03-29):**
+
+| 設定 | Col1 x | Col2 x | Col3 x |
+|------|--------|--------|--------|
+| 2col equal (w=215, sp=21.25) | 72.0 | 308.5 (≈308.25) | - |
+| 3col equal (w=136.25, sp=21.25) | 72.0 | 229.5 | 387.0 |
+| 2col gap=36 (w=207.65) | 72.0 | 315.5 (≈315.65) | - |
+| 2col unequal (w1=150, w2=265.3, sp=36) | 72.0 | 258.0 | - |
+
+### 7.2 均等幅カラムの計算
+
+```
+fn equal_column_width(text_width, num_cols, spacing) -> f32:
+    // text_width = page_width - margin_left - margin_right
+    return (text_width - spacing * (num_cols - 1)) / num_cols
+```
+
+### 7.3 テキストフロー
+
+- テキストは Column 1 → Column 2 → ... → 次ページ Column 1 の順にフロー
+- カラムの高さは通常ページ本文領域と同じ (top_margin ~ bottom_margin)
+- Column Break (wdColumnBreak): 強制的に次カラムへ移動
+
+### 7.4 カラムY座標
+
+- 各カラムのY座標開始位置はページ上端マージンから同一
+- テキストはページ上端から各カラムに独立してレイアウト
 
 ---
 

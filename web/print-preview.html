@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Oxi Print Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #888; font-family: sans-serif; }
+  #status { padding: 8px 16px; background: #333; color: #fff; font-size: 14px; }
+  .page-canvas {
+    display: block;
+    margin: 10px auto;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  #fileInput { display: none; }
+</style>
+</head>
+<body>
+<div id="status">Loading WASM...</div>
+<input type="file" id="fileInput" accept=".docx">
+<div id="pages"></div>
+
+<script type="module">
+import init, { layout_document } from './oxi_wasm.js';
+
+const DPI = 150;
+const SCALE = DPI / 72; // points to pixels at target DPI
+
+async function initWasm() {
+  await init();
+  window.__oxiWasmReady = true;
+  document.getElementById('status').textContent = 'Ready — drop a .docx file or use fileInput';
+}
+
+/**
+ * Pre-load all images in page elements, returns a Map<index, HTMLImageElement>.
+ */
+async function preloadImages(elements) {
+  const imageMap = new Map();
+  const promises = [];
+
+  elements.forEach((elem, idx) => {
+    if (elem.kind === 'image' && elem.image_data) {
+      const ct = elem.content_type || 'image/png';
+      const img = new Image();
+      const p = new Promise((resolve) => {
+        img.onload = () => { imageMap.set(idx, img); resolve(); };
+        img.onerror = () => { resolve(); }; // skip failed images
+      });
+      img.src = `data:${ct};base64,${elem.image_data}`;
+      promises.push(p);
+    }
+  });
+
+  await Promise.all(promises);
+  return imageMap;
+}
+
+async function renderPage(page, index) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'page-canvas';
+  canvas.id = `page-${index}`;
+  canvas.width = Math.round(page.width * SCALE);
+  canvas.height = Math.round(page.height * SCALE);
+  canvas.style.width = canvas.width + 'px';
+  canvas.style.height = canvas.height + 'px';
+
+  const ctx = canvas.getContext('2d');
+  // White background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Pre-load all images before rendering
+  const imageMap = await preloadImages(page.elements);
+
+  ctx.save();
+  ctx.scale(SCALE, SCALE);
+
+  page.elements.forEach((elem, idx) => {
+    if (elem.kind === 'text') {
+      renderText(ctx, elem);
+    } else if (elem.kind === 'image') {
+      renderImage(ctx, elem, imageMap.get(idx));
+    } else if (elem.kind === 'border') {
+      renderBorder(ctx, elem);
+    } else if (elem.kind === 'shading') {
+      renderShading(ctx, elem);
+    } else if (elem.kind === 'clip_start') {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(elem.x, elem.y, elem.width, elem.height);
+      ctx.clip();
+    } else if (elem.kind === 'clip_end') {
+      ctx.restore();
+    }
+  });
+
+  ctx.restore();
+  return canvas;
+}
+
+function renderText(ctx, elem) {
+  const fontSize = elem.font_size || 11;
+  const family = elem.font_family || 'Calibri, sans-serif';
+  const bold = elem.bold ? 'bold ' : '';
+  const italic = elem.italic ? 'italic ' : '';
+
+  // Use px not pt: in our scaled coordinate system (1 unit = 1 typographic pt),
+  // CSS "pt" would be 33% too large (CSS 1pt = 96/72 px = 1.333px).
+  ctx.font = `${italic}${bold}${fontSize}px ${family}`;
+  ctx.fillStyle = elem.color || '#000000';
+
+  // Highlight
+  if (elem.highlight && elem.highlight !== 'none') {
+    ctx.save();
+    ctx.fillStyle = elem.highlight;
+    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+    ctx.restore();
+    ctx.fillStyle = elem.color || '#000000';
+  }
+
+  // Apply character spacing (from OOXML cs or CJK justify)
+  if (elem.character_spacing && elem.character_spacing !== 0) {
+    ctx.letterSpacing = `${elem.character_spacing}px`;
+  }
+
+  // Draw text at baseline (y + ascent approximation)
+  const baseline = elem.y + fontSize * 0.85;
+  ctx.fillText(elem.text || '', elem.x, baseline);
+
+  // Reset letter spacing
+  if (elem.character_spacing && elem.character_spacing !== 0) {
+    ctx.letterSpacing = '0px';
+  }
+
+  // Underline
+  if (elem.underline) {
+    ctx.beginPath();
+    ctx.strokeStyle = elem.color || '#000000';
+    ctx.lineWidth = fontSize * 0.05;
+    const underY = baseline + fontSize * 0.15;
+    ctx.moveTo(elem.x, underY);
+    ctx.lineTo(elem.x + elem.width, underY);
+    ctx.stroke();
+  }
+
+  // Strikethrough
+  if (elem.strikethrough) {
+    ctx.beginPath();
+    ctx.strokeStyle = elem.color || '#000000';
+    ctx.lineWidth = fontSize * 0.05;
+    const strikeY = elem.y + elem.height * 0.45;
+    ctx.moveTo(elem.x, strikeY);
+    ctx.lineTo(elem.x + elem.width, strikeY);
+    ctx.stroke();
+  }
+}
+
+function renderImage(ctx, elem, loadedImg) {
+  if (!loadedImg) {
+    // Placeholder for missing/failed images
+    ctx.fillStyle = '#f0f0f0';
+    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(elem.x, elem.y, elem.width, elem.height);
+    return;
+  }
+
+  // Draw at layout coordinates (ctx is already scaled by SCALE)
+  ctx.drawImage(loadedImg, elem.x, elem.y, elem.width, elem.height);
+}
+
+function renderBorder(ctx, elem) {
+  ctx.beginPath();
+  ctx.strokeStyle = elem.color || '#000000';
+  ctx.lineWidth = elem.width || 0.5;
+  if (elem.x1 != null) {
+    ctx.moveTo(elem.x1, elem.y1);
+    ctx.lineTo(elem.x2, elem.y2);
+  } else {
+    ctx.moveTo(elem.x, elem.y);
+    ctx.lineTo(elem.x + elem.width, elem.y + elem.height);
+  }
+  ctx.stroke();
+}
+
+function renderShading(ctx, elem) {
+  if (elem.color) {
+    ctx.fillStyle = elem.color;
+    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+  }
+}
+
+async function processFile(arrayBuffer) {
+  const statusEl = document.getElementById('status');
+  const pagesEl = document.getElementById('pages');
+  pagesEl.innerHTML = '';
+
+  statusEl.textContent = 'Laying out...';
+  const start = performance.now();
+
+  try {
+    const bytes = new Uint8Array(arrayBuffer);
+    const result = layout_document(bytes);
+    const layoutMs = Math.round(performance.now() - start);
+
+    if (!result || !result.pages || result.pages.length === 0) {
+      statusEl.textContent = `No pages in layout result (${layoutMs}ms)`;
+      return;
+    }
+
+    statusEl.textContent = `Rendering ${result.pages.length} page(s)... (layout: ${layoutMs}ms)`;
+
+    for (let i = 0; i < result.pages.length; i++) {
+      const canvas = await renderPage(result.pages[i], i);
+      pagesEl.appendChild(canvas);
+    }
+
+    const totalMs = Math.round(performance.now() - start);
+    statusEl.textContent = `Done: ${result.pages.length} page(s), layout ${layoutMs}ms, total ${totalMs}ms`;
+    window.__oxiRenderDone = true;
+    window.__oxiLayoutMs = layoutMs;
+    window.__oxiTotalMs = totalMs;
+    window.__oxiPageCount = result.pages.length;
+  } catch (e) {
+    statusEl.textContent = `Error: ${e.message}`;
+    console.error(e);
+  }
+}
+
+// File input handler
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ab = await file.arrayBuffer();
+  await processFile(ab);
+});
+
+// Initialize
+initWasm().catch(e => {
+  document.getElementById('status').textContent = `WASM init error: ${e.message}`;
+});
+</script>
+</body>
+</html>

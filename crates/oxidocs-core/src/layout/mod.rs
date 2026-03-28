@@ -1183,6 +1183,7 @@ impl LayoutEngine {
 
             let mut frag_width_adjustments: Vec<f32> = vec![0.0; line.fragments.len()];
             let mut frag_spacing_after: Vec<f32> = vec![0.0; line.fragments.len()];
+            let mut justify_char_spacing: f32 = 0.0;
 
             let should_justify = (para.alignment == Alignment::Justify && !is_last_line)
                 || para.alignment == Alignment::Distribute;
@@ -1223,8 +1224,8 @@ impl LayoutEngine {
                         }
                     } else {
                         // No word spaces: distribute between CJK characters.
-                        // Count total character boundaries (not fragment boundaries)
-                        // to avoid concentrating all slack at few fragment joins.
+                        // Use character_spacing on each fragment so Canvas/PDF renderers
+                        // apply per-character gap (not just fragment-level gap).
                         let total_chars: usize = line.fragments.iter()
                             .map(|f| f.text.chars().count())
                             .sum();
@@ -1233,19 +1234,20 @@ impl LayoutEngine {
                         if has_cjk && total_chars > 1 {
                             let char_gap_count = total_chars - 1;
                             let per_char_gap = slack / char_gap_count as f32;
-                            // Distribute proportionally: each fragment gets per_char_gap * (chars_in_frag - 1)
-                            // for internal gaps, plus per_char_gap for the gap after it (except last)
+                            // Distribute: fragment-boundary gaps via frag_spacing_after,
+                            // internal gaps via frag_width_adjustments (for layout width),
+                            // AND set justify_char_spacing for renderer to apply letterSpacing.
                             for fi in 0..line.fragments.len() {
                                 let frag_chars = line.fragments[fi].text.chars().count();
-                                // Internal character gaps within this fragment: widen the fragment
                                 if frag_chars > 1 {
                                     frag_width_adjustments[fi] += per_char_gap * (frag_chars - 1) as f32;
                                 }
-                                // Gap after this fragment (between fragments)
                                 if fi < line.fragments.len() - 1 {
                                     frag_spacing_after[fi] += per_char_gap;
                                 }
                             }
+                            // Store per_char_gap for use in LayoutElement character_spacing
+                            justify_char_spacing = per_char_gap;
                         }
                         // Pure Latin with no spaces: do NOT add inter-character spacing
                     }
@@ -1299,7 +1301,7 @@ impl LayoutEngine {
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
-                        character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)),
+                        character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing,
                     },
                 });
                 x += adjusted_width + frag_spacing_after[frag_idx];
@@ -2672,6 +2674,7 @@ impl Default for LineBreakType {
     }
 }
 
+#[derive(Clone)]
 struct LineFragment {
     text: String,
     width: f32,
