@@ -611,7 +611,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: Some(underline),
                             underline_style,
                             strikethrough: Some(strikethrough),
-                            color,
+                            color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }),
                             highlight,
                             corner_radius: None,
                             image_data: None, content_type: None,
@@ -671,6 +671,15 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                         oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
                             x: 0.0, y: 0.0, width: 0.0, height: 0.0,
                             kind: "clip_end".into(),
+                            text: None, font_size: None, font_family: None, bold: None, italic: None,
+                            underline: None, underline_style: None, strikethrough: None,
+                            color: None, highlight: None, corner_radius: None,
+                            image_data: None, content_type: None,
+                            x1: None, y1: None, x2: None, y2: None,
+                        },
+                        oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
+                            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+                            kind: "preset_shape".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, underline_style: None, strikethrough: None,
                             color: None, highlight: None, corner_radius: None,
@@ -817,6 +826,7 @@ fn layout_to_pdf(
                     }));
                 }
                 oxidocs_core::layout::LayoutContent::ClipStart | oxidocs_core::layout::LayoutContent::ClipEnd => {}
+                oxidocs_core::layout::LayoutContent::PresetShape { .. } => {}
             }
         }
 
