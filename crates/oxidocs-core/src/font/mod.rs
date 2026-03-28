@@ -135,6 +135,9 @@ impl FontMetrics {
     /// For mixed-run lines: use max(word_ascent_pt) across all runs.
     pub fn word_ascent_pt(&self, font_size: f32) -> f32 {
         if self.is_cjk_83_64_font() {
+            // CJK 83/64 multiplier: line height = (win_ascent+win_descent)/UPM * fontSize * 83/64
+            // COM average matches raw value (no floor quantization needed for non-grid case).
+            // Grid snap case: grid snap overrides the raw value anyway.
             let win_sum = self.win_ascent + self.win_descent;
             let total = win_sum * font_size * (83.0 / 64.0);
             return total * self.win_ascent / (self.win_ascent + self.win_descent);
@@ -184,7 +187,7 @@ impl FontMetrics {
     /// instead of ceil, resulting in 1px smaller height for some font/size combinations.
     pub fn word_line_height_table_cell(&self, font_size: f32) -> f32 {
         let ppem = (font_size * 96.0 / 72.0).round();
-        let font_ascent = pixel_round(self.win_ascent, ppem);  // ceil
+        let font_ascent = pixel_round(self.win_ascent, ppem);
         let font_descent = (self.win_descent * ppem).floor();    // floor for table cells
         let base = (font_ascent + font_descent) * 72.0 / 96.0;
         if self.is_cjk_83_64_font() {
@@ -476,6 +479,8 @@ fn normalize_family_name(name: &str) -> String {
         "游明朝" => "Yu Mincho Regular".to_string(),
         "游明朝 Demibold" => "Yu Mincho Demibold".to_string(),
         "メイリオ" | "Meiryo UI" => "Meiryo".to_string(),
+        // Arial Unicode MS is not always installed; fall back to Arial
+        "Arial Unicode MS" => "Arial".to_string(),
         _ => name.to_string(),
     }
 }

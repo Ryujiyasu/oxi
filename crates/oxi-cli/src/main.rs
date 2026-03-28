@@ -1139,6 +1139,68 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                 oxidocs_core::layout::LayoutContent::ClipEnd => {
                     contents.push(ContentElement::RestoreState);
                 }
+                oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width } => {
+                    let sx = x;
+                    let sy = y;
+                    let sw = ew;
+                    let sh = eh;
+                    let lw = *stroke_width as f64;
+                    let sc = stroke_color.as_deref()
+                        .and_then(|c| parse_hex_color(c))
+                        .unwrap_or(Color::Rgb(0.0, 0.0, 0.0));
+                    let stroke_style = Some(oxipdf_core::ir::StrokeStyle {
+                        color: sc,
+                        width: lw,
+                        line_cap: oxipdf_core::ir::LineCap::Butt,
+                        line_join: oxipdf_core::ir::LineJoin::Miter,
+                    });
+
+                    match shape_type.as_str() {
+                        "bracketPair" => {
+                            // OOXML bracketPair: left 〔 and right 〕 brackets
+                            // Default adjustment value = 16667/100000 ≈ 1/6 of min dimension
+                            let r = sh.min(sw) * 16667.0 / 100000.0;
+                            // Bezier constant for quarter-circle approximation
+                            let k = r * 0.5523;
+                            // Left bracket 〔
+                            contents.push(ContentElement::Path(PathData {
+                                operations: vec![
+                                    PathOp::MoveTo(sx + r, sy),
+                                    PathOp::CurveTo(sx + r - k, sy, sx, sy + r - k, sx, sy + r),
+                                    PathOp::LineTo(sx, sy + sh - r),
+                                    PathOp::CurveTo(sx, sy + sh - r + k, sx + r - k, sy + sh, sx + r, sy + sh),
+                                ],
+                                stroke: stroke_style.clone(),
+                                fill: None,
+                            }));
+                            // Right bracket 〕
+                            contents.push(ContentElement::Path(PathData {
+                                operations: vec![
+                                    PathOp::MoveTo(sx + sw - r, sy),
+                                    PathOp::CurveTo(sx + sw - r + k, sy, sx + sw, sy + r - k, sx + sw, sy + r),
+                                    PathOp::LineTo(sx + sw, sy + sh - r),
+                                    PathOp::CurveTo(sx + sw, sy + sh - r + k, sx + sw - r + k, sy + sh, sx + sw - r, sy + sh),
+                                ],
+                                stroke: stroke_style,
+                                fill: None,
+                            }));
+                        }
+                        _ => {
+                            // Generic: draw outline rectangle
+                            contents.push(ContentElement::Path(PathData {
+                                operations: vec![
+                                    PathOp::MoveTo(sx, sy),
+                                    PathOp::LineTo(sx + sw, sy),
+                                    PathOp::LineTo(sx + sw, sy + sh),
+                                    PathOp::LineTo(sx, sy + sh),
+                                    PathOp::ClosePath,
+                                ],
+                                stroke: stroke_style,
+                                fill: None,
+                            }));
+                        }
+                    }
+                }
             }
         }
 
@@ -1923,7 +1985,7 @@ fn render_table(builder: &mut PdfBuilder, table: &Table, x_offset: f64, availabl
                 if ci >= cell_widths.len() { break; }
                 if cell.v_merge.as_deref() == Some("continue") { continue; }
                 let content_w = (cell_widths[ci] - cell_margin_l - cell_margin_r).max(1.0);
-                let cell_h = estimate_cell_height(cell, content_w, registry, doc_default_font);
+                let cell_h = estimate_cell_height(cell, content_w, registry, doc_default_font, &builder.font_widths);
                 let needed = cell_h + cell_margin_t + cell_margin_b;
                 if needed > row_height {
                     row_height = needed;
@@ -2071,11 +2133,11 @@ fn render_table(builder: &mut PdfBuilder, table: &Table, x_offset: f64, availabl
     }
 }
 
-fn estimate_cell_height(cell: &oxidocs_core::ir::TableCell, content_width: f64, registry: &FontMetricsRegistry, doc_default_font: Option<&str>) -> f64 {
+fn estimate_cell_height(cell: &oxidocs_core::ir::TableCell, content_width: f64, registry: &FontMetricsRegistry, doc_default_font: Option<&str>, font_widths: &HashMap<u32, u16>) -> f64 {
     let mut h = 0.0;
     for block in &cell.blocks {
         if let Block::Paragraph(para) = block {
-            let (font_size, cell_font, _bold) = para_font_props(para);
+            let (font_size, cell_font, default_bold) = para_font_props(para);
             let line_height = compute_line_height(
                 registry, cell_font, font_size as f32,
                 para.style.line_spacing, para.style.line_spacing_rule.as_deref(),
@@ -2086,8 +2148,10 @@ fn estimate_cell_height(cell: &oxidocs_core::ir::TableCell, content_width: f64, 
             if text.trim().is_empty() {
                 h += line_height;
             } else {
-                let lines = wrap_text(&text, font_size, content_width);
-                h += lines.len() as f64 * line_height;
+                // Use run-aware wrapping with actual font widths (same as rendering pass)
+                let default_ff = para.style.default_run_style.as_ref().and_then(|rs| rs.font_family.as_deref());
+                let cell_lines = wrap_runs_into_lines(&para.runs, font_size, content_width, 0.0, font_widths, default_bold, default_ff);
+                h += cell_lines.len() as f64 * line_height;
             }
             h += para.style.space_after.unwrap_or(0.0) as f64;
         }
