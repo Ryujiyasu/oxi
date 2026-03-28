@@ -69,14 +69,15 @@ cd crates/oxi-wasm && wasm-pack build --target web  # Wasm build
 8. net positive なら commit、negative なら revert
 9. 1 に戻る
 
-### ドメイン状況（2026-03-25）
+### ドメイン状況（2026-03-28）
 - **char_width**: フォールバック実装済み（MS UI Gothic）。現テスト文書では効果なし
-- **page_break**: widow/orphan、keepNext/keepTogether 既に実装済み
+- **page_break**: widow/orphan、keepNext/keepTogether 実装済み。段落途中改ページ修正済み（net +0.041）
 - **spacing**: コラプス（max(sa,sb)）実装済み。net +0.71
 - **line_height**: テーブルセル内リセット実装済み。net +0.66
 - **grid_snap**: 実装済み
-- **SSIM: 0.7496 → 0.7900（+0.040）**
-- **残りの改善余地**: 0.7-0.8帯150ページ。原因はGDIヒンティングによる行高さ1px揺らぎの累積。計算式では予測不可能
+- **justify**: docDefaults jc=both 継承修正済み。Justify(均等割付)が全文書で有効化
+- **SSIM: 0.7496 → 0.7849（+0.035）** ベースライン: 107文書326ページ
+- **残りの改善余地**: 見出し行高さ（Arial Unicode MS→CJKフォントメトリクス未対応）、文字幅精度
 
 ### 計測テンプレート
 行高さの正しい計測方法は「2段落のY座標差分」:

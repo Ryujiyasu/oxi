@@ -59,8 +59,9 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                         styles.doc_default_run_style = Some(run_style);
                     }
                     "pPr" if in_ppr_default => {
-                        let para_style = parse_para_properties_block(&mut reader)?;
+                        let (para_style, align) = parse_para_properties_block_with_alignment(&mut reader)?;
                         styles.doc_default_para_style = Some(para_style);
+                        styles.doc_default_alignment = align;
                     }
                     "style" => {
                         let mut style_id = None;
@@ -346,6 +347,55 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
     }
 
     Ok(rs)
+}
+
+/// Parse pPrDefault's pPr block, extracting both ParagraphStyle and alignment (jc).
+/// Regular parse_para_properties_block doesn't capture jc since ParagraphStyle has no alignment field.
+fn parse_para_properties_block_with_alignment(reader: &mut Reader<&[u8]>) -> Result<(ParagraphStyle, Option<Alignment>), ParseError> {
+    let mut style = ParagraphStyle::default();
+    let mut alignment: Option<Alignment> = None;
+    let mut depth = 1;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "pBdr" && depth == 1 {
+                    style.borders = Some(super::ooxml::parse_paragraph_borders(reader)?);
+                } else {
+                    depth += 1;
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "jc" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let val = String::from_utf8_lossy(&attr.value);
+                            alignment = Some(match val.as_ref() {
+                                "left" | "start" => Alignment::Left,
+                                "center" => Alignment::Center,
+                                "right" | "end" => Alignment::Right,
+                                "both" => Alignment::Justify,
+                                "distribute" => Alignment::Distribute,
+                                _ => Alignment::Left,
+                            });
+                        }
+                    }
+                } else {
+                    apply_para_property_empty(&e, &mut style);
+                }
+            }
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 { break; }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok((style, alignment))
 }
 
 /// Parse a paragraph properties block (<w:pPr>...</w:pPr>) and return ParagraphStyle

@@ -46,6 +46,7 @@ fn main() {
                     writeln!(out, "BOX\t{:.3}\t{:.3}\t{:.1}\t{:.3}", elem.x, elem.y, elem.width, elem.height).unwrap();
                 }
                 layout::LayoutContent::ClipStart | layout::LayoutContent::ClipEnd => {}
+                layout::LayoutContent::PresetShape { .. } => {}
             }
         }
     }

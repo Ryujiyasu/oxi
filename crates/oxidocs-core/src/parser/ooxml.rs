@@ -307,44 +307,12 @@ impl OoxmlParser {
     }
 
     /// Parse word/settings.xml for adjustLineHeightInTable compatibility flag.
-    /// true = adjust line height in table (disable grid snap in cells).
-    /// false (default) = table cells snap to grid like normal paragraphs.
+    /// COM measurement (2026-03-27): Compatibility(12) = False for ALL tested documents,
+    /// regardless of whether <w:adjustLineHeightInTable/> is present in XML.
+    /// 151 documents tested across compatibilityMode 14 and 15.
+    /// Therefore: always return false (= table cells snap to grid like normal paragraphs).
     fn parse_adjust_line_height_in_table(&mut self) -> bool {
-        let xml = match self.read_part("word/settings.xml") {
-            Ok(x) => x,
-            Err(_) => return false,
-        };
-        let mut reader = quick_xml::reader::Reader::from_str(&xml);
-        let mut in_compat = false;
-        loop {
-            match reader.read_event() {
-                Ok(quick_xml::events::Event::Start(e)) => {
-                    let local = local_name(e.name().as_ref());
-                    if local == "compat" { in_compat = true; }
-                }
-                Ok(quick_xml::events::Event::Empty(e)) if in_compat => {
-                    let local = local_name(e.name().as_ref());
-                    if local == "adjustLineHeightInTable" {
-                        // Present without val or val="true" means true
-                        for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "val" {
-                                let v = String::from_utf8_lossy(&attr.value);
-                                return v != "0" && v != "false";
-                            }
-                        }
-                        return true; // present without val = true
-                    }
-                }
-                Ok(quick_xml::events::Event::End(e)) => {
-                    let local = local_name(e.name().as_ref());
-                    if local == "compat" { in_compat = false; }
-                }
-                Ok(quick_xml::events::Event::Eof) => break,
-                Err(_) => break,
-                _ => {}
-            }
-        }
-        false // default: not present = false
+        false
     }
 
     fn parse_document_xml(
@@ -490,7 +458,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     current_blocks.push(Block::Image(image));
                                 }
                             }
-                            if let Some(shape) = drawing.shape {
+                            if let Some(mut shape) = drawing.shape {
+                                shape.anchor_block_index = current_blocks.len().saturating_sub(1);
                                 current_shapes.push(shape);
                             }
                             if let Some(mut tb) = drawing.text_box {
@@ -553,12 +522,15 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             if style.indent_left.is_none() { style.indent_left = doc_para.indent_left; }
                             if style.indent_right.is_none() { style.indent_right = doc_para.indent_right; }
                             if style.indent_first_line.is_none() { style.indent_first_line = doc_para.indent_first_line; }
+                            // Empty paragraphs never have explicit widowControl
+                            style.widow_control = doc_para.widow_control;
                         }
 
                         current_blocks.push(Block::Paragraph(Paragraph {
                             runs: vec![],
                             style,
                             alignment: Alignment::default(),
+                            shapes: vec![],
                         }));
                     }
                     _ => {}
@@ -1017,6 +989,16 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         if style.indent_first_line.is_none() {
             style.indent_first_line = doc_para.indent_first_line;
         }
+        // COM-confirmed: pPrDefault widowControl=false must override the struct default (true)
+        if !style.has_explicit_widow_control {
+            style.widow_control = doc_para.widow_control;
+        }
+    }
+    // Inherit alignment from docDefaults pPrDefault (jc)
+    if alignment == Alignment::default() {
+        if let Some(doc_align) = styles.doc_default_alignment {
+            alignment = doc_align;
+        }
     }
 
     // Inherit numPr from style definition if paragraph doesn't have its own
@@ -1080,9 +1062,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             runs,
             style,
             alignment,
+            shapes: found_shapes.clone(),
         },
         sect_pr: para_sect_pr,
-        shapes: found_shapes,
+        shapes: Vec::new(), // shapes are now in Paragraph.shapes, not page-level
         text_boxes: found_text_boxes,
         inline_images,
         floating_images: floating_imgs,
@@ -1105,6 +1088,7 @@ fn parse_paragraph_properties(
     let mut style_id: Option<String> = None;
     let mut num_pr: Option<NumPrRef> = None;
     let mut sect_pr: Option<SectionProperties> = None;
+    let mut has_explicit_widow_control = false;
     let mut depth = 0;
 
     loop {
@@ -1330,6 +1314,7 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.widow_control = enabled;
+                        has_explicit_widow_control = true;
                     }
                     "bidi" => {
                         let mut enabled = true;
@@ -1358,6 +1343,7 @@ fn parse_paragraph_properties(
         }
     }
 
+    style.has_explicit_widow_control = has_explicit_widow_control;
     Ok((style, alignment, style_id, num_pr, sect_pr))
 }
 
@@ -1578,7 +1564,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                     }
                     // VML legacy picture/shape
                     "pict" if depth == 0 => {
-                        let vml = parse_vml_pict(reader, ctx)?;
+                        let vml = parse_vml_pict(reader, ctx, styles)?;
                         if drawing_result.is_none() {
                             drawing_result = Some(vml);
                         }
@@ -2583,6 +2569,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             rotation,
             gradient_stops: gradient_stops.clone(),
             gradient_angle,
+            anchor_block_index: 0,
         })
     } else {
         None
@@ -2613,6 +2600,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             inset_right: text_inset_right,
             inset_top: text_inset_top,
             inset_bottom: text_inset_bottom,
+            wrap_type,
         })
     } else {
         None
@@ -2622,7 +2610,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
 }
 
 /// Parse VML w:pict element (legacy shapes/images)
-fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<DrawingResult, ParseError> {
+fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<DrawingResult, ParseError> {
     let mut shape_type = None;
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
@@ -2640,6 +2628,28 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Draw
                 let local = local_name(e.name().as_ref());
                 depth += 1;
                 match local.as_str() {
+                    // VML text box content — consume all paragraphs inside
+                    "txbxContent" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(se)) => {
+                                    if local_name(se.name().as_ref()) == "p" {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles) {
+                                            text_blocks.push(Block::Paragraph(pr.paragraph));
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(se)) => {
+                                    if local_name(se.name().as_ref()) == "txbxContent" {
+                                        break;
+                                    }
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => {}
+                            }
+                        }
+                        depth -= 1; // consumed the txbxContent end tag
+                    }
                     // VML shape types
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
                         shape_type = Some(match local.as_str() {
@@ -2752,6 +2762,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Draw
         rotation: None,
         gradient_stops: Vec::new(),
         gradient_angle: None,
+        anchor_block_index: 0,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })
@@ -2894,7 +2905,7 @@ fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, style
                         }
                     }
                     "pict" if (in_choice || in_fallback) && depth == 1 && result.is_none() => {
-                        let dr = parse_vml_pict(reader, ctx)?;
+                        let dr = parse_vml_pict(reader, ctx, styles)?;
                         if dr.has_content() {
                             result = Some(dr);
                         }
