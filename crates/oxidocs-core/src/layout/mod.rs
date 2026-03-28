@@ -1222,15 +1222,28 @@ impl LayoutEngine {
                             }
                         }
                     } else {
-                        // No word spaces: distribute between CJK fragments only
+                        // No word spaces: distribute between CJK characters.
+                        // Count total character boundaries (not fragment boundaries)
+                        // to avoid concentrating all slack at few fragment joins.
+                        let total_chars: usize = line.fragments.iter()
+                            .map(|f| f.text.chars().count())
+                            .sum();
                         let has_cjk = line.fragments.iter()
                             .any(|f| f.text.chars().any(|c| kinsoku::is_cjk(c)));
-                        if has_cjk {
-                            let gap_count = line.fragments.len() - 1;
-                            if gap_count > 0 {
-                                let per_gap = slack / gap_count as f32;
-                                for fi in 0..gap_count {
-                                    frag_spacing_after[fi] += per_gap;
+                        if has_cjk && total_chars > 1 {
+                            let char_gap_count = total_chars - 1;
+                            let per_char_gap = slack / char_gap_count as f32;
+                            // Distribute proportionally: each fragment gets per_char_gap * (chars_in_frag - 1)
+                            // for internal gaps, plus per_char_gap for the gap after it (except last)
+                            for fi in 0..line.fragments.len() {
+                                let frag_chars = line.fragments[fi].text.chars().count();
+                                // Internal character gaps within this fragment: widen the fragment
+                                if frag_chars > 1 {
+                                    frag_width_adjustments[fi] += per_char_gap * (frag_chars - 1) as f32;
+                                }
+                                // Gap after this fragment (between fragments)
+                                if fi < line.fragments.len() - 1 {
+                                    frag_spacing_after[fi] += per_char_gap;
                                 }
                             }
                         }
