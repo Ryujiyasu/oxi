@@ -108,6 +108,9 @@ pub struct Paragraph {
     pub runs: Vec<Run>,
     pub style: ParagraphStyle,
     pub alignment: Alignment,
+    /// Inline/anchor shapes attached to this paragraph (e.g. bracketPair)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shapes: Vec<Shape>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -456,6 +459,9 @@ pub struct TextBox {
     /// Text inset bottom (in points, default 3.6pt)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_bottom: Option<f32>,
+    /// Wrap type for text wrapping around this text box
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_type: Option<WrapType>,
 }
 
 /// A geometric shape (DrawingML or VML)
@@ -491,6 +497,9 @@ pub struct Shape {
     /// Gradient fill angle in degrees
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient_angle: Option<f32>,
+    /// Index of the anchor paragraph block (for positioning)
+    #[serde(default)]
+    pub anchor_block_index: usize,
 }
 
 /// A gradient color stop
@@ -674,6 +683,9 @@ pub struct ParagraphStyle {
     /// Widow/orphan control (w:widowControl, default true in Word)
     #[serde(default = "default_true")]
     pub widow_control: bool,
+    /// Whether widowControl was explicitly set in XML (for docDefaults inheritance)
+    #[serde(default, skip_serializing)]
+    pub has_explicit_widow_control: bool,
     /// Bidirectional text / RTL paragraph (w:bidi)
     #[serde(default)]
     pub bidi: bool,
@@ -745,6 +757,7 @@ impl Default for ParagraphStyle {
             keep_next: false,
             keep_lines: false,
             widow_control: true,
+            has_explicit_widow_control: false,
             bidi: false,
             num_id: None,
             num_ilvl: 0,
@@ -903,6 +916,9 @@ pub struct StyleSheet {
     pub doc_default_run_style: Option<RunStyle>,
     /// Default paragraph properties from w:docDefaults/w:pPrDefault
     pub doc_default_para_style: Option<ParagraphStyle>,
+    /// Default paragraph alignment from w:docDefaults/w:pPrDefault/w:jc
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_default_alignment: Option<Alignment>,
     /// Table style borders: style_id -> TableStyle (with border info from tblBorders)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub table_styles: HashMap<String, TableStyle>,

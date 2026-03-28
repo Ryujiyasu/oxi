@@ -66,6 +66,12 @@ pub enum LayoutContent {
         stroke_width: f32,
         corner_radius: f32,
     },
+    /// A preset shape outline (e.g. bracketPair, brace, etc.)
+    PresetShape {
+        shape_type: String,
+        stroke_color: Option<String>,
+        stroke_width: f32,
+    },
     /// Begin a clipping region. All subsequent elements until ClipEnd are clipped to this rect.
     ClipStart,
     /// End the current clipping region (restore graphics state).
@@ -317,6 +323,10 @@ impl LayoutEngine {
             let is_floating_table = matches!(block, Block::Table(t) if t.style.position.is_some());
             if matches!(block, Block::Table(_)) && !is_floating_table {
                 for tb in &page.text_boxes {
+                    // Skip wrapNone text boxes (they don't affect text flow)
+                    if tb.wrap_type == Some(crate::ir::WrapType::None) {
+                        continue;
+                    }
                     if tb.anchor_block_index < block_idx {
                         if let Some(ref pos) = tb.position {
                             let anchor_y = block_y_positions.get(tb.anchor_block_index).copied().unwrap_or(0.0);
@@ -562,7 +572,7 @@ impl LayoutEngine {
         let footer_dist = page.footer_distance.unwrap_or(36.0);
         let hdr_x = page.margin.left;
         let hdr_width = content_width;
-        for lp in pages.iter_mut() {
+        for (page_idx, lp) in pages.iter_mut().enumerate() {
             if !page.header.is_empty() {
                 let mut cy = header_y;
                 for block in &page.header {
@@ -596,6 +606,34 @@ impl LayoutEngine {
                             false, 0.0,
                         );
                         lp.elements.extend(ftr_elements);
+                    }
+                }
+            }
+
+            // Render shapes (e.g. bracketPair) positioned relative to anchor paragraph
+            for shape in &page.shapes {
+                if let Some(ref pos) = shape.position {
+                    // Get anchor paragraph's Y position and page index
+                    let anchor_y = block_y_positions.get(shape.anchor_block_index).copied().unwrap_or(start_y);
+                    let anchor_page = block_page_indices.get(shape.anchor_block_index).copied().unwrap_or(0);
+
+                    // Only render on the correct page
+                    if anchor_page == page_idx {
+                        // h_relative="column": x = margin_left + offset
+                        // v_relative="paragraph": y = anchor_paragraph_y + offset
+                        let sx = start_x + pos.x;
+                        let sy = anchor_y + pos.y;
+                        lp.elements.push(LayoutElement {
+                            x: sx,
+                            y: sy,
+                            width: shape.width,
+                            height: shape.height,
+                            content: LayoutContent::PresetShape {
+                                shape_type: shape.shape_type.clone(),
+                                stroke_color: shape.stroke_color.clone(),
+                                stroke_width: shape.stroke_width.unwrap_or(0.75),
+                            },
+                        });
                     }
                 }
             }
@@ -1096,13 +1134,14 @@ impl LayoutEngine {
                 elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
             } else if needs_page_break {
+                // Mid-paragraph page break: keep already-laid-out lines on current page,
+                // only the overflowing line (and subsequent) go to the next page.
+                current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
                     elements: std::mem::take(current_elements),
                 });
-                current_elements.extend(std::mem::take(&mut elements));
-                elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
             }
 
@@ -1209,7 +1248,8 @@ impl LayoutEngine {
             // Compute max ascent across all fragments for baseline alignment.
             // All fragments in a line share the same baseline (matches Word output).
             let line_max_ascent: f32 = if line.fragments.is_empty() {
-                self.doc_default_metrics().word_ascent_pt(para_font_size)
+                // COM-confirmed: empty lines use paragraph font, not document default
+                self.metrics_for(&RunStyle::default(), &para.style).word_ascent_pt(para_font_size)
             } else {
                 line.fragments.iter().map(|f| {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
@@ -1699,7 +1739,9 @@ impl LayoutEngine {
 
         if line.fragments.is_empty() {
             let font_size = para_font_size;
-            let metrics = self.registry.default_metrics();
+            // COM-confirmed: empty paragraphs use the paragraph's own font metrics,
+            // not the document default. Resolve via paragraph style's default run style.
+            let metrics = self.metrics_for(&RunStyle::default(), para_style);
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -1940,6 +1982,10 @@ impl LayoutEngine {
             }
 
             // Second pass: render cells
+            // Track actual content height per cell for row_height correction
+            let is_exact_row = row.height_rule.as_deref() == Some("exact");
+            let mut max_actual_cell_h: f32 = row_height;
+            let elements_before_row = elements.len();
             // Apply gridBefore: skip leading grid columns
             let mut cell_x = table_x + col_widths[..row.grid_before as usize].iter().sum::<f32>();
             let num_cells = row.cells.len();
@@ -2070,6 +2116,7 @@ impl LayoutEngine {
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after))
                     };
                     content_h += effective_space_before;
+                    let para_content_start_h = content_h;
                     {
                         // Paragraph indentation within cell (relative to cell content area)
                         let p_indent_left = para.style.indent_left.unwrap_or(0.0);
@@ -2268,12 +2315,43 @@ impl LayoutEngine {
                             content_h += lh;
                         }
                         content_h += effective_space_after.unwrap_or(0.0);
+
+                        // Render shapes attached to this paragraph (e.g. bracketPair)
+                        // pos.y = offset from paragraph start (Word COM confirmed)
+                        for shape in &para.shapes {
+                            if let Some(ref pos) = shape.position {
+                                cell_elements.push(LayoutElement {
+                                    x: cell_x + pad_l + pos.x,
+                                    y: para_content_start_h + pos.y,
+                                    width: shape.width,
+                                    height: shape.height,
+                                    content: LayoutContent::PresetShape {
+                                        shape_type: shape.shape_type.clone(),
+                                        stroke_color: shape.stroke_color.clone(),
+                                        stroke_width: shape.stroke_width.unwrap_or(0.5),
+                                    },
+                                });
+                            }
+                        }
                     }
                 }
                 _ => {}
                 } // match block
                 } // for block
                 } // if !is_vmerge_continue
+
+                // Track actual cell height for row_height correction
+                // Use max(y + height) from cell_elements as true content bottom,
+                // since content_h may undercount due to spacing interactions
+                if !is_vmerge_continue && !is_exact_row {
+                    let max_elem_bottom = cell_elements.iter()
+                        .map(|e| e.y + e.height)
+                        .fold(0.0_f32, f32::max);
+                    let actual = pad_t + max_elem_bottom.max(content_h) + pad_b;
+                    if actual > max_actual_cell_h {
+                        max_actual_cell_h = actual;
+                    }
+                }
 
                 // Apply vAlign offset
                 let v_offset = match cell.v_align.as_deref() {
@@ -2379,6 +2457,29 @@ impl LayoutEngine {
                 }
 
                 cell_x += cell_w;
+            }
+
+            // If actual content exceeds estimated row_height, fix border elements
+            if max_actual_cell_h > row_height + 0.01 {
+                let old_h = row_height;
+                row_height = max_actual_cell_h;
+                let by = *cursor_y;
+                let old_bottom = by + old_h;
+                let new_bottom = by + row_height;
+                for elem in elements[elements_before_row..].iter_mut() {
+                    match &mut elem.content {
+                        LayoutContent::TableBorder { y1, y2, .. } => {
+                            if (*y1 - old_bottom).abs() < 0.5 { *y1 = new_bottom; }
+                            if (*y2 - old_bottom).abs() < 0.5 { *y2 = new_bottom; }
+                        }
+                        LayoutContent::CellShading { .. } => {
+                            if (elem.height - old_h).abs() < 0.5 {
+                                elem.height = row_height;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
 
             *cursor_y += row_height;
@@ -2498,19 +2599,26 @@ impl LayoutEngine {
             let indent_r = para.style.indent_right.unwrap_or(0.0);
             let first_indent = para.style.indent_first_line.unwrap_or(0.0);
             let effective_width = (available_width - indent_l - indent_r).max(1.0);
-            let first_line_width = (effective_width - first_indent.max(0.0)).max(1.0);
+            // Hanging indent (negative first_indent): first line is WIDER by |indent|
+            // Positive first_indent: first line is NARROWER
+            let first_line_width = (effective_width - first_indent).max(1.0);
             // Greedy line count estimation
-            let line_count = if effective_width > 0.0 && total_text_w > 0.0 {
+            // Kinsoku (line-break rules) and character spacing rounding can cause
+            // actual layout to need 1 more line than the greedy estimate.
+            // Use effective_width reduced by 1 char as safety margin.
+            let safe_width = (effective_width - para_font_size).max(1.0);
+            let safe_first = (first_line_width - para_font_size).max(1.0);
+            let line_count = if safe_width > 0.0 && total_text_w > 0.0 {
                 let mut remaining = total_text_w;
                 let mut lines = 0u32;
                 // First line
                 if remaining > 0.0 {
-                    remaining -= first_line_width;
+                    remaining -= safe_first;
                     lines += 1;
                 }
                 // Subsequent lines
                 if remaining > 0.0 {
-                    lines += (remaining / effective_width).ceil() as u32;
+                    lines += (remaining / safe_width).ceil() as u32;
                 }
                 lines.max(1)
             } else {
