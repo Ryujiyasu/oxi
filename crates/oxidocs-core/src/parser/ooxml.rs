@@ -2663,6 +2663,10 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         None
     };
 
+    // Save stroke info for TextBox before Shape takes ownership
+    let stroke_color_saved = stroke_color.clone();
+    let stroke_width_saved = stroke_width;
+
     // Build shape if we detected a preset geometry
     let shape = if let Some(ref st) = shape_type {
         Some(Shape {
@@ -2701,6 +2705,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             height,
             position,
             border: !has_no_stroke,
+            stroke_color: if has_no_stroke { None } else { stroke_color_saved.clone() },
+            stroke_width: if has_no_stroke { None } else { stroke_width_saved },
             fill: if has_no_fill { None } else { shape_fill.clone().or_else(|| shape_type.as_ref().map(|_| "FFFFFF".to_string())) },
             anchor_block_index: 0, // set by caller in parse_body
             corner_radius,
