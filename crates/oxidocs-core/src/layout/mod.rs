@@ -370,9 +370,15 @@ impl LayoutEngine {
         let mut start_x = col_x_positions[0];
         let mut content_width = col_widths[0];
 
+        let grid_pitch = page.grid_line_pitch;
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
-        let mut cursor_y = start_y;
+        // COM-confirmed: first line Y is grid-snapped from top margin
+        let mut cursor_y = if let Some(pitch) = grid_pitch {
+            if pitch > 0.0 {
+                ((start_y / pitch) + 0.5).floor().max(1.0) * pitch
+            } else { start_y }
+        } else { start_y };
         let mut prev_para_style_id: Option<String> = None;
         let mut prev_contextual_spacing: bool = false;
         let mut prev_space_after: f32 = 0.0;
@@ -381,7 +387,6 @@ impl LayoutEngine {
         let mut block_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
         let mut current_page_idx: usize = 0;
 
-        let grid_pitch = page.grid_line_pitch;
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // wrapTopAndBottom: for inline TABLE blocks, push below overlapping TextBoxes
@@ -527,7 +532,7 @@ impl LayoutEngine {
                         &mut elements,
                         grid_pitch,
                         prev_para_style_id.as_deref(), prev_contextual_spacing, false,
-                        prev_space_after, Some(block_idx),
+                        prev_space_after,
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -1059,7 +1064,6 @@ impl LayoutEngine {
         prev_contextual_spacing: bool,
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
-        body_para_index: Option<usize>,
     ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
@@ -1170,11 +1174,12 @@ impl LayoutEngine {
             }));
         }
 
-        // Collect all text fragments with their styles and field types
-        let fragments: Vec<(&str, &RunStyle, Option<FieldType>)> = para
+        // Collect all text fragments with their styles, field types, and source indices
+        let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para
             .runs
             .iter()
-            .map(|r| (r.text.as_str(), &r.style, r.field_type))
+            .enumerate()
+            .map(|(i, r)| (r.text.as_str(), &r.style, r.field_type, i, 0usize))
             .collect();
 
         // Resolve font size for line breaking
@@ -1477,7 +1482,7 @@ impl LayoutEngine {
 
     fn break_into_lines(
         &self,
-        fragments: &[(&str, &RunStyle, Option<FieldType>)],
+        fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
         available_width: f32,
         first_line_indent: f32,
         para_style: &ParagraphStyle,
@@ -1493,6 +1498,8 @@ impl LayoutEngine {
         let mut word_width: f32 = 0.0;
         let mut word_style: Option<RunStyle> = None;
         let mut word_field_type: Option<FieldType> = None;
+        let mut word_run_index: usize = 0;
+        let mut word_char_offset: usize = 0;
 
         // Helper: flush the accumulated word into current_line, breaking if needed.
         macro_rules! flush_word {
@@ -1511,6 +1518,8 @@ impl LayoutEngine {
                         tab_alignment: None,
                         tab_position: None,
                         field_type: wft,
+                        run_index: word_run_index,
+                        char_offset: word_char_offset,
                     });
                     current_width += word_width;
                     word_width = 0.0;
@@ -1518,8 +1527,9 @@ impl LayoutEngine {
             };
         }
 
-        for &(text, style, frag_field_type) in fragments {
+        for &(text, style, frag_field_type, frag_run_index, frag_char_start) in fragments {
             let font_size = self.resolve_font_size(style, para_style);
+            let mut char_pos_in_run = frag_char_start;
 
             let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
             for ch in text.chars() {
@@ -1570,6 +1580,8 @@ impl LayoutEngine {
                                 tab_alignment: Some(tab_align),
                                 tab_position: Some(next_pos),
                                 field_type: None,
+                                run_index: frag_run_index,
+                                char_offset: char_pos_in_run,
                             });
                             current_width += w;
                         } else {
@@ -1581,6 +1593,8 @@ impl LayoutEngine {
                                 tab_alignment: None,
                                 tab_position: None,
                                 field_type: None,
+                                run_index: frag_run_index,
+                                char_offset: char_pos_in_run,
                             });
                             current_width += char_width;
                         }
@@ -1591,6 +1605,8 @@ impl LayoutEngine {
                     if word_style.is_none() {
                         word_style = Some(style.clone());
                         word_field_type = frag_field_type;
+                        word_run_index = frag_run_index;
+                        word_char_offset = char_pos_in_run;
                     }
                     word.push(ch);
                     word_width += char_width;
@@ -1618,6 +1634,8 @@ impl LayoutEngine {
                                 tab_alignment: None,
                                 tab_position: None,
                                 field_type: frag_field_type,
+                                run_index: frag_run_index,
+                                char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0;
@@ -1635,6 +1653,8 @@ impl LayoutEngine {
                             tab_alignment: None,
                             tab_position: None,
                             field_type: frag_field_type,
+                            run_index: frag_run_index,
+                            char_offset: char_pos_in_run,
                         });
                         current_width += char_width;
                         continue;
@@ -1647,6 +1667,8 @@ impl LayoutEngine {
                         tab_alignment: None,
                         tab_position: None,
                         field_type: frag_field_type,
+                        run_index: frag_run_index,
+                        char_offset: char_pos_in_run,
                     });
                     current_width += char_width;
                 } else {
@@ -1654,10 +1676,13 @@ impl LayoutEngine {
                     if word_style.is_none() {
                         word_style = Some(style.clone());
                         word_field_type = frag_field_type;
+                        word_run_index = frag_run_index;
+                        word_char_offset = char_pos_in_run;
                     }
                     word.push(ch);
                     word_width += char_width;
                 }
+                char_pos_in_run += ch.len_utf8();
             }
             // Do NOT flush word here — it may continue in the next fragment
         }
@@ -1679,6 +1704,8 @@ impl LayoutEngine {
                 tab_alignment: None,
                 tab_position: None,
                 field_type: wft,
+                run_index: word_run_index,
+                char_offset: word_char_offset,
             });
             current_width += word_width;
         }
