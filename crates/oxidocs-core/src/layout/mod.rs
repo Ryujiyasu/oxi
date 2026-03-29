@@ -2083,9 +2083,9 @@ impl LayoutEngine {
                         if des > max_descent { max_descent = des; }
                     }
                 }
-                let natural = max_ascent + max_descent;
-                // Extra space goes above text (text at bottom of line box)
-                (line_height - natural).max(0.0)
+                let _natural = max_ascent + max_descent;
+                // COM confirmed: text at top of line box for exact/atLeast spacing
+                0.0
             }
             _ => {
                 // Grid-snapped lines: text is vertically centered within the grid cell.
@@ -2251,10 +2251,6 @@ impl LayoutEngine {
                 row_height = row_height.max(cell_content_h);
                 grid_idx += span;
             }
-
-            // Note: individual line heights within cells are already grid-snapped
-            // via table_grid_pitch in line_height_inner. No additional row-level
-            // grid snap needed — it causes double-snapping and row expansion.
 
             // Apply trHeight constraint
             // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
