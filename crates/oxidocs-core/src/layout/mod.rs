@@ -1333,8 +1333,9 @@ impl LayoutEngine {
             let mut frag_spacing_after: Vec<f32> = vec![0.0; line.fragments.len()];
             let mut justify_char_spacing: f32 = 0.0;
 
-            let should_justify = (para.alignment == Alignment::Justify && !is_last_line)
-                || para.alignment == Alignment::Distribute;
+            let should_justify = !in_textbox
+                && ((para.alignment == Alignment::Justify && !is_last_line)
+                    || para.alignment == Alignment::Distribute);
             if should_justify && line.fragments.len() > 1 {
                 let mut slack = available_width - extra_indent - line_text_width;
 
