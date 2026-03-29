@@ -42,8 +42,10 @@ fn main() {
                 layout::LayoutContent::Image { .. } => {
                     writeln!(out, "IMG\t{:.3}\t{:.3}\t{:.1}\t{:.3}", elem.x, elem.y, elem.width, elem.height).unwrap();
                 }
-                layout::LayoutContent::BoxRect { .. } => {
-                    writeln!(out, "BOX\t{:.3}\t{:.3}\t{:.1}\t{:.3}", elem.x, elem.y, elem.width, elem.height).unwrap();
+                layout::LayoutContent::BoxRect { ref fill, ref stroke_color, stroke_width, corner_radius } => {
+                    let f = fill.as_deref().unwrap_or("");
+                    let s = stroke_color.as_deref().unwrap_or("");
+                    writeln!(out, "BOX\t{:.3}\t{:.3}\t{:.1}\t{:.3}\t{}\t{}\t{}\t{}", elem.x, elem.y, elem.width, elem.height, f, s, stroke_width, corner_radius).unwrap();
                 }
                 layout::LayoutContent::ClipStart | layout::LayoutContent::ClipEnd => {}
                 layout::LayoutContent::PresetShape { .. } => {}

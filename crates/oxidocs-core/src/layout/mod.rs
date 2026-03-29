@@ -1906,7 +1906,7 @@ impl LayoutEngine {
                 let snapped = if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            ((base / pitch) + 0.5).floor().max(1.0) * pitch
+                            (((base + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch
                         } else { base }
                     } else { base }
                 } else { base };
@@ -1920,7 +1920,7 @@ impl LayoutEngine {
                 if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            return ((spaced / pitch) + 0.5).floor().max(1.0) * pitch;
+                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
                     }
                 }
@@ -2003,7 +2003,7 @@ impl LayoutEngine {
                 let snapped = if para_style.snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            ((base / pitch) + 0.5).floor().max(1.0) * pitch
+                            (((base + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch
                         } else { base }
                     } else { base }
                 } else { base };
@@ -2019,7 +2019,7 @@ impl LayoutEngine {
                 if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            return ((spaced / pitch) + 0.5).floor().max(1.0) * pitch;
+                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
                     }
                 }
@@ -2930,6 +2930,39 @@ enum LineBreakType {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn bench_layout_multi() {
+        // Benchmark multiple documents to find the pattern
+        let docs_dir = "../../tools/golden-test/documents/docx";
+        let mut results = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(docs_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |e| e == "docx") {
+                    if let Ok(data) = std::fs::read(&path) {
+                        if let Ok(doc) = crate::parse_docx(&data) {
+                            let engine = LayoutEngine::for_document(&doc);
+                            let _ = engine.layout(&doc); // warmup
+                            let start = std::time::Instant::now();
+                            let r = engine.layout(&doc);
+                            let ms = start.elapsed().as_micros() as f64 / 1000.0;
+                            let elems: usize = r.pages.iter().map(|p| p.elements.len()).sum();
+                            results.push((path.file_name().unwrap().to_string_lossy().to_string(), ms, r.pages.len(), elems));
+                        }
+                    }
+                }
+            }
+        }
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        println!("\nTop 10 slowest:");
+        for (name, ms, pages, elems) in results.iter().take(10) {
+            println!("  {:.1}ms  {}p {}el  {}", ms, pages, elems, name);
+        }
+        let total: f64 = results.iter().map(|r| r.1).sum();
+        println!("Total: {:.0}ms for {} docs", total, results.len());
+    }
 
     #[test]
     #[ignore]
