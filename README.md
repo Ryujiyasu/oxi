@@ -26,6 +26,8 @@ View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — n
 
 ## Mission
 
+> **Documents belong to their communities, not to their software vendors.**
+
 Billions of people depend on proprietary document formats (.docx, .xlsx, .pptx, .pdf) for work, education, and government — yet no truly compatible open-source rendering engine exists. LibreOffice breaks layouts. Google Docs requires a server. The world deserves a document engine that is:
 
 - **Free forever** — MIT license, no vendor lock-in
@@ -34,7 +36,7 @@ Billions of people depend on proprietary document formats (.docx, .xlsx, .pptx, 
 - **Private by design** — your data never leaves your device
 - **Accessible** — works on low-end hardware, no installation required
 
-Oxi is built to close this gap.
+Oxi doesn't reject Microsoft Word — it observes Word's behavior, reproduces it with pixel-level accuracy, and returns the power of interpretation to the communities who depend on these documents. Reclaim sovereignty. Enable diversity.
 
 ---
 
