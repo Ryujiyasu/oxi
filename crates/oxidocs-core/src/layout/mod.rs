@@ -1014,17 +1014,28 @@ impl LayoutEngine {
                             false
                         }
                     });
-                    let accept = |pe: &LayoutElement| -> bool {
+                    let accept_and_fix_color = |pe: &mut LayoutElement| -> bool {
                         if pe.y + pe.height > clip_bottom { return false; }
-                        // Don't filter text in dark-filled TextBoxes — the text may have
-                        // theme colors that weren't resolved. Let the renderer handle contrast.
+                        // Fix text color contrast in dark-filled TextBoxes:
+                        // Theme colors not resolved → color=None/#000000 on dark background.
+                        // Replace with white for readability.
+                        if has_dark_fill {
+                            if let LayoutContent::Text { ref mut color, .. } = pe.content {
+                                match color.as_deref() {
+                                    None | Some("#000000") | Some("000000") => {
+                                        *color = Some("#FFFFFF".to_string());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                         true
                     };
-                    for pe in para_elements {
-                        if accept(&pe) { elements.push(pe); }
+                    for mut pe in para_elements {
+                        if accept_and_fix_color(&mut pe) { elements.push(pe); }
                     }
-                    for de in dummy_elements.drain(..) {
-                        if accept(&de) { elements.push(de); }
+                    for mut de in dummy_elements.drain(..) {
+                        if accept_and_fix_color(&mut de) { elements.push(de); }
                     }
                 }
                 Block::Table(table) => {
