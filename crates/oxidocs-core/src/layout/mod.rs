@@ -527,7 +527,7 @@ impl LayoutEngine {
                         &mut elements,
                         grid_pitch,
                         prev_para_style_id.as_deref(), prev_contextual_spacing, false,
-                        prev_space_after,
+                        prev_space_after, Some(block_idx),
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -1059,6 +1059,7 @@ impl LayoutEngine {
         prev_contextual_spacing: bool,
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
+        body_para_index: Option<usize>,
     ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
@@ -2807,6 +2808,10 @@ struct LineFragment {
     tab_position: Option<f32>,
     /// Field type for dynamic content (PAGE, NUMPAGES)
     field_type: Option<FieldType>,
+    /// Source run index within the paragraph (for editing support)
+    run_index: usize,
+    /// Source character byte offset within the run (for editing support)
+    char_offset: usize,
 }
 
 /// Marker for page/column break after a line
