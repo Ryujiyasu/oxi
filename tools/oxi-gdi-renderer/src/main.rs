@@ -225,7 +225,16 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         if let Some(ref _s) = stroke_pen { /* DeleteObject handled by HGDIOBJ drop */ }
                     }
 
-                    _ => {} // Skip ClipStart/End, Image, PresetShape for now
+                    oxidocs_core::layout::LayoutContent::ClipStart => {
+                        SaveDC(mem_dc);
+                        let rgn = CreateRectRgn(x, y, x + ew, y + eh);
+                        SelectClipRgn(mem_dc, rgn);
+                        let _ = DeleteObject(rgn);
+                    }
+                    oxidocs_core::layout::LayoutContent::ClipEnd => {
+                        RestoreDC(mem_dc, -1);
+                    }
+                    _ => {} // Skip Image, PresetShape for now
                 }
             }
 
