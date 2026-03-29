@@ -1558,20 +1558,26 @@ impl LayoutEngine {
                     } else {
                         // Space or tab
                         if ch == '\t' {
-                            // Find the next tab stop beyond current_width
+                            // COM-confirmed: tab positions are absolute from left margin.
+                            // current_width is relative to the indent start, so we add
+                            // indent_left to get the absolute position from margin.
+                            let indent_left = para_style.indent_left.unwrap_or(0.0);
+                            let abs_pos = current_width + indent_left;
                             let (next_pos, tab_align) = if !para_style.tab_stops.is_empty() {
                                 para_style.tab_stops.iter()
-                                    .find(|ts| ts.position > current_width + 0.01)
+                                    .find(|ts| ts.position > abs_pos + 0.01)
                                     .map(|ts| (ts.position, ts.alignment))
                                     .unwrap_or_else(|| {
                                         let tab_stop = 36.0;
-                                        (((current_width / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
+                                        (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                                     })
                             } else {
                                 let tab_stop = 36.0;
-                                (((current_width / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
+                                (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                             };
-                            let w = (next_pos - current_width).max(char_width);
+                            // Convert absolute tab position back to relative width
+                            let next_relative = next_pos - indent_left;
+                            let w = (next_relative - current_width).max(char_width);
                             current_line.fragments.push(LineFragment {
                                 text: String::from('\t'),
                                 width: w,

@@ -51,6 +51,12 @@ fn line_height(rule, value, font_metrics, font_size, grid_pitch) -> f32:
         "exact":
             lh = value  // w:line in twips / 20
             // grid snap は適用されない (COM確定)
+            // COM実測 (2026-03-29):
+            // 値は twips/20 ptをそのまま使用（丸めなし）
+            // WordはY座標をピクセルスナップ(0.5pt量子化)するため、
+            // 非整数pt値では行間が交互に微小変動（例: 9.15pt→9.0,9.5,9.0,9.0）
+            // しかし平均値は期待値と一致（183tw avg=9.125≈9.15, 誤差0.025pt）
+            // 実装: twips/20のpt値をそのまま使用。レンダリング時にピクセルスナップ
             return lh
         "atLeast":
             natural = word_line_height(font_metrics, font_size)
@@ -250,11 +256,57 @@ fn apply_cs(cs_twips) -> f32:
     return cs_px * 72.0 / 96.0
 ```
 
+**COM実測確定 (2026-03-29, MS Gothic 9pt):**
+
+| cs(tw) | GDI px | GDI pt | 実測CJK gap | base gap |
+|--------|--------|--------|-----------|----------|
+| 0 | 0 | 0 | 9.0pt | 9.0pt |
+| -9 | -2 | -1.5 | 8.5pt | -0.5pt |
+| 9 | 1 | 0.75 | 9.5pt | +0.5pt |
+| 20 | 1 | 0.75 | 10.0pt | +1.0pt |
+| -20 | -2 | -1.5 | 8.0pt | -1.0pt |
+
+**注意:** COM座標は0.5pt量子化の影響あり。実装ではGDI MulDiv計算値をそのまま使用すべき。
+
 ### 4.4 等幅CJKフォント (UPM=256)
 
 MS Gothic, MS Mincho:
-- 全角文字幅 = fontSize (pt)
-- 半角文字幅 = fontSize / 2 (pt)
+
+```
+fn cjk_fullwidth_px(font_size_pt) -> i32:
+    ppem = round(font_size_pt * 96.0 / 72.0)
+    // 偶数ピクセルに切り上げ (GDI実測 2026-03-29)
+    return (ppem + 1) & !1  // ceil to even
+    // 半角 = fullwidth / 2
+```
+
+**GDI実測確定 (2026-03-29):**
+
+| fontSize | ppem | CJK全角px | 公式 |
+|----------|------|----------|------|
+| 7pt | 9 | 10 | ceil_even(9)=10 ✓ |
+| 8pt | 11 | 12 | ceil_even(11)=12 ✓ |
+| 9pt | 12 | 12 | 12(偶数) ✓ |
+| 10pt | 13 | 14 | ceil_even(13)=14 ✓ |
+| 10.5pt | 14 | 14 | 14(偶数) ✓ |
+
+**注意:** `ceil_even` はMS Gothic/MS Minchoのみ（UPM=256ビットマップ等幅フォント）。
+
+### 4.5 その他のCJKフォントの全角幅
+
+Yu Gothic, Yu Mincho, Meiryo: **fullwidth = ppem** (偶数丸めなし)
+
+```
+fn cjk_fullwidth_other(font_size_pt) -> i32:
+    return round(font_size_pt * 96.0 / 72.0)  // ppem直接
+```
+
+MS PGothic, MS PMincho: **プロポーショナル** (文字ごとにGDI幅が異なる)
+
+**GDI実測確定 (2026-03-29, ppem=5-20全パターン確認):**
+- MS Gothic/Mincho: ceil_even ALL MATCH (ppem 5-29)
+- Yu Gothic/Mincho/Meiryo: CJK全角 = ppem (全サイズ一致)
+- MS PGothic/PMincho: プロポーショナル（「あ」≠ppem、文字幅のGDI個別計算が必要）
 
 ---
 
@@ -302,7 +354,11 @@ fn default_tab_interval() -> f32:
     return doc.default_tab_stop  // twips / 20
 ```
 
-**COM実測確定 (2026-03-29):** DefaultTabStop = 36pt
+**COM実測確定 (2026-03-29):**
+- DefaultTabStop はドキュメントごとに異なる
+- ja_gov_template.docx: 36pt
+- Normal.dotm (日本語Word): 42pt (= 4文字 × 10.5pt)
+- 値は `w:settings/w:defaultTabStop w:val` (twips) または Document.DefaultTabStop で取得
 
 ### 6.2 タブ位置の基準
 
@@ -353,26 +409,33 @@ fn next_tab_position(current_x, margin_left, default_interval) -> f32:
 
 ### 6.5 タブとindentの相互作用
 
-**タブ位置はマージン起点の絶対位置であり、indentの影響を受けない。**
+**カスタムタブ位置はマージン起点の絶対位置であり、indentの影響を受けない。**
 
 ```
-fn next_tab(current_x_from_margin, tab_stops, indent) -> f32:
-    // current_x はマージンからの相対位置
+fn next_custom_tab(current_x_from_margin, tab_stops, effective_indent) -> Option<f32>:
     // indent より前のタブ位置はスキップ
     for tab in tab_stops:
-        if tab.position > current_x_from_margin && tab.position >= indent:
-            return tab.position  // マージンからの絶対位置
-    // カスタムタブがない場合、デフォルトタブへフォールバック
-    return next_default_tab(current_x_from_margin)
+        if tab.position > current_x_from_margin && tab.position >= effective_indent:
+            return Some(tab.position)  // マージンからの絶対位置
+    return None
 ```
 
-**COM実測確定 (2026-03-29):**
-- indent=0, tab@144: text at margin+144 ✓
-- indent=36, tab@144: text at margin+144 (タブ位置は変わらない) ✓
-- indent=72, tab@144: text at margin+144 ✓
-- indent=180, tab@144: **スキップ** (タブ位置 < indent)。tab@288を使用 ✓
-- firstLineIndent=36, tab@144: first line text at margin+144 ✓, P2(indent=0) at margin+144 ✓
-- hanging=36/indent=72: P1(effective=36) uses tab@144, P2(effective=72) uses tab@144 ✓
+**COM実測確定 (2026-03-29, Selection.Information(5)で完全確認):**
+
+| 設定 | Seg0(text start) | Seg1(tab1) | Seg2(tab2) |
+|------|-----------------|-----------|-----------|
+| indent=0, tab@144,288 | margin+0 | margin+144 | margin+288 |
+| indent=36, tab@144,288 | margin+36 | margin+144 | margin+288 |
+| indent=72, tab@144,288 | margin+72 | margin+144 | margin+288 |
+| indent=180, tab@144,288 | margin+180 | margin+288 | margin+336 |
+| hanging=36/indent=72, P1 | margin+36 | margin+72 | margin+144 |
+| hanging=36/indent=72, P2 | margin+72 | margin+144 | margin+288 |
+| firstLine=36, P1 | margin+36 | margin+144 | margin+288 |
+| firstLine=36, P2 | margin+0 | margin+144 | margin+288 |
+
+- テキスト開始位置 = margin + effective_indent（完全一致、誤差0.0pt）
+- indent=180, tab@144: **tab@144 < indent → スキップ**、tab@288使用
+- hanging indent: P1 effective=36(72-36), P2 effective=72
 
 ### 6.6 タブリーダー
 
@@ -424,6 +487,153 @@ fn equal_column_width(text_width, num_cols, spacing) -> f32:
 
 - 各カラムのY座標開始位置はページ上端マージンから同一
 - テキストはページ上端から各カラムに独立してレイアウト
+
+### 7.5 段落途中のカラム分割 (mid-paragraph column break)
+
+**段落の行がカラム底を超えた場合、残りの行は次カラムのtop(=start_y)から継続。**
+
+```
+fn column_line_overflow(cursor_y, line_height, col_bottom, next_col_start_y) -> f32:
+    if cursor_y + line_height > col_bottom:
+        return next_col_start_y  // 次カラムのY開始位置
+    return cursor_y
+```
+
+**COM実測確定 (2026-03-29):**
+- 35短段落でカラム1を埋めた後、長段落(16行):
+  - カラム1に3行(y=704.5, 722.5, 740.5)
+  - カラム2に13行(y=74.5から、col2 x=308.5)
+  - **Y座標はtop_marginにリセット(74.5)**
+- keepTogether=True: 段落全体がカラム2先頭(x=308.5, y=74.5)に移動
+- **ページ内行分割と同一ロジック**
+
+---
+
+## 10. 番号リスト (numbering)
+
+### 10.1 基本レイアウト
+
+```
+fn list_paragraph_layout():
+    // 番号リスト = hanging indent + list marker
+    // leftIndent = テキスト開始位置（マージンから）
+    // firstLineIndent = -leftIndent（hanging: マーカー領域の幅）
+    // マーカーは margin+0 ～ margin+leftIndent に配置
+```
+
+**COM実測確定 (2026-03-29):**
+- 基本番号リスト(1.2.3.): leftIndent=22pt, firstLineIndent=-22pt
+- テキスト開始位置 = margin+22pt (= leftIndent)
+- 弾丸リスト: 同一(li=22, fli=-22), マーカー=U+F06C (Wingdings)
+
+### 10.2 ネストレベル別インデント
+
+| Level | leftIndent | firstLineIndent | テキスト開始(margin-rel) |
+|-------|-----------|-----------------|----------------------|
+| 1 | 22.0pt | -22.0pt | 22.0pt |
+| 2 | 32.5pt | -22.0pt | 32.5pt |
+| 3 | 43.0pt | -22.0pt | 43.0pt |
+
+- Level間のインデント増分: +10.5pt
+- firstLineIndentは全レベル共通(-22pt)
+
+### 10.3 リスト+カスタムタブの相互作用
+
+- リスト内テキストはleftIndent位置から開始
+- カスタムタブ(@144pt)はマージン絶対位置（リストindentに影響されない）
+- 番号→テキスト間のタブはリストの暗黙タブ
+
+---
+
+## 8. ヘッダー/フッター (header_footer)
+
+### 8.1 ヘッダー位置
+
+```
+fn header_y() -> f32:
+    return header_distance  // ページ上端からの距離（そのまま）
+```
+
+**COM実測確定 (2026-03-29):** headerDistance=18→y=18, 36→36, 54→54（完全一致）
+
+### 8.2 本文開始位置
+
+```
+fn body_start_y(top_margin, header_bottom) -> f32:
+    // 通常: topMargin + 約2.5ptオフセット
+    // ヘッダーが topMargin を超える場合: header_bottom + gap
+    return max(top_margin, header_bottom + gap) + ~2.5pt
+```
+
+**COM実測確定:**
+- 通常（ヘッダー < topMargin）: body_y = topMargin + 2.5pt
+- 背の高いヘッダー（3行14pt, topMargin=72）: header_bottom≈87 → body_y=90pt（pushdown）
+
+### 8.3 フッター位置
+
+```
+fn footer_y(page_height, footer_distance) -> f32:
+    // フッターテキストのY位置
+    return page_height - footer_distance - footer_line_height
+    // Calibri 11pt: footer_line_height ≈ 13.4pt
+```
+
+**COM実測確定:**
+- footerDist=18: footer_y=810.5, from_bottom=31.4 (18+13.4)
+- footerDist=36: footer_y=792.5, from_bottom=49.4 (36+13.4)
+- footerDist=54: footer_y=774.5, from_bottom=67.4 (54+13.4)
+
+---
+
+## 9. 脚注 (footnotes)
+
+### 9.1 脚注デフォルトスタイル
+
+- フォント: 10.5pt（ドキュメントデフォルト）
+- LineSpacing: 12pt (Single)
+- SpaceBefore/After: 0pt
+
+### 9.2 脚注位置
+
+```
+fn footnote_area(page_height, bottom_margin, footnotes) -> (f32, f32):
+    // 脚注はページ本文領域の下端に配置
+    // body_area_bottom = page_height - bottom_margin
+    // footnote_area は body_area_bottom から上に伸びる
+    area_height = separator_height + sum(fn.line_height for fn in footnotes)
+    footnote_start_y = body_area_bottom - area_height
+    return (footnote_start_y, body_area_bottom)
+```
+
+**COM実測確定 (2026-03-29):**
+- 単一脚注: y=752.5pt (body bottom=769.9 → 17.4pt上)
+- 複数脚注(3個): y=717.0, 735.0, 752.5 (間隔≈17-18pt)
+- 脚注はbody areaを圧迫（bodyの行数が減る）
+
+---
+
+## 11. セクション区切り (section_break)
+
+### 11.1 continuous section break
+
+- 同一ページ内でセクション変更
+- Y座標は前セクションの最後から連続（リセットなし）
+- マージン・カラム数等のフォーマット変更が同一ページ内で適用
+
+**COM実測確定 (2026-03-29):**
+- Section 1 最終段落 y=110.5, Section 2 最初段落 y=146.5（セクション区切り分の空行あり）
+
+### 11.2 nextPage section break
+
+- 強制改ページ + セクション変更
+- Section 2 は新ページの先頭から開始
+- マージン変更: Section 2 leftMargin=108pt → x=108pt（即座に反映）
+
+### 11.3 continuous + column変更
+
+- Section 1 (1カラム) → continuous break → Section 2 (2カラム)
+- カラム変更は同一ページ内で適用される
+- Section 2 のカラム領域は Section 1 の本文の下から開始
 
 ---
 
