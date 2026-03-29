@@ -1479,11 +1479,42 @@ impl LayoutEngine {
             if let Some(ref top) = borders.top {
                 let bw = top.width;
                 let color = top.color.clone().unwrap_or_else(|| "000000".to_string());
+                let border_y = para_top - top.space - bw;
                 elements.push(LayoutElement {
                     x: border_x,
-                    y: para_top,
+                    y: border_y,
                     width: border_width,
                     height: bw.max(0.5),
+                    content: LayoutContent::CellShading {
+                        color: format!("#{}", color),
+                    },
+                });
+            }
+            // Left border
+            if let Some(ref left) = borders.left {
+                let bw = left.width;
+                let color = left.color.clone().unwrap_or_else(|| "000000".to_string());
+                let bx = border_x - left.space - bw;
+                elements.push(LayoutElement {
+                    x: bx,
+                    y: para_top,
+                    width: bw.max(0.5),
+                    height: para_bottom - para_top,
+                    content: LayoutContent::CellShading {
+                        color: format!("#{}", color),
+                    },
+                });
+            }
+            // Right border
+            if let Some(ref right) = borders.right {
+                let bw = right.width;
+                let color = right.color.clone().unwrap_or_else(|| "000000".to_string());
+                let bx = border_x + border_width + right.space;
+                elements.push(LayoutElement {
+                    x: bx,
+                    y: para_top,
+                    width: bw.max(0.5),
+                    height: para_bottom - para_top,
                     content: LayoutContent::CellShading {
                         color: format!("#{}", color),
                     },
