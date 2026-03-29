@@ -1190,7 +1190,7 @@ impl LayoutEngine {
         );
 
         // Line-break the text
-        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style);
+        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style, page.grid_char_pitch);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -1486,6 +1486,7 @@ impl LayoutEngine {
         available_width: f32,
         first_line_indent: f32,
         para_style: &ParagraphStyle,
+        grid_char_pitch: Option<f32>,
     ) -> Vec<Line> {
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
@@ -1534,7 +1535,14 @@ impl LayoutEngine {
             let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
             for ch in text.chars() {
                 let char_metrics = self.metrics_for_char(ch, style, para_style);
-                let char_width = self.registry.char_width_pt_with_fallback(ch, font_size, char_metrics) + cs;
+                let mut char_width = self.registry.char_width_pt_with_fallback(ch, font_size, char_metrics) + cs;
+                // linesAndChars: snap character width to grid pitch
+                if let Some(pitch) = grid_char_pitch {
+                    if para_style.snap_to_grid && pitch > 0.0 {
+                        // Snap char width to nearest multiple of grid pitch
+                        char_width = ((char_width / pitch) + 0.5).floor().max(1.0) * pitch;
+                    }
+                }
 
                 if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace

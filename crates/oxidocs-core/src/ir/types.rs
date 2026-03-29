@@ -33,6 +33,10 @@ pub struct Page {
     /// snaps to multiples of this pitch.
     #[serde(default)]
     pub grid_line_pitch: Option<f32>,
+    /// Character grid pitch in points (from w:docGrid w:charSpace for linesAndChars).
+    /// When set, character widths are expanded to align to this grid.
+    #[serde(default)]
+    pub grid_char_pitch: Option<f32>,
     /// True when docGrid element exists but has NO type attribute.
     /// CJK 83/64 multiplier is NOT applied; COM-measured Single heights used instead.
     #[serde(default)]
