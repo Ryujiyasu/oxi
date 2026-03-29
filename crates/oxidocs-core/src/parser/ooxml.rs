@@ -60,6 +60,7 @@ impl OoxmlParser {
         let metadata = self.parse_metadata();
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
         let default_tab_stop = self.parse_default_tab_stop();
+        let compat_mode = self.parse_compat_mode();
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
@@ -154,6 +155,7 @@ impl OoxmlParser {
             comments: all_comments,
             adjust_line_height_in_table,
             default_tab_stop,
+            compat_mode,
         })
     }
 
@@ -315,6 +317,38 @@ impl OoxmlParser {
     /// Therefore: always return false (= table cells snap to grid like normal paragraphs).
     fn parse_adjust_line_height_in_table(&mut self) -> bool {
         false
+    }
+
+    /// Parse word/settings.xml for compatibilityMode.
+    fn parse_compat_mode(&mut self) -> u32 {
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return 15, // default to Word 2013+
+        };
+        let mut reader = Reader::from_str(&xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) => {
+                    if local_name(e.name().as_ref()) == "compatSetting" {
+                        let mut is_compat_mode = false;
+                        let mut val = String::new();
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let v = String::from_utf8_lossy(&attr.value).to_string();
+                            if key == "name" && v == "compatibilityMode" { is_compat_mode = true; }
+                            if key == "val" { val = v; }
+                        }
+                        if is_compat_mode {
+                            return val.parse().unwrap_or(15);
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        15
     }
 
     /// Parse word/settings.xml for defaultTabStop value.

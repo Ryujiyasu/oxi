@@ -48,9 +48,10 @@ fn gdi_line_height(font_metrics, font_size_pt) -> f32:
 3. **ppem直接** (UPM=256) — MS Gothic/Mincho系
 
 **フォント分類:**
-- round公式OK: Calibri, Cambria, Meiryo (ClearType最適化フォント)
-- テーブル必須: Arial, TNR, Century (ヒンティングがメトリクス変更)
-- ppem直接: MS Gothic, MS Mincho + P/UI variants (UPM=256, wa+wd=upm)
+- round公式OK (0エラー): **Calibri, Calibri Bold, Cambria, Cambria Bold, Meiryo, Yu Mincho Demibold** (6エントリ)
+- ppem直接 (1エラー): **MS Gothic, MS PGothic, MS Mincho, MS PMincho** (UPM=256)
+- テーブル必須: **Arial, Arial Bold, TNR, TNR Bold, Century, Yu Gothic Reg/Bold, Yu Mincho Reg** (8エントリ)
+  - Yu Gothic/Yu Mincho Regularはヒンティングで round=39エラー → テーブル必須
 
 ### 1.2 CJK 83/64 乗数
 
@@ -148,7 +149,9 @@ fn grid_snap(lh, pitch) -> f32:
 
 ### 1.6 TextBox内
 
-- grid snap なし (grid_pitch = None として計算)
+- **grid snap 有効** (compat=15では通常テキストと同様にgrid snap適用)
+  - COM実測: MS Gothic 10.5pt TB内gap=18pt = grid snap(17.85pt→18pt) ✓
+  - 旧仕様「grid snap なし」は誤り (2026-03-29修正)
 - CJK 83/64 は適用
 - **spacingリセット: なし（テーブルセルと同様、スタイル継承チェーンに従う）** (COM確定 2026-03-29)
 

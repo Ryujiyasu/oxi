@@ -86,6 +86,8 @@ pub struct LayoutEngine {
     adjust_line_height_in_table: bool,
     /// Document-level default tab stop interval (from w:settings/w:defaultTabStop)
     default_tab_stop: f32,
+    /// Compatibility mode: 14=Word 2010 (table cells no grid snap), 15=Word 2013+ (grid snap)
+    compat_mode: u32,
 }
 
 /// Word's default heading font sizes (in points)
@@ -131,6 +133,7 @@ impl LayoutEngine {
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
+            compat_mode: 15,
         }
     }
 
@@ -149,6 +152,7 @@ impl LayoutEngine {
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
+            compat_mode: doc.compat_mode,
         }
     }
 
@@ -2084,9 +2088,15 @@ impl LayoutEngine {
         let default_pad_t = default_pad.as_ref().and_then(|m| m.top).unwrap_or(0.0);
         let default_pad_b = default_pad.as_ref().and_then(|m| m.bottom).unwrap_or(0.0);
 
-        // adjustLineHeightInTable=true: disable grid snap in table cells (Word 6.0 compat)
-        // adjustLineHeightInTable=false (default): table cells snap to document grid
-        let table_grid_pitch: Option<f32> = if self.adjust_line_height_in_table { None } else { grid_pitch };
+        // Table cell grid snap depends on compat mode:
+        // - compat=15 (Word 2013+): grid snap enabled in table cells
+        // - compat=14 (Word 2010): grid snap disabled in table cells
+        // - adjustLineHeightInTable=true: always disable (Word 6.0 compat)
+        let table_grid_pitch: Option<f32> = if self.adjust_line_height_in_table || self.compat_mode < 15 {
+            None
+        } else {
+            grid_pitch
+        };
 
         let num_rows = table.rows.len();
         for (row_idx, row) in table.rows.iter().enumerate() {
