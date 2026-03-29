@@ -2,3 +2,8 @@
 members = ["crates/oxi-common", "crates/oxicells-core", "crates/oxidocs-core", "crates/oxihanko", "crates/oxipdf-core", "crates/oxi-wasm", "crates/oxislides-core", "crates/oxi-cli"]
 exclude = ["tools/font-metrics-gen", "tools/golden-test", "crates/oxi-desktop", "tools/oxi-gdi-renderer"]
 resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

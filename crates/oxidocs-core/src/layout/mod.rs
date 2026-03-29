@@ -1016,11 +1016,8 @@ impl LayoutEngine {
                     });
                     let accept = |pe: &LayoutElement| -> bool {
                         if pe.y + pe.height > clip_bottom { return false; }
-                        if has_dark_fill {
-                            if let LayoutContent::Text { ref color, .. } = pe.content {
-                                if color.is_none() { return false; }
-                            }
-                        }
+                        // Don't filter text in dark-filled TextBoxes — the text may have
+                        // theme colors that weren't resolved. Let the renderer handle contrast.
                         true
                     };
                     for pe in para_elements {
