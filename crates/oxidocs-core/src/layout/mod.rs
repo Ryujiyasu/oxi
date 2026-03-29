@@ -997,7 +997,8 @@ impl LayoutEngine {
                         page,
                         &mut dummy_pages,
                         &mut dummy_elements,
-                        None, // COM confirmed: TextBox content does NOT use grid snap
+                        // TextBox grid snap: enabled for "lines" grid, disabled for "linesAndChars"
+                        if page.grid_char_pitch.is_some() { None } else { page.grid_line_pitch },
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
                         0.0, None,
