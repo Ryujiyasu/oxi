@@ -11,11 +11,46 @@ COM API ブラックボックス測定により解明。DLL解析なし。
 ```
 fn gdi_line_height(font_metrics, font_size_pt) -> f32:
     ppem = round(font_size_pt * 96.0 / 72.0)
-    asc_px = ceil(win_ascent / upm * ppem)
-    des_px = ceil(win_descent / upm * ppem)
-    gdi_height_pt = (asc_px + des_px) * 72.0 / 96.0
-    return gdi_height_pt
+
+    // 方法1: GDI tmHeightテーブル参照（最も正確）
+    if GDI_HEIGHT_TABLE.has(font, ppem):
+        return GDI_HEIGHT_TABLE[font][ppem] * 72.0 / 96.0
+
+    // 方法2: round公式（多くのフォントで正確）
+    asc_px = round(win_ascent * ppem / upm)  // round, NOT ceil!
+    des_px = round(win_descent * ppem / upm)
+    return (asc_px + des_px) * 72.0 / 96.0
+
+    // 方法3: UPM=256フォント（MS Gothic/Mincho系）
+    // gdi_h = ppem (直接)
 ```
+
+**GDI実測確定 (2026-03-29):**
+
+公式比較（ppem 7-49, 全フォント）:
+
+| 公式 | Calibri | Cambria | Meiryo | MS Gothic | Arial | TNR | Century |
+|------|---------|---------|--------|-----------|-------|-----|---------|
+| **round+round** | **0 err** | **0** | **0** | **1** | 16 | 23 | 29 |
+| ceil+ceil (旧) | 69 err | 70 | 70 | 93 | 60 | 69 | 73 |
+
+- **round(winAsc*ppem/upm)+round(winDes*ppem/upm)** が正解公式
+- Calibri/Cambria/Meiryo: **完全一致**
+- MS Gothic/Mincho (UPM=256): **gdi_h = ppem** (wa+wd=upm なので round=ppem)
+- Arial/TNR/Century: round公式でも一部不一致 → GDIテーブル参照が必要
+  - 原因: TrueTypeバイトコードヒンティングがppemごとにtmAscentを独自に調整
+  - Arial ppem=11-13: ceil/round/floorいずれとも一致しない(ヒンティング補正)
+- **GDI tmHeightテーブル** (`gdi_height_table.json`, 54.6KB) で全フォント完全対応
+
+**3層アプローチ:**
+1. **GDIテーブル参照** (最優先) — 常に正確。全21フォント×ppem5-100
+2. **round公式** (テーブルにないフォント) — Calibri/Cambria/Meiryo系で0エラー
+3. **ppem直接** (UPM=256) — MS Gothic/Mincho系
+
+**フォント分類:**
+- round公式OK: Calibri, Cambria, Meiryo (ClearType最適化フォント)
+- テーブル必須: Arial, TNR, Century (ヒンティングがメトリクス変更)
+- ppem直接: MS Gothic, MS Mincho + P/UI variants (UPM=256, wa+wd=upm)
 
 ### 1.2 CJK 83/64 乗数
 
