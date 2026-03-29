@@ -76,7 +76,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, color, ..
+                        text, font_size, font_family, bold, color, underline, underline_style, ..
                     } => {
                         let fs = (*font_size as f64 * scale) as i32;
                         let family = font_family.as_deref().unwrap_or("Calibri");
@@ -111,6 +111,28 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         // Draw text
                         let text_wide: Vec<u16> = text.encode_utf16().collect();
                         TextOutW(mem_dc, x, y, &text_wide);
+
+                        // Underline
+                        if *underline {
+                            let ul_y = y + fs + (fs as f64 * 0.15) as i32;
+                            let ul_w = (fs as f64 * 0.05).max(1.0) as i32;
+                            let pen = CreatePen(PS_SOLID, ul_w, rgb);
+                            let old_pen = SelectObject(mem_dc, pen);
+                            let is_double = underline_style.as_deref() == Some("double");
+                            if is_double {
+                                let ul_y1 = y + fs + (fs as f64 * 0.10) as i32;
+                                let ul_y2 = y + fs + (fs as f64 * 0.22) as i32;
+                                MoveToEx(mem_dc, x, ul_y1, None);
+                                LineTo(mem_dc, x + ew, ul_y1);
+                                MoveToEx(mem_dc, x, ul_y2, None);
+                                LineTo(mem_dc, x + ew, ul_y2);
+                            } else {
+                                MoveToEx(mem_dc, x, ul_y, None);
+                                LineTo(mem_dc, x + ew, ul_y);
+                            }
+                            SelectObject(mem_dc, old_pen);
+                            let _ = DeleteObject(pen);
+                        }
 
                         SelectObject(mem_dc, old_font);
                         let _ = DeleteObject(font);
@@ -160,36 +182,47 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let _ = DeleteObject(brush);
                     }
 
-                    oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, stroke_width, .. } => {
-                        if let Some(ref fill_hex) = fill {
+                    oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
+                        let cr = (*corner_radius as f64 * scale) as i32;
+                        // Create fill brush
+                        let fill_brush = if let Some(ref fill_hex) = fill {
                             let c = fill_hex.strip_prefix('#').unwrap_or(fill_hex);
                             if c.len() == 6 {
-                                let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(0);
-                                let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(0);
-                                let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(0);
-                                let brush = CreateSolidBrush(COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16)));
-                                let rect = RECT { left: x, top: y, right: x + ew, bottom: y + eh };
-                                FillRect(mem_dc, &rect, brush);
-                                let _ = DeleteObject(brush);
-                            }
-                        }
-                        if let Some(ref sc) = stroke_color {
+                                let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(255);
+                                let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(255);
+                                let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(255);
+                                Some(CreateSolidBrush(COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))))
+                            } else { None }
+                        } else { None };
+                        // Create stroke pen
+                        let stroke_pen = if let Some(ref sc) = stroke_color {
                             let c = sc.strip_prefix('#').unwrap_or(sc);
                             if c.len() == 6 {
                                 let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(0);
                                 let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(0);
                                 let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(0);
                                 let sw = (*stroke_width as f64 * scale).max(1.0) as i32;
-                                let pen = CreatePen(PS_SOLID, sw, COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16)));
-                                let old_pen = SelectObject(mem_dc, pen);
-                                let null_brush = GetStockObject(NULL_BRUSH);
-                                let old_brush = SelectObject(mem_dc, null_brush);
-                                Rectangle(mem_dc, x, y, x + ew, y + eh);
-                                SelectObject(mem_dc, old_brush);
-                                SelectObject(mem_dc, old_pen);
-                                let _ = DeleteObject(pen);
-                            }
+                                Some(CreatePen(PS_SOLID, sw, COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))))
+                            } else { None }
+                        } else { None };
+                        // Select brush and pen
+                        let old_brush = fill_brush.map(|b| SelectObject(mem_dc, b));
+                        let no_brush = if fill_brush.is_none() { Some(SelectObject(mem_dc, GetStockObject(NULL_BRUSH))) } else { None };
+                        let old_pen = stroke_pen.map(|p| SelectObject(mem_dc, p));
+                        let no_pen = if stroke_pen.is_none() { Some(SelectObject(mem_dc, GetStockObject(NULL_PEN))) } else { None };
+                        // Draw rounded or regular rectangle
+                        if cr > 0 {
+                            RoundRect(mem_dc, x, y, x + ew, y + eh, cr * 2, cr * 2);
+                        } else {
+                            Rectangle(mem_dc, x, y, x + ew, y + eh);
                         }
+                        // Cleanup
+                        if let Some(ob) = old_brush { SelectObject(mem_dc, ob); }
+                        if let Some(nb) = no_brush { SelectObject(mem_dc, nb); }
+                        if let Some(op) = old_pen { SelectObject(mem_dc, op); }
+                        if let Some(np) = no_pen { SelectObject(mem_dc, np); }
+                        if let Some(ref _f) = fill_brush { /* DeleteObject handled by HGDIOBJ drop */ }
+                        if let Some(ref _s) = stroke_pen { /* DeleteObject handled by HGDIOBJ drop */ }
                     }
 
                     _ => {} // Skip ClipStart/End, Image, PresetShape for now
