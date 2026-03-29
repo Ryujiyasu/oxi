@@ -950,7 +950,7 @@ impl LayoutEngine {
             elements.push(LayoutElement::new(abs_x, abs_y, text_box.width, text_box.height, LayoutContent::BoxRect {
                     fill: fill_hex,
                     stroke_color: if has_border { Some("#000000".to_string()) } else { None },
-                    stroke_width: if has_border { 0.4 } else { 0.0 },
+                    stroke_width: if has_border { 0.75 } else { 0.0 },
                     corner_radius: cr,
             }));
         }
@@ -1239,7 +1239,10 @@ impl LayoutEngine {
             let line_height = line_heights[line_idx];
 
             // Page break check with widow/orphan control
-            let needs_page_break = *cursor_y + line_height > page_top + content_height;
+            // TextBox content: no page breaks, no widow/orphan. Overflow is clipped.
+            let needs_page_break = if in_textbox { false } else {
+                *cursor_y + line_height > page_top + content_height
+            };
 
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
             // check if only 1 line would fit on this page — if so, push the
