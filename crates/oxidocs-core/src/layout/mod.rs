@@ -972,7 +972,7 @@ impl LayoutEngine {
                         page,
                         &mut dummy_pages,
                         &mut dummy_elements,
-                        None, // TextBox paragraphs have explicit snap=0 and line spacing rules
+                        page.grid_line_pitch, // §1.6: TextBox uses grid snap (compat=15, COM confirmed)
                         None, // no prev style tracking
                         true, // in_textbox: suppress CJK compression
                         0.0,
