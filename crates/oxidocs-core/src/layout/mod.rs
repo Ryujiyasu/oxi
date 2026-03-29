@@ -954,7 +954,7 @@ impl LayoutEngine {
                             .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
                             .or_else(|| Some("#000000".to_string()))
                     } else { None },
-                    stroke_width: if has_border { text_box.stroke_width.unwrap_or(0.75) } else { 0.0 },
+                    stroke_width: if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 },
                     corner_radius: cr,
             }));
         }
