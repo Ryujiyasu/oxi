@@ -26,6 +26,26 @@ pub struct LayoutElement {
     pub width: f32,
     pub height: f32,
     pub content: LayoutContent,
+    /// Source paragraph index in the document body (for hit testing / editing)
+    pub paragraph_index: Option<usize>,
+    /// Source run index within the paragraph
+    pub run_index: Option<usize>,
+    /// Character offset within the run's text where this fragment starts
+    pub char_offset: Option<usize>,
+}
+
+impl LayoutElement {
+    /// Create a non-text element (border, shading, image, etc.) with no source indices.
+    fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
+        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None }
+    }
+
+    /// Create a text element with source location for hit testing.
+    fn text(x: f32, y: f32, width: f32, height: f32, content: LayoutContent,
+            para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
+        Self { x, y, width, height, content,
+               paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset) }
+    }
 }
 
 pub enum LayoutContent {
@@ -354,6 +374,7 @@ impl LayoutEngine {
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut cursor_y = start_y;
         let mut prev_para_style_id: Option<String> = None;
+        let mut prev_contextual_spacing: bool = false;
         let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
@@ -505,7 +526,7 @@ impl LayoutEngine {
                         &mut pages,
                         &mut elements,
                         grid_pitch,
-                        prev_para_style_id.as_deref(), false,
+                        prev_para_style_id.as_deref(), prev_contextual_spacing, false,
                         prev_space_after,
                     );
                     prev_space_after = sa;
@@ -534,6 +555,7 @@ impl LayoutEngine {
                         current_page_idx += pages_added;
                     }
                     prev_para_style_id = para.style.style_id.clone();
+                    prev_contextual_spacing = para.style.contextual_spacing;
                 }
                 Block::Table(table) => {
                     // COM-confirmed: prev paragraph's space_after is always added before table
@@ -608,16 +630,10 @@ impl LayoutEngine {
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
                     }
-                    elements.push(LayoutElement {
-                        x: start_x,
-                        y: cursor_y,
-                        width: img.width,
-                        height: img.height,
-                        content: LayoutContent::Image {
+                    elements.push(LayoutElement::new(start_x, cursor_y, img.width, img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
-                        },
-                    });
+                    }));
                     cursor_y += img.height;
                     prev_para_style_id = None;
                 }
@@ -656,16 +672,10 @@ impl LayoutEngine {
                     .get(img.anchor_block_index)
                     .copied()
                     .unwrap_or(0);
-                let el = LayoutElement {
-                    x: abs_x,
-                    y: abs_y,
-                    width: img.width,
-                    height: img.height,
-                    content: LayoutContent::Image {
+                let el = LayoutElement::new(abs_x, abs_y, img.width, img.height, LayoutContent::Image {
                         data: img.data.clone(),
                         content_type: img.content_type.clone(),
-                    },
-                };
+                });
                 if let Some(lp) = pages.get_mut(target_page) {
                     lp.elements.push(el);
                 } else if let Some(lp) = pages.last_mut() {
@@ -674,16 +684,10 @@ impl LayoutEngine {
             } else {
                 // No position info — treat as inline at end of last page
                 if let Some(lp) = pages.last_mut() {
-                    lp.elements.push(LayoutElement {
-                        x: start_x,
-                        y: 0.0,
-                        width: img.width,
-                        height: img.height,
-                        content: LayoutContent::Image {
+                    lp.elements.push(LayoutElement::new(start_x, 0.0, img.width, img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
-                        },
-                    });
+                    }));
                 }
             }
         }
@@ -703,7 +707,7 @@ impl LayoutEngine {
                         let (hdr_elements, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None,
+                            grid_pitch, None, false,
                             false, 0.0,
                         );
                         lp.elements.extend(hdr_elements);
@@ -725,7 +729,7 @@ impl LayoutEngine {
                         let (ftr_elements, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None,
+                            grid_pitch, None, false,
                             false, 0.0,
                         );
                         lp.elements.extend(ftr_elements);
@@ -746,17 +750,11 @@ impl LayoutEngine {
                         // v_relative="paragraph": y = anchor_paragraph_y + offset
                         let sx = start_x + pos.x;
                         let sy = anchor_y + pos.y;
-                        lp.elements.push(LayoutElement {
-                            x: sx,
-                            y: sy,
-                            width: shape.width,
-                            height: shape.height,
-                            content: LayoutContent::PresetShape {
+                        lp.elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, LayoutContent::PresetShape {
                                 shape_type: shape.shape_type.clone(),
                                 stroke_color: shape.stroke_color.clone(),
                                 stroke_width: shape.stroke_width.unwrap_or(0.75),
-                            },
-                        });
+                        }));
                     }
                 }
             }
@@ -917,25 +915,16 @@ impl LayoutEngine {
                 if f.starts_with('#') { f.clone() } else { format!("#{}", f) }
             });
             let cr = text_box.corner_radius.unwrap_or(0.0);
-            elements.push(LayoutElement {
-                x: abs_x,
-                y: abs_y,
-                width: text_box.width,
-                height: text_box.height,
-                content: LayoutContent::BoxRect {
+            elements.push(LayoutElement::new(abs_x, abs_y, text_box.width, text_box.height, LayoutContent::BoxRect {
                     fill: fill_hex,
                     stroke_color: if has_border { Some("#000000".to_string()) } else { None },
                     stroke_width: if has_border { 0.4 } else { 0.0 },
                     corner_radius: cr,
-                },
-            });
+            }));
         }
 
         // 3. Clip region — all TextBox content is clipped to the box boundary
-        elements.push(LayoutElement {
-            x: abs_x, y: abs_y, width: text_box.width, height: text_box.height,
-            content: LayoutContent::ClipStart,
-        });
+        elements.push(LayoutElement::new(abs_x, abs_y, text_box.width, text_box.height, LayoutContent::ClipStart));
 
         // 4. Content layout within text box
         // Word default inset: L/R = 7.2pt (0.1in = 91440 EMU), T/B = 3.6pt (0.05in = 45720 EMU)
@@ -973,7 +962,7 @@ impl LayoutEngine {
                         &mut dummy_pages,
                         &mut dummy_elements,
                         page.grid_line_pitch, // §1.6: TextBox uses grid snap (compat=15, COM confirmed)
-                        None, // no prev style tracking
+                        None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
                         0.0,
                     );
@@ -1026,16 +1015,10 @@ impl LayoutEngine {
                     elements.extend(table_elements);
                 }
                 Block::Image(img) => {
-                    elements.push(LayoutElement {
-                        x: inner_x,
-                        y: cursor_y,
-                        width: img.width.min(inner_width),
-                        height: img.height,
-                        content: LayoutContent::Image {
+                    elements.push(LayoutElement::new(inner_x, cursor_y, img.width.min(inner_width), img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
-                        },
-                    });
+                    }));
                     cursor_y += img.height;
                 }
                 Block::UnsupportedElement(_) => {}
@@ -1054,10 +1037,7 @@ impl LayoutEngine {
         }
 
         // End clip region
-        elements.push(LayoutElement {
-            x: abs_x, y: abs_y, width: text_box.width, height: actual_height,
-            content: LayoutContent::ClipEnd,
-        });
+        elements.push(LayoutElement::new(abs_x, abs_y, text_box.width, actual_height, LayoutContent::ClipEnd));
 
         elements
     }
@@ -1076,6 +1056,7 @@ impl LayoutEngine {
         current_elements: &mut Vec<LayoutElement>,
         grid_pitch: Option<f32>,
         prev_style_id: Option<&str>,
+        prev_contextual_spacing: bool,
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
     ) -> (Vec<LayoutElement>, f32) {
@@ -1098,10 +1079,10 @@ impl LayoutEngine {
         // prev_space_after was NOT added to cursor_y by the caller.
         let collapsed_spacing = space_before.max(prev_space_after);
 
-        // Contextual spacing: suppress spacing when previous paragraph
-        // has the same style and both have contextualSpacing enabled.
+        // Contextual spacing: suppress spacing when EITHER paragraph has
+        // contextualSpacing=true AND they share the same style (COM-confirmed).
         let mut effective_spacing = collapsed_spacing;
-        if para.style.contextual_spacing {
+        if para.style.contextual_spacing || prev_contextual_spacing {
             if let (Some(cur_id), Some(prev_id)) = (para.style.style_id.as_deref(), prev_style_id) {
                 if cur_id == prev_id {
                     effective_spacing = 0.0;
@@ -1172,12 +1153,7 @@ impl LayoutEngine {
             } else {
                 0.0
             };
-            elements.push(LayoutElement {
-                x: marker_x,
-                y: *cursor_y + marker_y_offset,
-                width: marker_width,
-                height: line_height,
-                content: LayoutContent::Text {
+            elements.push(LayoutElement::new(marker_x, *cursor_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
                     text: marker_text,
                     font_size: marker_font_size,
                     font_family: None,
@@ -1190,8 +1166,7 @@ impl LayoutEngine {
                     highlight: None,
                     field_type: None,
                     character_spacing: 0.0,
-                },
-            });
+            }));
         }
 
         // Collect all text fragments with their styles and field types
@@ -1406,12 +1381,7 @@ impl LayoutEngine {
                 let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
                 let baseline_adjust = line_max_ascent - frag_ascent;
 
-                elements.push(LayoutElement {
-                    x,
-                    y: *cursor_y + text_y_off + baseline_adjust,
-                    width: adjusted_width,
-                    height: line_height,
-                    content: LayoutContent::Text {
+                elements.push(LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -1425,8 +1395,7 @@ impl LayoutEngine {
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
                         character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing,
-                    },
-                });
+                }));
                 x += adjusted_width + frag_spacing_after[frag_idx];
             }
 
@@ -1470,59 +1439,35 @@ impl LayoutEngine {
                 let bw = bottom.width;
                 let color = bottom.color.clone().unwrap_or_else(|| "000000".to_string());
                 let border_y = para_bottom + bottom.space;
-                elements.push(LayoutElement {
-                    x: border_x,
-                    y: border_y,
-                    width: border_width,
-                    height: bw.max(0.5),
-                    content: LayoutContent::CellShading {
+                elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
-                    },
-                });
+                }));
             }
             if let Some(ref top) = borders.top {
                 let bw = top.width;
                 let color = top.color.clone().unwrap_or_else(|| "000000".to_string());
                 let border_y = para_top - top.space - bw;
-                elements.push(LayoutElement {
-                    x: border_x,
-                    y: border_y,
-                    width: border_width,
-                    height: bw.max(0.5),
-                    content: LayoutContent::CellShading {
+                elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
-                    },
-                });
+                }));
             }
             // Left border
             if let Some(ref left) = borders.left {
                 let bw = left.width;
                 let color = left.color.clone().unwrap_or_else(|| "000000".to_string());
                 let bx = border_x - left.space - bw;
-                elements.push(LayoutElement {
-                    x: bx,
-                    y: para_top,
-                    width: bw.max(0.5),
-                    height: para_bottom - para_top,
-                    content: LayoutContent::CellShading {
+                elements.push(LayoutElement::new(bx, para_top, bw.max(0.5), para_bottom - para_top, LayoutContent::CellShading {
                         color: format!("#{}", color),
-                    },
-                });
+                }));
             }
             // Right border
             if let Some(ref right) = borders.right {
                 let bw = right.width;
                 let color = right.color.clone().unwrap_or_else(|| "000000".to_string());
                 let bx = border_x + border_width + right.space;
-                elements.push(LayoutElement {
-                    x: bx,
-                    y: para_top,
-                    width: bw.max(0.5),
-                    height: para_bottom - para_top,
-                    content: LayoutContent::CellShading {
+                elements.push(LayoutElement::new(bx, para_top, bw.max(0.5), para_bottom - para_top, LayoutContent::CellShading {
                         color: format!("#{}", color),
-                    },
-                });
+                }));
             }
         }
 
@@ -1847,8 +1792,9 @@ impl LayoutEngine {
 
         if is_single {
             if in_table_cell {
-                // COM-confirmed: table cells use no-grid line height with floor(descent).
-                return metrics.word_line_height_table_cell(font_size);
+                // Table cells: use GDI table if available, otherwise word_line_height_table_cell.
+                // Grid snap is applied below via the normal path (compat_mode dependent).
+                // Don't early-return here — fall through to GDI table + grid snap logic.
             } else {
                 if let Some(lh) = self.registry.com_line_height(
                     &metrics.family, font_size,
@@ -1884,7 +1830,7 @@ impl LayoutEngine {
                 let snapped = if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            (((base + pitch * 0.5) / pitch) + 0.5).floor() * pitch
+                            ((base / pitch) + 0.5).floor().max(1.0) * pitch
                         } else { base }
                     } else { base }
                 } else { base };
@@ -1898,7 +1844,7 @@ impl LayoutEngine {
                 if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor() * pitch;
+                            return ((spaced / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
                     }
                 }
@@ -1981,7 +1927,7 @@ impl LayoutEngine {
                 let snapped = if para_style.snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            (((base + pitch * 0.5) / pitch) + 0.5).floor() * pitch
+                            ((base / pitch) + 0.5).floor().max(1.0) * pitch
                         } else { base }
                     } else { base }
                 } else { base };
@@ -1997,7 +1943,7 @@ impl LayoutEngine {
                 if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor() * pitch;
+                            return ((spaced / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
                     }
                 }
@@ -2253,15 +2199,9 @@ impl LayoutEngine {
                         } else {
                             format!("#{}", shading_color)
                         };
-                        elements.push(LayoutElement {
-                            x: cell_x,
-                            y: *cursor_y,
-                            width: cell_w,
-                            height: row_height,
-                            content: LayoutContent::CellShading {
+                        elements.push(LayoutElement::new(cell_x, *cursor_y, cell_w, row_height, LayoutContent::CellShading {
                                 color: color_hex,
-                            },
-                        });
+                        }));
                     }
                 }
 
@@ -2510,12 +2450,7 @@ impl LayoutEngine {
                             let mut rx = 0.0_f32;
                             for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
-                                cell_elements.push(LayoutElement {
-                                    x: cell_x + pad_l + line_indent + align_offset + rx,
-                                    y: content_h, // relative to cell top
-                                    width: adj_w,
-                                    height: lh,
-                                    content: LayoutContent::Text {
+                                cell_elements.push(LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h, adj_w, lh, LayoutContent::Text {
                                         text: text.clone(),
                                         font_size: *fs,
                                         font_family: font_family.clone(),
@@ -2528,8 +2463,7 @@ impl LayoutEngine {
                                         highlight: highlight.clone(),
                                         character_spacing: *cs,
                                         field_type: None,
-                                    },
-                                });
+                                }));
                                 rx += adj_w + frag_spacing[frag_idx];
                             }
                             content_h += lh;
@@ -2540,17 +2474,11 @@ impl LayoutEngine {
                         // pos.y = offset from paragraph start (Word COM confirmed)
                         for shape in &para.shapes {
                             if let Some(ref pos) = shape.position {
-                                cell_elements.push(LayoutElement {
-                                    x: cell_x + pad_l + pos.x,
-                                    y: para_content_start_h + pos.y,
-                                    width: shape.width,
-                                    height: shape.height,
-                                    content: LayoutContent::PresetShape {
+                                cell_elements.push(LayoutElement::new(cell_x + pad_l + pos.x, para_content_start_h + pos.y, shape.width, shape.height, LayoutContent::PresetShape {
                                         shape_type: shape.shape_type.clone(),
                                         stroke_color: shape.stroke_color.clone(),
                                         stroke_width: shape.stroke_width.unwrap_or(0.5),
-                                    },
-                                });
+                                }));
                             }
                         }
                     }
@@ -2630,13 +2558,10 @@ impl LayoutEngine {
 
                     // Top — skip for vMerge continue cells (internal to merged range)
                     if !is_vmerge_continue && top_color.is_some() && (!use_collapsed || row_idx == 0) {
-                        elements.push(LayoutElement {
-                            x: bx, y: by, width: cell_w, height: 0.0,
-                            content: LayoutContent::TableBorder {
+                        elements.push(LayoutElement::new(bx, by, cell_w, 0.0, LayoutContent::TableBorder {
                                 x1: bx, y1: by, x2: bx + cell_w, y2: by,
                                 color: top_color, width: top_width,
-                            },
-                        });
+                        }));
                     }
                     // Bottom — skip for vMerge continue cells unless next row is not continue
                     let next_is_continue = if row_idx + 1 < num_rows {
@@ -2646,33 +2571,24 @@ impl LayoutEngine {
                         false
                     };
                     if bot_color.is_some() && !next_is_continue {
-                        elements.push(LayoutElement {
-                            x: bx, y: by + row_height, width: cell_w, height: 0.0,
-                            content: LayoutContent::TableBorder {
+                        elements.push(LayoutElement::new(bx, by + row_height, cell_w, 0.0, LayoutContent::TableBorder {
                                 x1: bx, y1: by + row_height, x2: bx + cell_w, y2: by + row_height,
                                 color: bot_color, width: bot_width,
-                            },
-                        });
+                        }));
                     }
                     // Left
                     if left_color.is_some() && (!use_collapsed || cell_idx == 0) {
-                        elements.push(LayoutElement {
-                            x: bx, y: by, width: 0.0, height: row_height,
-                            content: LayoutContent::TableBorder {
+                        elements.push(LayoutElement::new(bx, by, 0.0, row_height, LayoutContent::TableBorder {
                                 x1: bx, y1: by, x2: bx, y2: by + row_height,
                                 color: left_color, width: left_width,
-                            },
-                        });
+                        }));
                     }
                     // Right
                     if right_color.is_some() {
-                        elements.push(LayoutElement {
-                            x: bx + cell_w, y: by, width: 0.0, height: row_height,
-                            content: LayoutContent::TableBorder {
+                        elements.push(LayoutElement::new(bx + cell_w, by, 0.0, row_height, LayoutContent::TableBorder {
                                 x1: bx + cell_w, y1: by, x2: bx + cell_w, y2: by + row_height,
                                 color: right_color, width: right_width,
-                            },
-                        });
+                        }));
                     }
                 }
 
@@ -2899,4 +2815,74 @@ enum LineBreakType {
     Normal,
     PageBreak,   // \x0C
     ColumnBreak, // \x0B
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[test]
+    #[ignore] // debug only
+    fn debug_1ec_y_positions() {
+        let data = std::fs::read("../../tools/golden-test/documents/docx/1ec1091177b1_006.docx")
+            .expect("read docx");
+        let doc = crate::parse_docx(&data).expect("parse");
+
+        // Print table structure in detail
+        for page in &doc.pages {
+            for (bi, block) in page.blocks.iter().enumerate() {
+                if let crate::ir::Block::Table(t) = block {
+                    println!("B{}: Table {}rows", bi, t.rows.len());
+                    for (ri, row) in t.rows.iter().enumerate() {
+                        let hr = row.height_rule.as_deref().unwrap_or("auto");
+                        let hv = row.height.unwrap_or(0.0);
+                        println!("  Row{}: h_spec={:.1} rule={} cells={}", ri, hv, hr, row.cells.len());
+                        for (ci, cell) in row.cells.iter().enumerate() {
+                            let pad = &cell.margins;
+                            let pad_t = pad.as_ref().and_then(|m| m.top).unwrap_or(-1.0);
+                            let pad_b = pad.as_ref().and_then(|m| m.bottom).unwrap_or(-1.0);
+                            println!("    Cell{}: paras={} pad_t={:.1} pad_b={:.1} vmerge={:?}",
+                                ci, cell.blocks.len(), pad_t, pad_b, cell.v_merge);
+                            for (pi, blk) in cell.blocks.iter().enumerate() {
+                                if let crate::ir::Block::Paragraph(p) = blk {
+                                    let text: String = p.runs.iter().flat_map(|r| r.text.chars()).take(30).collect();
+                                    let snap = p.style.snap_to_grid;
+                                    let ls = p.style.line_spacing;
+                                    let lr = p.style.line_spacing_rule.as_deref().unwrap_or("?");
+                                    let sa = p.style.space_after.unwrap_or(0.0);
+                                    let sb = p.style.space_before.unwrap_or(0.0);
+                                    let font = p.runs.first().map(|r| r.style.font_family.as_deref().unwrap_or("?")).unwrap_or("?");
+                                    let fsz = p.runs.first().map(|r| r.style.font_size.unwrap_or(0.0)).unwrap_or(0.0);
+                                    println!("      P{}: snap={} ls={:?} lr={} sa={:.1} sb={:.1} font={}@{:.1} \"{}\"",
+                                        pi, snap, ls, lr, sa, sb, font, fsz, text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let engine = LayoutEngine::for_document(&doc);
+        let result = engine.layout(&doc);
+        println!("\nPages: {}", result.pages.len());
+        // Show all elements with their Y positions grouped by row
+        for (pi, lpage) in result.pages.iter().enumerate() {
+            println!("--- Page {} ---", pi);
+            let mut prev_y: f32 = -1.0;
+            for el in &lpage.elements {
+                match &el.content {
+                    LayoutContent::Text { ref text, font_size, .. } => {
+                        if (el.y - prev_y).abs() > 0.1 {
+                            let snippet: String = text.chars().take(25).collect();
+                            println!("  TEXT y={:.1} h={:.1} fs={:.1} \"{}\"", el.y, el.height, font_size, snippet);
+                            prev_y = el.y;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
