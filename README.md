@@ -81,6 +81,29 @@ AI-generated documents are a growing challenge in academic settings. University 
 
 We welcome forks that serve communities Oxi's core cannot.
 
+### Governance (work in progress)
+
+The distribution model requires clear rules to prevent fragmentation. These are the open design questions:
+
+**What Oxi core defines:**
+- Pixel accuracy standards — the quality bar for the rendering engine
+- Extension interface specification — how Extensions plug into the WASM API
+- Version compatibility guarantees — how Extensions and Forks track core updates
+
+**What each Fork defines:**
+- Which Extensions to adopt as standard
+- Whether to add Fork-specific Extensions
+- Community-specific policies (compliance, certification, etc.)
+
+**Open questions:**
+- Extension API design — how Extensions hook into Oxi's WASM surface without compromising rendering
+- Extension registry — discovery, versioning, and quality assurance
+- "Oxi" trademark usage — minimum pixel accuracy threshold for Forks to use the Oxi name
+- Upstream sync — how Forks incorporate core updates (rebase, cherry-pick, or automated merge)
+- Cross-Fork specification sharing — how domain knowledge discovered in one Fork benefits others
+
+These will be documented in `docs/governance.md` as the ecosystem matures.
+
 ---
 
 ## 100% Clean-Room Implementation
