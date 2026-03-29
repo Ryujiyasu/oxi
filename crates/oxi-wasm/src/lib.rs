@@ -546,6 +546,13 @@ struct LayoutElementJs {
     y1: Option<f32>,
     x2: Option<f32>,
     y2: Option<f32>,
+    // Source location for editing
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paragraph_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    char_offset: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -618,6 +625,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
+                            paragraph_index: elem.paragraph_index, run_index: elem.run_index, char_offset: elem.char_offset,
                         },
                         oxidocs_core::layout::LayoutContent::Image { data, content_type } => {
                             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
@@ -629,7 +637,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                                 character_spacing: None, corner_radius: None,
                                 image_data: b64,
                                 content_type,
-                                x1: None, y1: None, x2: None, y2: None,
+                                x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                             }
                         },
                         oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width } => LayoutElementJs {
@@ -639,7 +647,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: None, underline_style: None, strikethrough: None, color, highlight: None,
                             character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
-                            x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2),
+                            x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2), paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::CellShading { color } => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
@@ -648,7 +656,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: None, underline_style: None, strikethrough: None, color: Some(color), highlight: None,
                             character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
-                            x1: None, y1: None, x2: None, y2: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, corner_radius, .. } => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
@@ -659,7 +667,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             highlight: None,
                             character_spacing: None, corner_radius: if corner_radius > 0.0 { Some(corner_radius) } else { None },
                             image_data: None, content_type: None,
-                            x1: None, y1: None, x2: None, y2: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::ClipStart => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
@@ -668,7 +676,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: None, underline_style: None, strikethrough: None,
                             color: None, highlight: None, character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
-                            x1: None, y1: None, x2: None, y2: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
                             x: 0.0, y: 0.0, width: 0.0, height: 0.0,
@@ -677,7 +685,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: None, underline_style: None, strikethrough: None,
                             color: None, highlight: None, character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
-                            x1: None, y1: None, x2: None, y2: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                         oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
@@ -686,7 +694,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: None, underline_style: None, strikethrough: None,
                             color: None, highlight: None, character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
-                            x1: None, y1: None, x2: None, y2: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
                     }
                 }).collect(),

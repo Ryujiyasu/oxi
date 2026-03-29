@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Oxidocs</title>
+<style>
+:root {
+  --accent: #185ABD;
+  --accent-h: #1048A0;
+  --accent-l: #E6EEF9;
+  --rib: #F3F3F3;
+  --rib-b: #D6D6D6;
+  --txt: #333;
+  --bg: #E8E8E8;
+  --shad: 0 1px 4px rgba(0,0,0,.18);
+  --hover: #E0E0E0;
+  --grp: #D0D0D0;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);display:flex;flex-direction:column}
+
+/* Title bar */
+.tb{display:flex;align-items:center;height:32px;background:var(--accent);color:#fff;padding:0 12px;font-size:12px;user-select:none;flex-shrink:0}
+.tb .logo{font-weight:700;margin-right:10px;letter-spacing:.5px}
+.tb .qat{display:flex;gap:2px;margin-right:14px}
+.tb .qat button svg,.tb .ra button svg{width:16px;height:16px;vertical-align:middle}
+.tb .qat button,.tb .ra button{background:none;border:none;color:rgba(255,255,255,.9);cursor:pointer;padding:3px 7px;border-radius:3px;font-size:13px}
+.tb .qat button:hover,.tb .ra button:hover{background:rgba(255,255,255,.18)}
+.tb .dn{flex:1;text-align:center;opacity:.95}
+.tb .ra{display:flex;gap:4px}
+
+/* Ribbon tabs */
+.rtabs{display:flex;align-items:flex-end;background:var(--accent);padding:0 8px;flex-shrink:0;height:26px}
+.rtabs button{background:none;border:none;color:#fff;font:inherit;font-size:13px;padding:5px 14px;cursor:pointer;border-radius:4px 4px 0 0}
+.rtabs button:hover{color:#fff;background:rgba(255,255,255,.1)}
+.rtabs button.active{background:var(--rib);color:var(--txt);font-weight:500}
+
+/* Ribbon panel */
+.rib{background:var(--rib);border-bottom:1px solid var(--rib-b);padding:4px 10px 5px;display:flex;gap:2px;align-items:stretch;flex-shrink:0;min-height:82px}
+.rg{display:flex;flex-direction:column;border-right:1px solid var(--grp);padding:0 8px}
+.rg:last-child{border-right:none}
+.rg-l{font-size:9px;color:#888;text-align:center;margin-top:auto;padding-top:2px;user-select:none}
+.rr{display:flex;gap:1px;align-items:center}
+.rc{display:flex;flex-direction:column;gap:1px}
+
+/* Buttons */
+.rb{background:none;border:1px solid transparent;cursor:pointer;padding:3px 5px;border-radius:3px;color:var(--txt);display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;font:inherit;font-size:13px;line-height:1}
+.rb:hover{background:var(--hover);border-color:#C0C0C0}
+.rb.active{background:#D0D8E8;border-color:#9DB2D6}
+.rb svg{width:16px;height:16px;pointer-events:none}
+.rb.lg{padding:4px 10px;font-size:12px;gap:4px}
+.font-sel,.size-sel{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #C0C0C0;border-radius:2px;height:24px;background:#fff;cursor:pointer;color:#333}
+.font-sel{width:130px}
+.size-sel{width:46px;text-align:center}
+/* Color */
+.cb{position:relative;display:inline-flex;flex-direction:column;align-items:center;background:none;border:1px solid transparent;cursor:pointer;padding:2px 5px;border-radius:3px;font-size:14px;min-width:28px;min-height:24px;font-weight:700;color:var(--txt)}
+.cb:hover{background:var(--hover);border-color:#C0C0C0}
+.cb .bar{height:3px;width:16px;border-radius:1px}
+.cpop{display:none;position:absolute;top:100%;left:0;z-index:200;background:#fff;border:1px solid #ccc;border-radius:4px;padding:8px;box-shadow:0 4px 12px rgba(0,0,0,.2);gap:2px;flex-wrap:wrap;width:160px}
+.cpop.show{display:flex}
+.cpop .sw{width:16px;height:16px;border:1px solid #ddd;border-radius:2px;cursor:pointer;padding:0}
+.cpop .sw:hover{border-color:#333;transform:scale(1.15)}
+/* Table grid */
+.tgp{display:none;position:absolute;top:100%;left:0;z-index:200;background:#fff;border:1px solid #ccc;border-radius:4px;padding:10px;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.mbar .tgp{top:auto;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:8px}
+.tgp.show{display:block}
+.tgp .lbl{font-size:11px;color:#666;margin-bottom:6px;text-align:center}
+.tg{display:grid;grid-template-columns:repeat(8,18px);gap:2px}
+.tg .tc{width:18px;height:18px;border:1px solid #ccc;background:#fff;cursor:pointer;padding:0;border-radius:1px}
+.tg .tc.hl{background:var(--accent-l);border-color:var(--accent)}
+
+/* Canvas document area */
+.canvas-area{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px;background:#888}
+.canvas-area .page-canvas{display:block;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.3);background:#fff}
+.canvas-area .empty-state{color:#ccc;font-size:18px;margin-top:120px;text-align:center;user-select:none}
+.canvas-area .loading-state{color:#fff;font-size:14px;padding:20px}
+
+/* Status bar */
+.sb{display:flex;align-items:center;height:22px;background:var(--accent);color:#fff;padding:0 14px;font-size:11px;flex-shrink:0;gap:16px}
+.sb .sep{opacity:.3}
+.sb .zg{margin-left:auto;display:flex;align-items:center;gap:6px}
+.sb input[type="range"]{width:90px;accent-color:#fff;height:4px}
+
+/* Mobile bottom bar */
+.mbar{display:none;flex-shrink:0;background:var(--rib);border-top:1px solid var(--rib-b);padding:4px 0 env(safe-area-inset-bottom,4px);overflow-x:auto;-webkit-overflow-scrolling:touch}
+.mbar-row{display:flex;gap:2px;padding:0 8px;min-width:max-content;align-items:center}
+.mbar .rb{min-width:36px;min-height:36px;font-size:15px}
+.mbar .rb svg{width:20px;height:20px}
+.mbar .sep{width:1px;height:28px;background:var(--grp);margin:0 4px;flex-shrink:0}
+
+/* Dialog */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;z-index:100;align-items:center;justify-content:center}
+.ov.show{display:flex}
+.dlg{background:#fff;border-radius:8px;padding:28px 32px;min-width:320px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.dlg h2{font-size:16px;margin-bottom:12px;color:var(--accent)}
+.dlg .acts{display:flex;gap:10px;margin-top:18px}
+.dlg button{padding:7px 22px;border:none;border-radius:4px;cursor:pointer;font:inherit;font-size:13px;font-weight:500}
+.dlg .bp{background:var(--accent);color:#fff}
+.dlg .bp:hover{background:var(--accent-h)}
+.dlg .bs{background:#E0E0E0;color:#333}
+.dlg .bs:hover{background:#D0D0D0}
+input[type="file"]{display:none}
+
+/* Responsive */
+@media(max-width:768px){
+  .rtabs,.rib{display:none!important}
+  .mbar{display:block}
+  .tb{height:44px;padding:0 8px}
+  .tb .qat button,.tb .ra button{padding:6px 8px;font-size:14px}
+  .tb .logo{font-size:14px}
+  .sb{height:28px;font-size:12px}
+}
+@media(min-width:769px){
+  .mbar{display:none!important}
+}
+</style>
+</head>
+<body>
+
+<!-- SVG icons -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-save" viewBox="0 0 16 16"><path fill="currentColor" d="M2 2a1 1 0 0 1 1-1h8.5L14 3.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V2zm3 0v3h5V2H5zm3 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4 7h6a3 3 0 0 1 0 6H9M4 7l3-3M4 7l3 3"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M12 7H6a3 3 0 0 0 0 6h1M12 7l-3-3M12 7l-3 3"/></symbol>
+  <symbol id="i-b" viewBox="0 0 16 16"><path fill="currentColor" d="M5 2.5h3.8c1.7 0 2.9 1 2.9 2.5 0 1-.6 1.8-1.5 2.1 1.1.3 1.8 1.3 1.8 2.4 0 1.7-1.3 2.8-3.2 2.8H5V2.5zm2 4h1.5c.7 0 1.1-.4 1.1-1s-.4-1-1.1-1H7v2zm0 2v2.5h1.8c.8 0 1.3-.5 1.3-1.2 0-.8-.5-1.3-1.3-1.3H7z"/></symbol>
+  <symbol id="i-i" viewBox="0 0 16 16"><path fill="currentColor" d="M6 2h6v1.5h-2.2L7.2 12.5H9.5V14H4v-1.5h2.1l2.6-9H6V2z"/></symbol>
+  <symbol id="i-u" viewBox="0 0 16 16"><path fill="currentColor" d="M4 2v5.5a4 4 0 0 0 8 0V2h-1.5v5.5a2.5 2.5 0 0 1-5 0V2H4zM3 13h10v1.5H3V13z"/></symbol>
+  <symbol id="i-s" viewBox="0 0 16 16"><path fill="currentColor" d="M5.5 3C6.2 2.4 7 2 8.2 2c1.8 0 3 1 3 2.5 0 .7-.3 1.3-.7 1.7H9c.4-.3.7-.7.7-1.2 0-.7-.6-1.2-1.5-1.2-.7 0-1.3.3-1.7.7L5.5 3zM3 7.5h10V9H3V7.5zm7 2.5c-.3.4-.8.7-1.5.8-.8.1-1.3-.1-1.7-.4l-1 1.3c.6.5 1.4.8 2.5.8 1.5 0 2.7-.8 3-2h-1.3z"/></symbol>
+  <symbol id="i-al" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm0 3h8v1.5H2V6zm0 3h10v1.5H2V9zm0 3h6v1.5H2V12z"/></symbol>
+  <symbol id="i-ac" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm3 3h6v1.5H5V6zm1 3h4v1.5H6V9zm-1 3h6v1.5H5V12z"/></symbol>
+  <symbol id="i-ar" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm6 3h6v1.5H8V6zm4 3h-6v1.5h8V9zM10 12h4v1.5H8V12z"/></symbol>
+  <symbol id="i-aj" viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v1.5H2V3zm0 3h12v1.5H2V6zm0 3h12v1.5H2V9zm0 3h12v1.5H2V12z"/></symbol>
+  <symbol id="i-ls" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11zM3.5 4l-2 2.5h1.5v3H1.5L3.5 12l2-2.5H4v-3h1.5L3.5 4z"/></symbol>
+  <symbol id="i-tbl" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="2" y1="6" x2="14" y2="6" stroke="currentColor"/><line x1="2" y1="10" x2="14" y2="10" stroke="currentColor"/><line x1="6" y1="2" x2="6" y2="14" stroke="currentColor"/><line x1="10" y1="2" x2="10" y2="14" stroke="currentColor"/></symbol>
+  <symbol id="i-img" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="6" r="1.5" fill="currentColor"/><path d="M1.5 11l3-3 2 2 3-4 5 5z" fill="currentColor" opacity=".4"/></symbol>
+  <symbol id="i-color" viewBox="0 0 16 16"><path fill="currentColor" d="M8 1L3 11h2l1-2.5h4L11 11h2L8 1zm-1.2 6L8 4l1.2 3H6.8z"/></symbol>
+  <symbol id="i-ul" viewBox="0 0 16 16"><circle cx="3" cy="4" r="1.3" fill="currentColor"/><circle cx="3" cy="8" r="1.3" fill="currentColor"/><circle cx="3" cy="12" r="1.3" fill="currentColor"/><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11z"/></symbol>
+  <symbol id="i-ol" viewBox="0 0 16 16"><text x="1" y="5" fill="currentColor" font-size="5" font-weight="700">1.</text><text x="1" y="9" fill="currentColor" font-size="5" font-weight="700">2.</text><text x="1" y="13" fill="currentColor" font-size="5" font-weight="700">3.</text><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11z"/></symbol>
+  <symbol id="i-indent" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6zm0 4h8v1.5H6zm0 4h8v1.5H6z"/><path fill="currentColor" d="M2 5l3 3-3 3z"/></symbol>
+  <symbol id="i-outdent" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6zm0 4h8v1.5H6zm0 4h8v1.5H6z"/><path fill="currentColor" d="M5 5l-3 3 3 3z"/></symbol>
+</svg>
+
+<!-- Title bar -->
+<div class="tb">
+  <span class="logo">Oxidocs</span>
+  <div class="qat">
+    <button id="btnSave" data-i18n-title="save"><svg><use href="#i-save"/></svg></button>
+    <button id="btnUndo" data-i18n-title="undo"><svg><use href="#i-undo"/></svg></button>
+    <button id="btnRedo" data-i18n-title="redo"><svg><use href="#i-redo"/></svg></button>
+  </div>
+  <span class="dn" id="docName" data-i18n="newDoc">New Document</span>
+  <div class="ra">
+    <button id="btnNew" data-i18n="new">New</button>
+    <button id="btnOpen" data-i18n="open">Open</button>
+    <button id="btnPdf">PDF</button>
+    <select id="langSel" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:3px;font-size:11px;padding:1px 4px;cursor:pointer">
+      <option value="en" style="color:#333;background:#fff">EN</option><option value="ja" style="color:#333;background:#fff">JA</option>
+      <option value="de" style="color:#333;background:#fff">DE</option><option value="fr" style="color:#333;background:#fff">FR</option>
+      <option value="es" style="color:#333;background:#fff">ES</option><option value="it" style="color:#333;background:#fff">IT</option>
+      <option value="pt" style="color:#333;background:#fff">PT</option><option value="ko" style="color:#333;background:#fff">KO</option>
+      <option value="zh-Hans" style="color:#333;background:#fff">简中</option><option value="zh-Hant" style="color:#333;background:#fff">繁中</option>
+    </select>
+  </div>
+</div>
+
+<!-- Ribbon tabs -->
+<div class="rtabs">
+  <button class="active" data-tab="home" data-i18n="home">Home</button>
+  <button data-tab="insert" data-i18n="insert">Insert</button>
+  <button data-tab="layout" data-i18n="layout">Layout</button>
+</div>
+
+<!-- Home ribbon -->
+<div class="rib" id="ribHome">
+  <div class="rg">
+    <div class="rc" style="gap:3px">
+      <div class="rr">
+        <select class="font-sel" id="fontFamily" style="font-family:Calibri">
+          <option value="Calibri" style="font-family:Calibri">Calibri</option>
+          <option value="Yu Gothic UI" style="font-family:'Yu Gothic UI','游ゴシック'">游ゴシック</option>
+          <option value="Yu Mincho" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
+          <option value="Meiryo" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+          <option value="Arial" style="font-family:Arial">Arial</option>
+          <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
+          <option value="Georgia" style="font-family:Georgia">Georgia</option>
+          <option value="Verdana" style="font-family:Verdana">Verdana</option>
+          <option value="Comic Sans MS" style="font-family:'Comic Sans MS'">Comic Sans MS</option>
+          <option value="Courier New" style="font-family:'Courier New'">Courier New</option>
+        </select>
+        <select class="size-sel" id="fontSize">
+          <option>8</option><option>9</option><option>10</option><option>10.5</option>
+          <option selected>11</option><option>12</option><option>14</option>
+          <option>16</option><option>18</option><option>20</option><option>24</option>
+          <option>28</option><option>36</option><option>48</option><option>72</option>
+        </select>
+      </div>
+      <div class="rr">
+        <button class="rb" id="btnBold" data-i18n-title="bold"><svg><use href="#i-b"/></svg></button>
+        <button class="rb" id="btnItalic" data-i18n-title="italic"><svg><use href="#i-i"/></svg></button>
+        <button class="rb" id="btnUnderline" data-i18n-title="underline"><svg><use href="#i-u"/></svg></button>
+        <button class="rb" id="btnStrike" data-i18n-title="strikethrough"><svg><use href="#i-s"/></svg></button>
+        <span style="width:4px"></span>
+        <button class="cb" id="btnColor" data-i18n-title="fontColor"><svg style="width:14px;height:14px"><use href="#i-color"/></svg><div class="bar" id="colorBar" style="background:#F00"></div><div class="cpop" id="colorPop"></div></button>
+        <button class="cb" id="btnHl" data-i18n-title="highlight"><span style="background:#FF0;padding:0 2px;font-size:11px">ab</span><div class="bar" id="hlBar" style="background:#FF0"></div><div class="cpop" id="hlPop"></div></button>
+        <span style="width:4px"></span>
+        <button class="rb" id="btnUL" data-i18n-title="bulletList"><svg><use href="#i-ul"/></svg></button>
+        <button class="rb" id="btnOL" data-i18n-title="numberedList"><svg><use href="#i-ol"/></svg></button>
+        <button class="rb" id="btnIndent" data-i18n-title="indent"><svg><use href="#i-indent"/></svg></button>
+        <button class="rb" id="btnOutdent" data-i18n-title="outdent"><svg><use href="#i-outdent"/></svg></button>
+        <span style="width:4px"></span>
+        <button class="rb" id="btnAlL" data-i18n-title="left"><svg><use href="#i-al"/></svg></button>
+        <button class="rb" id="btnAlC" data-i18n-title="center"><svg><use href="#i-ac"/></svg></button>
+        <button class="rb" id="btnAlR" data-i18n-title="right"><svg><use href="#i-ar"/></svg></button>
+        <button class="rb" id="btnAlJ" data-i18n-title="justify"><svg><use href="#i-aj"/></svg></button>
+        <button class="rb" id="btnLS" data-i18n-title="lineSpacing"><svg><use href="#i-ls"/></svg></button>
+      </div>
+    </div>
+    <span class="rg-l" data-i18n="format">Format</span>
+  </div>
+  <div class="rg">
+    <div class="rr" style="gap:6px">
+      <div style="position:relative">
+        <button class="rb lg" id="btnTbl"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button>
+        <div class="tgp" id="tgPop"><div class="lbl" id="tgLbl" data-i18n="insertTable">Insert Table</div><div class="tg" id="tgGrid"></div></div>
+      </div>
+      <button class="rb lg" id="btnImg"><svg><use href="#i-img"/></svg> <span data-i18n="picture">Picture</span></button>
+    </div>
+    <span class="rg-l" data-i18n="insert">Insert</span>
+  </div>
+</div>
+
+<!-- Insert ribbon -->
+<div class="rib" id="ribInsert" style="display:none">
+  <div class="rg"><div class="rr" style="gap:6px">
+    <div style="position:relative"><button class="rb lg" id="btnTbl2"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button></div>
+    <button class="rb lg" id="btnImg2"><svg><use href="#i-img"/></svg> <span data-i18n="picture">Picture</span></button>
+  </div><span class="rg-l" data-i18n="insert">Insert</span></div>
+</div>
+
+<!-- Layout ribbon -->
+<div class="rib" id="ribLayout" style="display:none">
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg active" id="pgA4">A4</button>
+    <button class="rb lg" id="pgLetter">Letter</button>
+  </div><span class="rg-l" data-i18n="size">Size</span></div>
+  <div class="rg"><div class="rr" style="gap:4px">
+    <button class="rb lg active" id="mgNorm" data-i18n="normal">Normal</button>
+    <button class="rb lg" id="mgNarrow" data-i18n="narrow">Narrow</button>
+  </div><span class="rg-l" data-i18n="margins">Margins</span></div>
+</div>
+
+<!-- Canvas document area -->
+<div class="canvas-area" id="canvasArea">
+  <div class="empty-state" id="emptyState">
+    <div style="font-size:48px;margin-bottom:16px;opacity:.5">&#128196;</div>
+    <div data-i18n="openOrDrop">Open or drop a .docx file</div>
+  </div>
+</div>
+
+<!-- Mobile bottom bar -->
+<div class="mbar">
+  <div class="mbar-row">
+    <select class="font-sel" id="mFontFamily" style="width:90px;height:32px;font-size:11px;font-family:Calibri">
+      <option value="Calibri" style="font-family:Calibri">Calibri</option>
+      <option value="Yu Gothic UI" style="font-family:'Yu Gothic UI','游ゴシック'">游ゴシック</option>
+      <option value="Yu Mincho" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
+      <option value="Meiryo" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+      <option value="Arial" style="font-family:Arial">Arial</option>
+      <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
+    </select>
+    <select class="size-sel" id="mFontSize" style="height:32px;font-size:12px">
+      <option>9</option><option>10</option><option selected>11</option><option>12</option><option>14</option><option>16</option><option>20</option><option>24</option><option>36</option>
+    </select>
+    <div class="sep"></div>
+    <button class="rb" id="mBold"><svg><use href="#i-b"/></svg></button>
+    <button class="rb" id="mItalic"><svg><use href="#i-i"/></svg></button>
+    <button class="rb" id="mUnder"><svg><use href="#i-u"/></svg></button>
+    <button class="rb" id="mStrike"><svg><use href="#i-s"/></svg></button>
+    <div class="sep"></div>
+    <button class="rb" id="mAlL"><svg><use href="#i-al"/></svg></button>
+    <button class="rb" id="mAlC"><svg><use href="#i-ac"/></svg></button>
+    <button class="rb" id="mAlR"><svg><use href="#i-ar"/></svg></button>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="sb">
+  <span id="pgInfo"></span><span class="sep">|</span>
+  <span id="statusText"></span>
+  <div class="zg">
+    <button class="rb" style="color:#fff;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zOut">-</button>
+    <span id="zLvl">100%</span>
+    <input type="range" id="zSlider" min="50" max="200" value="100">
+    <button class="rb" style="color:#fff;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zIn">+</button>
+  </div>
+</div>
+
+<!-- Dialogs -->
+<div class="ov" id="openOv">
+  <div class="dlg"><h2 data-i18n="openFile">Open File</h2><p style="font-size:13px;color:#666" data-i18n="selectDocx">Select a .docx file.</p>
+    <div class="acts"><button class="bp" id="dChoose" data-i18n="chooseFile">Choose File</button><button class="bs" id="dCancel" data-i18n="cancel">Cancel</button></div>
+  </div>
+</div>
+<input type="file" id="fileIn" accept=".docx">
+
+<script type="module">
+// ---- i18n ----
+const I18N = {
+  en: {
+    new: 'New', newDoc: 'New Document',
+    open: 'Open', save: 'Save', undo: 'Undo', redo: 'Redo',
+    home: 'Home', insert: 'Insert', layout: 'Layout',
+    bold: 'Bold', italic: 'Italic', underline: 'Underline', strikethrough: 'Strikethrough',
+    fontColor: 'Font Color', highlight: 'Highlight',
+    left: 'Left', center: 'Center', right: 'Right', justify: 'Justify', lineSpacing: 'Line Spacing',
+    format: 'Format', table: 'Table', picture: 'Picture', insertTable: 'Insert Table',
+    size: 'Size', margins: 'Margins', normal: 'Normal', narrow: 'Narrow',
+    openFile: 'Open File', selectDocx: 'Select a .docx file.',
+    chooseFile: 'Choose File', cancel: 'Cancel',
+    bulletList: 'Bullet List', numberedList: 'Numbered List', indent: 'Indent', outdent: 'Outdent',
+    page: 'Page', pages: 'pages', rendering: 'Rendering...',
+    openOrDrop: 'Open or drop a .docx file',
+  },
+  ja: {
+    new: '新規', newDoc: '新しいドキュメント',
+    open: '開く', save: '保存', undo: '元に戻す', redo: 'やり直し',
+    home: 'ホーム', insert: '挿入', layout: 'レイアウト',
+    bold: '太字', italic: '斜体', underline: '下線', strikethrough: '取り消し線',
+    fontColor: 'フォントの色', highlight: '蛍光ペン',
+    left: '左揃え', center: '中央揃え', right: '右揃え', justify: '両端揃え', lineSpacing: '行間',
+    format: '書式', table: '表', picture: '画像', insertTable: '表の挿入',
+    size: 'サイズ', margins: '余白', normal: '標準', narrow: '狭い',
+    openFile: 'ファイルを開く', selectDocx: '.docxファイルを選択してください。',
+    chooseFile: 'ファイルを選択', cancel: 'キャンセル',
+    bulletList: '箇条書き', numberedList: '番号付きリスト', indent: 'インデント', outdent: 'インデント解除',
+    page: 'ページ', pages: 'ページ', rendering: 'レンダリング中...',
+    openOrDrop: '.docxファイルを開くかドロップしてください',
+  },
+  de: {
+    new: 'Neu', newDoc: 'Neues Dokument',
+    open: 'Öffnen', save: 'Speichern', undo: 'Rückgängig', redo: 'Wiederholen',
+    home: 'Start', insert: 'Einfügen', layout: 'Layout',
+    bold: 'Fett', italic: 'Kursiv', underline: 'Unterstrichen', strikethrough: 'Durchgestrichen',
+    fontColor: 'Schriftfarbe', highlight: 'Hervorheben',
+    left: 'Links', center: 'Zentriert', right: 'Rechts', justify: 'Blocksatz', lineSpacing: 'Zeilenabstand',
+    format: 'Format', table: 'Tabelle', picture: 'Bild', insertTable: 'Tabelle einfügen',
+    size: 'Größe', margins: 'Seitenränder', normal: 'Normal', narrow: 'Schmal',
+    openFile: 'Datei öffnen', selectDocx: 'Wählen Sie eine .docx-Datei.',
+    chooseFile: 'Datei wählen', cancel: 'Abbrechen',
+    page: 'Seite', pages: 'Seiten', rendering: 'Wird gerendert...',
+    openOrDrop: 'Öffnen oder eine .docx-Datei ablegen',
+  },
+  fr: {
+    new: 'Nouveau', newDoc: 'Nouveau document',
+    open: 'Ouvrir', save: 'Enregistrer', undo: 'Annuler', redo: 'Rétablir',
+    home: 'Accueil', insert: 'Insertion', layout: 'Mise en page',
+    bold: 'Gras', italic: 'Italique', underline: 'Souligné', strikethrough: 'Barré',
+    fontColor: 'Couleur de police', highlight: 'Surligneur',
+    left: 'Gauche', center: 'Centré', right: 'Droite', justify: 'Justifié', lineSpacing: 'Interligne',
+    format: 'Format', table: 'Tableau', picture: 'Image', insertTable: 'Insérer un tableau',
+    size: 'Taille', margins: 'Marges', normal: 'Normal', narrow: 'Étroit',
+    openFile: 'Ouvrir un fichier', selectDocx: 'Sélectionnez un fichier .docx.',
+    chooseFile: 'Choisir', cancel: 'Annuler',
+    page: 'Page', pages: 'pages', rendering: 'Rendu en cours...',
+    openOrDrop: 'Ouvrir ou déposer un fichier .docx',
+  },
+  es: {
+    new: 'Nuevo', newDoc: 'Nuevo documento',
+    open: 'Abrir', save: 'Guardar', undo: 'Deshacer', redo: 'Rehacer',
+    home: 'Inicio', insert: 'Insertar', layout: 'Diseño',
+    bold: 'Negrita', italic: 'Cursiva', underline: 'Subrayado', strikethrough: 'Tachado',
+    fontColor: 'Color de fuente', highlight: 'Resaltar',
+    left: 'Izquierda', center: 'Centro', right: 'Derecha', justify: 'Justificar', lineSpacing: 'Interlineado',
+    format: 'Formato', table: 'Tabla', picture: 'Imagen', insertTable: 'Insertar tabla',
+    size: 'Tamaño', margins: 'Márgenes', normal: 'Normal', narrow: 'Estrecho',
+    openFile: 'Abrir archivo', selectDocx: 'Seleccione un archivo .docx.',
+    chooseFile: 'Elegir archivo', cancel: 'Cancelar',
+    page: 'Página', pages: 'páginas', rendering: 'Renderizando...',
+    openOrDrop: 'Abrir o soltar un archivo .docx',
+  },
+  it: {
+    new: 'Nuovo', newDoc: 'Nuovo documento',
+    open: 'Apri', save: 'Salva', undo: 'Annulla', redo: 'Ripristina',
+    home: 'Home', insert: 'Inserisci', layout: 'Layout',
+    bold: 'Grassetto', italic: 'Corsivo', underline: 'Sottolineato', strikethrough: 'Barrato',
+    fontColor: 'Colore carattere', highlight: 'Evidenzia',
+    left: 'Sinistra', center: 'Centro', right: 'Destra', justify: 'Giustifica', lineSpacing: 'Interlinea',
+    format: 'Formato', table: 'Tabella', picture: 'Immagine', insertTable: 'Inserisci tabella',
+    size: 'Dimensione', margins: 'Margini', normal: 'Normale', narrow: 'Stretto',
+    openFile: 'Apri file', selectDocx: 'Seleziona un file .docx.',
+    chooseFile: 'Scegli file', cancel: 'Annulla',
+    page: 'Pagina', pages: 'pagine', rendering: 'Rendering...',
+    openOrDrop: 'Apri o trascina un file .docx',
+  },
+  pt: {
+    new: 'Novo', newDoc: 'Novo documento',
+    open: 'Abrir', save: 'Salvar', undo: 'Desfazer', redo: 'Refazer',
+    home: 'Início', insert: 'Inserir', layout: 'Layout',
+    bold: 'Negrito', italic: 'Itálico', underline: 'Sublinhado', strikethrough: 'Tachado',
+    fontColor: 'Cor da fonte', highlight: 'Realçar',
+    left: 'Esquerda', center: 'Centro', right: 'Direita', justify: 'Justificar', lineSpacing: 'Espaçamento',
+    format: 'Formato', table: 'Tabela', picture: 'Imagem', insertTable: 'Inserir tabela',
+    size: 'Tamanho', margins: 'Margens', normal: 'Normal', narrow: 'Estreito',
+    openFile: 'Abrir arquivo', selectDocx: 'Selecione um arquivo .docx.',
+    chooseFile: 'Escolher arquivo', cancel: 'Cancelar',
+    page: 'Página', pages: 'páginas', rendering: 'Renderizando...',
+    openOrDrop: 'Abrir ou soltar um arquivo .docx',
+  },
+  ko: {
+    new: '새로', newDoc: '새 문서',
+    open: '열기', save: '저장', undo: '실행 취소', redo: '다시 실행',
+    home: '홈', insert: '삽입', layout: '레이아웃',
+    bold: '굵게', italic: '기울임꼴', underline: '밑줄', strikethrough: '취소선',
+    fontColor: '글꼴 색', highlight: '강조',
+    left: '왼쪽', center: '가운데', right: '오른쪽', justify: '양쪽 맞춤', lineSpacing: '줄 간격',
+    format: '서식', table: '표', picture: '그림', insertTable: '표 삽입',
+    size: '크기', margins: '여백', normal: '보통', narrow: '좁게',
+    openFile: '파일 열기', selectDocx: '.docx 파일을 선택하세요.',
+    chooseFile: '파일 선택', cancel: '취소',
+    page: '페이지', pages: '페이지', rendering: '렌더링 중...',
+    openOrDrop: '.docx 파일을 열거나 놓으세요',
+  },
+  'zh-Hans': {
+    new: '新建', newDoc: '新建文档',
+    open: '打开', save: '保存', undo: '撤销', redo: '重做',
+    home: '开始', insert: '插入', layout: '布局',
+    bold: '加粗', italic: '斜体', underline: '下划线', strikethrough: '删除线',
+    fontColor: '字体颜色', highlight: '突出显示',
+    left: '左对齐', center: '居中', right: '右对齐', justify: '两端对齐', lineSpacing: '行距',
+    format: '格式', table: '表格', picture: '图片', insertTable: '插入表格',
+    size: '大小', margins: '页边距', normal: '普通', narrow: '窄',
+    openFile: '打开文件', selectDocx: '请选择 .docx 文件。',
+    chooseFile: '选择文件', cancel: '取消',
+    page: '页', pages: '页', rendering: '渲染中...',
+    openOrDrop: '打开或拖放 .docx 文件',
+  },
+  'zh-Hant': {
+    new: '新增', newDoc: '新建文件',
+    open: '開啟', save: '儲存', undo: '復原', redo: '取消復原',
+    home: '常用', insert: '插入', layout: '版面配置',
+    bold: '粗體', italic: '斜體', underline: '底線', strikethrough: '刪除線',
+    fontColor: '字型色彩', highlight: '醒目提示',
+    left: '靠左', center: '置中', right: '靠右', justify: '左右對齊', lineSpacing: '行距',
+    format: '格式', table: '表格', picture: '圖片', insertTable: '插入表格',
+    size: '大小', margins: '邊界', normal: '標準', narrow: '窄',
+    openFile: '開啟檔案', selectDocx: '請選擇 .docx 檔案。',
+    chooseFile: '選擇檔案', cancel: '取消',
+    page: '頁', pages: '頁', rendering: '轉譯中...',
+    openOrDrop: '開啟或拖放 .docx 檔案',
+  },
+};
+
+function detectLang() {
+  const stored = localStorage.getItem('oxi-lang');
+  if (stored && I18N[stored]) return stored;
+  const nav = navigator.language || 'en';
+  if (nav.startsWith('ja')) return 'ja';
+  if (nav.startsWith('ko')) return 'ko';
+  if (nav.startsWith('zh-TW') || nav.startsWith('zh-Hant')) return 'zh-Hant';
+  if (nav.startsWith('zh')) return 'zh-Hans';
+  if (nav.startsWith('de')) return 'de';
+  if (nav.startsWith('fr')) return 'fr';
+  if (nav.startsWith('es')) return 'es';
+  if (nav.startsWith('it')) return 'it';
+  if (nav.startsWith('pt')) return 'pt';
+  return 'en';
+}
+let curLang = detectLang();
+function t(key) { return (I18N[curLang] || I18N.en)[key] || I18N.en[key] || key; }
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+}
+
+// ---- WASM ----
+import init, { layout_document, edit_docx_advanced, build_docx, parse_document } from './oxi_wasm.js';
+await init();
+
+const $ = id => document.getElementById(id);
+const canvasArea = $('canvasArea');
+const emptyState = $('emptyState');
+let currentDocx = null;
+let fileName = '';
+let layoutResult = null;   // latest layout_document() result
+let cursorPos = null;       // { pageIndex, elemIndex, charOffset }
+let cursorVisible = false;
+let cursorBlinkTimer = null;
+let currentScale = 1;
+
+const DPI = 150;
+const SCALE_BASE = DPI / 72;
+
+// Hidden textarea for keyboard input capture (including IME)
+const hiddenInput = document.createElement('textarea');
+hiddenInput.style.cssText = 'position:fixed;left:50%;top:50%;width:1px;height:1px;border:none;outline:none;color:transparent;background:transparent;caret-color:transparent;overflow:hidden;';
+hiddenInput.setAttribute('autocomplete', 'off');
+hiddenInput.setAttribute('autocorrect', 'off');
+hiddenInput.setAttribute('autocapitalize', 'off');
+hiddenInput.setAttribute('spellcheck', 'false');
+document.body.appendChild(hiddenInput);
+
+// ---- Image preloading ----
+async function preloadImages(elements) {
+  const imageMap = new Map();
+  const promises = [];
+  elements.forEach((elem, idx) => {
+    if (elem.kind === 'image' && elem.image_data) {
+      const ct = elem.content_type || 'image/png';
+      const img = new Image();
+      const p = new Promise(resolve => {
+        img.onload = () => { imageMap.set(idx, img); resolve(); };
+        img.onerror = () => resolve();
+      });
+      img.src = `data:${ct};base64,${elem.image_data}`;
+      promises.push(p);
+    }
+  });
+  await Promise.all(promises);
+  return imageMap;
+}
+
+// ---- Canvas rendering ----
+function renderText(ctx, elem) {
+  const fontSize = elem.font_size || 11;
+  const family = elem.font_family || 'Calibri, sans-serif';
+  const bold = elem.bold ? 'bold ' : '';
+  const italic = elem.italic ? 'italic ' : '';
+
+  ctx.font = `${italic}${bold}${fontSize}px ${family}`;
+  ctx.fillStyle = elem.color || '#000000';
+
+  // Highlight
+  if (elem.highlight && elem.highlight !== 'none') {
+    ctx.save();
+    ctx.fillStyle = elem.highlight;
+    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+    ctx.restore();
+    ctx.fillStyle = elem.color || '#000000';
+  }
+
+  // Character spacing
+  if (elem.character_spacing && elem.character_spacing !== 0) {
+    ctx.letterSpacing = `${elem.character_spacing}px`;
+  }
+
+  const baseline = elem.y + fontSize * 0.85;
+  ctx.fillText(elem.text || '', elem.x, baseline);
+
+  if (elem.character_spacing && elem.character_spacing !== 0) {
+    ctx.letterSpacing = '0px';
+  }
+
+  // Underline
+  if (elem.underline) {
+    ctx.beginPath();
+    ctx.strokeStyle = elem.color || '#000000';
+    ctx.lineWidth = fontSize * 0.05;
+    const underY = baseline + fontSize * 0.15;
+    ctx.moveTo(elem.x, underY);
+    ctx.lineTo(elem.x + elem.width, underY);
+    ctx.stroke();
+  }
+
+  // Strikethrough
+  if (elem.strikethrough) {
+    ctx.beginPath();
+    ctx.strokeStyle = elem.color || '#000000';
+    ctx.lineWidth = fontSize * 0.05;
+    const strikeY = elem.y + elem.height * 0.45;
+    ctx.moveTo(elem.x, strikeY);
+    ctx.lineTo(elem.x + elem.width, strikeY);
+    ctx.stroke();
+  }
+}
+
+function renderImage(ctx, elem, loadedImg) {
+  if (!loadedImg) {
+    ctx.fillStyle = '#f0f0f0';
+    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(elem.x, elem.y, elem.width, elem.height);
+    return;
+  }
+  ctx.drawImage(loadedImg, elem.x, elem.y, elem.width, elem.height);
+}
+
+function renderBorder(ctx, elem) {
+  ctx.beginPath();
+  ctx.strokeStyle = elem.color || '#000000';
+  ctx.lineWidth = elem.width || 0.5;
+  if (elem.x1 != null) {
+    ctx.moveTo(elem.x1, elem.y1);
+    ctx.lineTo(elem.x2, elem.y2);
+  } else {
+    ctx.moveTo(elem.x, elem.y);
+    ctx.lineTo(elem.x + elem.width, elem.y + elem.height);
+  }
+  ctx.stroke();
+}
+
+function renderShading(ctx, elem) {
+  if (elem.color) {
+    ctx.fillStyle = elem.color;
+    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+  }
+}
+
+function renderRect(ctx, elem) {
+  const x = elem.x, y = elem.y, w = elem.width, h = elem.height;
+  const r = elem.corner_radius || 0;
+
+  // Fill
+  if (elem.fill || elem.color) {
+    ctx.fillStyle = elem.fill || elem.color;
+    if (r > 0) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x, y, w, h);
+    }
+  }
+
+  // Stroke
+  if (elem.stroke || elem.border_color) {
+    ctx.strokeStyle = elem.stroke || elem.border_color;
+    ctx.lineWidth = elem.border_width || 1;
+    if (r > 0) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(x, y, w, h);
+    }
+  }
+}
+
+function renderPresetShape(ctx, elem) {
+  // Render preset shapes same as rect for now
+  renderRect(ctx, elem);
+}
+
+async function renderPage(page, index, scale) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'page-canvas';
+  canvas.id = `page-${index}`;
+  canvas.width = Math.round(page.width * scale);
+  canvas.height = Math.round(page.height * scale);
+
+  const isMobile = window.innerWidth < 769;
+  if (isMobile) {
+    canvas.style.width = '100%';
+    canvas.style.height = 'auto';
+  } else {
+    canvas.style.width = canvas.width + 'px';
+    canvas.style.height = canvas.height + 'px';
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const imageMap = await preloadImages(page.elements);
+
+  ctx.save();
+  ctx.scale(scale, scale);
+
+  for (let idx = 0; idx < page.elements.length; idx++) {
+    const elem = page.elements[idx];
+    if (elem.kind === 'text') {
+      renderText(ctx, elem);
+    } else if (elem.kind === 'image') {
+      renderImage(ctx, elem, imageMap.get(idx));
+    } else if (elem.kind === 'border') {
+      renderBorder(ctx, elem);
+    } else if (elem.kind === 'shading') {
+      renderShading(ctx, elem);
+    } else if (elem.kind === 'rect') {
+      renderRect(ctx, elem);
+    } else if (elem.kind === 'preset_shape') {
+      renderPresetShape(ctx, elem);
+    } else if (elem.kind === 'clip_start') {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(elem.x, elem.y, elem.width, elem.height);
+      ctx.clip();
+    } else if (elem.kind === 'clip_end') {
+      ctx.restore();
+    }
+  }
+
+  ctx.restore();
+  return canvas;
+}
+
+// ---- Document rendering ----
+async function renderDocument(docxBytes) {
+  // Remove empty state
+  emptyState.style.display = 'none';
+
+  // Clear previous canvases
+  canvasArea.querySelectorAll('.page-canvas,.loading-state').forEach(el => el.remove());
+
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'loading-state';
+  loadingEl.textContent = t('rendering');
+  canvasArea.appendChild(loadingEl);
+
+  const start = performance.now();
+
+  try {
+    const result = layout_document(docxBytes);
+    layoutResult = result;
+    const layoutMs = Math.round(performance.now() - start);
+
+    if (!result || !result.pages || result.pages.length === 0) {
+      loadingEl.textContent = `No pages in layout result (${layoutMs}ms)`;
+      return;
+    }
+
+    loadingEl.remove();
+
+    const isMobile = window.innerWidth < 769;
+    const scale = isMobile
+      ? (window.innerWidth - 20) / (result.pages[0]?.width || 595)
+      : SCALE_BASE * (zoomLevel / 100);
+    currentScale = scale;
+
+    for (let i = 0; i < result.pages.length; i++) {
+      const canvas = await renderPage(result.pages[i], i, scale);
+      canvas.addEventListener('mousedown', e => onCanvasClick(e, i));
+      canvasArea.appendChild(canvas);
+    }
+
+    const totalMs = Math.round(performance.now() - start);
+    $('pgInfo').textContent = `${result.pages.length} ${t('pages')}`;
+    $('statusText').textContent = `Layout ${layoutMs}ms, total ${totalMs}ms`;
+
+    // Expose for automation
+    window.__oxiRenderDone = true;
+    window.__oxiLayoutMs = layoutMs;
+    window.__oxiTotalMs = totalMs;
+    window.__oxiPageCount = result.pages.length;
+  } catch (e) {
+    loadingEl.textContent = `Error: ${e.message}`;
+    console.error(e);
+  }
+}
+
+// ---- Hit testing & cursor ----
+function onCanvasClick(e, pageIndex) {
+  if (!layoutResult) return;
+  const canvas = e.target;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width) / currentScale;
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height) / currentScale;
+
+  const page = layoutResult.pages[pageIndex];
+  if (!page) return;
+
+  // Find closest text element
+  let bestElem = null, bestIdx = -1, bestDist = Infinity;
+  for (let i = 0; i < page.elements.length; i++) {
+    const el = page.elements[i];
+    if (el.kind !== 'text' || !el.text) continue;
+    // Check if click is within element's vertical band (with some tolerance)
+    const ey = el.y, eh = el.height || el.font_size || 11;
+    if (y >= ey - 2 && y <= ey + eh + 2) {
+      // Horizontal distance
+      const ex = el.x, ew = el.width || 0;
+      const dx = x < ex ? ex - x : x > ex + ew ? x - ex - ew : 0;
+      const dy = Math.abs(y - (ey + eh / 2));
+      const dist = dx + dy * 0.1; // prefer same-line matches
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestElem = el;
+        bestIdx = i;
+      }
+    }
+  }
+
+  // If no same-line match, find globally nearest
+  if (!bestElem) {
+    for (let i = 0; i < page.elements.length; i++) {
+      const el = page.elements[i];
+      if (el.kind !== 'text' || !el.text) continue;
+      const eh = el.height || el.font_size || 11;
+      const cy = el.y + eh / 2, cx = el.x + (el.width || 0) / 2;
+      const dist = Math.abs(cx - x) + Math.abs(cy - y) * 2;
+      if (dist < bestDist) { bestDist = dist; bestElem = el; bestIdx = i; }
+    }
+  }
+
+  if (!bestElem) return;
+
+  // Find character offset within the text element
+  const charOffset = getCharOffset(bestElem, x);
+
+  cursorPos = { pageIndex, elemIndex: bestIdx, charOffset };
+  drawCursor();
+  startCursorBlink();
+  e.preventDefault();
+  hiddenInput.focus();
+}
+
+function getCharOffset(elem, clickX) {
+  const offscreen = document.createElement('canvas').getContext('2d');
+  const fs = elem.font_size || 11;
+  const fam = elem.font_family || 'Calibri, sans-serif';
+  offscreen.font = `${elem.italic?'italic ':''}${elem.bold?'bold ':''}${fs}px ${fam}`;
+  const text = elem.text || '';
+  const relX = clickX - elem.x;
+  for (let i = 0; i <= text.length; i++) {
+    const w = offscreen.measureText(text.substring(0, i)).width;
+    if (w >= relX) return Math.max(0, i);
+  }
+  return text.length;
+}
+
+function getCursorXY() {
+  if (!cursorPos || !layoutResult) return null;
+  const page = layoutResult.pages[cursorPos.pageIndex];
+  if (!page) return null;
+  const el = page.elements[cursorPos.elemIndex];
+  if (!el) return null;
+
+  const offscreen = document.createElement('canvas').getContext('2d');
+  const fs = el.font_size || 11;
+  const fam = el.font_family || 'Calibri, sans-serif';
+  offscreen.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
+  const textBefore = (el.text || '').substring(0, cursorPos.charOffset);
+  const cx = el.x + offscreen.measureText(textBefore).width;
+  const cy = el.y;
+  const ch = el.height || fs;
+  return { x: cx, y: cy, h: ch, pageIndex: cursorPos.pageIndex };
+}
+
+let cursorOverlay = null;
+
+function drawCursor() {
+  // Remove old overlay
+  if (cursorOverlay) { cursorOverlay.remove(); cursorOverlay = null; }
+
+  if (!cursorPos) return;
+  const pos = getCursorXY();
+  if (!pos) return;
+
+  const pageCanvas = $(`page-${pos.pageIndex}`);
+  if (!pageCanvas) return;
+
+  const overlay = document.createElement('canvas');
+  overlay.className = 'cursor-overlay';
+  overlay.width = pageCanvas.width;
+  overlay.height = pageCanvas.height;
+  overlay.style.cssText = `position:absolute;left:${pageCanvas.offsetLeft}px;top:${pageCanvas.offsetTop}px;width:${pageCanvas.style.width};height:${pageCanvas.style.height};pointer-events:none;`;
+
+  const ctx = overlay.getContext('2d');
+  ctx.scale(currentScale, currentScale);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pos.x, pos.y);
+  ctx.lineTo(pos.x, pos.y + pos.h);
+  ctx.stroke();
+
+  pageCanvas.parentElement.style.position = 'relative';
+  pageCanvas.insertAdjacentElement('afterend', overlay);
+  cursorOverlay = overlay;
+}
+
+function startCursorBlink() {
+  if (cursorBlinkTimer) clearInterval(cursorBlinkTimer);
+  cursorVisible = true;
+  drawCursor();
+  if (cursorOverlay) cursorOverlay.style.visibility = 'visible';
+  cursorBlinkTimer = setInterval(() => {
+    cursorVisible = !cursorVisible;
+    if (cursorOverlay) cursorOverlay.style.visibility = cursorVisible ? 'visible' : 'hidden';
+  }, 530);
+}
+
+function stopCursorBlink() {
+  if (cursorBlinkTimer) { clearInterval(cursorBlinkTimer); cursorBlinkTimer = null; }
+  cursorVisible = false;
+  if (cursorOverlay) { cursorOverlay.remove(); cursorOverlay = null; }
+}
+
+// ---- Text input handling ----
+hiddenInput.addEventListener('input', e => {
+  if (!cursorPos || !currentDocx || !layoutResult) return;
+  const typed = hiddenInput.value;
+  if (!typed) return;
+  hiddenInput.value = '';
+  insertText(typed);
+});
+
+hiddenInput.addEventListener('compositionend', e => {
+  if (!cursorPos || !currentDocx) return;
+  const text = e.data;
+  hiddenInput.value = '';
+  if (text) insertText(text);
+});
+
+// Fallback: handle printable characters via keypress/keydown for browsers
+// where hidden textarea doesn't fire 'input' events
+hiddenInput.addEventListener('keypress', e => {
+  if (!cursorPos || !currentDocx || !layoutResult) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const ch = e.key;
+  if (ch && ch.length === 1) {
+    e.preventDefault();
+    insertText(ch);
+  }
+});
+
+function getRunText(paraIndex, runIndex) {
+  // Document structure: { pages: [{ blocks: [{"Paragraph": {...}} | {"Table": {...}} | ...] }] }
+  // paragraph_index = flat block index (not paragraph-only count)
+  const docStruct = parse_document(currentDocx);
+  for (const page of (docStruct.pages || [])) {
+    const blocks = page.blocks || [];
+    if (paraIndex < blocks.length) {
+      const block = blocks[paraIndex];
+      // serde tagged enum: { "Paragraph": { runs: [...] } }
+      const para = block.Paragraph || block;
+      const run = para.runs?.[runIndex];
+      if (run) return run.text || '';
+    }
+  }
+  return null;
+}
+
+let renderTimer = null;
+let pendingCursorRestore = null;
+
+function editDocxNow(paraIndex, runIndex, newText) {
+  const edits = [{ type: 'set_run_text', paragraph_index: paraIndex, run_index: runIndex, new_text: newText }];
+  const edited = edit_docx_advanced(currentDocx, edits);
+  currentDocx = new Uint8Array(edited);
+}
+
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(async () => {
+    renderTimer = null;
+    // Fade transition instead of abrupt switch
+    const canvases = canvasArea.querySelectorAll('.page-canvas');
+    canvases.forEach(c => c.style.transition = 'opacity 0.15s');
+    canvases.forEach(c => c.style.opacity = '0.7');
+    await renderDocument(currentDocx);
+    if (pendingCursorRestore) {
+      const { paraIndex, runIndex, charOff } = pendingCursorRestore;
+      restoreCursor(paraIndex, runIndex, charOff);
+      pendingCursorRestore = null;
+    }
+  }, 2000);
+}
+
+async function insertText(text) {
+  if (!cursorPos || !layoutResult) return;
+  const page = layoutResult.pages[cursorPos.pageIndex];
+  const el = page.elements[cursorPos.elemIndex];
+  if (!el || el.paragraph_index == null || el.run_index == null) return;
+
+  const globalCharOffset = (el.char_offset || 0) + cursorPos.charOffset;
+
+  try {
+    const oldText = getRunText(el.paragraph_index, el.run_index);
+    if (oldText == null) return;
+
+    const newText = oldText.substring(0, globalCharOffset) + text + oldText.substring(globalCharOffset);
+    editDocxNow(el.paragraph_index, el.run_index, newText);
+
+    // Optimistic: update layoutResult in-place and redraw just this page
+    const fragOld = el.text || '';
+    const localOff = cursorPos.charOffset;
+    el.text = fragOld.substring(0, localOff) + text + fragOld.substring(localOff);
+    const oldWidth = el.width;
+    el.width = measureTextWidth(el);
+    const dx = el.width - oldWidth;
+
+    // Shift subsequent elements on the same line
+    if (dx !== 0) shiftFollowing(page, cursorPos.elemIndex, el.y, dx);
+
+    cursorPos.charOffset += text.length;
+    pendingCursorRestore = { paraIndex: el.paragraph_index, runIndex: el.run_index, charOff: globalCharOffset + text.length };
+
+    // Instant redraw of just this page
+    repaintPage(cursorPos.pageIndex);
+    drawCursor();
+
+    // Full re-layout later
+    scheduleRender();
+  } catch (err) {
+    console.error('Edit failed:', err);
+  }
+}
+
+function shiftFollowing(page, elemIndex, lineY, dx) {
+  // Shift all elements after elemIndex that are on the same line (same y)
+  for (let i = elemIndex + 1; i < page.elements.length; i++) {
+    const e = page.elements[i];
+    if (Math.abs(e.y - lineY) < 1) {
+      e.x += dx;
+    }
+  }
+}
+
+function measureTextWidth(el) {
+  const ctx = document.createElement('canvas').getContext('2d');
+  const fs = el.font_size || 11;
+  const fam = el.font_family || 'Calibri, sans-serif';
+  ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
+  return ctx.measureText(el.text || '').width;
+}
+
+function repaintPage(pageIndex) {
+  if (!layoutResult) return;
+  const page = layoutResult.pages[pageIndex];
+  if (!page) return;
+  const canvas = $(`page-${pageIndex}`);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.scale(currentScale, currentScale);
+  for (const elem of page.elements) {
+    if (elem.kind === 'text') renderText(ctx, elem);
+    else if (elem.kind === 'border') renderBorder(ctx, elem);
+    else if (elem.kind === 'shading') renderShading(ctx, elem);
+    else if (elem.kind === 'rect') renderRect(ctx, elem);
+    else if (elem.kind === 'preset_shape') renderPresetShape(ctx, elem);
+    else if (elem.kind === 'clip_start') { ctx.save(); ctx.beginPath(); ctx.rect(elem.x, elem.y, elem.width, elem.height); ctx.clip(); }
+    else if (elem.kind === 'clip_end') ctx.restore();
+    // skip images for speed in optimistic repaint
+  }
+  ctx.restore();
+}
+
+// After re-layout, find the element matching (paraIndex, runIndex) and set cursor
+function restoreCursor(paraIndex, runIndex, globalCharOff) {
+  if (!layoutResult) return;
+  for (let pi = 0; pi < layoutResult.pages.length; pi++) {
+    const page = layoutResult.pages[pi];
+    for (let ei = 0; ei < page.elements.length; ei++) {
+      const el = page.elements[ei];
+      if (el.kind !== 'text') continue;
+      if (el.paragraph_index === paraIndex && el.run_index === runIndex) {
+        const fragStart = el.char_offset || 0;
+        const fragEnd = fragStart + (el.text || '').length;
+        if (globalCharOff >= fragStart && globalCharOff <= fragEnd) {
+          cursorPos = { pageIndex: pi, elemIndex: ei, charOffset: globalCharOff - fragStart };
+          startCursorBlink();
+          hiddenInput.focus();
+          return;
+        }
+      }
+    }
+  }
+  // Fallback: couldn't find exact match, clear cursor
+  stopCursorBlink();
+  cursorPos = null;
+}
+
+hiddenInput.addEventListener('keydown', e => {
+  if (!cursorPos || !currentDocx) return;
+  if (e.ctrlKey || e.metaKey) return;
+
+  if (e.key === 'Backspace') {
+    e.preventDefault();
+    deleteChar(-1);
+  } else if (e.key === 'Delete') {
+    e.preventDefault();
+    deleteChar(1);
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    moveCursor(-1);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    moveCursor(1);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+  } else if (e.key.length === 1 && !e.altKey) {
+    e.preventDefault();
+    insertText(e.key);
+  }
+});
+
+function moveCursor(dir) {
+  if (!cursorPos || !layoutResult) return;
+  const page = layoutResult.pages[cursorPos.pageIndex];
+  const el = page.elements[cursorPos.elemIndex];
+  if (!el) return;
+  const textLen = (el.text || '').length;
+  const newOff = cursorPos.charOffset + dir;
+  if (newOff >= 0 && newOff <= textLen) {
+    cursorPos.charOffset = newOff;
+  } else if (dir < 0 && newOff < 0) {
+    // Move to previous text element
+    for (let i = cursorPos.elemIndex - 1; i >= 0; i--) {
+      if (page.elements[i].kind === 'text' && page.elements[i].text) {
+        cursorPos.elemIndex = i;
+        cursorPos.charOffset = (page.elements[i].text || '').length;
+        break;
+      }
+    }
+  } else if (dir > 0 && newOff > textLen) {
+    // Move to next text element
+    for (let i = cursorPos.elemIndex + 1; i < page.elements.length; i++) {
+      if (page.elements[i].kind === 'text' && page.elements[i].text) {
+        cursorPos.elemIndex = i;
+        cursorPos.charOffset = 0;
+        break;
+      }
+    }
+  }
+  startCursorBlink();
+}
+
+async function deleteChar(dir) {
+  if (!cursorPos || !layoutResult || !currentDocx) return;
+  const page = layoutResult.pages[cursorPos.pageIndex];
+  const el = page.elements[cursorPos.elemIndex];
+  if (!el || el.paragraph_index == null || el.run_index == null) return;
+
+  const globalCharOffset = (el.char_offset || 0) + cursorPos.charOffset;
+
+  try {
+    const oldText = getRunText(el.paragraph_index, el.run_index);
+    if (oldText == null) return;
+
+    let newText, newCursorOffset = cursorPos.charOffset;
+    if (dir < 0 && globalCharOffset > 0) {
+      newText = oldText.substring(0, globalCharOffset - 1) + oldText.substring(globalCharOffset);
+      newCursorOffset = Math.max(0, cursorPos.charOffset - 1);
+    } else if (dir > 0 && globalCharOffset < oldText.length) {
+      newText = oldText.substring(0, globalCharOffset) + oldText.substring(globalCharOffset + 1);
+    } else {
+      return;
+    }
+
+    editDocxNow(el.paragraph_index, el.run_index, newText);
+
+    // Optimistic: update fragment text in place
+    const fragOld = el.text || '';
+    const localOff = cursorPos.charOffset;
+    if (dir < 0 && localOff > 0) {
+      el.text = fragOld.substring(0, localOff - 1) + fragOld.substring(localOff);
+    } else if (dir > 0 && localOff < fragOld.length) {
+      el.text = fragOld.substring(0, localOff) + fragOld.substring(localOff + 1);
+    }
+    const oldWidth = el.width;
+    el.width = measureTextWidth(el);
+    const dx = el.width - oldWidth;
+    if (dx !== 0) shiftFollowing(page, cursorPos.elemIndex, el.y, dx);
+
+    const newGlobalOffset = dir < 0 ? globalCharOffset - 1 : globalCharOffset;
+    cursorPos.charOffset = newCursorOffset;
+    pendingCursorRestore = { paraIndex: el.paragraph_index, runIndex: el.run_index, charOff: Math.max(0, newGlobalOffset) };
+
+    repaintPage(cursorPos.pageIndex);
+    drawCursor();
+    scheduleRender();
+  } catch (err) {
+    console.error('Delete failed:', err);
+  }
+}
+
+// ---- File handling ----
+async function openFile(file) {
+  fileName = file.name.replace(/\.docx$/, '');
+  $('docName').textContent = fileName;
+  $('docName').removeAttribute('data-i18n');
+  const ab = await file.arrayBuffer();
+  currentDocx = new Uint8Array(ab);
+  await renderDocument(currentDocx);
+}
+
+$('btnOpen').addEventListener('click', () => $('openOv').classList.add('show'));
+$('dCancel').addEventListener('click', () => $('openOv').classList.remove('show'));
+$('dChoose').addEventListener('click', () => $('fileIn').click());
+$('fileIn').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('openOv').classList.remove('show');
+  await openFile(f);
+  e.target.value = '';
+});
+
+$('btnNew').addEventListener('click', () => {
+  currentDocx = null;
+  fileName = t('newDoc');
+  $('docName').textContent = fileName;
+  $('docName').dataset.i18n = 'newDoc';
+  canvasArea.querySelectorAll('.page-canvas,.loading-state').forEach(el => el.remove());
+  emptyState.style.display = '';
+  $('pgInfo').textContent = '';
+  $('statusText').textContent = '';
+});
+
+// Drag and drop
+canvasArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+canvasArea.addEventListener('drop', async e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.docx')) {
+    await openFile(file);
+  }
+});
+
+// ---- Save (download current docx) ----
+function dl(d, name, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([d], { type: mime }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+$('btnSave').addEventListener('click', () => {
+  if (!currentDocx) return;
+  dl(currentDocx, (fileName || 'doc') + '.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+});
+
+$('btnPdf').addEventListener('click', () => {
+  // PDF export placeholder -- docx_to_pdf not imported but can be added
+  if (!currentDocx) return;
+  alert('PDF export coming soon');
+});
+
+// ---- Zoom ----
+let zoomLevel = 100;
+const zs = $('zSlider');
+
+function applyZoom(v) {
+  v = Math.max(50, Math.min(200, v));
+  zoomLevel = v;
+  zs.value = v;
+  $('zLvl').textContent = v + '%';
+  // Re-render at new zoom if we have a document
+  if (currentDocx) renderDocument(currentDocx);
+}
+
+zs.addEventListener('input', e => applyZoom(+e.target.value));
+$('zOut').addEventListener('click', () => applyZoom(zoomLevel - 10));
+$('zIn').addEventListener('click', () => applyZoom(zoomLevel + 10));
+
+// ---- Ribbon tabs ----
+const ribs = { home: 'ribHome', insert: 'ribInsert', layout: 'ribLayout' };
+document.querySelectorAll('.rtabs button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.rtabs button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    for (const [k, id] of Object.entries(ribs)) $(id).style.display = k === b.dataset.tab ? 'flex' : 'none';
+  });
+});
+
+// ---- Color palettes (kept for future formatting) ----
+const COLORS = ['#000','#444','#666','#999','#CCC','#FFF','#F00','#F60','#FC0','#FF0','#9C0','#0C0','#0CC','#06C','#00F','#63C','#C0C','#C06','#930','#630','#360','#036','#339','#808'];
+function buildPal(el, cb) {
+  el.innerHTML = '';
+  for (const c of COLORS) {
+    const b = document.createElement('button');
+    b.className = 'sw';
+    b.style.background = c;
+    b.title = c;
+    b.addEventListener('click', e => { e.stopPropagation(); cb(c); el.classList.remove('show'); });
+    el.appendChild(b);
+  }
+}
+buildPal($('colorPop'), c => { $('colorBar').style.background = c; });
+buildPal($('hlPop'), c => { $('hlBar').style.background = c; });
+$('btnColor').addEventListener('click', e => { e.stopPropagation(); $('colorPop').classList.toggle('show'); $('hlPop').classList.remove('show'); });
+$('btnHl').addEventListener('click', e => { e.stopPropagation(); $('hlPop').classList.toggle('show'); $('colorPop').classList.remove('show'); });
+document.addEventListener('click', () => { $('colorPop').classList.remove('show'); $('hlPop').classList.remove('show'); $('tgPop').classList.remove('show'); });
+
+// ---- Table grid (kept for future editing) ----
+const tg = $('tgGrid');
+for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+  const b = document.createElement('button');
+  b.className = 'tc';
+  b.dataset.r = r;
+  b.dataset.c = c;
+  b.addEventListener('mouseenter', () => {
+    tg.querySelectorAll('.tc').forEach(t => t.classList.toggle('hl', +t.dataset.r <= r && +t.dataset.c <= c));
+    $('tgLbl').textContent = `${c + 1} x ${r + 1}`;
+  });
+  b.addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.remove('show'); });
+  tg.appendChild(b);
+}
+$('btnTbl').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
+
+// ---- Keyboard shortcuts ----
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 's') { e.preventDefault(); $('btnSave').click(); }
+    if (e.key === 'o') { e.preventDefault(); $('btnOpen').click(); }
+  }
+});
+
+// ---- i18n init ----
+$('langSel').value = curLang;
+$('langSel').addEventListener('change', e => {
+  curLang = e.target.value;
+  localStorage.setItem('oxi-lang', curLang);
+  document.documentElement.lang = curLang.startsWith('zh') ? curLang : curLang.split('-')[0];
+  applyI18n();
+});
+document.documentElement.lang = curLang.startsWith('zh') ? curLang : curLang.split('-')[0];
+applyI18n();
+</script>
+</body>
+</html>

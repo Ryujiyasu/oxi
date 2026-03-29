@@ -1693,7 +1693,7 @@ impl LayoutEngine {
                     word.push(ch);
                     word_width += char_width;
                 }
-                char_pos_in_run += ch.len_utf8();
+                char_pos_in_run += 1; // character index (not byte offset) for JS compatibility
             }
             // Do NOT flush word here — it may continue in the next fragment
         }
