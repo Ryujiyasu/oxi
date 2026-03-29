@@ -21,8 +21,10 @@ fn gdi_line_height(font_metrics, font_size_pt) -> f32:
 
 **適用条件:** フォントファミリーがCJKホワイトリストに含まれる場合
 
-ホワイトリスト: MS Gothic, MS Mincho, Yu Gothic, Yu Mincho, Meiryo,
-  MS PGothic, MS PMincho, HG系フォント
+ホワイトリスト (COM実測 2026-03-29):
+  MS Gothic, MS Mincho, MS PGothic, MS PMincho,
+  Yu Gothic, Yu Mincho, Meiryo
+  **HG系フォントは不適用** (HGGothicM ratio=1.125≠1.297)
 
 ```
 fn word_line_height(font_metrics, font_size_pt) -> f32:
@@ -48,6 +50,13 @@ fn line_height(rule, value, font_metrics, font_size, grid_pitch) -> f32:
             base = word_line_height(font_metrics, font_size)
             factor = value / 240.0  // w:line="240" = 1.0x
             lh = base * factor
+            // COM実測確定 (2026-03-29, Calibri 11pt gdi_h=13.5pt, noGrid):
+            //   XML w:line設定時: gap = gdi_h × factor
+            //     Single(240): 13.5×1.0 = 13.5pt ✓
+            //     1.15(276):   13.5×1.15 = 15.5pt ✓
+            //     1.5(360):    13.5×1.5  = 20.0pt ✓
+            //     Double(480): 13.5×2.0  = 27.0pt ✓
+            //   compat=14と15で差なし（以前の不一致はスタイル継承の問題）
         "exact":
             lh = value  // w:line in twips / 20
             // grid snap は適用されない (COM確定)
@@ -92,8 +101,11 @@ fn grid_snap(lh, pitch) -> f32:
 
 ### 1.5 テーブルセル内
 
-- adjustLineHeightInTable=false (デフォルト): CJK 83/64 + grid snap 有効
-- adjustLineHeightInTable=true: CJK 83/64 + grid snap 両方無効
+- adjustLineHeightInTable=false (デフォルト): CJK 83/64 有効
+- adjustLineHeightInTable=true: CJK 83/64 無効
+- **grid snap: compat_mode依存** (§15.3参照)
+  - compat=15 (Word 2013+): grid snap **有効**
+  - compat=14 (Word 2010): grid snap **無効**
 - **lineSpacing/spaceAfter/spaceBefore: 自動リセットは無い**
   - COM確認 (2026-03-29): docDefaults/Normalスタイル経由のsa/sb/lsは、テーブルセル・TextBox内でも保持される
   - 以前「リセット」と見えた挙動はテーブルスタイルがNormalのspacingをオーバーライドした結果
@@ -140,6 +152,10 @@ fn paragraph_gap(prev_para, next_para) -> f32:
 - sa=10, sb=10 → spacing=9.75pt ← grid snap の影響
 - sa=15, sb=15 → spacing=15pt ✓
 - sa=0, sb=24 → spacing=24pt ✓
+
+**spaceAfter精度 (2026-03-29, noGrid):**
+gap = line_height + sa（完全一致、twips/20をそのまま加算）
+- sa=0→gap=13.5, sa=60tw(3pt)→16.5, sa=120tw(6pt)→19.5, sa=240tw(12pt)→25.5
 
 **注意:** spacingにもgrid snapが適用される場合がある。
 sa=sb=10pt → 10pt → grid snap → 9.75pt (= 13px * 0.75)
@@ -751,11 +767,50 @@ fn effective_indent(left_twips, left_chars, char_width) -> f32:
 - leftChars=200 のみ → li=21.0pt (200/100 × 10.5pt)
 - left=720 + leftChars=400 → li=**42.0pt** (leftCharsが優先、400/100 × 10.5)
 
-### 15.2 スタイル継承
+### 15.2 スタイル継承チェーン
 
-- Normal style li=18pt → 段落に明示設定なし → **li=18pt(継承)**
-- Normal style li=18pt → 段落で li=36pt → **li=36pt(上書き)**
-- Normal style li=18pt → 段落で li=0pt → **li=0pt(明示0で上書き)**
+```
+priority: direct(paragraph/run XML) > style > basedOn chain > docDefaults
+```
+
+**COM実測確定 (2026-03-29):**
+
+| プロパティ | docDefaults | Normal style | direct | 結果 |
+|-----------|------------|-------------|--------|------|
+| font | Arial | TNR | なし | **TNR** (Normal wins) |
+| font | Arial | TNR | Calibri | **Calibri** (direct wins) |
+| size | 11pt | 12pt | なし | **12pt** |
+| size | 11pt | 12pt | 9pt | **9pt** |
+| spaceAfter | 8pt | 10pt | なし | **10pt** |
+| spaceAfter | 8pt | 10pt | 0pt | **0pt** (明示0も有効) |
+| leftIndent | - | 18pt | なし | **18pt** |
+| leftIndent | - | 18pt | 0pt | **0pt** |
+
+### 15.3 テーブルセル内行高さとgrid snap — compat_mode依存
+
+**テーブルセル内のgrid snapは互換性モードで異なる。**
+
+```
+fn cell_line_gap(font, font_size, grid_pitch, compat_mode) -> f32:
+    lh = gdi_line_height(font, font_size)
+    if compat_mode >= 15:
+        // Word 2013+: セル内もgrid snap有効
+        if grid_pitch > 0:
+            lh = grid_snap(lh, grid_pitch)
+    // else: compat=14(Word 2010): grid snap無効
+    return lh + border_overhead
+```
+
+**COM実測確定 (2026-03-29):**
+
+| compat | grid | body gap | table gap | 解釈 |
+|--------|------|----------|-----------|------|
+| 15 | なし | 18.0 | **18.5** | body=18(snap), table=18+0.5 |
+| 14 | lines/360(18pt) | 20.5 | **16.0** | body=snap, table=**no snap**(13.5+2.5) |
+
+- compat=15: テーブル内grid snap **有効** (adjustLineHeightInTable=False でも)
+- compat=14: テーブル内grid snap **無効**
+- adjustLineHeightInTable=False は全テストで共通（影響せず）
 
 ---
 
@@ -791,6 +846,82 @@ fn effective_indent(left_twips, left_chars, char_width) -> f32:
 | zero | 0.0 | ~0 | ~0 |
 | large(20) | 20.0 | ~20 | ~15 |
 | asymmetric(10) | 10.0 | ~10 | ~8 |
+
+### 13.5 テーブル行高さ (trHeight)
+
+```
+fn row_height(height_rule, specified, content_height) -> f32:
+    match height_rule:
+        "auto":    return content_height  // コンテンツに合わせる
+        "exact":   return specified       // 指定値そのまま
+        "atLeast": return max(content_height, specified)
+```
+
+**COM実測確定 (2026-03-29):**
+
+| rule | specified | content | actual gap |
+|------|----------|---------|-----------|
+| exact=20pt | 20 | - | 20.0 ✓ |
+| exact=30pt | 30 | - | 30.0 ✓ |
+| exact=50pt | 50 | - | 50.0 ✓ |
+| atLeast=25, 1行 | 25 | ~18 | 25.5 (≈specified) |
+| atLeast=25, 3行 | 25 | ~54 | 54.5 (content wins) |
+| auto, 1行 | - | ~18 | 18.5 |
+| auto, 2行 | - | ~36 | 36.5 |
+
+- auto行高さ ≈ n_paras × grid_snap(line_height) + border
+  - Calibri 11pt: natural=13.5→grid_snap=18pt。1行row gap=18.5pt(+0.5 border)
+  - P1→P2 gap in cell: 18pt (grid snap確認、ls=12pt報告だが実質18pt)
+- 段落→テーブル最初の行: gap=18.5pt (spaceAfter=0の場合)
+
+---
+
+## 16. テーブル入れ子 (nested_tables)
+
+### 16.1 入れ子テーブル幅
+
+```
+fn nested_table_width(parent_cell_width, parent_padding_l, parent_padding_r) -> f32:
+    return parent_cell_width - parent_padding_l - parent_padding_r
+```
+
+**COM実測確定 (2026-03-29, 3段ネスト):**
+
+| Level | Cell width | Padding L/R | Content area |
+|-------|-----------|------------|-------------|
+| outer | 400.0 | 4.95 | 390.1 |
+| mid | 390.1 | 4.95 | 380.2 |
+| inner | 380.2 | 4.95 | 370.3 |
+
+- **text_x 増分 = parent_padding (5pt/level)**: 77→82→87
+
+### 16.2 TextBox内テーブル
+
+- テーブル幅 = TextBox content_width = TB.width - TB.marginL - TB.marginR
+- TB w=300, marginL/R=7.2 → content=285.6 → table total=285.85 ≈ 285.6
+
+---
+
+## 17. 図形位置 (shape_positioning)
+
+### 17.1 位置基準 (relativePosition)
+
+| h_rel | v_rel | 基準 |
+|-------|-------|------|
+| 0 (page) | 0 (page) | ページ左上 |
+| 1 (margin) | 1 (margin) | マージン左上 |
+| 2 (column) | 2 (paragraph) | カラム/アンカー段落 |
+
+### 17.2 Wrapタイプのテキストフロー影響
+
+**COM実測確定 (2026-03-29, shape w=100,h=60 at margin-left):**
+
+| Wrap | テキスト挙動 |
+|------|-------------|
+| None(3) | 影響なし（テキストと重なる） |
+| Square(0) | 隣接行が右に押される(x+shape_w) |
+| TopAndBottom(1) | 隣接行が右に押される |
+| Tight(4) | テキスト全体が図形下方に移動 |
 
 ---
 
