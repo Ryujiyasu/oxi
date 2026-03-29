@@ -3,6 +3,18 @@ mod kinsoku;
 use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
 
+/// Pre-allocated single-character strings to avoid heap allocation in hot loops.
+const TAB_STRING: &str = "\t";
+const SPACE_STRING: &str = " ";
+
+/// Convert a char to a String with pre-sized buffer (avoids realloc for multi-byte chars).
+#[inline]
+fn char_to_string(ch: char) -> String {
+    let mut s = String::with_capacity(ch.len_utf8());
+    s.push(ch);
+    s
+}
+
 /// Characters that allow a line break AFTER them (English punctuation).
 /// Word treats these as breakable opportunities similar to spaces.
 fn is_break_after(ch: char) -> bool {
@@ -267,16 +279,25 @@ impl LayoutEngine {
     /// Get font metrics for a single character, using East Asian font for CJK.
     fn metrics_for_char(&self, ch: char, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         if kinsoku::is_cjk(ch) {
-            if let Some(ref ff) = run_style.font_family_east_asia {
-                return self.registry.get(ff.as_str());
-            }
-            if let Some(ref drs) = para_style.default_run_style {
-                if let Some(ref ff) = drs.font_family_east_asia {
-                    return self.registry.get(ff.as_str());
-                }
+            if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
+                return m;
             }
         }
         self.metrics_for(run_style, para_style)
+    }
+
+    /// Get East Asian font metrics if an east-asia font family is specified.
+    /// Returns None if no east-asia font is set (caller should fall back to latin metrics).
+    fn metrics_for_cjk(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> Option<&FontMetrics> {
+        if let Some(ref ff) = run_style.font_family_east_asia {
+            return Some(self.registry.get(ff.as_str()));
+        }
+        if let Some(ref drs) = para_style.default_run_style {
+            if let Some(ref ff) = drs.font_family_east_asia {
+                return Some(self.registry.get(ff.as_str()));
+            }
+        }
+        None
     }
 
     /// Resolve bold for a run, considering paragraph style defaults
@@ -1536,9 +1557,25 @@ impl LayoutEngine {
             let mut char_pos_in_run = frag_char_start;
 
             let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
+
+            // Pre-resolve font metrics and GDI width maps for this fragment.
+            // Avoids repeated font family resolution and HashMap lookups per character.
+            let latin_metrics = self.metrics_for(style, para_style);
+            let cjk_metrics = self.metrics_for_cjk(style, para_style);
+            let latin_gdi_map = self.registry.get_gdi_char_widths(&latin_metrics.family, font_size);
+            let cjk_gdi_map = cjk_metrics.map(|m| self.registry.get_gdi_char_widths(&m.family, font_size)).flatten();
+
             for ch in text.chars() {
-                let char_metrics = self.metrics_for_char(ch, style, para_style);
-                let mut char_width = self.registry.char_width_pt_with_fallback(ch, font_size, char_metrics) + cs;
+                let (char_metrics, gdi_map) = if kinsoku::is_cjk(ch) {
+                    if let Some(cjk_m) = cjk_metrics {
+                        (cjk_m, cjk_gdi_map)
+                    } else {
+                        (latin_metrics, latin_gdi_map)
+                    }
+                } else {
+                    (latin_metrics, latin_gdi_map)
+                };
+                let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map) + cs;
                 // linesAndChars: snap character width to grid pitch
                 if let Some(pitch) = grid_char_pitch {
                     if para_style.snap_to_grid && pitch > 0.0 {
@@ -1585,7 +1622,7 @@ impl LayoutEngine {
                             let next_relative = next_pos - indent_left;
                             let w = (next_relative - current_width).max(char_width);
                             current_line.fragments.push(LineFragment {
-                                text: String::from('\t'),
+                                text: TAB_STRING.to_owned(),
                                 width: w,
                                 style: style.clone(),
                                 tab_alignment: Some(tab_align),
@@ -1598,7 +1635,7 @@ impl LayoutEngine {
                         } else {
                             // Regular space
                             current_line.fragments.push(LineFragment {
-                                text: String::from(ch),
+                                text: SPACE_STRING.to_owned(),
                                 width: char_width,
                                 style: style.clone(),
                                 tab_alignment: None,
@@ -1639,7 +1676,7 @@ impl LayoutEngine {
                     if current_width + char_width > available_width && !current_line.fragments.is_empty() {
                         if kinsoku::is_line_start_prohibited(ch) && !current_line.fragments.is_empty() {
                             current_line.fragments.push(LineFragment {
-                                text: ch.to_string(),
+                                text: char_to_string(ch),
                                 width: char_width,
                                 style: style.clone(),
                                 tab_alignment: None,
@@ -1658,7 +1695,7 @@ impl LayoutEngine {
 
                     if kinsoku::is_line_end_prohibited(ch) {
                         current_line.fragments.push(LineFragment {
-                            text: ch.to_string(),
+                            text: char_to_string(ch),
                             width: char_width,
                             style: style.clone(),
                             tab_alignment: None,
@@ -1672,7 +1709,7 @@ impl LayoutEngine {
                     }
 
                     current_line.fragments.push(LineFragment {
-                        text: ch.to_string(),
+                        text: char_to_string(ch),
                         width: char_width,
                         style: style.clone(),
                         tab_alignment: None,
@@ -2025,7 +2062,34 @@ impl LayoutEngine {
                 // Extra space goes above text (text at bottom of line box)
                 (line_height - natural).max(0.0)
             }
-            _ => 0.0, // auto/multiple: text at top of line box
+            _ => {
+                // Grid-snapped lines: text is vertically centered within the grid cell.
+                // COM-confirmed: P1 20pt in 35.7pt grid cell → 4.9pt offset above text.
+                // Compute natural height and center within line_height.
+                let mut max_ascent: f32 = 0.0;
+                let mut max_descent: f32 = 0.0;
+                if line.fragments.is_empty() {
+                    let metrics = self.doc_default_metrics();
+                    max_ascent = metrics.word_ascent_pt(para_font_size);
+                    max_descent = metrics.word_descent_pt(para_font_size);
+                } else {
+                    for frag in &line.fragments {
+                        let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                        let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                        let asc = metrics.word_ascent_pt(font_size);
+                        let des = metrics.word_descent_pt(font_size);
+                        if asc > max_ascent { max_ascent = asc; }
+                        if des > max_descent { max_descent = des; }
+                    }
+                }
+                let natural = max_ascent + max_descent;
+                if line_height > natural + 0.5 {
+                    // Center text within grid cell
+                    (line_height - natural) / 2.0
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
@@ -2866,6 +2930,27 @@ enum LineBreakType {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn bench_layout_1ec() {
+        let data = std::fs::read("../../tools/golden-test/documents/docx/1ec1091177b1_006.docx")
+            .expect("read docx");
+        let doc = crate::parse_docx(&data).expect("parse");
+        // Warmup
+        let engine = LayoutEngine::for_document(&doc);
+        let _ = engine.layout(&doc);
+        // Measure
+        let n = 10;
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            let engine = LayoutEngine::for_document(&doc);
+            let _ = engine.layout(&doc);
+        }
+        let elapsed = start.elapsed();
+        println!("Layout 1ec: {:.1}ms avg ({} runs, {:.1}ms total)",
+            elapsed.as_millis() as f64 / n as f64, n, elapsed.as_millis());
+    }
 
     #[test]
     #[ignore] // debug only
