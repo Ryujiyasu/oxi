@@ -1824,7 +1824,17 @@ impl LayoutEngine {
 
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
-            (Some("atLeast"), Some(val)) => base.max(val),
+            (Some("atLeast"), Some(val)) => {
+                // COM-confirmed: atLeast = max(grid_snap(natural), specified)
+                let snapped = if snap_to_grid {
+                    if let Some(pitch) = grid_pitch {
+                        if pitch > 0.0 {
+                            (((base + pitch * 0.5) / pitch) + 0.5).floor() * pitch
+                        } else { base }
+                    } else { base }
+                } else { base };
+                snapped.max(val)
+            }
             _ => {
                 let spaced = match line_spacing {
                     Some(factor) => base * factor,
@@ -1911,7 +1921,17 @@ impl LayoutEngine {
         let line_spacing_rule = para_style.line_spacing_rule.as_deref();
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
-            (Some("atLeast"), Some(val)) => base.max(val),
+            (Some("atLeast"), Some(val)) => {
+                // COM-confirmed: atLeast = max(grid_snap(natural), specified)
+                let snapped = if para_style.snap_to_grid {
+                    if let Some(pitch) = grid_pitch {
+                        if pitch > 0.0 {
+                            (((base + pitch * 0.5) / pitch) + 0.5).floor() * pitch
+                        } else { base }
+                    } else { base }
+                } else { base };
+                snapped.max(val)
+            }
             _ => {
                 let spaced = match line_spacing {
                     Some(factor) => base * factor,
