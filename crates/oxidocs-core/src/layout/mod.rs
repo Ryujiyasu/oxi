@@ -2206,12 +2206,14 @@ impl LayoutEngine {
                 if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) { pad_b += bw; }
                 let inner_w = (cell_w - pad_l - pad_r).max(0.0);
                 let mut cell_content_h = pad_t;
+                let _cell_debug_row = row_idx;
 
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
                             let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref());
                             let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
+                            eprintln!("  EST row={} cell_w={:.1} inner_w={:.1} para_h={:.2} cum={:.2} text=\"{}\"", _cell_debug_row, cell_w, inner_w, para_h, cell_content_h + para_h, t);
                                                         cell_content_h += para_h;
                         }
                         Block::Table(nested) => {
@@ -2245,6 +2247,7 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
+            eprintln!("  ROW {} content_h={:.2} trH={:?}", row_idx, row_height, row.height);
             // Apply trHeight constraint
             // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
             if let Some(h) = row.height {
@@ -2761,7 +2764,9 @@ impl LayoutEngine {
             let total: f32 = table.grid_columns.iter().sum();
             let indent = table.style.indent.unwrap_or(0.0);
             let available = content_width - indent;
-            if total > available && table.grid_columns.len() > 1 {
+            // Floating tables (tblpPr) are not constrained by content_width
+            let is_floating = table.style.position.is_some();
+            if !is_floating && total > available && table.grid_columns.len() > 1 {
                 let mut cols = table.grid_columns.clone();
                 let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
                 let last = (available - prefix_sum).max(0.0);
