@@ -1814,11 +1814,17 @@ impl LayoutEngine {
             }
         }
 
-        // Fallback: calculate from font metrics.
-        // adjustLineHeightInTable=true: use standard height (no CJK 83/64).
-        // Table cells use floor(descent) instead of ceil(descent).
-        // Otherwise: use word_line_height (with CJK 83/64 for CJK fonts).
-        let base = if in_table_cell && self.adjust_line_height_in_table {
+        // Use GDI tmHeight table if available (most accurate).
+        // Falls back to formula-based calculation.
+        let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        let base = if let Some((h_px, _a_px, _d_px)) = self.registry.gdi_height(&metrics.family, ppem) {
+            let gdi_height_pt = h_px as f32 * 72.0 / 96.0;
+            if metrics.is_cjk_83_64_font() {
+                gdi_height_pt * 83.0 / 64.0
+            } else {
+                gdi_height_pt
+            }
+        } else if in_table_cell && self.adjust_line_height_in_table {
             metrics.word_line_height_standard(font_size)
         } else if in_table_cell {
             metrics.word_line_height_table_cell(font_size)
