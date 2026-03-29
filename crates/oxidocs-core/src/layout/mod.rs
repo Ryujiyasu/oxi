@@ -84,6 +84,8 @@ pub struct LayoutEngine {
     registry: FontMetricsRegistry,
     /// Compatibility: adjustLineHeightInTable=true disables grid snap in table cells.
     adjust_line_height_in_table: bool,
+    /// Document-level default tab stop interval (from w:settings/w:defaultTabStop)
+    default_tab_stop: f32,
 }
 
 /// Word's default heading font sizes (in points)
@@ -128,6 +130,7 @@ impl LayoutEngine {
             default_font_family: None,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
+            default_tab_stop: 36.0,
         }
     }
 
@@ -145,6 +148,7 @@ impl LayoutEngine {
             default_font_family,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
+            default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
         }
     }
 
@@ -1568,11 +1572,11 @@ impl LayoutEngine {
                                     .find(|ts| ts.position > abs_pos + 0.01)
                                     .map(|ts| (ts.position, ts.alignment))
                                     .unwrap_or_else(|| {
-                                        let tab_stop = 36.0;
+                                        let tab_stop = self.default_tab_stop;
                                         (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                                     })
                             } else {
-                                let tab_stop = 36.0;
+                                let tab_stop = self.default_tab_stop;
                                 (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                             };
                             // Convert absolute tab position back to relative width

@@ -14,6 +14,9 @@ pub struct Document {
     /// false (default) = table cells snap to document grid like normal paragraphs.
     #[serde(default)]
     pub adjust_line_height_in_table: bool,
+    /// Default tab stop interval from w:settings/w:defaultTabStop (in points).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tab_stop: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
