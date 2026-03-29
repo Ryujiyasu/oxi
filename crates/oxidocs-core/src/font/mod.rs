@@ -82,11 +82,25 @@ impl FontMetrics {
     ///   char_width_px = round(advance_em * ppem)
     ///   char_width_pt = char_width_px * 72 / 96
     ///
-    /// COM measurement confirmed: this produces correct widths for all fonts
-    /// including monospace CJK (MS Gothic/Mincho UPM=256).
+    /// For CJK monospace fonts (UPM=256: MS Gothic/Mincho), fullwidth characters
+    /// use even-pixel rounding: ceil_even(ppem). GDI-measured 2026-03-29.
+    /// This matters at small font sizes (7-10pt) where ppem is odd.
     pub fn char_width_pt(&self, c: char, font_size: f32) -> f32 {
         let ppem = (font_size * 96.0 / 72.0).round();
         let advance_em = self.char_width_em(c);
+
+        // CJK monospace fonts (UPM=256): fullwidth = ceil_even(ppem), halfwidth = fullwidth/2
+        if self.units_per_em == 256 && is_fullwidth(c) {
+            let ppem_i = ppem as i32;
+            let even_px = (ppem_i + 1) & !1; // ceil to even
+            return even_px as f32 * 72.0 / 96.0;
+        }
+        if self.units_per_em == 256 && (is_halfwidth_katakana(c) || advance_em <= 0.51) {
+            let ppem_i = ppem as i32;
+            let even_px = (ppem_i + 1) & !1;
+            return (even_px / 2) as f32 * 72.0 / 96.0;
+        }
+
         (advance_em * ppem).round() * 72.0 / 96.0
     }
 
