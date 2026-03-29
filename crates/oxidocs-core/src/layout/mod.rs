@@ -1586,13 +1586,11 @@ impl LayoutEngine {
                     (latin_metrics, latin_gdi_map)
                 };
                 let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map) + cs;
-                // linesAndChars: snap character width to grid pitch
-                if let Some(pitch) = grid_char_pitch {
-                    if para_style.snap_to_grid && pitch > 0.0 {
-                        // Snap char width to nearest multiple of grid pitch
-                        char_width = ((char_width / pitch) + 0.5).floor().max(1.0) * pitch;
-                    }
-                }
+                // linesAndChars: character grid adds micro-expansion (+0.125pt/char)
+                // but never shrinks below natural width. COM-confirmed: no effect
+                // on line breaking for this document. Disabled to prevent
+                // shrinking 12pt chars to 10.63pt grid pitch.
+                // TODO: implement correct char grid expansion when needed.
 
                 if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace
@@ -2983,25 +2981,33 @@ mod tests {
         let engine = LayoutEngine::for_document(&doc);
         let _ = engine.layout(&doc); // warmup
 
-        // Measure layout only
+        // Measure engine creation + layout
         let n = 20;
         let start = std::time::Instant::now();
         let mut result = None;
+        for _ in 0..n {
+            let eng = LayoutEngine::for_document(&doc);
+            result = Some(eng.layout(&doc));
+        }
+        let full_ms = start.elapsed().as_micros() as f64 / 1000.0 / n as f64;
+
+        // Measure layout only (engine reused)
+        let start = std::time::Instant::now();
         for _ in 0..n {
             result = Some(engine.layout(&doc));
         }
         let layout_ms = start.elapsed().as_micros() as f64 / 1000.0 / n as f64;
 
-        // Measure serialization (serde_json as proxy for serde_wasm_bindgen)
-        let r = result.unwrap();
+        // Measure engine creation only
         let start = std::time::Instant::now();
         for _ in 0..n {
-            let _ = serde_json::to_string(&r).unwrap();
+            let _eng = LayoutEngine::for_document(&doc);
         }
-        let serde_ms = start.elapsed().as_micros() as f64 / 1000.0 / n as f64;
+        let engine_ms = start.elapsed().as_micros() as f64 / 1000.0 / n as f64;
 
+        let r = result.unwrap();
         let total_elems: usize = r.pages.iter().map(|p| p.elements.len()).sum();
-        println!("Layout: {:.1}ms, Serde: {:.1}ms, Elements: {}", layout_ms, serde_ms, total_elems);
+        println!("Engine: {:.1}ms, Layout: {:.1}ms, Full: {:.1}ms, Pages: {}, Elements: {}", engine_ms, layout_ms, full_ms, r.pages.len(), total_elems);
     }
 
     #[test]
