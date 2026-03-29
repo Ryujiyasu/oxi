@@ -535,6 +535,7 @@ struct LayoutElementJs {
     strikethrough: Option<bool>,
     color: Option<String>,
     highlight: Option<String>,
+    character_spacing: Option<f32>,
     // Box fields
     corner_radius: Option<f32>,
     // Image fields
@@ -599,7 +600,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                 elements: page.elements.into_iter().map(|elem| {
                     match elem.content {
                         oxidocs_core::layout::LayoutContent::Text {
-                            text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, ..
+                            text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, ..
                         } => LayoutElementJs {
                             x: elem.x, y: elem.y, width: elem.width, height: elem.height,
                             kind: "text".into(),
@@ -613,6 +614,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             strikethrough: Some(strikethrough),
                             color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }),
                             highlight,
+                            character_spacing: if character_spacing.abs() > 0.001 { Some(character_spacing) } else { None },
                             corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
@@ -624,7 +626,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                                 kind: "image".into(),
                                 text: None, font_size: None, font_family: None, bold: None, italic: None,
                                 underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
-                                corner_radius: None,
+                                character_spacing: None, corner_radius: None,
                                 image_data: b64,
                                 content_type,
                                 x1: None, y1: None, x2: None, y2: None,
@@ -635,7 +637,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             kind: "border".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, underline_style: None, strikethrough: None, color, highlight: None,
-                            corner_radius: None,
+                            character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2),
                         },
@@ -644,7 +646,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             kind: "shading".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, underline_style: None, strikethrough: None, color: Some(color), highlight: None,
-                            corner_radius: None,
+                            character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
                         },
@@ -655,7 +657,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             underline: None, underline_style: None, strikethrough: None,
                             color: fill.clone().or_else(|| stroke_color.clone()),
                             highlight: None,
-                            corner_radius: if corner_radius > 0.0 { Some(corner_radius) } else { None },
+                            character_spacing: None, corner_radius: if corner_radius > 0.0 { Some(corner_radius) } else { None },
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
                         },
@@ -664,7 +666,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             kind: "clip_start".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, underline_style: None, strikethrough: None,
-                            color: None, highlight: None, corner_radius: None,
+                            color: None, highlight: None, character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
                         },
@@ -673,7 +675,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             kind: "clip_end".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, underline_style: None, strikethrough: None,
-                            color: None, highlight: None, corner_radius: None,
+                            color: None, highlight: None, character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
                         },
@@ -682,7 +684,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             kind: "preset_shape".into(),
                             text: None, font_size: None, font_family: None, bold: None, italic: None,
                             underline: None, underline_style: None, strikethrough: None,
-                            color: None, highlight: None, corner_radius: None,
+                            color: None, highlight: None, character_spacing: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
                         },
