@@ -449,6 +449,12 @@ pub struct TextBox {
     /// Border style
     #[serde(default)]
     pub border: bool,
+    /// Border stroke color (hex)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_color: Option<String>,
+    /// Border stroke width in points
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_width: Option<f32>,
     /// Background color (hex)
     #[serde(default)]
     pub fill: Option<String>,

@@ -949,8 +949,12 @@ impl LayoutEngine {
             let cr = text_box.corner_radius.unwrap_or(0.0);
             elements.push(LayoutElement::new(abs_x, abs_y, text_box.width, text_box.height, LayoutContent::BoxRect {
                     fill: fill_hex,
-                    stroke_color: if has_border { Some("#000000".to_string()) } else { None },
-                    stroke_width: if has_border { 0.75 } else { 0.0 },
+                    stroke_color: if has_border {
+                        text_box.stroke_color.as_ref()
+                            .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
+                            .or_else(|| Some("#000000".to_string()))
+                    } else { None },
+                    stroke_width: if has_border { text_box.stroke_width.unwrap_or(0.75) } else { 0.0 },
                     corner_radius: cr,
             }));
         }
