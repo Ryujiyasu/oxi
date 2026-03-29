@@ -2936,7 +2936,53 @@ mod tests {
     fn bench_layout_1ec() {
         let data = std::fs::read("../../tools/golden-test/documents/docx/1ec1091177b1_006.docx")
             .expect("read docx");
+        // Profile: parse vs layout
+        let parse_start = std::time::Instant::now();
         let doc = crate::parse_docx(&data).expect("parse");
+        let parse_ms = parse_start.elapsed().as_millis();
+        println!("Parse: {}ms", parse_ms);
+
+        // Count blocks, runs, characters
+        let mut total_chars = 0usize;
+        let mut total_runs = 0usize;
+        let mut total_blocks = 0usize;
+        let mut total_table_cells = 0usize;
+        for page in &doc.pages {
+            total_blocks += page.blocks.len();
+            for block in &page.blocks {
+                match block {
+                    crate::ir::Block::Paragraph(p) => {
+                        total_runs += p.runs.len();
+                        for r in &p.runs { total_chars += r.text.len(); }
+                    }
+                    crate::ir::Block::Table(t) => {
+                        for row in &t.rows {
+                            for cell in &row.cells {
+                                total_table_cells += 1;
+                                for b in &cell.blocks {
+                                    if let crate::ir::Block::Paragraph(p) = b {
+                                        total_runs += p.runs.len();
+                                        for r in &p.runs { total_chars += r.text.len(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // TextBox content
+            for tb in &page.text_boxes {
+                for b in &tb.blocks {
+                    if let crate::ir::Block::Paragraph(p) = b {
+                        total_runs += p.runs.len();
+                        for r in &p.runs { total_chars += r.text.len(); }
+                    }
+                }
+            }
+        }
+        println!("Doc: {} blocks, {} runs, {} chars, {} table_cells", total_blocks, total_runs, total_chars, total_table_cells);
+
         // Warmup
         let engine = LayoutEngine::for_document(&doc);
         let _ = engine.layout(&doc);
@@ -2948,7 +2994,7 @@ mod tests {
             let _ = engine.layout(&doc);
         }
         let elapsed = start.elapsed();
-        println!("Layout 1ec: {:.1}ms avg ({} runs, {:.1}ms total)",
+        println!("Layout: {:.1}ms avg ({} runs, {:.0}ms total)",
             elapsed.as_millis() as f64 / n as f64, n, elapsed.as_millis());
     }
 
