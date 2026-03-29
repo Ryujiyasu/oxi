@@ -2108,10 +2108,16 @@ impl LayoutEngine {
                 }
                 let natural = max_ascent + max_descent;
                 if line_height > natural + 0.5 {
-                    // Center text within grid cell
+                    // Center text within grid cell (grid snap case)
                     (line_height - natural) / 2.0
                 } else {
-                    0.0
+                    // No grid snap: apply font internal leading offset
+                    // COM-confirmed: offset = (CJK_height - fontSize) / 2
+                    let font_size = if !line.fragments.is_empty() {
+                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
+                    } else { para_font_size };
+                    let leading = (natural - font_size).max(0.0);
+                    leading / 2.0
                 }
             }
         }
