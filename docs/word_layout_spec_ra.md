@@ -60,7 +60,11 @@ fn line_height(rule, value, font_metrics, font_size, grid_pitch) -> f32:
             return lh
         "atLeast":
             natural = word_line_height(font_metrics, font_size)
+            // grid snap は natural に適用、specified にはなし
+            if grid_pitch > 0:
+                natural = grid_snap(natural, grid_pitch)
             lh = max(natural, value)
+            return lh  // grid snap済み or specified(snap不要)
 
     // grid snap (type="lines" or "linesAndChars" のみ)
     if grid_pitch > 0:
@@ -223,6 +227,41 @@ fn char_width_pt(font_metrics, char, font_size) -> f32:
     pixel_width = round(advance * ppem / upm)
     return pixel_width * 72.0 / 96.0
 ```
+
+**GDI実測 vs Oxi計算の差異 (2026-03-29):**
+
+| フォント | ppem | 不一致数/63文字 | 原因 |
+|---------|------|----------------|------|
+| Calibri | 12 (9pt) | **17** | GDIヒンティング |
+| Calibri | 14 (10.5pt) | **0** | 完全一致 |
+| Calibri | 15 (11pt) | **16** | GDIヒンティング |
+| Arial | 12-15 | **11-18** | GDIヒンティング |
+| MS Gothic/Mincho | 全サイズ | **0** | UPM=256で丸め不要 |
+
+**注意:** `round(advance * ppem / upm)` はGDIヒンティング非適用時の近似値。
+TrueTypeフォント(UPM=2048)は、GDIがヒンティング命令で幅を調整するため最大1px差が生じる。
+この差が行折り返し位置→行数→Y座標累積ずれの主因。
+**解決策: GDI幅オーバーライドテーブル**
+- `gdi_pixel_overrides.json` (14.8KB): Oxi計算値と異なる1888箇所のみ
+- `gdi_width_overrides.json` (1055KB): 全フォント完全テーブル
+- 9フォント × ppem 7-20 × 894文字を Windows GDI で実測済み
+- Bold フォントは Regular より差異が多い (Arial Bold: 500箇所)
+
+### 4.6 行折り返し判定
+
+```
+fn needs_line_break(accumulated_width_px, content_width_px) -> bool:
+    return accumulated_width_px > content_width_px
+    // 注意: > であり >= ではない（content_widthちょうどは折り返さない）
+```
+
+**GDI実測確定 (2026-03-29):**
+- Calibri 11pt 'A'(9px)×86 = 774px... ×87=783px: content=602px
+  - n=86 string_w=602px → **1行** (width == content → 折り返さない)
+  - n=87 string_w=609px → **2行** (width > content → 折り返す)
+- `GetTextExtentPoint32W(全文字列)` = 個別文字幅の合計と一致
+  - string_width == sum(char_widths) (Wordでも同様)
+- Mixed text: line 1 gdi_w=459.75pt > content(451.3pt) → 正しく折り返し
 
 ### 4.2 フォントフォールバック
 
@@ -428,8 +467,10 @@ fn next_custom_tab(current_x_from_margin, tab_stops, effective_indent) -> Option
 | indent=36, tab@144,288 | margin+36 | margin+144 | margin+288 |
 | indent=72, tab@144,288 | margin+72 | margin+144 | margin+288 |
 | indent=180, tab@144,288 | margin+180 | margin+288 | margin+336 |
-| hanging=36/indent=72, P1 | margin+36 | margin+72 | margin+144 |
+| hanging=36/indent=72, P1 | margin+36 | margin+72* | margin+144 |
 | hanging=36/indent=72, P2 | margin+72 | margin+144 | margin+288 |
+
+\* P1のSeg1(margin+72)はleftIndent位置への**暗黙タブ**(hanging indent自動生成)
 | firstLine=36, P1 | margin+36 | margin+144 | margin+288 |
 | firstLine=36, P2 | margin+0 | margin+144 | margin+288 |
 
@@ -509,9 +550,9 @@ fn column_line_overflow(cursor_y, line_height, col_bottom, next_col_start_y) -> 
 
 ---
 
-## 10. 番号リスト (numbering)
+## 12. 番号リスト (numbering)
 
-### 10.1 基本レイアウト
+### 12.1 基本レイアウト
 
 ```
 fn list_paragraph_layout():
@@ -526,7 +567,7 @@ fn list_paragraph_layout():
 - テキスト開始位置 = margin+22pt (= leftIndent)
 - 弾丸リスト: 同一(li=22, fli=-22), マーカー=U+F06C (Wingdings)
 
-### 10.2 ネストレベル別インデント
+### 12.2 ネストレベル別インデント
 
 | Level | leftIndent | firstLineIndent | テキスト開始(margin-rel) |
 |-------|-----------|-----------------|----------------------|
@@ -537,7 +578,7 @@ fn list_paragraph_layout():
 - Level間のインデント増分: +10.5pt
 - firstLineIndentは全レベル共通(-22pt)
 
-### 10.3 リスト+カスタムタブの相互作用
+### 12.3 リスト+カスタムタブの相互作用
 
 - リスト内テキストはleftIndent位置から開始
 - カスタムタブ(@144pt)はマージン絶対位置（リストindentに影響されない）
@@ -634,6 +675,122 @@ fn footnote_area(page_height, bottom_margin, footnotes) -> (f32, f32):
 - Section 1 (1カラム) → continuous break → Section 2 (2カラム)
 - カラム変更は同一ページ内で適用される
 - Section 2 のカラム領域は Section 1 の本文の下から開始
+
+---
+
+## 13. テーブルセルパディング (cell_padding)
+
+### 13.1 デフォルト値
+
+| パラメータ | デフォルト値 |
+|-----------|-----------|
+| LeftPadding | **4.95pt** (≈0.069in) |
+| RightPadding | **4.95pt** |
+| TopPadding | **0.0pt** |
+| BottomPadding | **0.0pt** |
+
+**COM実測確定 (2026-03-29):** Cell.LeftPadding=4.95, Cell.TopPadding=0.0
+
+### 13.2 セルレベルオーバーライド
+
+- テーブルレベル (tbl.LeftPadding=10) とセルレベル (cell.LeftPadding=20) が混在可能
+- **セルレベルが優先**
+- COM確認: tbl=10, cell(1,1)=20 → R1C1 text_x は R2C1 より10pt右
+
+### 13.3 ボーダー幅のテキスト位置影響
+
+```
+fn text_position_in_cell(cell_x, padding, border_width) -> f32:
+    return cell_x + padding + border_width / 2.0
+```
+
+**COM実測確定:**
+- border=0: text_x=77.0
+- border=4halfpt(2pt): text_x=77.0 (差なし? padding内に吸収)
+- border=12halfpt(6pt): text_x=77.5 (+0.5pt)
+- border=24halfpt(12pt): text_x=78.5 (+1.5pt)
+
+### 13.4 セル垂直配置 (vAlign)
+
+```
+fn cell_text_y(valign, row_top, row_height, content_height, top_padding) -> f32:
+    match valign:
+        "top":    return row_top + top_padding
+        "center": return row_top + (row_height - content_height) / 2.0
+        "bottom": return row_top + row_height - content_height
+```
+
+**COM実測確定 (2026-03-29, row_height=60pt):**
+
+| vAlign | 1行(~18pt) | 2行(~36pt) | 3行(~54pt) |
+|--------|-----------|-----------|-----------|
+| top | 102.5 | 102.5 | 102.5 |
+| center | 184.0 | 175.0 | 166.0 |
+| bottom | 265.5 | 247.5 | 229.5 |
+
+- center 1行: row_top(162.5) + (60-18)/2 = 183.5 → 実測184.0 (±0.5pt)
+- center 3行: row_top(162.5) + (60-54)/2 = 165.5 → 実測166.0 (±0.5pt)
+
+---
+
+## 15. インデント継承 (indent_inheritance)
+
+### 15.1 leftChars vs left (twips)
+
+```
+fn effective_indent(left_twips, left_chars, char_width) -> f32:
+    if left_chars is Some:
+        // leftChars が left を上書き（加算ではない）
+        return left_chars / 100.0 * char_width
+    else:
+        return left_twips / 20.0
+```
+
+**COM実測確定 (2026-03-29):**
+- left=720tw のみ → li=36.0pt (720/20)
+- leftChars=200 のみ → li=21.0pt (200/100 × 10.5pt)
+- left=720 + leftChars=400 → li=**42.0pt** (leftCharsが優先、400/100 × 10.5)
+
+### 15.2 スタイル継承
+
+- Normal style li=18pt → 段落に明示設定なし → **li=18pt(継承)**
+- Normal style li=18pt → 段落で li=36pt → **li=36pt(上書き)**
+- Normal style li=18pt → 段落で li=0pt → **li=0pt(明示0で上書き)**
+
+---
+
+## 14. TextBox内部マージン (textbox_padding)
+
+### 14.1 デフォルト値
+
+| パラメータ | デフォルト値 |
+|-----------|-----------|
+| MarginLeft | **7.2pt** (≈0.1in) |
+| MarginRight | **7.2pt** |
+| MarginTop | **3.6pt** (≈0.05in) |
+| MarginBottom | **3.6pt** |
+
+**COM実測確定 (2026-03-29)**
+
+### 14.2 テーブル vs TextBox 比較
+
+| | Table Cell | TextBox |
+|---|-----------|---------|
+| Left pad | 4.95pt | 7.2pt |
+| Top pad | 0.0pt | 3.6pt |
+| Right pad | 4.95pt | 7.2pt |
+| Bottom pad | 0.0pt | 3.6pt |
+
+**TextBoxの方がパディングが大きい（左右+2.25pt、上下+3.6pt）**
+
+### 14.3 カスタムパディング検証
+
+| 設定 | MarginL | text_offset_x | text_offset_y |
+|------|---------|--------------|--------------|
+| default | 7.2 | 7.2に近い | 3.6に近い |
+| zero | 0.0 | ~0 | ~0 |
+| large(20) | 20.0 | ~20 | ~15 |
+| asymmetric(10) | 10.0 | ~10 | ~8 |
 
 ---
 

@@ -238,6 +238,9 @@ pub struct FontMetricsRegistry {
     default_family: String,
     /// COM-measured line heights: font → size_str → grid_key → height_pt
     com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>>,
+    /// GDI-measured character widths: font → ppem → codepoint → width_px
+    /// These override the formula-based widths where GDI hinting produces different results.
+    gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>>,
 }
 
 impl FontMetricsRegistry {
@@ -322,10 +325,38 @@ impl FontMetricsRegistry {
             { HashMap::new() }
         };
 
+        // Load GDI-measured character width overrides
+        // These correct for GDI hinting that round(advance * ppem / upm) cannot reproduce
+        let gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>> = {
+            let gdi_json = include_str!("data/gdi_width_overrides.json");
+            // Parse: font_name -> ppem_str -> {codepoint_str: width_px}
+            let raw: HashMap<String, HashMap<String, HashMap<String, u32>>> =
+                serde_json::from_str(gdi_json).unwrap_or_default();
+            // Convert string keys to numeric
+            let mut result = HashMap::new();
+            for (font, ppem_map) in raw {
+                let mut ppem_result = HashMap::new();
+                for (ppem_str, char_map) in ppem_map {
+                    if let Ok(ppem) = ppem_str.parse::<u32>() {
+                        let mut char_result = HashMap::new();
+                        for (cp_str, width) in char_map {
+                            if let Ok(cp) = cp_str.parse::<u32>() {
+                                char_result.insert(cp, width);
+                            }
+                        }
+                        ppem_result.insert(ppem, char_result);
+                    }
+                }
+                result.insert(font, ppem_result);
+            }
+            result
+        };
+
         Self {
             fonts,
             default_family: "Calibri".to_string(),
             com_line_heights,
+            gdi_widths,
         }
     }
 
@@ -397,10 +428,21 @@ impl FontMetricsRegistry {
         self.get(&self.default_family)
     }
 
-    /// Character width with GDI font fallback.
+    /// Character width with GDI font fallback and hinting overrides.
     /// When a CJK character is rendered with a Latin font (e.g. Calibri),
     /// GDI substitutes MS UI Gothic. This method mimics that behavior.
+    /// For Latin fonts, GDI hinting overrides are applied when available.
     pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
+        // GDI hinting override: use pre-measured width if available
+        let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
+            if let Some(char_widths) = font_ppems.get(&ppem) {
+                if let Some(&width_px) = char_widths.get(&(c as u32)) {
+                    return width_px as f32 * 72.0 / 96.0;
+                }
+            }
+        }
+
         // If the font has this character's width measured, use it directly
         if metrics.char_widths.contains_key(&c) {
             return metrics.char_width_pt(c, font_size);

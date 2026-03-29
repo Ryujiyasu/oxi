@@ -2015,10 +2015,11 @@ impl LayoutEngine {
             }
         };
 
-        // Default cell padding from table style or OOXML default (L/R=108tw=5.4pt, T/B=0)
+        // Default cell padding from table style or OOXML default
+        // COM-measured 2026-03-29: L/R=4.95pt (99tw), T/B=0pt
         let default_pad = &table.style.default_cell_margins;
-        let default_pad_l = default_pad.as_ref().and_then(|m| m.left).unwrap_or(5.4);
-        let default_pad_r = default_pad.as_ref().and_then(|m| m.right).unwrap_or(5.4);
+        let default_pad_l = default_pad.as_ref().and_then(|m| m.left).unwrap_or(4.95);
+        let default_pad_r = default_pad.as_ref().and_then(|m| m.right).unwrap_or(4.95);
         let default_pad_t = default_pad.as_ref().and_then(|m| m.top).unwrap_or(0.0);
         let default_pad_b = default_pad.as_ref().and_then(|m| m.bottom).unwrap_or(0.0);
 
