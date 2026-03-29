@@ -234,7 +234,41 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     oxidocs_core::layout::LayoutContent::ClipEnd => {
                         RestoreDC(mem_dc, -1);
                     }
-                    _ => {} // Skip Image, PresetShape for now
+                    oxidocs_core::layout::LayoutContent::Image { ref data, .. } => {
+                        if !data.is_empty() {
+                            // Decode image and draw via GDI StretchDIBits
+                            if let Ok(img) = image::load_from_memory(data) {
+                                let rgba = img.to_rgba8();
+                                let (pw, ph) = rgba.dimensions();
+                                // Create DIB and draw
+                                let mut bmi = BITMAPINFO {
+                                    bmiHeader: BITMAPINFOHEADER {
+                                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                                        biWidth: pw as i32,
+                                        biHeight: -(ph as i32), // top-down
+                                        biPlanes: 1,
+                                        biBitCount: 32,
+                                        biCompression: 0,
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                };
+                                // BGRA pixel data
+                                let mut pixels: Vec<u8> = Vec::with_capacity((pw * ph * 4) as usize);
+                                for pixel in rgba.pixels() {
+                                    pixels.push(pixel[2]); // B
+                                    pixels.push(pixel[1]); // G
+                                    pixels.push(pixel[0]); // R
+                                    pixels.push(pixel[3]); // A
+                                }
+                                StretchDIBits(mem_dc, x, y, ew, eh,
+                                    0, 0, pw as i32, ph as i32,
+                                    Some(pixels.as_ptr() as *const _),
+                                    &bmi, DIB_RGB_COLORS, SRCCOPY);
+                            }
+                        }
+                    }
+                    _ => {} // Skip PresetShape for now
                 }
             }
 
