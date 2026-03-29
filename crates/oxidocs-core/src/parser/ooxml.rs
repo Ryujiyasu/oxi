@@ -59,6 +59,7 @@ impl OoxmlParser {
         let sections = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
+        let default_tab_stop = self.parse_default_tab_stop();
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
@@ -152,6 +153,7 @@ impl OoxmlParser {
             metadata,
             comments: all_comments,
             adjust_line_height_in_table,
+            default_tab_stop,
         })
     }
 
@@ -313,6 +315,38 @@ impl OoxmlParser {
     /// Therefore: always return false (= table cells snap to grid like normal paragraphs).
     fn parse_adjust_line_height_in_table(&mut self) -> bool {
         false
+    }
+
+    /// Parse word/settings.xml for defaultTabStop value.
+    fn parse_default_tab_stop(&mut self) -> Option<f32> {
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return None,
+        };
+        // Quick search for w:defaultTabStop
+        let mut reader = Reader::from_str(&xml);
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) => {
+                    if local_name(e.name().as_ref()) == "defaultTabStop" {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if let Ok(twips) = val.parse::<f32>() {
+                                    return Some(twips / 20.0);
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        None
     }
 
     fn parse_document_xml(
