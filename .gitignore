@@ -52,3 +52,4 @@ tools/**/*_deep*.py
 !tools/metrics/analyze_default_spacing.py
 !tools/metrics/analyze_isolated.py
 tools/acrobat_analysis.py
+tools/oxi-gdi-renderer/target/
