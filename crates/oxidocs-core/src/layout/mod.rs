@@ -2252,6 +2252,10 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
+            // Note: individual line heights within cells are already grid-snapped
+            // via table_grid_pitch in line_height_inner. No additional row-level
+            // grid snap needed — it causes double-snapping and row expansion.
+
             // Apply trHeight constraint
             // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
             if let Some(h) = row.height {
