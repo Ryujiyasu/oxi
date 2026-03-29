@@ -533,6 +533,7 @@ impl LayoutEngine {
                         grid_pitch,
                         prev_para_style_id.as_deref(), prev_contextual_spacing, false,
                         prev_space_after,
+                        Some(block_idx),
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -713,7 +714,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0,
+                            false, 0.0, None,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -735,7 +736,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0,
+                            false, 0.0, None,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -969,7 +970,7 @@ impl LayoutEngine {
                         page.grid_line_pitch, // §1.6: TextBox uses grid snap (compat=15, COM confirmed)
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
-                        0.0,
+                        0.0, None,
                     );
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
@@ -1064,6 +1065,7 @@ impl LayoutEngine {
         prev_contextual_spacing: bool,
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
+        body_para_index: Option<usize>,
     ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
@@ -1387,7 +1389,7 @@ impl LayoutEngine {
                 let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
                 let baseline_adjust = line_max_ascent - frag_ascent;
 
-                elements.push(LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust, adjusted_width, line_height, LayoutContent::Text {
+                let mut el = LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -1401,7 +1403,13 @@ impl LayoutEngine {
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
                         character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing,
-                }));
+                });
+                if let Some(pi) = body_para_index {
+                    el.paragraph_index = Some(pi);
+                    el.run_index = Some(frag.run_index);
+                    el.char_offset = Some(frag.char_offset);
+                }
+                elements.push(el);
                 x += adjusted_width + frag_spacing_after[frag_idx];
             }
 
@@ -2777,9 +2785,11 @@ impl LayoutEngine {
             // Greedy line count estimation
             // Kinsoku (line-break rules) and character spacing rounding can cause
             // actual layout to need 1 more line than the greedy estimate.
-            // Use effective_width reduced by 1 char as safety margin.
-            let safe_width = (effective_width - para_font_size).max(1.0);
-            let safe_first = (first_line_width - para_font_size).max(1.0);
+            // Use actual effective width for line count estimation.
+            // Previous 1-char safety margin caused false 2-line estimates
+            // for text that barely fits (e.g. 492pt text in 500pt cell).
+            let safe_width = effective_width.max(1.0);
+            let safe_first = first_line_width.max(1.0);
             let line_count = if safe_width > 0.0 && total_text_w > 0.0 {
                 let mut remaining = total_text_w;
                 let mut lines = 0u32;
