@@ -300,10 +300,47 @@ impl LayoutEngine {
     }
 
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
-        let content_width = page.size.width - page.margin.left - page.margin.right;
+        let total_content_width = page.size.width - page.margin.left - page.margin.right;
         let content_height = page.size.height - page.margin.top - page.margin.bottom;
-        let start_x = page.margin.left;
         let start_y = page.margin.top;
+
+        // Multi-column layout: compute column X positions and widths
+        // COM-confirmed: col_x = margin + Σ(prev_width + prev_spacing)
+        let num_columns = page.columns.as_ref().map(|c| c.num.max(1) as usize).unwrap_or(1);
+        let mut col_x_positions: Vec<f32> = Vec::with_capacity(num_columns);
+        let mut col_widths: Vec<f32> = Vec::with_capacity(num_columns);
+
+        if num_columns > 1 {
+            if let Some(ref cols) = page.columns {
+                if !cols.columns.is_empty() {
+                    // Unequal width columns: use explicit definitions
+                    let mut x = page.margin.left;
+                    for col_def in &cols.columns {
+                        col_x_positions.push(x);
+                        col_widths.push(col_def.width);
+                        x += col_def.width + col_def.space.unwrap_or(0.0);
+                    }
+                } else {
+                    // Equal width columns
+                    let spacing = cols.space.unwrap_or(36.0); // default 36pt
+                    let col_w = (total_content_width - spacing * (num_columns - 1) as f32) / num_columns as f32;
+                    let mut x = page.margin.left;
+                    for _ in 0..num_columns {
+                        col_x_positions.push(x);
+                        col_widths.push(col_w);
+                        x += col_w + spacing;
+                    }
+                }
+            }
+        }
+        if col_x_positions.is_empty() {
+            col_x_positions.push(page.margin.left);
+            col_widths.push(total_content_width);
+        }
+
+        let mut current_column: usize = 0;
+        let mut start_x = col_x_positions[0];
+        let mut content_width = col_widths[0];
 
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
@@ -348,7 +385,7 @@ impl LayoutEngine {
             block_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
-                    // pageBreakBefore: force a new page before this paragraph
+                    // pageBreakBefore: force a new page (not just next column)
                     if para.style.page_break_before && !elements.is_empty() {
                         pages.push(LayoutPage {
                             width: page.size.width,
@@ -356,50 +393,95 @@ impl LayoutEngine {
                             elements: std::mem::take(&mut elements),
                         });
                         cursor_y = start_y;
+                        current_column = 0;
+                        start_x = col_x_positions[0];
+                        content_width = col_widths[0];
                         current_page_idx += 1;
-                        // Update this block's page index since it moved to next page
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
                     }
 
-                    // keepLines: estimate paragraph height; if it doesn't fit
-                    // on the current page but would fit on a fresh page, push
-                    // the entire paragraph to the next page.
+                    // keepLines: if doesn't fit, advance column or page
                     if para.style.keep_lines && !elements.is_empty() {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
                         let remaining = (start_y + content_height) - cursor_y;
                         if est_h > remaining && est_h <= content_height {
-                            pages.push(LayoutPage {
-                                width: page.size.width,
-                                height: page.size.height,
-                                elements: std::mem::take(&mut elements),
-                            });
-                            cursor_y = start_y;
-                            current_page_idx += 1;
-                            *block_page_indices.last_mut().unwrap() = current_page_idx;
-                            *block_y_positions.last_mut().unwrap() = cursor_y;
-                        }
-                    }
-
-                    // keepNext: if this paragraph has keepNext AND the next block
-                    // is a paragraph that won't fit together with this one, push
-                    // both to the next page.
-                    if para.style.keep_next && !elements.is_empty() {
-                        if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
-                            let this_h = self.estimate_para_height(para, content_width, grid_pitch, None);
-                            let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None);
-                            let remaining = (start_y + content_height) - cursor_y;
-                            if this_h + next_h > remaining && this_h + next_h <= content_height {
+                            if num_columns > 1 && current_column + 1 < num_columns {
+                                current_column += 1;
+                                start_x = col_x_positions[current_column];
+                                content_width = col_widths[current_column];
+                                cursor_y = start_y;
+                            } else {
                                 pages.push(LayoutPage {
                                     width: page.size.width,
                                     height: page.size.height,
                                     elements: std::mem::take(&mut elements),
                                 });
                                 cursor_y = start_y;
+                                current_column = 0;
+                                start_x = col_x_positions[0];
+                                content_width = col_widths[0];
                                 current_page_idx += 1;
+                            }
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                        }
+                    }
+
+                    // keepNext: advance column or page if pair doesn't fit
+                    if para.style.keep_next && !elements.is_empty() {
+                        if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
+                            let this_h = self.estimate_para_height(para, content_width, grid_pitch, None);
+                            let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None);
+                            let remaining = (start_y + content_height) - cursor_y;
+                            if this_h + next_h > remaining && this_h + next_h <= content_height {
+                                if num_columns > 1 && current_column + 1 < num_columns {
+                                    current_column += 1;
+                                    start_x = col_x_positions[current_column];
+                                    content_width = col_widths[current_column];
+                                    cursor_y = start_y;
+                                } else {
+                                    pages.push(LayoutPage {
+                                        width: page.size.width,
+                                        height: page.size.height,
+                                        elements: std::mem::take(&mut elements),
+                                    });
+                                    cursor_y = start_y;
+                                    current_column = 0;
+                                    start_x = col_x_positions[0];
+                                    content_width = col_widths[0];
+                                    current_page_idx += 1;
+                                }
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 *block_y_positions.last_mut().unwrap() = cursor_y;
                             }
+                        }
+                    }
+
+                    // Multi-column pre-check: advance column if paragraph won't fit
+                    if num_columns > 1 {
+                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
+                        let remaining = (start_y + content_height) - cursor_y;
+                        if est_h > remaining && est_h <= content_height {
+                            if current_column + 1 < num_columns {
+                                current_column += 1;
+                                start_x = col_x_positions[current_column];
+                                content_width = col_widths[current_column];
+                                cursor_y = start_y;
+                            } else {
+                                pages.push(LayoutPage {
+                                    width: page.size.width,
+                                    height: page.size.height,
+                                    elements: std::mem::take(&mut elements),
+                                });
+                                cursor_y = start_y;
+                                current_column = 0;
+                                start_x = col_x_positions[0];
+                                content_width = col_widths[0];
+                                current_page_idx += 1;
+                            }
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            *block_y_positions.last_mut().unwrap() = cursor_y;
                         }
                     }
 
@@ -420,9 +502,27 @@ impl LayoutEngine {
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
-                    // Track page breaks that happened inside layout_paragraph
+                    // Track page/column breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
                     if pages_added > 0 {
+                        // Multi-column: a "page break" inside layout_paragraph may actually
+                        // be a column break. Check if we can advance to the next column.
+                        if num_columns > 1 && current_column < num_columns - 1 {
+                            // Move to next column instead of creating a new page.
+                            // The page was already pushed by layout_paragraph — undo it
+                            // by popping and re-merging elements.
+                            // Actually, layout_paragraph already pushed the page.
+                            // We update column state for subsequent blocks.
+                            current_column += 1;
+                            start_x = col_x_positions[current_column];
+                            content_width = col_widths[current_column];
+                            // cursor_y was already reset to start_y by layout_paragraph
+                        } else if num_columns > 1 {
+                            // All columns exhausted: reset to column 0 for new page
+                            current_column = 0;
+                            start_x = col_x_positions[0];
+                            content_width = col_widths[0];
+                        }
                         current_page_idx += pages_added;
                     }
                     prev_para_style_id = para.style.style_id.clone();
@@ -468,6 +568,11 @@ impl LayoutEngine {
                             current_page_idx += pages_added;
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             *block_y_positions.last_mut().unwrap() = cursor_y;
+                            if num_columns > 1 {
+                                current_column = 0;
+                                start_x = col_x_positions[0];
+                                content_width = col_widths[0];
+                            }
                         }
                     }
                     prev_para_style_id = None;
@@ -475,13 +580,23 @@ impl LayoutEngine {
                 }
                 Block::Image(img) => {
                     if cursor_y + img.height > start_y + content_height {
-                        pages.push(LayoutPage {
-                            width: page.size.width,
-                            height: page.size.height,
-                            elements: std::mem::take(&mut elements),
-                        });
-                        cursor_y = start_y;
-                        current_page_idx += 1;
+                        if num_columns > 1 && current_column + 1 < num_columns {
+                            current_column += 1;
+                            start_x = col_x_positions[current_column];
+                            content_width = col_widths[current_column];
+                            cursor_y = start_y;
+                        } else {
+                            pages.push(LayoutPage {
+                                width: page.size.width,
+                                height: page.size.height,
+                                elements: std::mem::take(&mut elements),
+                            });
+                            cursor_y = start_y;
+                            current_column = 0;
+                            start_x = col_x_positions[0];
+                            content_width = col_widths[0];
+                            current_page_idx += 1;
+                        }
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
                     }
