@@ -2206,14 +2206,12 @@ impl LayoutEngine {
                 if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) { pad_b += bw; }
                 let inner_w = (cell_w - pad_l - pad_r).max(0.0);
                 let mut cell_content_h = pad_t;
-                let _cell_debug_row = row_idx;
 
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
                             let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref());
                             let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
-                            eprintln!("  EST row={} cell_w={:.1} inner_w={:.1} para_h={:.2} cum={:.2} text=\"{}\"", _cell_debug_row, cell_w, inner_w, para_h, cell_content_h + para_h, t);
                                                         cell_content_h += para_h;
                         }
                         Block::Table(nested) => {
@@ -2247,7 +2245,6 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
-            eprintln!("  ROW {} content_h={:.2} trH={:?}", row_idx, row_height, row.height);
             // Apply trHeight constraint
             // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
             if let Some(h) = row.height {
@@ -2335,8 +2332,8 @@ impl LayoutEngine {
                     }
                 }
 
-                // Layout cell content with line wrapping and vAlign
-                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
+                // COM-confirmed: Word uses cell_w for text wrapping (text overflows into padding)
+                let inner_w = cell_w.max(0.0);
                 let mut cell_elements: Vec<LayoutElement> = Vec::new();
                 let mut content_h: f32 = 0.0;
 
