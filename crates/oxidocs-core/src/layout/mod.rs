@@ -1651,7 +1651,17 @@ impl LayoutEngine {
                     flush_word!(style);
                 } else if kinsoku::is_cjk(ch) {
                     // CJK characters can break at any point
+                    // autoSpaceDE: add 2.5pt gap between Latin and CJK
+                    let prev_is_latin = !word.is_empty() && word.chars().last().map_or(false, |c| c.is_ascii_alphanumeric());
+                    let prev_frag_is_latin = if word.is_empty() {
+                        current_line.fragments.last().map_or(false, |f| {
+                            f.text.chars().last().map_or(false, |c| c.is_ascii_alphanumeric() || c.is_ascii_punctuation())
+                        })
+                    } else { false };
                     flush_word!(style);
+                    if (prev_is_latin || prev_frag_is_latin) && para_style.auto_space_de {
+                        current_width += 2.5; // COM-confirmed: 2.5pt auto space
+                    }
 
                     if current_width + char_width > available_width && !current_line.fragments.is_empty() {
                         if kinsoku::is_line_start_prohibited(ch) && !current_line.fragments.is_empty() {

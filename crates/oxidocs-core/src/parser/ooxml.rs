@@ -1412,6 +1412,26 @@ fn parse_paragraph_properties(
                         }
                         style.bidi = enabled;
                     }
+                    "autoSpaceDE" => {
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.auto_space_de = enabled;
+                    }
+                    "autoSpaceDN" => {
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.auto_space_dn = enabled;
+                    }
                     _ => {}
                 }
             }

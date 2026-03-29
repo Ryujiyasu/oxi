@@ -693,6 +693,12 @@ pub struct ParagraphStyle {
     /// Whether widowControl was explicitly set in XML (for docDefaults inheritance)
     #[serde(default, skip_serializing)]
     pub has_explicit_widow_control: bool,
+    /// Auto space between East Asian and Western text (w:autoSpaceDE, default true)
+    #[serde(default = "default_true")]
+    pub auto_space_de: bool,
+    /// Auto space between East Asian and numbers (w:autoSpaceDN, default true)
+    #[serde(default = "default_true")]
+    pub auto_space_dn: bool,
     /// Bidirectional text / RTL paragraph (w:bidi)
     #[serde(default)]
     pub bidi: bool,
@@ -765,6 +771,8 @@ impl Default for ParagraphStyle {
             keep_lines: false,
             widow_control: true,
             has_explicit_widow_control: false,
+            auto_space_de: true,
+            auto_space_dn: true,
             bidi: false,
             num_id: None,
             num_ilvl: 0,
