@@ -46,6 +46,17 @@ const FONTS: &[(&str, &str, u32)] = &[
     ("cambria.ttc", "Cambria", 0),
     ("cambriab.ttf", "Cambria Bold", 0),
     ("meiryo.ttc", "Meiryo", 0),
+    // OSS metric-compatible fonts
+    ("Carlito-Regular.ttf", "Carlito", 0),
+    ("Carlito-Bold.ttf", "Carlito Bold", 0),
+    ("Caladea-Regular.ttf", "Caladea", 0),
+    ("Caladea-Bold.ttf", "Caladea Bold", 0),
+    ("LiberationSans-Regular.ttf", "Liberation Sans", 0),
+    ("LiberationSans-Bold.ttf", "Liberation Sans Bold", 0),
+    ("LiberationSerif-Regular.ttf", "Liberation Serif", 0),
+    ("LiberationSerif-Bold.ttf", "Liberation Serif Bold", 0),
+    ("NotoSansJP-VF.ttf", "Noto Sans JP", 0),
+    ("NotoSerifJP-VF.ttf", "Noto Serif JP", 0),
 ];
 
 /// Character ranges to extract widths for.

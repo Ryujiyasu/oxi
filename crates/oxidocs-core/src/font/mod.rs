@@ -530,6 +530,7 @@ fn is_cjk_font_family(family: &str) -> bool {
     matches!(family,
         "MS Gothic" | "MS Mincho" | "MS PGothic" | "MS PMincho" |
         "MS UI Gothic" | "Yu Gothic" | "Yu Mincho" | "Meiryo" |
+        "Noto Sans JP" | "Noto Serif JP" | "Noto Sans CJK JP" | "Noto Serif CJK JP" |
         "HGPGothicE" | "HGPMinchoE" | "HGGothicE" | "HGMinchoE" |
         "HGSGothicE" | "HGSMinchoE" | "HGPGothicM" | "HGPMinchoB" |
         "HGPSoeiKakugothicUB" | "HGSoeiKakugothicUB" |
@@ -575,6 +576,13 @@ fn normalize_family_name(name: &str) -> String {
         "メイリオ" | "Meiryo UI" => "Meiryo".to_string(),
         // Arial Unicode MS is not always installed; fall back to Arial
         "Arial Unicode MS" => "Arial".to_string(),
+        // OSS metric-compatible fonts
+        "Carlito" => "Carlito".to_string(),
+        "Caladea" => "Caladea".to_string(),
+        "Liberation Sans" => "Liberation Sans".to_string(),
+        "Liberation Serif" => "Liberation Serif".to_string(),
+        "Noto Sans JP" | "Noto Sans CJK JP" => "Noto Sans JP".to_string(),
+        "Noto Serif JP" | "Noto Serif CJK JP" => "Noto Serif JP".to_string(),
         _ => name.to_string(),
     }
 }
