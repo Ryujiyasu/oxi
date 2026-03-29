@@ -2062,13 +2062,15 @@ impl LayoutEngine {
                         }
                         Block::Table(nested) => {
                             // Estimate nested table height from rows
+                            // COM-confirmed: nested table width = cell width - 2 × padding
+                            let nested_w = (inner_w).max(0.0);
                             for nr in &nested.rows {
                                 let mut nr_h = 0.0_f32;
                                 for nc in &nr.cells {
                                     let mut nc_h = 0.0_f32;
                                     for nb in &nc.blocks {
                                         if let Block::Paragraph(np) = nb {
-                                            nc_h += self.estimate_para_height(np, inner_w / 2.0, table_grid_pitch, nested.style.para_style.as_ref());
+                                            nc_h += self.estimate_para_height(np, nested_w / 2.0, table_grid_pitch, nested.style.para_style.as_ref());
                                         }
                                     }
                                     nr_h = nr_h.max(nc_h);
@@ -2077,7 +2079,7 @@ impl LayoutEngine {
                                     if nr.height_rule.as_deref() == Some("exact") { nr_h = h; }
                                     else { nr_h = nr_h.max(h); }
                                 }
-                                                                cell_content_h += nr_h;
+                                cell_content_h += nr_h;
                             }
                         }
                         _ => {}
@@ -2197,14 +2199,14 @@ impl LayoutEngine {
                 }
                 match block {
                 Block::Table(nested) => {
-                    // Layout nested table: use cell_w (not inner_w) as content width
-                    // Word does not constrain nested tables to cell padding area
+                    // COM-confirmed: nested table width = outer cell width - 2 × padding
                     let nested_x = cell_x + pad_l;
+                    let nested_content_w = (cell_w - pad_l - pad_r).max(0.0);
                     let mut nested_y = content_h;
                     let mut dummy_pages = Vec::new();
                     let mut dummy_elems = Vec::new();
                     let nested_elements = self.layout_table(
-                        nested, nested_x, &mut nested_y, cell_w, table_grid_pitch,
+                        nested, nested_x, &mut nested_y, nested_content_w, table_grid_pitch,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut dummy_pages, &mut dummy_elems,
                     );
