@@ -17,6 +17,10 @@ pub struct Document {
     /// Default tab stop interval from w:settings/w:defaultTabStop (in points).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_tab_stop: Option<f32>,
+    /// Compatibility mode (from w:settings/w:compat/w:compatSetting w:name="compatibilityMode")
+    /// 14=Word 2010, 15=Word 2013+. Affects table cell grid snap behavior.
+    #[serde(default)]
+    pub compat_mode: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
