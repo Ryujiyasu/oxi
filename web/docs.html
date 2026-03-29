@@ -480,7 +480,7 @@ function applyI18n() {
 }
 
 // ---- WASM ----
-import init, { layout_document, edit_docx_advanced, build_docx, parse_document } from './oxi_wasm.js';
+import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout } from './oxi_wasm.js';
 await init();
 
 const $ = id => document.getElementById(id);
@@ -941,7 +941,12 @@ function getRunText(paraIndex, runIndex) {
 let renderTimer = null;
 let pendingCursorRestore = null;
 
+let pendingEdit = null; // { paraIndex, runIndex, newText }
+
 function editDocxNow(paraIndex, runIndex, newText) {
+  // Queue the edit for batch relayout
+  pendingEdit = { paraIndex, runIndex, newText };
+  // Also update docx bytes (needed for save)
   const edits = [{ type: 'set_run_text', paragraph_index: paraIndex, run_index: runIndex, new_text: newText }];
   const edited = edit_docx_advanced(currentDocx, edits);
   currentDocx = new Uint8Array(edited);
@@ -951,17 +956,89 @@ function scheduleRender() {
   if (renderTimer) clearTimeout(renderTimer);
   renderTimer = setTimeout(async () => {
     renderTimer = null;
-    // Fade transition instead of abrupt switch
-    const canvases = canvasArea.querySelectorAll('.page-canvas');
-    canvases.forEach(c => c.style.transition = 'opacity 0.15s');
-    canvases.forEach(c => c.style.opacity = '0.7');
-    await renderDocument(currentDocx);
+    const start = performance.now();
+    let result;
+    try {
+      if (pendingEdit) {
+        // Fast path: use cached Document, skip parse
+        result = edit_text_and_relayout(pendingEdit.paraIndex, pendingEdit.runIndex, pendingEdit.newText);
+        pendingEdit = null;
+      } else {
+        result = layout_document(currentDocx);
+      }
+    } catch (e) {
+      // Fallback to full re-parse
+      result = layout_document(currentDocx);
+      pendingEdit = null;
+    }
+    layoutResult = result;
+    const layoutMs = Math.round(performance.now() - start);
+
+    // Remove cursor overlay only
+    if (cursorOverlay) { cursorOverlay.remove(); cursorOverlay = null; }
+
+    const isMobile = window.innerWidth < 769;
+    const scale = isMobile
+      ? (window.innerWidth - 20) / (result.pages[0]?.width || 595)
+      : SCALE_BASE * (zoomLevel / 100);
+    currentScale = scale;
+
+    // Reuse existing canvases, add/remove as needed
+    const existingCanvases = canvasArea.querySelectorAll('.page-canvas');
+    for (let i = 0; i < result.pages.length; i++) {
+      const page = result.pages[i];
+      let canvas = existingCanvases[i];
+      const w = Math.round(page.width * scale);
+      const h = Math.round(page.height * scale);
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.className = 'page-canvas';
+        canvas.addEventListener('mousedown', e => onCanvasClick(e, i));
+        canvasArea.appendChild(canvas);
+      }
+      canvas.id = `page-${i}`;
+      canvas.width = w;
+      canvas.height = h;
+      if (isMobile) { canvas.style.width = '100%'; canvas.style.height = 'auto'; }
+      else { canvas.style.width = w + 'px'; canvas.style.height = h + 'px'; }
+      // Redraw in place
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.save();
+      ctx.scale(scale, scale);
+      for (const elem of page.elements) {
+        if (elem.kind === 'text') renderText(ctx, elem);
+        else if (elem.kind === 'border') renderBorder(ctx, elem);
+        else if (elem.kind === 'shading') renderShading(ctx, elem);
+        else if (elem.kind === 'rect') renderRect(ctx, elem);
+        else if (elem.kind === 'preset_shape') renderPresetShape(ctx, elem);
+        else if (elem.kind === 'clip_start') { ctx.save(); ctx.beginPath(); ctx.rect(elem.x, elem.y, elem.width, elem.height); ctx.clip(); }
+        else if (elem.kind === 'clip_end') ctx.restore();
+        else if (elem.kind === 'image' && elem.image_data) {
+          const img = new Image();
+          const ct = elem.content_type || 'image/png';
+          img.src = `data:${ct};base64,${elem.image_data}`;
+          const ex = elem.x, ey = elem.y, ew = elem.width, eh = elem.height;
+          img.onload = () => { ctx.drawImage(img, ex, ey, ew, eh); };
+        }
+      }
+      ctx.restore();
+    }
+    // Remove extra canvases if page count decreased
+    for (let i = result.pages.length; i < existingCanvases.length; i++) {
+      existingCanvases[i].remove();
+    }
+    $('pgInfo').textContent = `${result.pages.length} ${t('pages')}`;
+    $('statusText').textContent = `Layout ${layoutMs}ms`;
+
     if (pendingCursorRestore) {
       const { paraIndex, runIndex, charOff } = pendingCursorRestore;
       restoreCursor(paraIndex, runIndex, charOff);
       pendingCursorRestore = null;
     }
-  }, 2000);
+  }, 0);
 }
 
 async function insertText(text) {

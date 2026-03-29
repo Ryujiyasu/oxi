@@ -1,6 +1,13 @@
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use std::cell::RefCell;
+
+// Thread-local cached document for fast re-layout during editing
+thread_local! {
+    static CACHED_DOC: RefCell<Option<oxidocs_core::ir::Document>> = RefCell::new(None);
+    static CACHED_DOCX: RefCell<Option<Vec<u8>>> = RefCell::new(None);
+}
 
 static OXI_GOTHIC: &[u8] = include_bytes!("../../oxi-cli/fonts/OxiGothic.ttf");
 static OXI_MINCHO: &[u8] = include_bytes!("../../oxi-cli/fonts/OxiMincho.ttf");
@@ -591,10 +598,16 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
+/// Load a document, cache it, and return layout result.
+/// Subsequent calls to `edit_text_and_relayout` will reuse the cached parse.
 #[wasm_bindgen]
 pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
     let doc = oxidocs_core::parse_docx(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
+
+    // Cache for fast re-layout
+    CACHED_DOC.with(|c| *c.borrow_mut() = Some(doc.clone()));
+    CACHED_DOCX.with(|c| *c.borrow_mut() = Some(data.to_vec()));
 
     let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc);
     let result = engine.layout(&doc);
@@ -703,6 +716,129 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
     };
 
     serde_wasm_bindgen::to_value(&js_result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Fast text edit + re-layout using cached document (skips docx parse).
+/// Returns layout result. Also updates the cached docx bytes.
+#[wasm_bindgen]
+pub fn edit_text_and_relayout(paragraph_index: usize, run_index: usize, new_text: &str) -> Result<JsValue, JsError> {
+    CACHED_DOC.with(|cell| {
+        let mut doc_opt = cell.borrow_mut();
+        let doc = doc_opt.as_mut().ok_or_else(|| JsError::new("No cached document. Call layout_document first."))?;
+
+        // Find the block by index and update run text directly
+        // paragraph_index is block_idx (index into page.blocks[])
+        let mut found = false;
+        for page in &mut doc.pages {
+            if paragraph_index < page.blocks.len() {
+                if let oxidocs_core::ir::Block::Paragraph(ref mut para) = page.blocks[paragraph_index] {
+                    if let Some(run) = para.runs.get_mut(run_index) {
+                        run.text = new_text.to_string();
+                        found = true;
+                    }
+                }
+            }
+            if found { break; }
+        }
+        if !found {
+            return Err(JsError::new(&format!("Paragraph {} run {} not found", paragraph_index, run_index)));
+        }
+
+        // Re-layout (no parse needed)
+        let engine = oxidocs_core::layout::LayoutEngine::for_document(doc);
+        let result = engine.layout(doc);
+
+        let js_result = LayoutResultJs {
+            pages: result.pages.into_iter().map(|page| {
+                LayoutPageJs {
+                    width: page.width,
+                    height: page.height,
+                    elements: page.elements.into_iter().map(|elem| {
+                        elem_to_js(elem)
+                    }).collect(),
+                }
+            }).collect(),
+        };
+
+        serde_wasm_bindgen::to_value(&js_result).map_err(|e| JsError::new(&e.to_string()))
+    })
+}
+
+fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
+    match elem.content {
+        oxidocs_core::layout::LayoutContent::Text {
+            text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, ..
+        } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+            kind: "text".into(),
+            text: Some(text), font_size: Some(font_size), font_family,
+            bold: Some(bold), italic: Some(italic), underline: Some(underline),
+            underline_style, strikethrough: Some(strikethrough),
+            color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }),
+            highlight,
+            character_spacing: if character_spacing.abs() > 0.001 { Some(character_spacing) } else { None },
+            corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None,
+            paragraph_index: elem.paragraph_index, run_index: elem.run_index, char_offset: elem.char_offset,
+        },
+        oxidocs_core::layout::LayoutContent::Image { data, content_type } => {
+            let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
+            LayoutElementJs {
+                x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+                kind: "image".into(),
+                text: None, font_size: None, font_family: None, bold: None, italic: None,
+                underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
+                character_spacing: None, corner_radius: None, image_data: b64, content_type,
+                x1: None, y1: None, x2: None, y2: None,
+                paragraph_index: None, run_index: None, char_offset: None,
+            }
+        },
+        oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width } => LayoutElementJs {
+            x: elem.x, y: elem.y, width, height: elem.height, kind: "border".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2),
+            paragraph_index: None, run_index: None, char_offset: None,
+        },
+        oxidocs_core::layout::LayoutContent::CellShading { color } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "shading".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: Some(color), highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+        oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, corner_radius, .. } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "shading".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None,
+            color: fill.clone().or_else(|| stroke_color.clone()), highlight: None,
+            character_spacing: None, corner_radius: if corner_radius > 0.0 { Some(corner_radius) } else { None },
+            image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+        oxidocs_core::layout::LayoutContent::ClipStart => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "clip_start".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+        oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
+            x: 0.0, y: 0.0, width: 0.0, height: 0.0, kind: "clip_end".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+        oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "preset_shape".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -233,6 +233,7 @@ impl FontMetrics {
 
 /// Registry of font metrics for multiple font families.
 /// Backed by real measurements extracted from Windows system fonts.
+#[derive(Clone)]
 pub struct FontMetricsRegistry {
     fonts: HashMap<String, FontMetrics>,
     default_family: String,
@@ -247,10 +248,14 @@ pub struct FontMetricsRegistry {
 }
 
 impl FontMetricsRegistry {
-    /// Load the embedded font metrics data.
-    /// If the user has generated metrics from their local fonts (via tools/font-metrics-gen),
-    /// those are used. Otherwise, falls back to basic metrics for common fonts.
+    /// Load the embedded font metrics data, cached globally after first call.
     pub fn load() -> Self {
+        use std::sync::OnceLock;
+        static CACHED: OnceLock<FontMetricsRegistry> = OnceLock::new();
+        CACHED.get_or_init(Self::load_inner).clone()
+    }
+
+    fn load_inner() -> Self {
         #[cfg(has_local_font_metrics)]
         let raw_json = include_str!("data/font_metrics_compact.json");
         #[cfg(not(has_local_font_metrics))]
@@ -478,6 +483,49 @@ impl FontMetricsRegistry {
                 if let Some(&width_px) = char_widths.get(&(c as u32)) {
                     return width_px as f32 * 72.0 / 96.0;
                 }
+            }
+        }
+
+        // If the font has this character's width measured, use it directly
+        if metrics.char_widths.contains_key(&c) {
+            return metrics.char_width_pt(c, font_size);
+        }
+
+        // CJK character + Latin font → GDI fallback to MS UI Gothic
+        if is_cjk_or_symbol(c) && !is_cjk_font_family(&metrics.family) {
+            if let Some(fallback) = self.fonts.get("MS UI Gothic")
+                .or_else(|| self.fonts.get("MS Gothic"))
+            {
+                return fallback.char_width_pt(c, font_size);
+            }
+        }
+
+        // Default: use the font's own heuristic
+        metrics.char_width_pt(c, font_size)
+    }
+
+    /// Pre-resolve the GDI character width map for a given font family and font size.
+    /// Returns the ppem-specific width map (codepoint → width_px), avoiding
+    /// repeated HashMap lookups in per-character loops.
+    pub fn get_gdi_char_widths(&self, family: &str, font_size: f32) -> Option<&HashMap<u32, u32>> {
+        let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        self.gdi_widths.get(family)?.get(&ppem)
+    }
+
+    /// Character width using a pre-resolved GDI width map.
+    /// This avoids the 2-level HashMap lookup per character that
+    /// `char_width_pt_with_fallback` performs.
+    pub fn char_width_pt_with_gdi_map(
+        &self,
+        c: char,
+        font_size: f32,
+        metrics: &FontMetrics,
+        gdi_map: Option<&HashMap<u32, u32>>,
+    ) -> f32 {
+        // GDI hinting override via pre-resolved map
+        if let Some(char_widths) = gdi_map {
+            if let Some(&width_px) = char_widths.get(&(c as u32)) {
+                return width_px as f32 * 72.0 / 96.0;
             }
         }
 
