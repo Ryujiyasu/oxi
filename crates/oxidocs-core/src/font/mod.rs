@@ -220,7 +220,7 @@ impl FontMetrics {
     /// Meiryo uses 83/64 despite being a modern font.
     ///
     /// See tools/metrics/verify_exact_cjk.py for the measurement script.
-    fn is_cjk_83_64_font(&self) -> bool {
+    pub fn is_cjk_83_64_font(&self) -> bool {
         matches!(
             self.family.as_str(),
             "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
@@ -241,6 +241,9 @@ pub struct FontMetricsRegistry {
     /// GDI-measured character widths: font → ppem → codepoint → width_px
     /// These override the formula-based widths where GDI hinting produces different results.
     gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>>,
+    /// GDI-measured tmHeight/tmAscent/tmDescent: font → ppem → (height, ascent, descent) in pixels
+    /// ceil(winAscent/upm*ppem) + ceil(winDescent/upm*ppem) ≠ tmHeight due to hinting.
+    gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>>,
 }
 
 impl FontMetricsRegistry {
@@ -352,11 +355,37 @@ impl FontMetricsRegistry {
             result
         };
 
+        // Load GDI-measured tmHeight table
+        let gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>> = {
+            let ht_json = include_str!("data/gdi_height_table.json");
+            let raw: HashMap<String, HashMap<String, serde_json::Value>> =
+                serde_json::from_str(ht_json).unwrap_or_default();
+            let mut result = HashMap::new();
+            for (font, ppem_map) in raw {
+                // Convert font name: underscores to spaces for matching
+                let font_name = font.replace('_', " ");
+                let mut ppem_result = HashMap::new();
+                for (ppem_str, val) in ppem_map {
+                    if let Ok(ppem) = ppem_str.parse::<u32>() {
+                        if let Some(obj) = val.as_object() {
+                            let h = obj.get("h").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let a = obj.get("a").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let d = obj.get("d").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            ppem_result.insert(ppem, (h, a, d));
+                        }
+                    }
+                }
+                result.insert(font_name, ppem_result);
+            }
+            result
+        };
+
         Self {
             fonts,
             default_family: "Calibri".to_string(),
             com_line_heights,
             gdi_widths,
+            gdi_heights,
         }
     }
 
@@ -426,6 +455,15 @@ impl FontMetricsRegistry {
     /// Get the default font metrics (Calibri).
     pub fn default_metrics(&self) -> &FontMetrics {
         self.get(&self.default_family)
+    }
+
+    /// Get GDI-measured tmHeight for a font at a given ppem.
+    /// Returns (height_px, ascent_px, descent_px) or None if not in table.
+    pub fn gdi_height(&self, family: &str, ppem: u32) -> Option<(u32, u32, u32)> {
+        let normalized = normalize_family_name(family);
+        self.gdi_heights.get(family)
+            .or_else(|| self.gdi_heights.get(&normalized))
+            .and_then(|ppem_map| ppem_map.get(&ppem).copied())
     }
 
     /// Character width with GDI font fallback and hinting overrides.

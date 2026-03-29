@@ -1,0 +1,3937 @@
+{
+  "Calibri": {
+    "5": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "8": {
+      "formula": 11,
+      "gdi": 10,
+      "diff": -1
+    },
+    "9": {
+      "formula": 12,
+      "gdi": 11,
+      "diff": -1
+    },
+    "11": {
+      "formula": 14,
+      "gdi": 13,
+      "diff": -1
+    },
+    "12": {
+      "formula": 16,
+      "gdi": 14,
+      "diff": -2
+    },
+    "13": {
+      "formula": 17,
+      "gdi": 15,
+      "diff": -2
+    },
+    "14": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "15": {
+      "formula": 20,
+      "gdi": 18,
+      "diff": -2
+    },
+    "16": {
+      "formula": 21,
+      "gdi": 19,
+      "diff": -2
+    },
+    "17": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "18": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "19": {
+      "formula": 25,
+      "gdi": 23,
+      "diff": -2
+    },
+    "20": {
+      "formula": 26,
+      "gdi": 24,
+      "diff": -2
+    },
+    "23": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "24": {
+      "formula": 30,
+      "gdi": 29,
+      "diff": -1
+    },
+    "27": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "30": {
+      "formula": 38,
+      "gdi": 37,
+      "diff": -1
+    },
+    "31": {
+      "formula": 39,
+      "gdi": 38,
+      "diff": -1
+    },
+    "32": {
+      "formula": 40,
+      "gdi": 39,
+      "diff": -1
+    },
+    "33": {
+      "formula": 41,
+      "gdi": 40,
+      "diff": -1
+    },
+    "34": {
+      "formula": 43,
+      "gdi": 41,
+      "diff": -2
+    },
+    "35": {
+      "formula": 44,
+      "gdi": 42,
+      "diff": -2
+    },
+    "36": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "37": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "38": {
+      "formula": 48,
+      "gdi": 46,
+      "diff": -2
+    },
+    "39": {
+      "formula": 49,
+      "gdi": 47,
+      "diff": -2
+    },
+    "40": {
+      "formula": 50,
+      "gdi": 49,
+      "diff": -1
+    },
+    "41": {
+      "formula": 52,
+      "gdi": 50,
+      "diff": -2
+    },
+    "42": {
+      "formula": 52,
+      "gdi": 51,
+      "diff": -1
+    },
+    "45": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "46": {
+      "formula": 57,
+      "gdi": 56,
+      "diff": -1
+    },
+    "49": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "50": {
+      "formula": 62,
+      "gdi": 61,
+      "diff": -1
+    },
+    "53": {
+      "formula": 66,
+      "gdi": 64,
+      "diff": -2
+    },
+    "54": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "55": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "56": {
+      "formula": 70,
+      "gdi": 68,
+      "diff": -2
+    },
+    "57": {
+      "formula": 71,
+      "gdi": 69,
+      "diff": -2
+    },
+    "58": {
+      "formula": 72,
+      "gdi": 71,
+      "diff": -1
+    },
+    "59": {
+      "formula": 73,
+      "gdi": 72,
+      "diff": -1
+    },
+    "60": {
+      "formula": 75,
+      "gdi": 73,
+      "diff": -2
+    },
+    "61": {
+      "formula": 76,
+      "gdi": 74,
+      "diff": -2
+    },
+    "62": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "64": {
+      "formula": 79,
+      "gdi": 78,
+      "diff": -1
+    },
+    "65": {
+      "formula": 80,
+      "gdi": 79,
+      "diff": -1
+    },
+    "68": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "71": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "72": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "74": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "75": {
+      "formula": 93,
+      "gdi": 91,
+      "diff": -2
+    },
+    "76": {
+      "formula": 94,
+      "gdi": 92,
+      "diff": -2
+    },
+    "77": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "78": {
+      "formula": 96,
+      "gdi": 95,
+      "diff": -1
+    },
+    "79": {
+      "formula": 98,
+      "gdi": 96,
+      "diff": -2
+    },
+    "80": {
+      "formula": 99,
+      "gdi": 97,
+      "diff": -2
+    },
+    "81": {
+      "formula": 100,
+      "gdi": 99,
+      "diff": -1
+    },
+    "82": {
+      "formula": 102,
+      "gdi": 100,
+      "diff": -2
+    },
+    "83": {
+      "formula": 103,
+      "gdi": 101,
+      "diff": -2
+    },
+    "86": {
+      "formula": 106,
+      "gdi": 105,
+      "diff": -1
+    },
+    "87": {
+      "formula": 107,
+      "gdi": 106,
+      "diff": -1
+    },
+    "90": {
+      "formula": 111,
+      "gdi": 110,
+      "diff": -1
+    },
+    "91": {
+      "formula": 112,
+      "gdi": 111,
+      "diff": -1
+    },
+    "94": {
+      "formula": 116,
+      "gdi": 115,
+      "diff": -1
+    },
+    "95": {
+      "formula": 117,
+      "gdi": 116,
+      "diff": -1
+    },
+    "96": {
+      "formula": 118,
+      "gdi": 117,
+      "diff": -1
+    },
+    "97": {
+      "formula": 120,
+      "gdi": 118,
+      "diff": -2
+    },
+    "98": {
+      "formula": 121,
+      "gdi": 119,
+      "diff": -2
+    },
+    "99": {
+      "formula": 122,
+      "gdi": 121,
+      "diff": -1
+    },
+    "100": {
+      "formula": 123,
+      "gdi": 122,
+      "diff": -1
+    }
+  },
+  "Arial": {
+    "5": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "6": {
+      "formula": 8,
+      "gdi": 6,
+      "diff": -2
+    },
+    "7": {
+      "formula": 9,
+      "gdi": 7,
+      "diff": -2
+    },
+    "9": {
+      "formula": 11,
+      "gdi": 12,
+      "diff": 1
+    },
+    "11": {
+      "formula": 13,
+      "gdi": 14,
+      "diff": 1
+    },
+    "12": {
+      "formula": 14,
+      "gdi": 15,
+      "diff": 1
+    },
+    "13": {
+      "formula": 15,
+      "gdi": 16,
+      "diff": 1
+    },
+    "15": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "16": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "17": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "19": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "20": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "21": {
+      "formula": 25,
+      "gdi": 24,
+      "diff": -1
+    },
+    "24": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "25": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "26": {
+      "formula": 30,
+      "gdi": 31,
+      "diff": 1
+    },
+    "27": {
+      "formula": 31,
+      "gdi": 32,
+      "diff": 1
+    },
+    "29": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "31": {
+      "formula": 36,
+      "gdi": 35,
+      "diff": -1
+    },
+    "33": {
+      "formula": 37,
+      "gdi": 38,
+      "diff": 1
+    },
+    "38": {
+      "formula": 44,
+      "gdi": 43,
+      "diff": -1
+    },
+    "39": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "40": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "42": {
+      "formula": 48,
+      "gdi": 47,
+      "diff": -1
+    },
+    "45": {
+      "formula": 51,
+      "gdi": 50,
+      "diff": -1
+    },
+    "55": {
+      "formula": 62,
+      "gdi": 63,
+      "diff": 1
+    },
+    "56": {
+      "formula": 63,
+      "gdi": 65,
+      "diff": 2
+    },
+    "59": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "60": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "61": {
+      "formula": 69,
+      "gdi": 68,
+      "diff": -1
+    },
+    "62": {
+      "formula": 71,
+      "gdi": 69,
+      "diff": -2
+    },
+    "63": {
+      "formula": 72,
+      "gdi": 71,
+      "diff": -1
+    },
+    "67": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "68": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "69": {
+      "formula": 78,
+      "gdi": 77,
+      "diff": -1
+    },
+    "71": {
+      "formula": 81,
+      "gdi": 80,
+      "diff": -1
+    },
+    "72": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "73": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "74": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "75": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "76": {
+      "formula": 86,
+      "gdi": 84,
+      "diff": -2
+    },
+    "78": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "79": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "80": {
+      "formula": 90,
+      "gdi": 89,
+      "diff": -1
+    },
+    "81": {
+      "formula": 92,
+      "gdi": 91,
+      "diff": -1
+    },
+    "82": {
+      "formula": 93,
+      "gdi": 91,
+      "diff": -2
+    },
+    "83": {
+      "formula": 94,
+      "gdi": 92,
+      "diff": -2
+    },
+    "84": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "86": {
+      "formula": 97,
+      "gdi": 96,
+      "diff": -1
+    },
+    "87": {
+      "formula": 98,
+      "gdi": 97,
+      "diff": -1
+    },
+    "90": {
+      "formula": 102,
+      "gdi": 99,
+      "diff": -3
+    },
+    "91": {
+      "formula": 103,
+      "gdi": 101,
+      "diff": -2
+    },
+    "92": {
+      "formula": 104,
+      "gdi": 103,
+      "diff": -1
+    },
+    "93": {
+      "formula": 105,
+      "gdi": 104,
+      "diff": -1
+    },
+    "94": {
+      "formula": 106,
+      "gdi": 104,
+      "diff": -2
+    },
+    "95": {
+      "formula": 108,
+      "gdi": 106,
+      "diff": -2
+    },
+    "96": {
+      "formula": 108,
+      "gdi": 107,
+      "diff": -1
+    },
+    "97": {
+      "formula": 109,
+      "gdi": 108,
+      "diff": -1
+    },
+    "98": {
+      "formula": 110,
+      "gdi": 109,
+      "diff": -1
+    },
+    "100": {
+      "formula": 113,
+      "gdi": 112,
+      "diff": -1
+    }
+  },
+  "Times_New_Roman": {
+    "5": {
+      "formula": 7,
+      "gdi": 5,
+      "diff": -2
+    },
+    "6": {
+      "formula": 8,
+      "gdi": 6,
+      "diff": -2
+    },
+    "7": {
+      "formula": 9,
+      "gdi": 8,
+      "diff": -1
+    },
+    "9": {
+      "formula": 11,
+      "gdi": 12,
+      "diff": 1
+    },
+    "11": {
+      "formula": 13,
+      "gdi": 14,
+      "diff": 1
+    },
+    "12": {
+      "formula": 14,
+      "gdi": 15,
+      "diff": 1
+    },
+    "14": {
+      "formula": 17,
+      "gdi": 16,
+      "diff": -1
+    },
+    "15": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "17": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "18": {
+      "formula": 21,
+      "gdi": 20,
+      "diff": -1
+    },
+    "19": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "20": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "21": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "24": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "26": {
+      "formula": 30,
+      "gdi": 29,
+      "diff": -1
+    },
+    "28": {
+      "formula": 32,
+      "gdi": 33,
+      "diff": 1
+    },
+    "33": {
+      "formula": 38,
+      "gdi": 37,
+      "diff": -1
+    },
+    "39": {
+      "formula": 44,
+      "gdi": 43,
+      "diff": -1
+    },
+    "40": {
+      "formula": 45,
+      "gdi": 46,
+      "diff": 1
+    },
+    "41": {
+      "formula": 46,
+      "gdi": 47,
+      "diff": 1
+    },
+    "44": {
+      "formula": 50,
+      "gdi": 51,
+      "diff": 1
+    },
+    "45": {
+      "formula": 51,
+      "gdi": 52,
+      "diff": 1
+    },
+    "46": {
+      "formula": 51,
+      "gdi": 53,
+      "diff": 2
+    },
+    "48": {
+      "formula": 54,
+      "gdi": 55,
+      "diff": 1
+    },
+    "49": {
+      "formula": 55,
+      "gdi": 56,
+      "diff": 1
+    },
+    "50": {
+      "formula": 56,
+      "gdi": 57,
+      "diff": 1
+    },
+    "51": {
+      "formula": 58,
+      "gdi": 57,
+      "diff": -1
+    },
+    "52": {
+      "formula": 59,
+      "gdi": 60,
+      "diff": 1
+    },
+    "53": {
+      "formula": 60,
+      "gdi": 61,
+      "diff": 1
+    },
+    "56": {
+      "formula": 63,
+      "gdi": 64,
+      "diff": 1
+    },
+    "57": {
+      "formula": 64,
+      "gdi": 65,
+      "diff": 1
+    },
+    "58": {
+      "formula": 65,
+      "gdi": 67,
+      "diff": 2
+    },
+    "59": {
+      "formula": 66,
+      "gdi": 67,
+      "diff": 1
+    },
+    "60": {
+      "formula": 67,
+      "gdi": 68,
+      "diff": 1
+    },
+    "64": {
+      "formula": 72,
+      "gdi": 73,
+      "diff": 1
+    },
+    "65": {
+      "formula": 73,
+      "gdi": 74,
+      "diff": 1
+    },
+    "66": {
+      "formula": 74,
+      "gdi": 75,
+      "diff": 1
+    },
+    "67": {
+      "formula": 75,
+      "gdi": 76,
+      "diff": 1
+    },
+    "68": {
+      "formula": 76,
+      "gdi": 77,
+      "diff": 1
+    },
+    "69": {
+      "formula": 77,
+      "gdi": 78,
+      "diff": 1
+    },
+    "70": {
+      "formula": 79,
+      "gdi": 80,
+      "diff": 1
+    },
+    "71": {
+      "formula": 80,
+      "gdi": 81,
+      "diff": 1
+    },
+    "73": {
+      "formula": 82,
+      "gdi": 83,
+      "diff": 1
+    },
+    "74": {
+      "formula": 83,
+      "gdi": 84,
+      "diff": 1
+    },
+    "75": {
+      "formula": 84,
+      "gdi": 85,
+      "diff": 1
+    },
+    "76": {
+      "formula": 85,
+      "gdi": 86,
+      "diff": 1
+    },
+    "77": {
+      "formula": 86,
+      "gdi": 88,
+      "diff": 2
+    },
+    "78": {
+      "formula": 87,
+      "gdi": 89,
+      "diff": 2
+    },
+    "79": {
+      "formula": 89,
+      "gdi": 90,
+      "diff": 1
+    },
+    "81": {
+      "formula": 91,
+      "gdi": 92,
+      "diff": 1
+    },
+    "82": {
+      "formula": 92,
+      "gdi": 94,
+      "diff": 2
+    },
+    "83": {
+      "formula": 92,
+      "gdi": 94,
+      "diff": 2
+    },
+    "84": {
+      "formula": 94,
+      "gdi": 95,
+      "diff": 1
+    },
+    "85": {
+      "formula": 95,
+      "gdi": 97,
+      "diff": 2
+    },
+    "86": {
+      "formula": 96,
+      "gdi": 98,
+      "diff": 2
+    },
+    "87": {
+      "formula": 97,
+      "gdi": 98,
+      "diff": 1
+    },
+    "88": {
+      "formula": 99,
+      "gdi": 100,
+      "diff": 1
+    },
+    "89": {
+      "formula": 100,
+      "gdi": 101,
+      "diff": 1
+    },
+    "90": {
+      "formula": 101,
+      "gdi": 103,
+      "diff": 2
+    },
+    "91": {
+      "formula": 102,
+      "gdi": 103,
+      "diff": 1
+    },
+    "92": {
+      "formula": 102,
+      "gdi": 104,
+      "diff": 2
+    },
+    "93": {
+      "formula": 104,
+      "gdi": 105,
+      "diff": 1
+    },
+    "94": {
+      "formula": 105,
+      "gdi": 107,
+      "diff": 2
+    },
+    "95": {
+      "formula": 106,
+      "gdi": 108,
+      "diff": 2
+    },
+    "96": {
+      "formula": 107,
+      "gdi": 109,
+      "diff": 2
+    },
+    "97": {
+      "formula": 108,
+      "gdi": 110,
+      "diff": 2
+    },
+    "98": {
+      "formula": 110,
+      "gdi": 111,
+      "diff": 1
+    },
+    "99": {
+      "formula": 111,
+      "gdi": 112,
+      "diff": 1
+    },
+    "100": {
+      "formula": 112,
+      "gdi": 114,
+      "diff": 2
+    }
+  },
+  "MS_Gothic": {
+    "5": {
+      "formula": 6,
+      "gdi": 5,
+      "diff": -1
+    },
+    "6": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "7": {
+      "formula": 8,
+      "gdi": 7,
+      "diff": -1
+    },
+    "8": {
+      "formula": 9,
+      "gdi": 8,
+      "diff": -1
+    },
+    "9": {
+      "formula": 10,
+      "gdi": 9,
+      "diff": -1
+    },
+    "10": {
+      "formula": 11,
+      "gdi": 10,
+      "diff": -1
+    },
+    "11": {
+      "formula": 12,
+      "gdi": 11,
+      "diff": -1
+    },
+    "12": {
+      "formula": 13,
+      "gdi": 12,
+      "diff": -1
+    },
+    "13": {
+      "formula": 14,
+      "gdi": 13,
+      "diff": -1
+    },
+    "14": {
+      "formula": 15,
+      "gdi": 14,
+      "diff": -1
+    },
+    "15": {
+      "formula": 16,
+      "gdi": 15,
+      "diff": -1
+    },
+    "16": {
+      "formula": 17,
+      "gdi": 16,
+      "diff": -1
+    },
+    "17": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "18": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "19": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "20": {
+      "formula": 21,
+      "gdi": 20,
+      "diff": -1
+    },
+    "21": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "22": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "23": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "24": {
+      "formula": 25,
+      "gdi": 24,
+      "diff": -1
+    },
+    "25": {
+      "formula": 26,
+      "gdi": 25,
+      "diff": -1
+    },
+    "26": {
+      "formula": 27,
+      "gdi": 26,
+      "diff": -1
+    },
+    "27": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "28": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "29": {
+      "formula": 30,
+      "gdi": 29,
+      "diff": -1
+    },
+    "30": {
+      "formula": 31,
+      "gdi": 30,
+      "diff": -1
+    },
+    "31": {
+      "formula": 32,
+      "gdi": 31,
+      "diff": -1
+    },
+    "33": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "34": {
+      "formula": 35,
+      "gdi": 34,
+      "diff": -1
+    },
+    "35": {
+      "formula": 36,
+      "gdi": 35,
+      "diff": -1
+    },
+    "36": {
+      "formula": 37,
+      "gdi": 36,
+      "diff": -1
+    },
+    "37": {
+      "formula": 38,
+      "gdi": 37,
+      "diff": -1
+    },
+    "38": {
+      "formula": 39,
+      "gdi": 38,
+      "diff": -1
+    },
+    "39": {
+      "formula": 40,
+      "gdi": 39,
+      "diff": -1
+    },
+    "40": {
+      "formula": 41,
+      "gdi": 40,
+      "diff": -1
+    },
+    "41": {
+      "formula": 42,
+      "gdi": 41,
+      "diff": -1
+    },
+    "42": {
+      "formula": 43,
+      "gdi": 42,
+      "diff": -1
+    },
+    "43": {
+      "formula": 44,
+      "gdi": 43,
+      "diff": -1
+    },
+    "44": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "45": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "46": {
+      "formula": 47,
+      "gdi": 46,
+      "diff": -1
+    },
+    "47": {
+      "formula": 48,
+      "gdi": 47,
+      "diff": -1
+    },
+    "48": {
+      "formula": 49,
+      "gdi": 48,
+      "diff": -1
+    },
+    "49": {
+      "formula": 50,
+      "gdi": 49,
+      "diff": -1
+    },
+    "50": {
+      "formula": 51,
+      "gdi": 50,
+      "diff": -1
+    },
+    "51": {
+      "formula": 52,
+      "gdi": 51,
+      "diff": -1
+    },
+    "52": {
+      "formula": 53,
+      "gdi": 52,
+      "diff": -1
+    },
+    "53": {
+      "formula": 54,
+      "gdi": 53,
+      "diff": -1
+    },
+    "54": {
+      "formula": 55,
+      "gdi": 54,
+      "diff": -1
+    },
+    "55": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "56": {
+      "formula": 57,
+      "gdi": 56,
+      "diff": -1
+    },
+    "57": {
+      "formula": 58,
+      "gdi": 57,
+      "diff": -1
+    },
+    "58": {
+      "formula": 59,
+      "gdi": 58,
+      "diff": -1
+    },
+    "59": {
+      "formula": 60,
+      "gdi": 59,
+      "diff": -1
+    },
+    "60": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "61": {
+      "formula": 62,
+      "gdi": 61,
+      "diff": -1
+    },
+    "62": {
+      "formula": 63,
+      "gdi": 62,
+      "diff": -1
+    },
+    "63": {
+      "formula": 64,
+      "gdi": 63,
+      "diff": -1
+    },
+    "65": {
+      "formula": 66,
+      "gdi": 65,
+      "diff": -1
+    },
+    "66": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "67": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "68": {
+      "formula": 69,
+      "gdi": 68,
+      "diff": -1
+    },
+    "69": {
+      "formula": 70,
+      "gdi": 69,
+      "diff": -1
+    },
+    "70": {
+      "formula": 71,
+      "gdi": 70,
+      "diff": -1
+    },
+    "71": {
+      "formula": 72,
+      "gdi": 71,
+      "diff": -1
+    },
+    "72": {
+      "formula": 73,
+      "gdi": 72,
+      "diff": -1
+    },
+    "73": {
+      "formula": 74,
+      "gdi": 73,
+      "diff": -1
+    },
+    "74": {
+      "formula": 75,
+      "gdi": 74,
+      "diff": -1
+    },
+    "75": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "76": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "77": {
+      "formula": 78,
+      "gdi": 77,
+      "diff": -1
+    },
+    "78": {
+      "formula": 79,
+      "gdi": 78,
+      "diff": -1
+    },
+    "79": {
+      "formula": 80,
+      "gdi": 79,
+      "diff": -1
+    },
+    "80": {
+      "formula": 81,
+      "gdi": 80,
+      "diff": -1
+    },
+    "81": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "82": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "83": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "84": {
+      "formula": 85,
+      "gdi": 84,
+      "diff": -1
+    },
+    "85": {
+      "formula": 86,
+      "gdi": 85,
+      "diff": -1
+    },
+    "86": {
+      "formula": 87,
+      "gdi": 86,
+      "diff": -1
+    },
+    "87": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "88": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "89": {
+      "formula": 90,
+      "gdi": 89,
+      "diff": -1
+    },
+    "90": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "91": {
+      "formula": 92,
+      "gdi": 91,
+      "diff": -1
+    },
+    "92": {
+      "formula": 93,
+      "gdi": 92,
+      "diff": -1
+    },
+    "93": {
+      "formula": 94,
+      "gdi": 93,
+      "diff": -1
+    },
+    "94": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "95": {
+      "formula": 96,
+      "gdi": 95,
+      "diff": -1
+    },
+    "97": {
+      "formula": 98,
+      "gdi": 97,
+      "diff": -1
+    },
+    "98": {
+      "formula": 99,
+      "gdi": 98,
+      "diff": -1
+    },
+    "99": {
+      "formula": 100,
+      "gdi": 99,
+      "diff": -1
+    },
+    "100": {
+      "formula": 101,
+      "gdi": 100,
+      "diff": -1
+    }
+  },
+  "MS_Mincho": {
+    "5": {
+      "formula": 6,
+      "gdi": 5,
+      "diff": -1
+    },
+    "6": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "7": {
+      "formula": 8,
+      "gdi": 7,
+      "diff": -1
+    },
+    "8": {
+      "formula": 9,
+      "gdi": 8,
+      "diff": -1
+    },
+    "9": {
+      "formula": 10,
+      "gdi": 9,
+      "diff": -1
+    },
+    "10": {
+      "formula": 11,
+      "gdi": 10,
+      "diff": -1
+    },
+    "11": {
+      "formula": 12,
+      "gdi": 11,
+      "diff": -1
+    },
+    "12": {
+      "formula": 13,
+      "gdi": 12,
+      "diff": -1
+    },
+    "13": {
+      "formula": 14,
+      "gdi": 13,
+      "diff": -1
+    },
+    "14": {
+      "formula": 15,
+      "gdi": 14,
+      "diff": -1
+    },
+    "15": {
+      "formula": 16,
+      "gdi": 15,
+      "diff": -1
+    },
+    "16": {
+      "formula": 17,
+      "gdi": 16,
+      "diff": -1
+    },
+    "17": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "18": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "19": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "20": {
+      "formula": 21,
+      "gdi": 20,
+      "diff": -1
+    },
+    "21": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "22": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "23": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "24": {
+      "formula": 25,
+      "gdi": 24,
+      "diff": -1
+    },
+    "25": {
+      "formula": 26,
+      "gdi": 25,
+      "diff": -1
+    },
+    "26": {
+      "formula": 27,
+      "gdi": 26,
+      "diff": -1
+    },
+    "27": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "28": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "29": {
+      "formula": 30,
+      "gdi": 29,
+      "diff": -1
+    },
+    "30": {
+      "formula": 31,
+      "gdi": 30,
+      "diff": -1
+    },
+    "31": {
+      "formula": 32,
+      "gdi": 31,
+      "diff": -1
+    },
+    "33": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "34": {
+      "formula": 35,
+      "gdi": 34,
+      "diff": -1
+    },
+    "35": {
+      "formula": 36,
+      "gdi": 35,
+      "diff": -1
+    },
+    "36": {
+      "formula": 37,
+      "gdi": 36,
+      "diff": -1
+    },
+    "37": {
+      "formula": 38,
+      "gdi": 37,
+      "diff": -1
+    },
+    "38": {
+      "formula": 39,
+      "gdi": 38,
+      "diff": -1
+    },
+    "39": {
+      "formula": 40,
+      "gdi": 39,
+      "diff": -1
+    },
+    "40": {
+      "formula": 41,
+      "gdi": 40,
+      "diff": -1
+    },
+    "41": {
+      "formula": 42,
+      "gdi": 41,
+      "diff": -1
+    },
+    "42": {
+      "formula": 43,
+      "gdi": 42,
+      "diff": -1
+    },
+    "43": {
+      "formula": 44,
+      "gdi": 43,
+      "diff": -1
+    },
+    "44": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "45": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "46": {
+      "formula": 47,
+      "gdi": 46,
+      "diff": -1
+    },
+    "47": {
+      "formula": 48,
+      "gdi": 47,
+      "diff": -1
+    },
+    "48": {
+      "formula": 49,
+      "gdi": 48,
+      "diff": -1
+    },
+    "49": {
+      "formula": 50,
+      "gdi": 49,
+      "diff": -1
+    },
+    "50": {
+      "formula": 51,
+      "gdi": 50,
+      "diff": -1
+    },
+    "51": {
+      "formula": 52,
+      "gdi": 51,
+      "diff": -1
+    },
+    "52": {
+      "formula": 53,
+      "gdi": 52,
+      "diff": -1
+    },
+    "53": {
+      "formula": 54,
+      "gdi": 53,
+      "diff": -1
+    },
+    "54": {
+      "formula": 55,
+      "gdi": 54,
+      "diff": -1
+    },
+    "55": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "56": {
+      "formula": 57,
+      "gdi": 56,
+      "diff": -1
+    },
+    "57": {
+      "formula": 58,
+      "gdi": 57,
+      "diff": -1
+    },
+    "58": {
+      "formula": 59,
+      "gdi": 58,
+      "diff": -1
+    },
+    "59": {
+      "formula": 60,
+      "gdi": 59,
+      "diff": -1
+    },
+    "60": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "61": {
+      "formula": 62,
+      "gdi": 61,
+      "diff": -1
+    },
+    "62": {
+      "formula": 63,
+      "gdi": 62,
+      "diff": -1
+    },
+    "63": {
+      "formula": 64,
+      "gdi": 63,
+      "diff": -1
+    },
+    "65": {
+      "formula": 66,
+      "gdi": 65,
+      "diff": -1
+    },
+    "66": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "67": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "68": {
+      "formula": 69,
+      "gdi": 68,
+      "diff": -1
+    },
+    "69": {
+      "formula": 70,
+      "gdi": 69,
+      "diff": -1
+    },
+    "70": {
+      "formula": 71,
+      "gdi": 70,
+      "diff": -1
+    },
+    "71": {
+      "formula": 72,
+      "gdi": 71,
+      "diff": -1
+    },
+    "72": {
+      "formula": 73,
+      "gdi": 72,
+      "diff": -1
+    },
+    "73": {
+      "formula": 74,
+      "gdi": 73,
+      "diff": -1
+    },
+    "74": {
+      "formula": 75,
+      "gdi": 74,
+      "diff": -1
+    },
+    "75": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "76": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "77": {
+      "formula": 78,
+      "gdi": 77,
+      "diff": -1
+    },
+    "78": {
+      "formula": 79,
+      "gdi": 78,
+      "diff": -1
+    },
+    "79": {
+      "formula": 80,
+      "gdi": 79,
+      "diff": -1
+    },
+    "80": {
+      "formula": 81,
+      "gdi": 80,
+      "diff": -1
+    },
+    "81": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "82": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "83": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "84": {
+      "formula": 85,
+      "gdi": 84,
+      "diff": -1
+    },
+    "85": {
+      "formula": 86,
+      "gdi": 85,
+      "diff": -1
+    },
+    "86": {
+      "formula": 87,
+      "gdi": 86,
+      "diff": -1
+    },
+    "87": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "88": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "89": {
+      "formula": 90,
+      "gdi": 89,
+      "diff": -1
+    },
+    "90": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "91": {
+      "formula": 92,
+      "gdi": 91,
+      "diff": -1
+    },
+    "92": {
+      "formula": 93,
+      "gdi": 92,
+      "diff": -1
+    },
+    "93": {
+      "formula": 94,
+      "gdi": 93,
+      "diff": -1
+    },
+    "94": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "95": {
+      "formula": 96,
+      "gdi": 95,
+      "diff": -1
+    },
+    "97": {
+      "formula": 98,
+      "gdi": 97,
+      "diff": -1
+    },
+    "98": {
+      "formula": 99,
+      "gdi": 98,
+      "diff": -1
+    },
+    "99": {
+      "formula": 100,
+      "gdi": 99,
+      "diff": -1
+    },
+    "100": {
+      "formula": 101,
+      "gdi": 100,
+      "diff": -1
+    }
+  },
+  "MS_PGothic": {
+    "5": {
+      "formula": 6,
+      "gdi": 5,
+      "diff": -1
+    },
+    "6": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "7": {
+      "formula": 8,
+      "gdi": 7,
+      "diff": -1
+    },
+    "8": {
+      "formula": 9,
+      "gdi": 8,
+      "diff": -1
+    },
+    "9": {
+      "formula": 10,
+      "gdi": 9,
+      "diff": -1
+    },
+    "10": {
+      "formula": 11,
+      "gdi": 10,
+      "diff": -1
+    },
+    "11": {
+      "formula": 12,
+      "gdi": 11,
+      "diff": -1
+    },
+    "12": {
+      "formula": 13,
+      "gdi": 12,
+      "diff": -1
+    },
+    "13": {
+      "formula": 14,
+      "gdi": 13,
+      "diff": -1
+    },
+    "14": {
+      "formula": 15,
+      "gdi": 14,
+      "diff": -1
+    },
+    "15": {
+      "formula": 16,
+      "gdi": 15,
+      "diff": -1
+    },
+    "16": {
+      "formula": 17,
+      "gdi": 16,
+      "diff": -1
+    },
+    "17": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "18": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "19": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "20": {
+      "formula": 21,
+      "gdi": 20,
+      "diff": -1
+    },
+    "21": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "22": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "23": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "24": {
+      "formula": 25,
+      "gdi": 24,
+      "diff": -1
+    },
+    "25": {
+      "formula": 26,
+      "gdi": 25,
+      "diff": -1
+    },
+    "26": {
+      "formula": 27,
+      "gdi": 26,
+      "diff": -1
+    },
+    "27": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "28": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "29": {
+      "formula": 30,
+      "gdi": 29,
+      "diff": -1
+    },
+    "30": {
+      "formula": 31,
+      "gdi": 30,
+      "diff": -1
+    },
+    "31": {
+      "formula": 32,
+      "gdi": 31,
+      "diff": -1
+    },
+    "33": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "34": {
+      "formula": 35,
+      "gdi": 34,
+      "diff": -1
+    },
+    "35": {
+      "formula": 36,
+      "gdi": 35,
+      "diff": -1
+    },
+    "36": {
+      "formula": 37,
+      "gdi": 36,
+      "diff": -1
+    },
+    "37": {
+      "formula": 38,
+      "gdi": 37,
+      "diff": -1
+    },
+    "38": {
+      "formula": 39,
+      "gdi": 38,
+      "diff": -1
+    },
+    "39": {
+      "formula": 40,
+      "gdi": 39,
+      "diff": -1
+    },
+    "40": {
+      "formula": 41,
+      "gdi": 40,
+      "diff": -1
+    },
+    "41": {
+      "formula": 42,
+      "gdi": 41,
+      "diff": -1
+    },
+    "42": {
+      "formula": 43,
+      "gdi": 42,
+      "diff": -1
+    },
+    "43": {
+      "formula": 44,
+      "gdi": 43,
+      "diff": -1
+    },
+    "44": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "45": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "46": {
+      "formula": 47,
+      "gdi": 46,
+      "diff": -1
+    },
+    "47": {
+      "formula": 48,
+      "gdi": 47,
+      "diff": -1
+    },
+    "48": {
+      "formula": 49,
+      "gdi": 48,
+      "diff": -1
+    },
+    "49": {
+      "formula": 50,
+      "gdi": 49,
+      "diff": -1
+    },
+    "50": {
+      "formula": 51,
+      "gdi": 50,
+      "diff": -1
+    },
+    "51": {
+      "formula": 52,
+      "gdi": 51,
+      "diff": -1
+    },
+    "52": {
+      "formula": 53,
+      "gdi": 52,
+      "diff": -1
+    },
+    "53": {
+      "formula": 54,
+      "gdi": 53,
+      "diff": -1
+    },
+    "54": {
+      "formula": 55,
+      "gdi": 54,
+      "diff": -1
+    },
+    "55": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "56": {
+      "formula": 57,
+      "gdi": 56,
+      "diff": -1
+    },
+    "57": {
+      "formula": 58,
+      "gdi": 57,
+      "diff": -1
+    },
+    "58": {
+      "formula": 59,
+      "gdi": 58,
+      "diff": -1
+    },
+    "59": {
+      "formula": 60,
+      "gdi": 59,
+      "diff": -1
+    },
+    "60": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "61": {
+      "formula": 62,
+      "gdi": 61,
+      "diff": -1
+    },
+    "62": {
+      "formula": 63,
+      "gdi": 62,
+      "diff": -1
+    },
+    "63": {
+      "formula": 64,
+      "gdi": 63,
+      "diff": -1
+    },
+    "65": {
+      "formula": 66,
+      "gdi": 65,
+      "diff": -1
+    },
+    "66": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "67": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "68": {
+      "formula": 69,
+      "gdi": 68,
+      "diff": -1
+    },
+    "69": {
+      "formula": 70,
+      "gdi": 69,
+      "diff": -1
+    },
+    "70": {
+      "formula": 71,
+      "gdi": 70,
+      "diff": -1
+    },
+    "71": {
+      "formula": 72,
+      "gdi": 71,
+      "diff": -1
+    },
+    "72": {
+      "formula": 73,
+      "gdi": 72,
+      "diff": -1
+    },
+    "73": {
+      "formula": 74,
+      "gdi": 73,
+      "diff": -1
+    },
+    "74": {
+      "formula": 75,
+      "gdi": 74,
+      "diff": -1
+    },
+    "75": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "76": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "77": {
+      "formula": 78,
+      "gdi": 77,
+      "diff": -1
+    },
+    "78": {
+      "formula": 79,
+      "gdi": 78,
+      "diff": -1
+    },
+    "79": {
+      "formula": 80,
+      "gdi": 79,
+      "diff": -1
+    },
+    "80": {
+      "formula": 81,
+      "gdi": 80,
+      "diff": -1
+    },
+    "81": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "82": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "83": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "84": {
+      "formula": 85,
+      "gdi": 84,
+      "diff": -1
+    },
+    "85": {
+      "formula": 86,
+      "gdi": 85,
+      "diff": -1
+    },
+    "86": {
+      "formula": 87,
+      "gdi": 86,
+      "diff": -1
+    },
+    "87": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "88": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "89": {
+      "formula": 90,
+      "gdi": 89,
+      "diff": -1
+    },
+    "90": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "91": {
+      "formula": 92,
+      "gdi": 91,
+      "diff": -1
+    },
+    "92": {
+      "formula": 93,
+      "gdi": 92,
+      "diff": -1
+    },
+    "93": {
+      "formula": 94,
+      "gdi": 93,
+      "diff": -1
+    },
+    "94": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "95": {
+      "formula": 96,
+      "gdi": 95,
+      "diff": -1
+    },
+    "97": {
+      "formula": 98,
+      "gdi": 97,
+      "diff": -1
+    },
+    "98": {
+      "formula": 99,
+      "gdi": 98,
+      "diff": -1
+    },
+    "99": {
+      "formula": 100,
+      "gdi": 99,
+      "diff": -1
+    },
+    "100": {
+      "formula": 101,
+      "gdi": 100,
+      "diff": -1
+    }
+  },
+  "MS_PMincho": {
+    "5": {
+      "formula": 6,
+      "gdi": 5,
+      "diff": -1
+    },
+    "6": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "7": {
+      "formula": 8,
+      "gdi": 7,
+      "diff": -1
+    },
+    "8": {
+      "formula": 9,
+      "gdi": 8,
+      "diff": -1
+    },
+    "9": {
+      "formula": 10,
+      "gdi": 9,
+      "diff": -1
+    },
+    "10": {
+      "formula": 11,
+      "gdi": 10,
+      "diff": -1
+    },
+    "11": {
+      "formula": 12,
+      "gdi": 11,
+      "diff": -1
+    },
+    "12": {
+      "formula": 13,
+      "gdi": 12,
+      "diff": -1
+    },
+    "13": {
+      "formula": 14,
+      "gdi": 13,
+      "diff": -1
+    },
+    "14": {
+      "formula": 15,
+      "gdi": 14,
+      "diff": -1
+    },
+    "15": {
+      "formula": 16,
+      "gdi": 15,
+      "diff": -1
+    },
+    "16": {
+      "formula": 17,
+      "gdi": 16,
+      "diff": -1
+    },
+    "17": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "18": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "19": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "20": {
+      "formula": 21,
+      "gdi": 20,
+      "diff": -1
+    },
+    "21": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "22": {
+      "formula": 23,
+      "gdi": 22,
+      "diff": -1
+    },
+    "23": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "24": {
+      "formula": 25,
+      "gdi": 24,
+      "diff": -1
+    },
+    "25": {
+      "formula": 26,
+      "gdi": 25,
+      "diff": -1
+    },
+    "26": {
+      "formula": 27,
+      "gdi": 26,
+      "diff": -1
+    },
+    "27": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "28": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "29": {
+      "formula": 30,
+      "gdi": 29,
+      "diff": -1
+    },
+    "30": {
+      "formula": 31,
+      "gdi": 30,
+      "diff": -1
+    },
+    "31": {
+      "formula": 32,
+      "gdi": 31,
+      "diff": -1
+    },
+    "33": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "34": {
+      "formula": 35,
+      "gdi": 34,
+      "diff": -1
+    },
+    "35": {
+      "formula": 36,
+      "gdi": 35,
+      "diff": -1
+    },
+    "36": {
+      "formula": 37,
+      "gdi": 36,
+      "diff": -1
+    },
+    "37": {
+      "formula": 38,
+      "gdi": 37,
+      "diff": -1
+    },
+    "38": {
+      "formula": 39,
+      "gdi": 38,
+      "diff": -1
+    },
+    "39": {
+      "formula": 40,
+      "gdi": 39,
+      "diff": -1
+    },
+    "40": {
+      "formula": 41,
+      "gdi": 40,
+      "diff": -1
+    },
+    "41": {
+      "formula": 42,
+      "gdi": 41,
+      "diff": -1
+    },
+    "42": {
+      "formula": 43,
+      "gdi": 42,
+      "diff": -1
+    },
+    "43": {
+      "formula": 44,
+      "gdi": 43,
+      "diff": -1
+    },
+    "44": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "45": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "46": {
+      "formula": 47,
+      "gdi": 46,
+      "diff": -1
+    },
+    "47": {
+      "formula": 48,
+      "gdi": 47,
+      "diff": -1
+    },
+    "48": {
+      "formula": 49,
+      "gdi": 48,
+      "diff": -1
+    },
+    "49": {
+      "formula": 50,
+      "gdi": 49,
+      "diff": -1
+    },
+    "50": {
+      "formula": 51,
+      "gdi": 50,
+      "diff": -1
+    },
+    "51": {
+      "formula": 52,
+      "gdi": 51,
+      "diff": -1
+    },
+    "52": {
+      "formula": 53,
+      "gdi": 52,
+      "diff": -1
+    },
+    "53": {
+      "formula": 54,
+      "gdi": 53,
+      "diff": -1
+    },
+    "54": {
+      "formula": 55,
+      "gdi": 54,
+      "diff": -1
+    },
+    "55": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "56": {
+      "formula": 57,
+      "gdi": 56,
+      "diff": -1
+    },
+    "57": {
+      "formula": 58,
+      "gdi": 57,
+      "diff": -1
+    },
+    "58": {
+      "formula": 59,
+      "gdi": 58,
+      "diff": -1
+    },
+    "59": {
+      "formula": 60,
+      "gdi": 59,
+      "diff": -1
+    },
+    "60": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "61": {
+      "formula": 62,
+      "gdi": 61,
+      "diff": -1
+    },
+    "62": {
+      "formula": 63,
+      "gdi": 62,
+      "diff": -1
+    },
+    "63": {
+      "formula": 64,
+      "gdi": 63,
+      "diff": -1
+    },
+    "65": {
+      "formula": 66,
+      "gdi": 65,
+      "diff": -1
+    },
+    "66": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "67": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "68": {
+      "formula": 69,
+      "gdi": 68,
+      "diff": -1
+    },
+    "69": {
+      "formula": 70,
+      "gdi": 69,
+      "diff": -1
+    },
+    "70": {
+      "formula": 71,
+      "gdi": 70,
+      "diff": -1
+    },
+    "71": {
+      "formula": 72,
+      "gdi": 71,
+      "diff": -1
+    },
+    "72": {
+      "formula": 73,
+      "gdi": 72,
+      "diff": -1
+    },
+    "73": {
+      "formula": 74,
+      "gdi": 73,
+      "diff": -1
+    },
+    "74": {
+      "formula": 75,
+      "gdi": 74,
+      "diff": -1
+    },
+    "75": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "76": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "77": {
+      "formula": 78,
+      "gdi": 77,
+      "diff": -1
+    },
+    "78": {
+      "formula": 79,
+      "gdi": 78,
+      "diff": -1
+    },
+    "79": {
+      "formula": 80,
+      "gdi": 79,
+      "diff": -1
+    },
+    "80": {
+      "formula": 81,
+      "gdi": 80,
+      "diff": -1
+    },
+    "81": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "82": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "83": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "84": {
+      "formula": 85,
+      "gdi": 84,
+      "diff": -1
+    },
+    "85": {
+      "formula": 86,
+      "gdi": 85,
+      "diff": -1
+    },
+    "86": {
+      "formula": 87,
+      "gdi": 86,
+      "diff": -1
+    },
+    "87": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "88": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "89": {
+      "formula": 90,
+      "gdi": 89,
+      "diff": -1
+    },
+    "90": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "91": {
+      "formula": 92,
+      "gdi": 91,
+      "diff": -1
+    },
+    "92": {
+      "formula": 93,
+      "gdi": 92,
+      "diff": -1
+    },
+    "93": {
+      "formula": 94,
+      "gdi": 93,
+      "diff": -1
+    },
+    "94": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "95": {
+      "formula": 96,
+      "gdi": 95,
+      "diff": -1
+    },
+    "97": {
+      "formula": 98,
+      "gdi": 97,
+      "diff": -1
+    },
+    "98": {
+      "formula": 99,
+      "gdi": 98,
+      "diff": -1
+    },
+    "99": {
+      "formula": 100,
+      "gdi": 99,
+      "diff": -1
+    },
+    "100": {
+      "formula": 101,
+      "gdi": 100,
+      "diff": -1
+    }
+  },
+  "Meiryo": {
+    "5": {
+      "formula": 9,
+      "gdi": 7,
+      "diff": -2
+    },
+    "6": {
+      "formula": 10,
+      "gdi": 9,
+      "diff": -1
+    },
+    "7": {
+      "formula": 12,
+      "gdi": 10,
+      "diff": -2
+    },
+    "8": {
+      "formula": 13,
+      "gdi": 12,
+      "diff": -1
+    },
+    "10": {
+      "formula": 16,
+      "gdi": 15,
+      "diff": -1
+    },
+    "12": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "14": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "16": {
+      "formula": 25,
+      "gdi": 24,
+      "diff": -1
+    },
+    "17": {
+      "formula": 27,
+      "gdi": 25,
+      "diff": -2
+    },
+    "18": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "19": {
+      "formula": 30,
+      "gdi": 28,
+      "diff": -2
+    },
+    "20": {
+      "formula": 31,
+      "gdi": 30,
+      "diff": -1
+    },
+    "21": {
+      "formula": 33,
+      "gdi": 31,
+      "diff": -2
+    },
+    "22": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "23": {
+      "formula": 36,
+      "gdi": 34,
+      "diff": -2
+    },
+    "24": {
+      "formula": 37,
+      "gdi": 36,
+      "diff": -1
+    },
+    "26": {
+      "formula": 40,
+      "gdi": 39,
+      "diff": -1
+    },
+    "28": {
+      "formula": 43,
+      "gdi": 42,
+      "diff": -1
+    },
+    "30": {
+      "formula": 46,
+      "gdi": 45,
+      "diff": -1
+    },
+    "32": {
+      "formula": 49,
+      "gdi": 48,
+      "diff": -1
+    },
+    "34": {
+      "formula": 52,
+      "gdi": 51,
+      "diff": -1
+    },
+    "35": {
+      "formula": 54,
+      "gdi": 52,
+      "diff": -2
+    },
+    "36": {
+      "formula": 55,
+      "gdi": 54,
+      "diff": -1
+    },
+    "37": {
+      "formula": 57,
+      "gdi": 55,
+      "diff": -2
+    },
+    "38": {
+      "formula": 58,
+      "gdi": 57,
+      "diff": -1
+    },
+    "39": {
+      "formula": 60,
+      "gdi": 58,
+      "diff": -2
+    },
+    "40": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "41": {
+      "formula": 63,
+      "gdi": 61,
+      "diff": -2
+    },
+    "42": {
+      "formula": 64,
+      "gdi": 63,
+      "diff": -1
+    },
+    "44": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "46": {
+      "formula": 70,
+      "gdi": 69,
+      "diff": -1
+    },
+    "48": {
+      "formula": 73,
+      "gdi": 72,
+      "diff": -1
+    },
+    "50": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "51": {
+      "formula": 78,
+      "gdi": 76,
+      "diff": -2
+    },
+    "52": {
+      "formula": 79,
+      "gdi": 78,
+      "diff": -1
+    },
+    "53": {
+      "formula": 81,
+      "gdi": 79,
+      "diff": -2
+    },
+    "54": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "55": {
+      "formula": 84,
+      "gdi": 82,
+      "diff": -2
+    },
+    "56": {
+      "formula": 85,
+      "gdi": 84,
+      "diff": -1
+    },
+    "57": {
+      "formula": 87,
+      "gdi": 85,
+      "diff": -2
+    },
+    "58": {
+      "formula": 88,
+      "gdi": 87,
+      "diff": -1
+    },
+    "60": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "62": {
+      "formula": 94,
+      "gdi": 93,
+      "diff": -1
+    },
+    "64": {
+      "formula": 97,
+      "gdi": 96,
+      "diff": -1
+    },
+    "66": {
+      "formula": 100,
+      "gdi": 99,
+      "diff": -1
+    },
+    "67": {
+      "formula": 102,
+      "gdi": 100,
+      "diff": -2
+    },
+    "68": {
+      "formula": 103,
+      "gdi": 102,
+      "diff": -1
+    },
+    "69": {
+      "formula": 105,
+      "gdi": 103,
+      "diff": -2
+    },
+    "70": {
+      "formula": 106,
+      "gdi": 105,
+      "diff": -1
+    },
+    "71": {
+      "formula": 108,
+      "gdi": 106,
+      "diff": -2
+    },
+    "72": {
+      "formula": 109,
+      "gdi": 108,
+      "diff": -1
+    },
+    "73": {
+      "formula": 111,
+      "gdi": 109,
+      "diff": -2
+    },
+    "74": {
+      "formula": 112,
+      "gdi": 111,
+      "diff": -1
+    },
+    "76": {
+      "formula": 115,
+      "gdi": 114,
+      "diff": -1
+    },
+    "78": {
+      "formula": 118,
+      "gdi": 117,
+      "diff": -1
+    },
+    "80": {
+      "formula": 121,
+      "gdi": 120,
+      "diff": -1
+    },
+    "82": {
+      "formula": 124,
+      "gdi": 123,
+      "diff": -1
+    },
+    "84": {
+      "formula": 127,
+      "gdi": 126,
+      "diff": -1
+    },
+    "85": {
+      "formula": 129,
+      "gdi": 127,
+      "diff": -2
+    },
+    "86": {
+      "formula": 130,
+      "gdi": 129,
+      "diff": -1
+    },
+    "87": {
+      "formula": 132,
+      "gdi": 130,
+      "diff": -2
+    },
+    "88": {
+      "formula": 133,
+      "gdi": 132,
+      "diff": -1
+    },
+    "89": {
+      "formula": 135,
+      "gdi": 133,
+      "diff": -2
+    },
+    "90": {
+      "formula": 136,
+      "gdi": 135,
+      "diff": -1
+    },
+    "91": {
+      "formula": 138,
+      "gdi": 136,
+      "diff": -2
+    },
+    "92": {
+      "formula": 139,
+      "gdi": 138,
+      "diff": -1
+    },
+    "94": {
+      "formula": 142,
+      "gdi": 141,
+      "diff": -1
+    },
+    "96": {
+      "formula": 145,
+      "gdi": 144,
+      "diff": -1
+    },
+    "98": {
+      "formula": 148,
+      "gdi": 147,
+      "diff": -1
+    },
+    "100": {
+      "formula": 151,
+      "gdi": 150,
+      "diff": -1
+    }
+  },
+  "Century": {
+    "5": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "6": {
+      "formula": 8,
+      "gdi": 7,
+      "diff": -1
+    },
+    "8": {
+      "formula": 10,
+      "gdi": 13,
+      "diff": 3
+    },
+    "9": {
+      "formula": 11,
+      "gdi": 14,
+      "diff": 3
+    },
+    "10": {
+      "formula": 13,
+      "gdi": 15,
+      "diff": 2
+    },
+    "11": {
+      "formula": 14,
+      "gdi": 15,
+      "diff": 1
+    },
+    "12": {
+      "formula": 15,
+      "gdi": 16,
+      "diff": 1
+    },
+    "14": {
+      "formula": 18,
+      "gdi": 17,
+      "diff": -1
+    },
+    "15": {
+      "formula": 19,
+      "gdi": 18,
+      "diff": -1
+    },
+    "19": {
+      "formula": 24,
+      "gdi": 23,
+      "diff": -1
+    },
+    "20": {
+      "formula": 25,
+      "gdi": 23,
+      "diff": -2
+    },
+    "21": {
+      "formula": 26,
+      "gdi": 25,
+      "diff": -1
+    },
+    "24": {
+      "formula": 30,
+      "gdi": 28,
+      "diff": -2
+    },
+    "25": {
+      "formula": 31,
+      "gdi": 29,
+      "diff": -2
+    },
+    "26": {
+      "formula": 32,
+      "gdi": 31,
+      "diff": -1
+    },
+    "28": {
+      "formula": 35,
+      "gdi": 33,
+      "diff": -2
+    },
+    "29": {
+      "formula": 36,
+      "gdi": 34,
+      "diff": -2
+    },
+    "30": {
+      "formula": 37,
+      "gdi": 35,
+      "diff": -2
+    },
+    "31": {
+      "formula": 38,
+      "gdi": 36,
+      "diff": -2
+    },
+    "32": {
+      "formula": 39,
+      "gdi": 38,
+      "diff": -1
+    },
+    "33": {
+      "formula": 41,
+      "gdi": 39,
+      "diff": -2
+    },
+    "34": {
+      "formula": 42,
+      "gdi": 40,
+      "diff": -2
+    },
+    "35": {
+      "formula": 43,
+      "gdi": 41,
+      "diff": -2
+    },
+    "36": {
+      "formula": 44,
+      "gdi": 42,
+      "diff": -2
+    },
+    "37": {
+      "formula": 45,
+      "gdi": 44,
+      "diff": -1
+    },
+    "38": {
+      "formula": 47,
+      "gdi": 44,
+      "diff": -3
+    },
+    "39": {
+      "formula": 48,
+      "gdi": 45,
+      "diff": -3
+    },
+    "40": {
+      "formula": 49,
+      "gdi": 47,
+      "diff": -2
+    },
+    "41": {
+      "formula": 50,
+      "gdi": 48,
+      "diff": -2
+    },
+    "42": {
+      "formula": 52,
+      "gdi": 50,
+      "diff": -2
+    },
+    "43": {
+      "formula": 53,
+      "gdi": 50,
+      "diff": -3
+    },
+    "45": {
+      "formula": 55,
+      "gdi": 53,
+      "diff": -2
+    },
+    "46": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "47": {
+      "formula": 58,
+      "gdi": 55,
+      "diff": -3
+    },
+    "48": {
+      "formula": 59,
+      "gdi": 57,
+      "diff": -2
+    },
+    "50": {
+      "formula": 61,
+      "gdi": 60,
+      "diff": -1
+    },
+    "51": {
+      "formula": 63,
+      "gdi": 61,
+      "diff": -2
+    },
+    "52": {
+      "formula": 64,
+      "gdi": 62,
+      "diff": -2
+    },
+    "53": {
+      "formula": 65,
+      "gdi": 64,
+      "diff": -1
+    },
+    "54": {
+      "formula": 66,
+      "gdi": 64,
+      "diff": -2
+    },
+    "55": {
+      "formula": 67,
+      "gdi": 66,
+      "diff": -1
+    },
+    "56": {
+      "formula": 69,
+      "gdi": 67,
+      "diff": -2
+    },
+    "57": {
+      "formula": 70,
+      "gdi": 69,
+      "diff": -1
+    },
+    "58": {
+      "formula": 71,
+      "gdi": 70,
+      "diff": -1
+    },
+    "59": {
+      "formula": 72,
+      "gdi": 70,
+      "diff": -2
+    },
+    "60": {
+      "formula": 73,
+      "gdi": 71,
+      "diff": -2
+    },
+    "61": {
+      "formula": 75,
+      "gdi": 74,
+      "diff": -1
+    },
+    "62": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "63": {
+      "formula": 77,
+      "gdi": 75,
+      "diff": -2
+    },
+    "64": {
+      "formula": 78,
+      "gdi": 77,
+      "diff": -1
+    },
+    "65": {
+      "formula": 80,
+      "gdi": 78,
+      "diff": -2
+    },
+    "66": {
+      "formula": 81,
+      "gdi": 79,
+      "diff": -2
+    },
+    "67": {
+      "formula": 82,
+      "gdi": 80,
+      "diff": -2
+    },
+    "68": {
+      "formula": 83,
+      "gdi": 82,
+      "diff": -1
+    },
+    "69": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "70": {
+      "formula": 86,
+      "gdi": 84,
+      "diff": -2
+    },
+    "71": {
+      "formula": 86,
+      "gdi": 85,
+      "diff": -1
+    },
+    "73": {
+      "formula": 88,
+      "gdi": 89,
+      "diff": 1
+    },
+    "75": {
+      "formula": 91,
+      "gdi": 90,
+      "diff": -1
+    },
+    "76": {
+      "formula": 92,
+      "gdi": 91,
+      "diff": -1
+    },
+    "77": {
+      "formula": 93,
+      "gdi": 94,
+      "diff": 1
+    },
+    "79": {
+      "formula": 96,
+      "gdi": 95,
+      "diff": -1
+    },
+    "80": {
+      "formula": 97,
+      "gdi": 95,
+      "diff": -2
+    },
+    "84": {
+      "formula": 102,
+      "gdi": 100,
+      "diff": -2
+    },
+    "85": {
+      "formula": 103,
+      "gdi": 102,
+      "diff": -1
+    },
+    "86": {
+      "formula": 104,
+      "gdi": 105,
+      "diff": 1
+    },
+    "89": {
+      "formula": 108,
+      "gdi": 106,
+      "diff": -2
+    },
+    "90": {
+      "formula": 109,
+      "gdi": 108,
+      "diff": -1
+    },
+    "93": {
+      "formula": 113,
+      "gdi": 111,
+      "diff": -2
+    },
+    "94": {
+      "formula": 114,
+      "gdi": 113,
+      "diff": -1
+    },
+    "98": {
+      "formula": 119,
+      "gdi": 118,
+      "diff": -1
+    },
+    "99": {
+      "formula": 120,
+      "gdi": 119,
+      "diff": -1
+    },
+    "100": {
+      "formula": 121,
+      "gdi": 120,
+      "diff": -1
+    }
+  },
+  "Cambria": {
+    "5": {
+      "formula": 7,
+      "gdi": 6,
+      "diff": -1
+    },
+    "6": {
+      "formula": 8,
+      "gdi": 7,
+      "diff": -1
+    },
+    "10": {
+      "formula": 13,
+      "gdi": 12,
+      "diff": -1
+    },
+    "11": {
+      "formula": 14,
+      "gdi": 12,
+      "diff": -2
+    },
+    "12": {
+      "formula": 15,
+      "gdi": 14,
+      "diff": -1
+    },
+    "13": {
+      "formula": 16,
+      "gdi": 15,
+      "diff": -1
+    },
+    "14": {
+      "formula": 18,
+      "gdi": 16,
+      "diff": -2
+    },
+    "15": {
+      "formula": 19,
+      "gdi": 17,
+      "diff": -2
+    },
+    "16": {
+      "formula": 20,
+      "gdi": 19,
+      "diff": -1
+    },
+    "17": {
+      "formula": 21,
+      "gdi": 20,
+      "diff": -1
+    },
+    "18": {
+      "formula": 22,
+      "gdi": 21,
+      "diff": -1
+    },
+    "19": {
+      "formula": 24,
+      "gdi": 22,
+      "diff": -2
+    },
+    "20": {
+      "formula": 25,
+      "gdi": 23,
+      "diff": -2
+    },
+    "23": {
+      "formula": 28,
+      "gdi": 27,
+      "diff": -1
+    },
+    "24": {
+      "formula": 29,
+      "gdi": 28,
+      "diff": -1
+    },
+    "28": {
+      "formula": 34,
+      "gdi": 33,
+      "diff": -1
+    },
+    "29": {
+      "formula": 35,
+      "gdi": 34,
+      "diff": -1
+    },
+    "31": {
+      "formula": 37,
+      "gdi": 36,
+      "diff": -1
+    },
+    "32": {
+      "formula": 39,
+      "gdi": 37,
+      "diff": -2
+    },
+    "33": {
+      "formula": 40,
+      "gdi": 38,
+      "diff": -2
+    },
+    "34": {
+      "formula": 41,
+      "gdi": 40,
+      "diff": -1
+    },
+    "35": {
+      "formula": 42,
+      "gdi": 41,
+      "diff": -1
+    },
+    "36": {
+      "formula": 43,
+      "gdi": 42,
+      "diff": -1
+    },
+    "37": {
+      "formula": 45,
+      "gdi": 43,
+      "diff": -2
+    },
+    "38": {
+      "formula": 46,
+      "gdi": 44,
+      "diff": -2
+    },
+    "39": {
+      "formula": 47,
+      "gdi": 46,
+      "diff": -1
+    },
+    "40": {
+      "formula": 48,
+      "gdi": 47,
+      "diff": -1
+    },
+    "41": {
+      "formula": 49,
+      "gdi": 48,
+      "diff": -1
+    },
+    "42": {
+      "formula": 50,
+      "gdi": 49,
+      "diff": -1
+    },
+    "46": {
+      "formula": 55,
+      "gdi": 54,
+      "diff": -1
+    },
+    "47": {
+      "formula": 56,
+      "gdi": 55,
+      "diff": -1
+    },
+    "50": {
+      "formula": 60,
+      "gdi": 59,
+      "diff": -1
+    },
+    "51": {
+      "formula": 61,
+      "gdi": 59,
+      "diff": -2
+    },
+    "52": {
+      "formula": 62,
+      "gdi": 61,
+      "diff": -1
+    },
+    "53": {
+      "formula": 63,
+      "gdi": 62,
+      "diff": -1
+    },
+    "54": {
+      "formula": 64,
+      "gdi": 63,
+      "diff": -1
+    },
+    "55": {
+      "formula": 66,
+      "gdi": 64,
+      "diff": -2
+    },
+    "56": {
+      "formula": 67,
+      "gdi": 65,
+      "diff": -2
+    },
+    "57": {
+      "formula": 68,
+      "gdi": 67,
+      "diff": -1
+    },
+    "58": {
+      "formula": 69,
+      "gdi": 68,
+      "diff": -1
+    },
+    "59": {
+      "formula": 71,
+      "gdi": 69,
+      "diff": -2
+    },
+    "60": {
+      "formula": 72,
+      "gdi": 70,
+      "diff": -2
+    },
+    "64": {
+      "formula": 76,
+      "gdi": 75,
+      "diff": -1
+    },
+    "65": {
+      "formula": 77,
+      "gdi": 76,
+      "diff": -1
+    },
+    "68": {
+      "formula": 81,
+      "gdi": 80,
+      "diff": -1
+    },
+    "69": {
+      "formula": 82,
+      "gdi": 81,
+      "diff": -1
+    },
+    "71": {
+      "formula": 84,
+      "gdi": 83,
+      "diff": -1
+    },
+    "72": {
+      "formula": 85,
+      "gdi": 84,
+      "diff": -1
+    },
+    "73": {
+      "formula": 87,
+      "gdi": 85,
+      "diff": -2
+    },
+    "74": {
+      "formula": 88,
+      "gdi": 86,
+      "diff": -2
+    },
+    "75": {
+      "formula": 89,
+      "gdi": 88,
+      "diff": -1
+    },
+    "76": {
+      "formula": 90,
+      "gdi": 89,
+      "diff": -1
+    },
+    "77": {
+      "formula": 92,
+      "gdi": 90,
+      "diff": -2
+    },
+    "78": {
+      "formula": 93,
+      "gdi": 91,
+      "diff": -2
+    },
+    "79": {
+      "formula": 94,
+      "gdi": 93,
+      "diff": -1
+    },
+    "80": {
+      "formula": 95,
+      "gdi": 94,
+      "diff": -1
+    },
+    "82": {
+      "formula": 97,
+      "gdi": 96,
+      "diff": -1
+    },
+    "83": {
+      "formula": 98,
+      "gdi": 97,
+      "diff": -1
+    },
+    "86": {
+      "formula": 102,
+      "gdi": 101,
+      "diff": -1
+    },
+    "87": {
+      "formula": 103,
+      "gdi": 102,
+      "diff": -1
+    },
+    "91": {
+      "formula": 108,
+      "gdi": 106,
+      "diff": -2
+    },
+    "92": {
+      "formula": 109,
+      "gdi": 107,
+      "diff": -2
+    },
+    "93": {
+      "formula": 110,
+      "gdi": 109,
+      "diff": -1
+    },
+    "94": {
+      "formula": 111,
+      "gdi": 110,
+      "diff": -1
+    },
+    "95": {
+      "formula": 113,
+      "gdi": 111,
+      "diff": -2
+    },
+    "96": {
+      "formula": 114,
+      "gdi": 112,
+      "diff": -2
+    },
+    "97": {
+      "formula": 115,
+      "gdi": 114,
+      "diff": -1
+    },
+    "98": {
+      "formula": 116,
+      "gdi": 115,
+      "diff": -1
+    },
+    "99": {
+      "formula": 117,
+      "gdi": 116,
+      "diff": -1
+    },
+    "100": {
+      "formula": 119,
+      "gdi": 117,
+      "diff": -2
+    }
+  }
+}
