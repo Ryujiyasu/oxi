@@ -126,6 +126,7 @@ impl OoxmlParser {
                     size: section.properties.page_size,
                     margin: section.properties.margin,
                     grid_line_pitch: section.properties.grid_line_pitch,
+                    grid_char_pitch: section.properties.grid_char_pitch,
                     doc_grid_no_type: section.properties.doc_grid_no_type,
                     header,
                     footer,
@@ -614,6 +615,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         page_size: PageSize::default(),
         margin: Margin::default(),
         grid_line_pitch: None,
+        grid_char_pitch: None,
         doc_grid_no_type: false,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
@@ -4109,6 +4111,8 @@ struct SectionProperties {
     margin: Margin,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
+    /// Character grid pitch in points (for linesAndChars mode)
+    grid_char_pitch: Option<f32>,
     /// docGrid exists but has no type attribute
     doc_grid_no_type: bool,
     /// Reference IDs for header parts (with type)
@@ -4140,6 +4144,7 @@ fn parse_section_properties(
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
     let mut grid_line_pitch: Option<f32> = None;
+    let mut grid_char_pitch: Option<f32> = None;
     let mut doc_grid_no_type = false;
     let mut header_refs: Vec<HdrFtrRef> = Vec::new();
     let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
@@ -4335,6 +4340,7 @@ fn parse_section_properties(
                     "docGrid" => {
                         let mut grid_type = String::new();
                         let mut line_pitch = 0u32;
+                        let mut char_space = 0u32;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -4342,6 +4348,9 @@ fn parse_section_properties(
                                 "type" => grid_type = val.to_string(),
                                 "linePitch" => {
                                     line_pitch = val.parse().unwrap_or(0);
+                                }
+                                "charSpace" => {
+                                    char_space = val.parse().unwrap_or(0);
                                 }
                                 _ => {}
                             }
@@ -4354,6 +4363,14 @@ fn parse_section_properties(
                         } else if grid_type.is_empty() && line_pitch > 0 {
                             // docGrid exists with linePitch but no type attribute
                             doc_grid_no_type = true;
+                        }
+                        // linesAndChars: compute character grid pitch
+                        if grid_type == "linesAndChars" {
+                            // charSpace is in twips (extra space per char beyond default)
+                            // Character pitch = default_char_width + charSpace/20
+                            // For Japanese: default char width ≈ 10.5pt (MS Mincho/Gothic at 10.5pt)
+                            let char_space_pt = char_space as f32 / 20.0;
+                            grid_char_pitch = Some(10.5 + char_space_pt);
                         }
                     }
                     "headerReference" => {
@@ -4452,6 +4469,7 @@ fn parse_section_properties(
         page_size,
         margin,
         grid_line_pitch,
+        grid_char_pitch,
         doc_grid_no_type,
         header_refs,
         footer_refs,
