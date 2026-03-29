@@ -373,12 +373,7 @@ impl LayoutEngine {
         let grid_pitch = page.grid_line_pitch;
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
-        // COM-confirmed: first line Y is grid-snapped from top margin
-        let mut cursor_y = if let Some(pitch) = grid_pitch {
-            if pitch > 0.0 {
-                ((start_y / pitch) + 0.5).floor().max(1.0) * pitch
-            } else { start_y }
-        } else { start_y };
+        let mut cursor_y = start_y;
         let mut prev_para_style_id: Option<String> = None;
         let mut prev_contextual_spacing: bool = false;
         let mut prev_space_after: f32 = 0.0;
