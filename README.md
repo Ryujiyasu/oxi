@@ -42,16 +42,37 @@ Oxi is built to close this gap.
 
 Oxi's core mission is one thing: **pixel-perfect document rendering**. Everything else is an extension or a fork.
 
+This is a **distribution model** — like Linux. Oxi provides the kernel (rendering engine) and defines two things:
+
+1. **Pixel accuracy standards** — the quality bar for the rendering core
+2. **Extension/Fork interface rules** — how add-ons plug in
+
+Each Fork decides which Extensions to adopt, which to skip, and which to build. Oxi doesn't pick winners — communities do.
+
 ### Extensions
 Extensions add functionality on top of Oxi's rendering core without compromising pixel accuracy.
 
-Examples:
+Available extensions:
 - **oxi-hyde** — Hardware-backed encryption and PQC signatures (TPM 2.0 + ML-KEM-768) for document integrity
+- **oxi-argo** — Zero-knowledge proofs for document provenance and selective disclosure
 - **oxi-mcp** — Model Context Protocol integration for AI agent workflows
 - **oxi-tauri** — Desktop application wrapper
 
 ### Forks
-Forks are purpose-built derivatives of Oxi targeting specific use cases and user communities.
+Forks are purpose-built derivatives of Oxi targeting specific use cases and user communities. Each Fork chooses which Extensions to adopt as standard — Oxi core doesn't decide for them.
+
+| Fork | Domain | Standard Extensions | Key Value |
+|------|--------|-------------------|-----------|
+| **Government Oxi** | Public sector | hyde, argo | Authenticity proof for official documents, tamper detection |
+| **Medical Oxi** | Healthcare | hyde, argo | Medical record rendering + signatures, patient privacy via ZKP |
+| **Legal Oxi** | Law | hyde | Contract version management, signature chains, selective disclosure |
+| **University Oxi** | Education | hyde, argo | AI-generated document process proof, transparent and verifiable |
+| **Finance Oxi** | Financial services | hyde | High-fidelity rendering of securities reports and disclosure documents |
+| **Publisher Oxi** | Publishing | — | InDesign interop, print-quality PDF output |
+| **BIM Oxi** | Construction / Real estate | — | High-precision rendering of blueprints and specifications |
+
+**Example: Government Oxi**
+Japan's government runs on .docx. As public agencies digitize, tamper detection and authenticity proof become critical. Government Oxi combines Oxi's pixel-perfect rendering with hyde (PQC signatures) and argo (ZKP) to let any citizen verify that a public document is authentic — without trusting a central authority.
 
 **Example: University Oxi**
 AI-generated documents are a growing challenge in academic settings. University Oxi envisions binding the *process* of document creation — the dialogue with AI, the edit history, the human revisions — to the final submission. Using oxi + hyde + argo (ZKP), a student can prove not just *what* was submitted, but *how* it was created, without exposing the full content. This is not about banning AI — it's about making AI use transparent and verifiable.
