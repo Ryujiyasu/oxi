@@ -849,7 +849,17 @@ impl LayoutEngine {
             }
         };
 
-        // Word allows textboxes to overflow beyond content area (clipped at page edge)
+        // Clamp TextBox to page boundaries (prevent overflow beyond page edge)
+        let abs_y = if abs_y + text_box.height > page.size.height {
+            (page.size.height - text_box.height).max(0.0)
+        } else {
+            abs_y
+        };
+        let abs_x = if abs_x + text_box.width > page.size.width {
+            (page.size.width - text_box.width).max(0.0)
+        } else {
+            abs_x
+        };
 
         (abs_x, abs_y)
     }
@@ -1047,9 +1057,9 @@ impl LayoutEngine {
             }
         }
 
-        // AutoFit: shrink height to actual content height
-        let content_used = cursor_y - abs_y + inset_b;
-        let actual_height = content_used.min(text_box.height);
+        // Use specified height (no autoFit by default in Word).
+        // Only shrink if content is smaller AND autoFit is explicitly enabled.
+        let actual_height = text_box.height;
 
         // Patch background fill and clip elements with actual height
         for el in elements.iter_mut() {
@@ -2962,6 +2972,36 @@ mod tests {
         }
         let total: f64 = results.iter().map(|r| r.1).sum();
         println!("Total: {:.0}ms for {} docs", total, results.len());
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_layout_1ec_detail() {
+        let data = std::fs::read("../../tools/golden-test/documents/docx/1ec1091177b1_006.docx")
+            .expect("read docx");
+        let doc = crate::parse_docx(&data).expect("parse");
+        let engine = LayoutEngine::for_document(&doc);
+        let _ = engine.layout(&doc); // warmup
+
+        // Measure layout only
+        let n = 20;
+        let start = std::time::Instant::now();
+        let mut result = None;
+        for _ in 0..n {
+            result = Some(engine.layout(&doc));
+        }
+        let layout_ms = start.elapsed().as_micros() as f64 / 1000.0 / n as f64;
+
+        // Measure serialization (serde_json as proxy for serde_wasm_bindgen)
+        let r = result.unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            let _ = serde_json::to_string(&r).unwrap();
+        }
+        let serde_ms = start.elapsed().as_micros() as f64 / 1000.0 / n as f64;
+
+        let total_elems: usize = r.pages.iter().map(|p| p.elements.len()).sum();
+        println!("Layout: {:.1}ms, Serde: {:.1}ms, Elements: {}", layout_ms, serde_ms, total_elems);
     }
 
     #[test]
