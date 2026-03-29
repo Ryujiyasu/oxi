@@ -76,8 +76,9 @@ cd crates/oxi-wasm && wasm-pack build --target web  # Wasm build
 - **line_height**: テーブルセル内リセット実装済み。net +0.66
 - **grid_snap**: 実装済み
 - **justify**: docDefaults jc=both 継承修正済み。Justify(均等割付)が全文書で有効化
-- **SSIM: 0.7496 → 0.7849（+0.035）** ベースライン: 107文書326ページ
-- **残りの改善余地**: 見出し行高さ（Arial Unicode MS→CJKフォントメトリクス未対応）、文字幅精度
+- **SSIM: 0.7496 → 0.7884（+0.039）** ベースライン: 147文書399ページ
+- **GDI幅オーバーライド**: 9フォント完全GDI幅テーブル組み込み済み（1055KB）
+- **残りの改善余地**: 1ec文書72.7ptオーバーフロー、見出し行高さ、Desktop GDIレンダラー
 
 ### 計測テンプレート
 行高さの正しい計測方法は「2段落のY座標差分」:
