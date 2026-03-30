@@ -1938,7 +1938,7 @@ impl LayoutEngine {
 
         // Use GDI tmHeight table if available (most accurate).
         // Falls back to formula-based calculation.
-        let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        let ppem = (font_size * 96.0 / 72.0) as u32;
         let base = if let Some((h_px, _a_px, _d_px)) = self.registry.gdi_height(&metrics.family, ppem) {
             let gdi_height_pt = h_px as f32 * 72.0 / 96.0;
             if metrics.is_cjk_83_64_font() {
