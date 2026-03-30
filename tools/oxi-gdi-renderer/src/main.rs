@@ -139,26 +139,35 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let text_wide: Vec<u16> = text.encode_utf16().collect();
                         TextOutW(mem_dc, x, y, &text_wide);
 
-                        // Underline
+                        // Underline: use OTM metrics for correct positioning
                         if *underline {
-                            // Get actual GDI font metrics for underline position
                             let mut tm = TEXTMETRICW::default();
                             GetTextMetricsW(mem_dc, &mut tm);
                             let ascent = tm.tmAscent;
-                            let ul_w = 1_i32; // Word uses 1px underline
-                            let pen = CreatePen(PS_SOLID, ul_w, rgb);
+                            // OTM underline metrics (font-specific)
+                            let (ul_offset, ul_size) = {
+                                let mut otm_buf = vec![0u8; 512];
+                                let got = GetOutlineTextMetricsW(mem_dc, 512,
+                                    Some(otm_buf.as_mut_ptr() as *mut OUTLINETEXTMETRICW));
+                                if got > 0 {
+                                    let otm = &*(otm_buf.as_ptr() as *const OUTLINETEXTMETRICW);
+                                    (otm.otmsUnderscorePosition.abs(), otm.otmsUnderscoreSize.max(1) as i32)
+                                } else {
+                                    (3_i32, 1_i32) // fallback
+                                }
+                            };
+                            let pen = CreatePen(PS_SOLID, ul_size, rgb);
                             let old_pen = SelectObject(mem_dc, pen);
                             let is_double = underline_style.as_deref() == Some("double");
                             if is_double {
-                                // Word double underline: baseline+2 and baseline+5
-                                let ul_y1 = y + ascent + 2;
-                                let ul_y2 = y + ascent + 5;
+                                let ul_y1 = y + ascent + ul_offset;
+                                let ul_y2 = ul_y1 + ul_size + 2;
                                 MoveToEx(mem_dc, x, ul_y1, None);
                                 LineTo(mem_dc, x + ew, ul_y1);
                                 MoveToEx(mem_dc, x, ul_y2, None);
                                 LineTo(mem_dc, x + ew, ul_y2);
                             } else {
-                                let ul_y = y + ascent + 2;
+                                let ul_y = y + ascent + ul_offset;
                                 MoveToEx(mem_dc, x, ul_y, None);
                                 LineTo(mem_dc, x + ew, ul_y);
                             }
