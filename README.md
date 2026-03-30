@@ -364,6 +364,18 @@ waterdocs
 - oxi-mcp (AI agent workflow integration)
 - Desktop application (oxi-tauri)
 
+### Ra: No Excuses by Design
+
+Oxi's Word compatibility is not aspirational — it is mechanically guaranteed to converge.
+
+- Word's layout is **deterministic** — same input always produces the same output
+- Every value is **measurable** via the COM API — Y coordinates, line heights, character widths, paragraph spacing
+- Every visual difference between Oxi and Word maps to a **finite, identifiable specification gap**
+- Fixing one specification gap often improves **multiple documents simultaneously** (convergent structure)
+- Measurement results are **permanent assets** — once a behavior is COM-measured and committed, it never needs to be re-derived
+
+This is not "best effort." It is a closed loop where "not yet implemented" is the only valid state, and "cannot implement" does not exist. The question is never *if* Oxi will match Word, only *when* — determined by measurement count and implementation time.
+
 ### Implementation Gap: oxidocs-to-docx Generator
 
 The most critical task for v2. Without a complete generator that can produce valid .docx from any oxidocs without the original file, the Architectural Guarantee is aspirational, not real.
