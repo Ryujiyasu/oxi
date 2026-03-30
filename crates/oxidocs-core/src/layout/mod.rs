@@ -2146,13 +2146,9 @@ impl LayoutEngine {
                     } else { para_font_size };
                     (line_height - font_size) / 2.0
                 } else {
-                    // No grid snap: apply font internal leading offset
-                    // COM-confirmed: offset = (CJK_height - fontSize) / 2
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
-                    } else { para_font_size };
-                    let leading = (natural - font_size).max(0.0);
-                    leading / 2.0
+                    // No grid snap: COM shows text starts at line top (offset=0).
+                    // Word places text at the top of the line box, not centered.
+                    0.0
                 }
             }
         }
