@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Oxi Headless Renderer</title></head>
+<body>
+<div id="status">Initializing...</div>
+<script type="module">
+import init, { layout_document } from './oxi_wasm.js';
+
+const statusEl = document.getElementById('status');
+
+async function main() {
+  await init();
+  statusEl.textContent = 'WASM loaded. Checking render args...';
+
+  // Get render args from Tauri backend
+  let args;
+  try {
+    args = await window.__TAURI__.core.invoke('get_render_args');
+  } catch (e) {
+    statusEl.textContent = 'Not in Tauri render mode: ' + e;
+    window._oxiReady = true;
+    window.layout_document = layout_document;
+    return;
+  }
+
+  const [docxPath, outputDir, dpi] = args;
+  if (!docxPath || !outputDir) {
+    statusEl.textContent = 'No render args. Ready for interactive use.';
+    window._oxiReady = true;
+    window.layout_document = layout_document;
+    return;
+  }
+
+  statusEl.textContent = `Rendering ${docxPath}...`;
+
+  // Read docx file
+  const response = await fetch('tauri://localhost/' + docxPath.replace(/\\/g, '/'));
+  if (!response.ok) {
+    // Try reading via Tauri fs
+    statusEl.textContent = 'Reading file via fetch failed, trying direct...';
+    return;
+  }
+  const docxBytes = new Uint8Array(await response.arrayBuffer());
+
+  // Layout
+  const layout = layout_document(docxBytes);
+  const scale = dpi / 72;
+
+  // Render each page
+  for (let pi = 0; pi < layout.pages.length; pi++) {
+    const pg = layout.pages[pi];
+    const w = Math.ceil(pg.width * scale);
+    const h = Math.ceil(pg.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.scale(scale, scale);
+
+    // Render all elements (same as docs.html renderPage)
+    for (const el of pg.elements) {
+      const kind = el.kind || '';
+      if (kind === 'text') {
+        const fs = el.font_size || 11;
+        const family = el.font_family || 'Calibri, sans-serif';
+        const bold = el.bold ? 'bold ' : '';
+        const italic = el.italic ? 'italic ' : '';
+        ctx.font = `${italic}${bold}${fs}px ${family}`;
+        ctx.fillStyle = el.color || '#000000';
+        if (el.character_spacing) ctx.letterSpacing = `${el.character_spacing}px`;
+        ctx.fillText(el.text || '', el.x, el.y + fs * 0.85);
+        if (el.character_spacing) ctx.letterSpacing = '0px';
+        if (el.underline) {
+          ctx.beginPath();
+          ctx.strokeStyle = el.color || '#000000';
+          ctx.lineWidth = fs * 0.05;
+          const baseline = el.y + fs * 0.85;
+          ctx.moveTo(el.x, baseline + fs * 0.15);
+          ctx.lineTo(el.x + el.width, baseline + fs * 0.15);
+          ctx.stroke();
+        }
+      } else if (kind === 'shading') {
+        const r = el.corner_radius || 0;
+        if (el.color) {
+          ctx.fillStyle = el.color;
+          if (r > 0) { ctx.beginPath(); ctx.roundRect(el.x, el.y, el.width, el.height, r); ctx.fill(); }
+          else ctx.fillRect(el.x, el.y, el.width, el.height);
+        }
+        if (el.stroke_color) {
+          ctx.strokeStyle = el.stroke_color;
+          ctx.lineWidth = el.stroke_width || 1;
+          if (r > 0) { ctx.beginPath(); ctx.roundRect(el.x, el.y, el.width, el.height, r); ctx.stroke(); }
+          else ctx.strokeRect(el.x, el.y, el.width, el.height);
+        }
+      } else if (kind === 'border' || kind === 'rect') {
+        ctx.beginPath();
+        ctx.strokeStyle = el.color || '#000000';
+        ctx.lineWidth = el.width || 0.5;
+        if (el.x1 != null) { ctx.moveTo(el.x1, el.y1); ctx.lineTo(el.x2, el.y2); }
+        else { ctx.moveTo(el.x, el.y); ctx.lineTo(el.x + el.width, el.y + el.height); }
+        ctx.stroke();
+      } else if (kind === 'image' && el.image_data) {
+        try {
+          const img = new Image();
+          const ct = el.content_type || 'image/png';
+          img.src = `data:${ct};base64,${el.image_data}`;
+          await new Promise((resolve) => { img.onload = resolve; setTimeout(resolve, 2000); });
+          ctx.drawImage(img, el.x, el.y, el.width, el.height);
+        } catch {}
+      } else if (kind === 'clip_start') {
+        ctx.save(); ctx.beginPath(); ctx.rect(el.x, el.y, el.width, el.height); ctx.clip();
+      } else if (kind === 'clip_end') {
+        ctx.restore();
+      }
+    }
+
+    // Save PNG via Tauri command
+    const dataUrl = canvas.toDataURL('image/png');
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const pageNum = String(pi + 1).padStart(4, '0');
+    const outPath = `${outputDir}\\page_${pageNum}.png`;
+    try {
+      await window.__TAURI__.core.invoke('save_png', { path: outPath, dataBase64: base64 });
+      statusEl.textContent = `Saved page ${pi + 1}`;
+    } catch (e) {
+      statusEl.textContent = `Error saving: ${e}`;
+    }
+  }
+
+  statusEl.textContent = `Done. Rendered ${layout.pages.length} pages.`;
+  // Auto-close after render
+  setTimeout(() => window.close(), 1000);
+}
+
+main().catch(e => { statusEl.textContent = 'Error: ' + e; });
+</script>
+</body>
+</html>

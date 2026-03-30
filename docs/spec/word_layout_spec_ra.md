@@ -963,10 +963,199 @@ fn nested_table_width(parent_cell_width, parent_padding_l, parent_padding_r) -> 
 
 ---
 
+## 11. 文字グリッド (docGrid type="linesAndChars")
+
+### 11.1 文字ピッチ計算
+
+```
+charPitch = content_width / floor(content_width / defaultFontSize)
+```
+
+- `content_width = pageWidth - leftMargin - rightMargin`
+- `defaultFontSize` = docDefaults の rPr sz (通常 10.5pt)
+- charSpace XML属性が指定されている場合: `base = defaultFontSize + charSpace * defaultFontSize / 4096`
+- COM GridDistanceHorizontal = charPitch / 2 (半角分)
+
+**1ec文書例:** content_width=510.2pt, defaultFS=10.5pt → floor(510.2/10.5)=48文字 → charPitch=510.2/48=10.629pt
+
+### 11.2 文字幅のグリッドスナップ
+
+TextBox内テキストで適用。body段落では適用しない（justifyで調整）。
+
+```
+effective_char_width = ceil(natural_char_width / charPitch) * charPitch
+```
+
+**例:** MS Gothic 18pt (natural=18pt) on charPitch=10.629pt
+- ceil(18/10.629) = 2 → effective = 2 × 10.629 = 21.258pt/char
+- inner_width=371.85pt → floor(371.85/21.258) = 17文字
+
+### 11.3 行グリッド
+
+body段落・テーブルセル内で適用。TextBox内では docGrid type="linesAndChars" の場合は無効。
+
+```
+line_height = ceil(natural_height / linePitch) * linePitch
+// 10tw (0.5pt) に丸め
+line_height = round(line_height * 2) / 2
+```
+
+---
+
+## 12. テーブルセル行高さとvAlign
+
+### 12.1 テーブルRow高さ
+
+```
+content_h = max(ceil(CJK_height / grid_pitch) * grid_pitch, over all cells)
+content_h = round_to_10tw(content_h)  // 0.5pt丸め
+row_height = max(content_h, trHeight)  // atLeast
+```
+
+- テーブルセル内の折返し幅: `cell_w` (cellMargin を引かない)
+- Word はcellMargin内にテキストのはみ出しを許容
+
+### 12.2 vAlign=center
+
+```
+text_y = cell_top + (row_height - CJK_content_height) / 2
+```
+
+COM Y gap値はvAlignオフセット差を含むため row_height と一致しない:
+```
+COM_gap = row_height + vAlign_offset_next - vAlign_offset_current
+```
+
+### 12.3 vAlign設定
+
+XML `<w:vAlign w:val="center"/>` がセル単位で設定される。COMでは直接取得できないがXMLで確認可能。
+
+---
+
+## 13. TextBox内レイアウト
+
+### 13.1 Grid snap
+
+- `docGrid type="linesAndChars"` の場合: TextBox内行高さの grid snap は**無効**
+- `docGrid type="lines"` の場合: TextBox内行高さの grid snap は**有効**
+- COM実測: Shape2内 P2→P3 gap=17.0pt (grid pitch 17.85ptと不一致)
+
+### 13.2 Page break / Orphan control
+
+TextBox内では **無効**。テキストはoverflow分をclipで切り捨て。
+
+### 13.3 Justify
+
+TextBox内でもjustify (jc=both) は**無効**。テキストは左寄せで配置。
+
+### 13.4 テキストY位置のオフセット
+
+- exact/atLeast spacing: extra space は text の**上に**配置 (text at bottom)
+  - `text_y_offset = (line_spacing - natural_height).max(0)`
+- single spacing (grid snap): fontSize をグリッドセル内で**中央配置**
+  - `text_y_offset = (grid_snapped_height - fontSize) / 2`
+  - ※ CJK_natural ではなく fontSize を使う (GDI TextOutW の character cell = fontSize)
+
+### 13.5 Shape stroke
+
+XML `strokeweight` の値をそのまま使用。テーブルレベル border とは別。
+- Shape1-5: strokeweight=1pt
+- TextBox IRに `stroke_color` / `stroke_width` を保持
+
+---
+
+## 14. GDI文字幅 (ABC幅)
+
+### 14.1 CJK等幅フォント (UPM=256)
+
+```
+advance_px = ceil_even(ppem)  // ppemを偶数に切り上げ
+advance_pt = advance_px * 72 / 96
+```
+
+GDI GetCharABCWidthsW の A+B+C total = ceil_even(ppem)。全サイズ・全文字で一致。
+
+**例:**
+| fontSize | ppem | ceil_even | advance_pt |
+|----------|------|-----------|------------|
+| 10.5pt | 14 | 14 | 10.5pt |
+| 12pt | 16 | 16 | 12.0pt |
+| 14pt | 19 | 20 | 15.0pt |
+| 18pt | 24 | 24 | 18.0pt |
+| 20pt | 27 | 28 | 21.0pt |
+
+### 14.2 Proportional フォント
+
+GDI幅オーバーライドテーブル (`gdi_width_overrides.json`, 1055KB) で個別文字幅を保持。
+9フォント × ppem 7-100 × 主要文字コードポイント。
+
+---
+
+## 15. GDIレンダラー仕様
+
+### 15.1 フォント作成
+
+```c
+CreateFontW(
+    -(int)round(fontSize * dpi / 72),  // lfHeight: round, NOT truncate
+    0, 0, 0, weight,
+    0, 0, 0,
+    DEFAULT_CHARSET,
+    0, 0,
+    CLEARTYPE_QUALITY,  // ClearType品質
+    0, fontName
+)
+```
+
+### 15.2 テキスト描画
+
+```c
+TextOutW(hdc, round(x * dpi/72), round(y * dpi/72), text, len)
+```
+
+座標変換: pt → pixel は `round()` を使用。`truncate` ではない。
+
+### 15.3 ページサイズ
+
+```c
+width_px = ceil(pageWidth_pt * dpi / 72)
+height_px = ceil(pageHeight_pt * dpi / 72)
+```
+
+---
+
+## 16. SSIM=1.0 検証方法
+
+### 16.1 Word参照画像
+
+```
+Word COM → doc.Content.CopyAsPicture() → CF_ENHMETAFILE →
+SetEnhMetaFileBits → PlayEnhMetaFile(content_area_rect) → GetDIBits → PNG
+```
+
+EMFの描画先 RECT はマージンオフセット付き:
+```
+RECT = { margin_left, margin_top, width-margin_right, height-margin_bottom }
+```
+
+### 16.2 Oxi参照画像
+
+```
+oxidocs-core::layout::LayoutEngine → GDI TextOutW/FillRect/RoundRect → GetDIBits → PNG
+```
+
+### 16.3 比較
+
+skimage.metrics.structural_similarity (SSIM) で帯ごとに比較。
+目標: 全帯 SSIM=1.0000。
+
+---
+
 ## 計測根拠
 
 - 全値はWindows + Word 365 + COM API (win32com) で計測
-- GDI文字幅は GetTextExtentPoint32W で計測
+- GDI文字幅は GetCharABCWidthsW / GetTextExtentPoint32W で計測
 - GDIフォントメトリクスは GetTextMetricsW で計測
 - テスト文書は python-docx で動的生成 or Word COM で直接作成
 - Ra (仕様自動解析エンジン) + 手動計測の統合結果
+- GDI vs GDI SSIM検証: 0-6%帯でSSIM=1.0000(ピクセル完全一致)達成 (2026-03-30)

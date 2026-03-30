@@ -54,12 +54,12 @@ cd crates/oxi-wasm && wasm-pack build --target web  # Wasm build
 各セッション開始時に以下を確認し、自律的に仕様解析を継続する。
 
 ### ステート管理
-- 仕様書: `docs/word_layout_spec_ra.md`
+- 仕様書: `docs/spec/word_layout_spec_ra.md`
 - 計測データ: `pipeline_data/ra_manual_measurements.json`
 - SSIMベースライン: `pipeline_data/ssim_baseline.json`
 
 ### 自律ループ手順
-1. `docs/word_layout_spec_ra.md` を読み、未解決の疑問を確認
+1. `docs/spec/word_layout_spec_ra.md` を読み、未解決の疑問を確認
 2. 最も影響の大きい未解決疑問を選択
 3. Python COM計測スクリプトを `tools/metrics/` に作成
 4. 実行して結果を `pipeline_data/ra_manual_measurements.json` に追記
