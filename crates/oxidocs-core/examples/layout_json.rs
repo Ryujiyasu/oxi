@@ -94,8 +94,19 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                         if current_para.is_some() && line_chars > 0 {
                             writeln!(out, "  LINE\ty={:.2}\tchars={}", current_line_y.unwrap_or(0.0), line_chars).unwrap();
                         }
-                        if in_table {
-                            // Table text — group by Y
+                        // End table if a body paragraph appears after table content
+                        if in_table && para_idx.is_some() && elem.paragraph_index != current_para {
+                            // Emit collected table rows
+                            if table_rows.len() >= 2 {
+                                table_rows.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                                table_rows.dedup();
+                                writeln!(out, "TABLE_ROWS\t{}", table_rows.len() - 1).unwrap();
+                                for i in 0..table_rows.len() - 1 {
+                                    writeln!(out, "  ROW\t{}\ty={:.2}\th={:.2}", i, table_rows[i], table_rows[i + 1] - table_rows[i]).unwrap();
+                                }
+                            }
+                            in_table = false;
+                            table_rows.clear();
                         }
                         // Start new paragraph
                         if let Some(idx) = para_idx {
