@@ -8,13 +8,21 @@ use std::path::Path;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: {} <input.docx> <output_prefix>", args[0]);
+        eprintln!("Usage: {} <input.docx> <output_prefix> [dpi] [--exclude=text,border,shading,box,image,clip]", args[0]);
         std::process::exit(1);
     }
 
     let docx_path = &args[1];
     let output_prefix = &args[2];
     let dpi: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(150);
+
+    // Parse --exclude flag from any argument
+    let mut exclude: Vec<String> = Vec::new();
+    for arg in &args[3..] {
+        if let Some(list) = arg.strip_prefix("--exclude=") {
+            exclude = list.split(',').map(|s| s.trim().to_lowercase()).collect();
+        }
+    }
 
     // Parse document
     let data = std::fs::read(docx_path).expect("Cannot read docx file");
@@ -25,11 +33,14 @@ fn main() {
     let result = engine.layout(&doc);
 
     eprintln!("Parsed {} pages, DPI={}", result.pages.len(), dpi);
+    if !exclude.is_empty() {
+        eprintln!("Excluding: {:?}", exclude);
+    }
 
     // Render each page with GDI
     #[cfg(windows)]
     {
-        render_pages_gdi(&result, output_prefix, dpi);
+        render_pages_gdi(&result, output_prefix, dpi, &exclude);
     }
 
     #[cfg(not(windows))]
@@ -40,7 +51,7 @@ fn main() {
 }
 
 #[cfg(windows)]
-fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32) {
+fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, exclude: &[String]) {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::*;
     use windows::core::*;
@@ -48,8 +59,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
     let scale = dpi as f64 / 72.0;
 
     for (page_idx, page) in result.pages.iter().enumerate() {
-        let w = (page.width as f64 * scale) as i32;
-        let h = (page.height as f64 * scale) as i32;
+        let w = (page.width as f64 * scale).ceil() as i32;
+        let h = (page.height as f64 * scale).ceil() as i32;
 
         unsafe {
             // Create memory DC and bitmap
@@ -67,18 +78,32 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
             // Set text mode
             SetBkMode(mem_dc, TRANSPARENT);
 
-            // Render each element
+            // Render each element (skip excluded types)
             for elem in &page.elements {
-                let x = (elem.x as f64 * scale) as i32;
-                let y = (elem.y as f64 * scale) as i32;
-                let ew = (elem.width as f64 * scale) as i32;
-                let eh = (elem.height as f64 * scale) as i32;
+                let type_name = match &elem.content {
+                    oxidocs_core::layout::LayoutContent::Text { .. } => "text",
+                    oxidocs_core::layout::LayoutContent::TableBorder { .. } => "border",
+                    oxidocs_core::layout::LayoutContent::CellShading { .. } => "shading",
+                    oxidocs_core::layout::LayoutContent::BoxRect { .. } => "box",
+                    oxidocs_core::layout::LayoutContent::Image { .. } => "image",
+                    oxidocs_core::layout::LayoutContent::ClipStart => "clip",
+                    oxidocs_core::layout::LayoutContent::ClipEnd => "clip",
+                    oxidocs_core::layout::LayoutContent::PresetShape { .. } => "shape",
+                };
+                if exclude.iter().any(|e| e == type_name) {
+                    continue;
+                }
+
+                let x = (elem.x as f64 * scale).round() as i32;
+                let y = (elem.y as f64 * scale).round() as i32;
+                let ew = (elem.width as f64 * scale).round() as i32;
+                let eh = (elem.height as f64 * scale).round() as i32;
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
                         text, font_size, font_family, bold, color, underline, underline_style, ..
                     } => {
-                        let fs = (*font_size as f64 * scale) as i32;
+                        let fs = (*font_size as f64 * scale).round() as i32;
                         let family = font_family.as_deref().unwrap_or("Calibri");
 
                         // Parse color
@@ -103,7 +128,9 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             -fs, 0, 0, 0, weight,
                             0, 0, 0,
                             1, // DEFAULT_CHARSET
-                            0, 0, 0, 0,
+                            0, 0,
+                            5, // CLEARTYPE_QUALITY — matches Word GDI rendering
+                            0,
                             PCWSTR(family_wide.as_ptr()),
                         );
                         let old_font = SelectObject(mem_dc, font);
@@ -114,19 +141,24 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                         // Underline
                         if *underline {
-                            let ul_y = y + fs + (fs as f64 * 0.15) as i32;
-                            let ul_w = (fs as f64 * 0.05).max(1.0) as i32;
+                            // Get actual GDI font metrics for underline position
+                            let mut tm = TEXTMETRICW::default();
+                            GetTextMetricsW(mem_dc, &mut tm);
+                            let ascent = tm.tmAscent;
+                            let ul_w = 1_i32; // Word uses 1px underline
                             let pen = CreatePen(PS_SOLID, ul_w, rgb);
                             let old_pen = SelectObject(mem_dc, pen);
                             let is_double = underline_style.as_deref() == Some("double");
                             if is_double {
-                                let ul_y1 = y + fs + (fs as f64 * 0.10) as i32;
-                                let ul_y2 = y + fs + (fs as f64 * 0.22) as i32;
+                                // Word double underline: baseline+2 and baseline+5
+                                let ul_y1 = y + ascent + 2;
+                                let ul_y2 = y + ascent + 5;
                                 MoveToEx(mem_dc, x, ul_y1, None);
                                 LineTo(mem_dc, x + ew, ul_y1);
                                 MoveToEx(mem_dc, x, ul_y2, None);
                                 LineTo(mem_dc, x + ew, ul_y2);
                             } else {
+                                let ul_y = y + ascent + 2;
                                 MoveToEx(mem_dc, x, ul_y, None);
                                 LineTo(mem_dc, x + ew, ul_y);
                             }
