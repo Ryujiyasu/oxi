@@ -2139,13 +2139,11 @@ impl LayoutEngine {
                 }
                 let natural = max_ascent + max_descent;
                 if line_height > natural + 0.5 {
-                    // Center fontSize (not CJK natural) within grid cell.
-                    // GDI TextOutW places character cell (= fontSize height) at y.
-                    // CJK 83/64 expands line spacing but not the GDI character cell.
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
-                    } else { para_font_size };
-                    (line_height - font_size) / 2.0
+                    // Grid-snapped: center natural height within grid cell.
+                    // COM measurements show offset ≈ (lineH-natural)/2 for CJK fonts.
+                    // WASM pipeline shows no SSIM difference vs (lineH-fontSize)/2,
+                    // but GDI rendering is more accurate with natural centering.
+                    (line_height - natural) / 2.0
                 } else {
                     // No grid snap: apply font internal leading offset
                     // COM-confirmed: offset = (CJK_height - fontSize) / 2
