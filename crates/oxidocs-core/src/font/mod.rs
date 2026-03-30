@@ -473,6 +473,13 @@ impl FontMetricsRegistry {
     /// GDI substitutes MS UI Gothic. This method mimics that behavior.
     /// For Latin fonts, GDI hinting overrides are applied when available.
     pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
+        // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly
+        if metrics.units_per_em == 256 {
+            if is_fullwidth(c) { return font_size; }
+            let advance_em = metrics.char_width_em(c);
+            if is_halfwidth_katakana(c) || advance_em <= 0.51 { return font_size / 2.0; }
+        }
+
         // GDI hinting override: use pre-measured width if available
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
         if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
@@ -519,7 +526,19 @@ impl FontMetricsRegistry {
         metrics: &FontMetrics,
         gdi_map: Option<&HashMap<u32, u32>>,
     ) -> f32 {
-        // GDI hinting override via pre-resolved map
+        // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly,
+        // NOT GDI table (GDI returns ceil_even which is wrong for Word layout).
+        if metrics.units_per_em == 256 {
+            if is_fullwidth(c) {
+                return font_size;
+            }
+            let advance_em = metrics.char_width_em(c);
+            if is_halfwidth_katakana(c) || advance_em <= 0.51 {
+                return font_size / 2.0;
+            }
+        }
+
+        // GDI hinting override via pre-resolved map (for proportional chars)
         if let Some(char_widths) = gdi_map {
             if let Some(&width_px) = char_widths.get(&(c as u32)) {
                 return width_px as f32 * 72.0 / 96.0;
