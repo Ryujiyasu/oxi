@@ -76,9 +76,12 @@ At the start of each session, check the current state and continue autonomous sp
 - **line_height**: Table cell reset implemented. net +0.66
 - **grid_snap**: Implemented
 - **justify**: docDefaults jc=both inheritance fixed. Justify enabled for all documents
-- **SSIM: 0.7496 → 0.7884 (+0.039)** Baseline: 147 documents, 399 pages
+- **SSIM: 0.7496 → 0.8083 (+0.059)** Baseline: 147 documents, 399 pages
+- **char_width (2026-03-30)**: Twips-based width calculation (round(advance*fontSize*20/UPM)/20). Matches Word line breaks
 - **GDI width overrides**: 9 fonts with complete GDI width tables (1055KB)
-- **Remaining improvements**: 1ec document 72.7pt overflow, heading line height, Desktop GDI renderer
+- **GDI renderer**: Pipeline switched to oxi-gdi-renderer (TextOutW) for pixel-accurate comparison
+- **DML diff tools**: word_dml_extract.py + dml_diff.py for structural layout comparison
+- **Remaining improvements**: table row height (0.25pt border overhead), 1ec overflow, heading line height
 
 ### Measurement Template
 Correct method for measuring line height is "Y coordinate difference between 2 paragraphs":
@@ -88,6 +91,26 @@ y2 = doc.Paragraphs(2).Range.Information(6)
 gap = y2 - y1  # = line_height + spacing
 ```
 `Format.LineSpacing` returns the setting value only, not the actual rendered height.
+
+### DML-Driven Improvement Loop
+
+DML (layout structure) match is a **prerequisite** for pixel match.
+Pixel comparison (SSIM) is only for final verification. The improvement driver is DML comparison.
+
+**Tools:**
+- `tools/metrics/word_dml_extract.py` — Extract Word COM positions → JSON cache (`pipeline_data/word_dml/`)
+- `tools/metrics/dml_diff.py` — Structural diff: Oxi layout_json vs Word DML cache
+- `tools/oxi-gdi-renderer/` — GDI renderer for pixel-level SSIM verification
+
+**Loop:**
+1. `word_dml_extract.py` to cache Word positions (once)
+2. Code fix
+3. `dml_diff.py` for structural diff (1 min, no rendering needed)
+4. When diff improves → next issue
+5. After batch of fixes → `pipeline.verify` for full SSIM check
+
+**Rationale:** Pixel loop (GDI render → SSIM) takes 10 min/cycle. DML diff takes 1 min/cycle = 10x faster.
+DML diff also gives precise, actionable feedback ("table row 3 Y off by 0.25pt") vs SSIM ("something looks different").
 
 ### Critical Rules
 - No DLL disassembly. Black-box measurement via COM API only
