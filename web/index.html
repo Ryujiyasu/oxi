@@ -1,0 +1,4140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oxi - Document Viewer &amp; Editor</title>
+<meta name="description" content="Open-source document processing suite built with Rust + WebAssembly. View and edit .docx, .xlsx, .pptx files natively in the browser.">
+<meta name="keywords" content="docx, xlsx, pptx, viewer, editor, wasm, rust, webassembly, office, document, open source">
+<!-- OGP / Facebook -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Oxi - Document Viewer &amp; Editor">
+<meta property="og:description" content="View and edit .docx / .xlsx / .pptx files natively in the browser. Built with Rust + WebAssembly.">
+<meta property="og:image" content="https://ryujiyasu.github.io/oxi/oxi-logo.png">
+<meta property="og:url" content="https://ryujiyasu.github.io/oxi/">
+<meta property="og:site_name" content="Oxi">
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Oxi - Document Viewer &amp; Editor">
+<meta name="twitter:description" content="View and edit .docx / .xlsx / .pptx files natively in the browser. Built with Rust + WebAssembly.">
+<meta name="twitter:image" content="https://ryujiyasu.github.io/oxi/oxi-logo.png">
+<link rel="canonical" href="https://ryujiyasu.github.io/oxi/">
+<link rel="icon" type="image/x-icon" href="../docs/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="../docs/favicon-32x32.png">
+<link rel="apple-touch-icon" href="../docs/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    /* Oxi brand palette — Japanese traditional colors (和の伝統色) */
+    --oxi-primary: #264653;       /* 藍色 (Ai-iro) — deep indigo */
+    --oxi-primary-dark: #1b3440;
+    --oxi-primary-light: #e8f0f2;
+    --oxi-accent: #C84C3A;        /* 朱色 (Shu-iro) — vermilion accent */
+    --oxi-text: #1a1a1a;
+    --oxi-text-secondary: #5a5a5a;
+    --oxi-bg: #f7f5f0;            /* 生成り (Kinari) — warm off-white, like washi paper */
+    --oxi-surface: #ffffff;
+    --oxi-border: #d5d0c8;        /* Warm gray, like aged paper edge */
+    --oxi-hover: #ece8e0;
+    /* Format accent colors — Japanese traditional tones */
+    --oxi-docs: #8B72BE;          /* 藤色 (Fuji-iro) — wisteria purple */
+    --oxi-cells: #86A95B;         /* 萌黄 (Moegi) — fresh green, like bamboo/matcha */
+    --oxi-slides: #E8927C;        /* 鴇色 (Toki-iro) — warm coral, like ibis feathers */
+    --oxi-pdf: #B5495B;           /* 紅 (Kurenai) — deep crimson */
+    /* Dark mode vars (overridden by .dark) */
+    --bg: var(--oxi-bg);
+    --surface: var(--oxi-surface);
+    --text: var(--oxi-text);
+    --text-secondary: var(--oxi-text-secondary);
+    --border: var(--oxi-border);
+    --ribbon-bg: #f0ece4;
+    --ribbon-tab-bg: var(--surface);
+    --ribbon-hover: var(--oxi-hover);
+    --title-bar-bg: var(--oxi-primary);
+}
+.dark {
+    --bg: #1a1a2e;                /* 墨色 (Sumi-iro) — ink black with blue tint */
+    --surface: #262640;
+    --text: #e8e4dc;              /* Warm white, like candlelit paper */
+    --text-secondary: #a8a098;
+    --border: #3a3850;
+    --ribbon-bg: #22223a;
+    --ribbon-tab-bg: #262640;
+    --ribbon-hover: #363652;
+    --title-bar-bg: #141428;      /* 漆黒 (Shikkoku) — lacquer black */
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    transition: background 0.2s, color 0.2s;
+}
+/* Title bar — Oxi style */
+.title-bar {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    background: var(--title-bar-bg);
+    color: white;
+    font-size: 12px;
+    padding: 0 12px;
+    user-select: none;
+}
+.title-bar.docx { background: var(--oxi-docs); }
+.title-bar.xlsx { background: var(--oxi-cells); }
+.title-bar.pptx { background: var(--oxi-slides); }
+.title-bar.pdf { background: var(--oxi-pdf); }
+.dark .title-bar { background: var(--title-bar-bg); }
+.title-bar .qat {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.title-bar .qat button {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+.title-bar .qat button:hover { background: rgba(255,255,255,0.18); }
+.title-bar .title-text {
+    flex: 1;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 400;
+    opacity: 0.95;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.title-bar .title-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.title-bar .title-right button {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+.title-bar .title-right button:hover { background: rgba(255,255,255,0.18); }
+/* Landing header */
+header {
+    background: var(--oxi-primary);
+    color: white;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+header h1 { font-size: 16px; font-weight: 600; }
+header span { font-size: 12px; opacity: 0.7; }
+#langToggle {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.3);
+    color: white;
+    padding: 3px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+}
+#langToggle:hover { border-color: rgba(255,255,255,0.7); }
+.container {
+    max-width: 1100px;
+    margin: 16px auto;
+    padding: 0 16px;
+    padding-bottom: 36px; /* space for fixed status bar */
+}
+.container.xlsx-active {
+    max-width: 100%;
+    padding: 0 16px;
+}
+.drop-zone {
+    border: 2px dashed #b8b0a0;
+    border-radius: 12px;
+    padding: 48px;
+    text-align: center;
+    background: #fdfbf7;          /* 鳥の子色 — warm cream, like torinoko paper */
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+}
+.drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--oxi-primary);
+    background: var(--oxi-primary-light);
+}
+.drop-zone p { font-size: 16px; color: #666; }
+.drop-zone .hint { font-size: 13px; color: #999; margin-top: 8px; }
+input[type="file"] { display: none; }
+.sample-buttons {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #666;
+}
+.sample-buttons button {
+    padding: 6px 16px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: white;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+}
+.sample-buttons button:hover {
+    border-color: var(--oxi-primary);
+    color: var(--oxi-primary);
+    background: var(--oxi-primary-light);
+}
+#status {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    display: none;
+    font-size: 14px;
+}
+#status.info { display: block; background: var(--oxi-primary-light); color: var(--oxi-primary); }
+#status.error { display: block; background: #fde8eb; color: var(--oxi-pdf); }
+#pages-container {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+}
+.page-wrapper {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    display: inline-block;
+}
+/* Toolbar */
+.toolbar {
+    margin-top: 16px;
+    display: none;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+}
+.toolbar.visible { display: flex; }
+.toolbar button {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background 0.15s;
+}
+.toolbar button.primary {
+    background: var(--oxi-primary);
+    color: white;
+}
+.toolbar button.primary:hover {
+    background: var(--oxi-primary-dark);
+}
+
+/* Ribbon menu bar — Oxi style */
+.ribbon {
+    display: none;
+    background: var(--ribbon-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0;
+    margin-top: 0;
+    overflow: hidden;
+}
+.ribbon.visible { display: block; }
+.ribbon-tabs {
+    display: flex;
+    gap: 0;
+    background: var(--ribbon-tab-bg);
+    border-bottom: 1px solid var(--border);
+    padding-left: 0;
+}
+.ribbon-tab-file {
+    padding: 7px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: white;
+    border: none;
+    background: var(--oxi-primary);
+    letter-spacing: 0.3px;
+    border-radius: 0;
+}
+.ribbon-tab-file:hover { filter: brightness(1.1); }
+.ribbon.docx .ribbon-tab-file { background: var(--oxi-docs); }
+.ribbon.xlsx .ribbon-tab-file { background: var(--oxi-cells); }
+.ribbon.pptx .ribbon-tab-file { background: var(--oxi-slides); }
+.ribbon.pdf .ribbon-tab-file { background: var(--oxi-pdf); }
+.ribbon-tab {
+    padding: 7px 16px;
+    font-size: 13px;
+    font-weight: 400;
+    cursor: pointer;
+    color: var(--text-secondary);
+    border: none;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    letter-spacing: 0.3px;
+}
+.ribbon-tab:hover { background: var(--ribbon-hover); }
+.ribbon-tab.active {
+    color: var(--text);
+    background: var(--ribbon-bg);
+    border-bottom-color: var(--oxi-primary);
+    font-weight: 600;
+}
+.ribbon.docx .ribbon-tab.active { border-bottom-color: var(--oxi-docs); }
+.ribbon.xlsx .ribbon-tab.active { border-bottom-color: var(--oxi-cells); }
+.ribbon.pptx .ribbon-tab.active { border-bottom-color: var(--oxi-slides); }
+.ribbon.pdf .ribbon-tab.active { border-bottom-color: var(--oxi-pdf); }
+.ribbon-content {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 4px 6px 2px 6px;
+    min-height: 80px;
+    background: var(--ribbon-bg);
+}
+.ribbon-group {
+    display: flex;
+    flex-direction: column;
+    padding: 0 8px;
+    border-right: 1px solid var(--border);
+    min-width: 0;
+}
+.ribbon-group:last-child { border-right: none; }
+.ribbon-group-items {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+}
+.ribbon-group-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 2px 0 1px 0;
+    border-top: 1px solid var(--border);
+    margin-top: auto;
+}
+.ribbon-btn {
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+    transition: all 0.1s;
+    min-width: 26px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.ribbon-btn:hover {
+    background: var(--ribbon-hover);
+    border-color: rgba(91,79,199,0.2);
+}
+.ribbon-btn.active {
+    background: var(--oxi-primary-light);
+    border-color: rgba(91,79,199,0.3);
+}
+.ribbon-btn-large {
+    padding: 4px 8px;
+    font-size: 11px;
+    min-width: 50px;
+}
+.ribbon-btn-large .rb-icon { font-size: 20px; margin-bottom: 2px; }
+.ribbon-btn-large .rb-label { font-size: 10px; }
+.ribbon-btn svg { width: 16px; height: 16px; vertical-align: middle; }
+.ribbon-sep {
+    width: 1px;
+    height: 24px;
+    background: #d0d0d0;
+    margin: 0 2px;
+    align-self: center;
+}
+/* Ribbon dropdowns */
+.ribbon-select {
+    padding: 2px 4px;
+    border: 1px solid #c0c0c0;
+    border-radius: 3px;
+    font-size: 12px;
+    background: white;
+    cursor: pointer;
+    outline: none;
+    height: 26px;
+}
+.ribbon-select:hover { border-color: #888; }
+.ribbon-select:focus { border-color: var(--oxi-primary); }
+.ribbon-font-family { width: 130px; }
+.ribbon-font-size { width: 48px; }
+/* Color picker button */
+.ribbon-color-btn {
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    min-width: 28px;
+    text-align: center;
+    position: relative;
+    line-height: 1.2;
+}
+.ribbon-color-btn:hover { background: #dde4f0; border-color: #b0bdd4; }
+.ribbon-color-bar {
+    display: block;
+    height: 3px;
+    border-radius: 1px;
+    margin-top: 1px;
+}
+/* Color palette popup */
+.color-palette {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 100;
+    width: 160px;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+.color-palette.open { display: flex; }
+.color-swatch {
+    width: 18px; height: 18px;
+    border: 1px solid #ddd;
+    border-radius: 2px;
+    cursor: pointer;
+}
+.color-swatch:hover { border-color: #333; transform: scale(1.15); }
+
+/* Status bar / zoom — Oxi style */
+.status-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--oxi-primary-dark);
+    padding: 2px 12px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.9);
+    margin-top: 0;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    height: 26px;
+}
+.status-bar.docx { background: var(--oxi-docs); }
+.status-bar.xlsx { background: var(--oxi-cells); }
+.status-bar.pptx { background: var(--oxi-slides); }
+.status-bar.pdf { background: var(--oxi-pdf); }
+.dark .status-bar { background: #16162a; }
+.status-bar.visible { display: flex; }
+.status-bar .status-left { display: flex; gap: 16px; }
+.status-bar .zoom-controls { display: flex; align-items: center; gap: 6px; }
+.zoom-controls button {
+    width: 22px; height: 22px; border: none; background: transparent;
+    cursor: pointer; font-size: 14px; border-radius: 3px; color: rgba(255,255,255,0.9);
+}
+.zoom-controls button:hover { background: rgba(255,255,255,0.15); }
+.zoom-controls input[type="range"] { width: 100px; cursor: pointer; }
+.zoom-controls .zoom-label { min-width: 40px; text-align: center; }
+
+/* Find & Replace dialog */
+.find-replace-dialog {
+    display: none;
+    position: fixed;
+    top: 60px;
+    right: 24px;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    padding: 12px 16px;
+    z-index: 200;
+    min-width: 340px;
+    font-size: 13px;
+}
+.find-replace-dialog.open { display: block; }
+.find-replace-dialog .fr-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.find-replace-dialog label { min-width: 60px; color: #555; }
+.find-replace-dialog input[type="text"] {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    outline: none;
+}
+.find-replace-dialog input[type="text"]:focus { border-color: var(--oxi-primary); }
+.find-replace-dialog .fr-buttons {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+.find-replace-dialog .fr-buttons button {
+    padding: 4px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #f5f5f5;
+    cursor: pointer;
+    font-size: 12px;
+}
+.find-replace-dialog .fr-buttons button:hover { background: #e0e0e0; }
+.find-replace-dialog .fr-buttons button.primary { background: var(--oxi-primary); color: white; border-color: var(--oxi-primary); }
+.find-replace-dialog .fr-close {
+    position: absolute; top: 8px; right: 8px;
+    background: none; border: none; font-size: 16px; cursor: pointer; color: #888;
+}
+.find-replace-dialog .fr-close:hover { color: #333; }
+.find-replace-dialog .fr-status { font-size: 11px; color: #888; margin-top: 4px; }
+/* Backstage overlay */
+.backstage-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 300;
+    background: var(--bg);
+}
+.backstage-overlay.open { display: flex; }
+.backstage-sidebar {
+    width: 260px;
+    background: var(--oxi-primary);
+    color: white;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+.dark .backstage-sidebar { background: #16162a; }
+.backstage-sidebar .bs-brand {
+    padding: 20px 24px 16px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+.backstage-sidebar .bs-item {
+    padding: 12px 24px;
+    font-size: 14px;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: rgba(255,255,255,0.85);
+    text-align: left;
+    width: 100%;
+    transition: background 0.1s;
+}
+.backstage-sidebar .bs-item:hover { background: rgba(255,255,255,0.12); }
+.backstage-sidebar .bs-item.active { background: rgba(255,255,255,0.18); font-weight: 600; }
+.backstage-sidebar .bs-back {
+    padding: 12px 24px;
+    font-size: 22px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: white;
+    text-align: left;
+    width: 100%;
+}
+.backstage-sidebar .bs-back:hover { background: rgba(255,255,255,0.1); }
+.backstage-main {
+    flex: 1;
+    padding: 40px;
+    overflow-y: auto;
+    background: var(--bg);
+    color: var(--text);
+}
+.backstage-main h2 { font-size: 22px; font-weight: 300; margin-bottom: 24px; color: var(--oxi-primary); }
+.dark .backstage-main h2 { color: var(--oxi-accent); }
+.backstage-main .bs-section { margin-bottom: 28px; }
+.backstage-main .bs-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); }
+.backstage-main .bs-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+}
+.backstage-main .bs-row:hover { background: var(--ribbon-hover); margin: 0 -8px; padding: 10px 8px; border-radius: 6px; }
+.backstage-main .bs-row .bs-icon { font-size: 20px; width: 32px; text-align: center; }
+.backstage-main .bs-row .bs-label { font-size: 14px; }
+.backstage-main .bs-row .bs-desc { font-size: 12px; color: var(--text-secondary); }
+/* Dark mode toggle in title bar */
+.dark-mode-toggle {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    transition: all 0.2s;
+}
+.dark-mode-toggle:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.5); }
+
+/* PDF text viewer */
+.pdf-page {
+    background: white;
+    margin: 16px auto;
+    padding: 48px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    max-width: 800px;
+    min-height: 400px;
+    font-family: serif;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.pdf-page-header {
+    font-size: 11px;
+    color: #999;
+    margin: 16px auto 4px;
+    max-width: 800px;
+    padding-left: 4px;
+}
+.pdf-sig-panel {
+    background: #fff8f0;
+    border: 1px solid #e8d4b8;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px auto;
+    max-width: 800px;
+}
+.pdf-sig-panel h3 { font-size: 14px; margin-bottom: 8px; color: #9a6700; }
+.pdf-sig-item { font-size: 13px; padding: 6px 0; border-bottom: 1px solid #f0e4d0; }
+.pdf-sig-item:last-child { border-bottom: none; }
+.pdf-meta { font-size: 12px; color: #666; margin-bottom: 4px; }
+
+/* Hanko panel */
+.hanko-panel {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px auto;
+    max-width: 800px;
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+}
+.hanko-controls { flex: 1; }
+.hanko-controls label { display: block; font-size: 13px; margin-bottom: 4px; color: #555; }
+.hanko-controls input, .hanko-controls select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    margin-bottom: 12px;
+}
+.hanko-preview {
+    width: 120px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed #ccc;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+/* Excel formula bar */
+.formula-bar {
+    display: flex;
+    align-items: center;
+    background: white;
+    border: 1px solid #d0d0d0;
+    border-top: none;
+    font-family: 'Calibri', 'Yu Gothic', 'Meiryo', 'Noto Sans JP', 'Segoe UI', sans-serif;
+    font-size: 13px;
+}
+.formula-bar .cell-ref {
+    width: 80px;
+    padding: 4px 8px;
+    border-right: 1px solid #d0d0d0;
+    text-align: center;
+    font-weight: 600;
+    color: #333;
+    background: #f8f8f8;
+}
+.formula-bar .fx-label {
+    padding: 4px 8px;
+    color: #888;
+    border-right: 1px solid #d0d0d0;
+    font-style: italic;
+}
+.formula-bar .formula-input {
+    flex: 1;
+    padding: 4px 8px;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: inherit;
+}
+
+/* Editable document view */
+.edit-page {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    max-width: 800px;
+    width: 100%;
+    min-height: 600px;
+}
+.edit-page .edit-para {
+    margin-bottom: 4px;
+    line-height: 1.5;
+    min-height: 1.2em;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    line-break: strict; /* JIS X 4051 kinsoku */
+}
+.edit-page .edit-para.heading1 {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 12px;
+}
+.edit-page .edit-para.heading2 {
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+.edit-page .edit-para.heading3 {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+.edit-page .edit-para.align-center { text-align: center; }
+.edit-page .edit-para.align-right { text-align: right; }
+.edit-page .edit-para.align-justify { text-align: justify; }
+.edit-page .edit-run {
+    outline: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+    cursor: text;
+}
+.edit-page .edit-run:focus {
+    border-bottom-color: var(--oxi-primary);
+}
+.edit-page .edit-table {
+    border-collapse: collapse;
+    margin: 12px 0;
+    width: 100%;
+}
+.edit-page .edit-table td {
+    border: 1px solid #ccc;
+    padding: 6px 8px;
+    min-width: 60px;
+}
+.edit-page .edit-table .edit-run {
+    display: inline;
+}
+.edit-page .edit-table thead { display: table-header-group; }
+@media print { .edit-page .edit-table thead { display: table-header-group; } }
+
+/* Spreadsheet styles */
+.sheet-tabs {
+    display: flex;
+    gap: 2px;
+    margin-top: 0;
+    padding: 0 4px;
+    background: #e0e0e0;
+    border-top: 1px solid #ccc;
+}
+.sheet-tab {
+    padding: 6px 16px;
+    background: #d8d8d8;
+    border: 1px solid #ccc;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #555;
+}
+.sheet-tab.active {
+    background: white;
+    color: #217346;
+    font-weight: 600;
+    border-top: 2px solid white;
+    margin-top: -1px;
+}
+.spreadsheet-wrapper {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    border-radius: 0;
+    overflow: auto;
+    max-width: 100%;
+    max-height: 70vh;
+}
+.spreadsheet-wrapper table {
+    border-collapse: collapse;
+    font-size: 13px;
+    font-family: 'Calibri', 'Yu Gothic', 'Meiryo', 'Noto Sans JP', 'Segoe UI', sans-serif;
+}
+.spreadsheet-wrapper th {
+    background: #f3f3f3;
+    border: 1px solid #d0d0d0;
+    padding: 4px 8px;
+    font-weight: 600;
+    color: #555;
+    min-width: 30px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.spreadsheet-wrapper th.row-header {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 40px;
+    text-align: center;
+}
+.spreadsheet-wrapper td {
+    border: 1px solid #e0e0e0;
+    padding: 4px 8px;
+    min-width: 80px;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.spreadsheet-wrapper td[contenteditable="true"]:focus {
+    outline: 2px solid #217346;
+    outline-offset: -1px;
+    box-shadow: inset 0 0 0 1px #217346;
+}
+.spreadsheet-wrapper td.cell-selected {
+    outline: 2px solid #217346;
+    outline-offset: -1px;
+}
+.spreadsheet-wrapper td.range-selected {
+    background: rgba(33, 115, 70, 0.08) !important;
+}
+.spreadsheet-wrapper td.range-border-top { border-top: 2px solid #217346 !important; }
+.spreadsheet-wrapper td.range-border-bottom { border-bottom: 2px solid #217346 !important; }
+.spreadsheet-wrapper td.range-border-left { border-left: 2px solid #217346 !important; }
+.spreadsheet-wrapper td.range-border-right { border-right: 2px solid #217346 !important; }
+.spreadsheet-wrapper th.col-selected { background: #d0e8d8 !important; }
+.spreadsheet-wrapper th.row-selected { background: #d0e8d8 !important; }
+
+/* Slide styles */
+.pptx-layout {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    align-items: flex-start;
+}
+.slide-thumbnails {
+    width: 160px;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+.slide-thumb {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 4px;
+    transition: background 0.1s;
+}
+.slide-thumb:hover { background: #e8e8e8; }
+.slide-thumb.active { background: #dde4f0; }
+.slide-thumb-num {
+    font-size: 11px;
+    color: #888;
+    min-width: 18px;
+    text-align: right;
+}
+.slide-thumb-preview {
+    border: 1px solid #d0d0d0;
+    border-radius: 2px;
+    overflow: hidden;
+    background: white;
+    position: relative;
+    width: 120px;
+}
+.slide-thumb.active .slide-thumb-preview {
+    border-color: #d24726;
+    border-width: 2px;
+}
+.slide-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.slide-wrapper {
+    background: white;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    position: relative;
+    overflow: hidden;
+}
+.slide-shape {
+    position: absolute;
+    overflow: hidden;
+}
+.slide-shape p {
+    margin: 0;
+}
+.slide-counter {
+    text-align: center;
+    font-size: 13px;
+    color: #888;
+    margin-top: 4px;
+}
+/* Dark mode overrides */
+.dark .drop-zone { background: #2e2e48; border-color: #4a4860; color: var(--text); }
+.dark .drop-zone p { color: var(--text-secondary); }
+.dark .drop-zone .hint { color: #8a8078; }
+.dark .sample-buttons { color: var(--text-secondary); }
+.dark .sample-buttons button { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .page-wrapper { box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+.dark .edit-page { background: var(--surface); color: var(--text); }
+.dark .ribbon-select { background: var(--surface); color: var(--text); border-color: #555; }
+.dark .ribbon-color-btn { color: var(--text); }
+.dark .color-palette { background: var(--surface); border-color: #555; }
+.dark .find-replace-dialog { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .find-replace-dialog input[type="text"] { background: #1e1e2e; color: var(--text); border-color: #555; }
+.dark .find-replace-dialog .fr-buttons button { background: #333; color: var(--text); border-color: #555; }
+.dark #status.info { background: #1e2e4a; color: #7ab8f5; }
+.dark #status.error { background: #3a1e1e; color: #f08080; }
+.dark .spreadsheet-wrapper { background: var(--surface); }
+.dark .spreadsheet-wrapper th { background: #333; color: var(--text-secondary); border-color: #555; }
+.dark .spreadsheet-wrapper td { background: var(--surface); color: var(--text); border-color: #444; }
+.dark .formula-bar { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .formula-bar .cell-ref { background: #333; color: var(--text); }
+.dark .formula-bar .formula-input { background: var(--surface); color: var(--text); }
+.dark .sheet-tabs { background: #333; }
+.dark .sheet-tab { background: #444; color: var(--text-secondary); border-color: #555; }
+.dark .sheet-tab.active { background: var(--surface); color: var(--oxi-accent); }
+.dark header { background: #16162a; }
+</style>
+</head>
+<body>
+
+<div class="title-bar" id="titleBar" style="display:none">
+    <div class="qat">
+        <button id="qatSave" title="Save (Ctrl+S)">&#x1F4BE;</button>
+        <button id="qatUndo" title="Undo (Ctrl+Z)">&#x21A9;</button>
+        <button id="qatRedo" title="Redo (Ctrl+Y)">&#x21AA;</button>
+    </div>
+    <div class="title-text" id="titleText">Oxi</div>
+    <div class="title-right">
+        <button class="dark-mode-toggle" id="darkModeToggle" onclick="toggleDarkMode()" title="Toggle Dark Mode">&#x263D;</button>
+        <button id="langToggle" onclick="toggleLang()">日本語</button>
+    </div>
+</div>
+<header id="landingHeader">
+    <img src="../docs/icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
+    <h1>Oxi</h1>
+    <span data-i18n="subtitle">Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
+    <button class="dark-mode-toggle" id="darkModeLanding" onclick="toggleDarkMode()">&#x263D;</button>
+    <button id="langToggleLanding" onclick="toggleLang()">日本語</button>
+</header>
+
+<div class="container">
+    <div class="drop-zone" id="dropZone">
+        <p data-i18n="dropText">Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse</p>
+        <p class="hint" data-i18n="dropHint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
+    </div>
+    <div class="sample-buttons" id="sampleButtons">
+        <button onclick="createNewDocument()" style="font-weight:bold">+ New Document</button>
+        <span data-i18n="trySample">Try a sample:</span>
+        <button onclick="loadSample('sample.docx')">Word (.docx)</button>
+        <button onclick="loadSample('sample.xlsx')">Excel (.xlsx)</button>
+        <button onclick="loadSample('sample.pptx')">PowerPoint (.pptx)</button>
+        <button onclick="loadSample('sample.pdf')">PDF (.pdf)</button>
+    </div>
+    <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx,.pdf">
+    <div class="toolbar" id="toolbar">
+        <button id="btnDownload" class="primary" data-i18n="download">Download</button>
+    </div>
+    <div class="ribbon" id="ribbon"></div>
+    <div id="status"></div>
+    <div id="pages-container"></div>
+    <div class="status-bar" id="statusBar">
+        <div class="status-left">
+            <span id="statusInfo" data-i18n="ready">Ready</span>
+        </div>
+        <div class="zoom-controls">
+            <button id="zoomOut" title="Zoom Out">−</button>
+            <input type="range" id="zoomSlider" min="50" max="200" value="100">
+            <button id="zoomIn" title="Zoom In">+</button>
+            <span class="zoom-label" id="zoomLabel">100%</span>
+        </div>
+    </div>
+</div>
+
+<div class="find-replace-dialog" id="findReplaceDialog">
+    <button class="fr-close" id="frClose">×</button>
+    <div class="fr-row">
+        <label>Find:</label>
+        <input type="text" id="frFind" data-i18n-placeholder="searchText" placeholder="Search text...">
+    </div>
+    <div class="fr-row">
+        <label>Replace:</label>
+        <input type="text" id="frReplace" data-i18n-placeholder="replaceWith" placeholder="Replace with...">
+    </div>
+    <div class="fr-buttons">
+        <button id="frPrev" data-i18n="prev">← Prev</button>
+        <button id="frNext" data-i18n="next">Next →</button>
+        <button id="frReplaceOne" data-i18n="replace">Replace</button>
+        <button id="frReplaceAll" class="primary" data-i18n="replaceAll">Replace All</button>
+    </div>
+    <div class="fr-status" id="frStatus"></div>
+</div>
+
+<!-- Backstage view (File menu) -->
+<div class="backstage-overlay" id="backstageOverlay">
+    <div class="backstage-sidebar" id="backstageSidebar">
+        <button class="bs-back" id="bsBack" title="Back">&larr;</button>
+        <div class="bs-brand">Oxi</div>
+        <button class="bs-item active" data-bs="info">Info</button>
+        <button class="bs-item" data-bs="new">New</button>
+        <button class="bs-item" data-bs="open">Open</button>
+        <button class="bs-item" data-bs="save">Save</button>
+        <button class="bs-item" data-bs="export">Export</button>
+        <button class="bs-item" data-bs="settings">Settings</button>
+        <button class="bs-item" data-bs="about">About</button>
+    </div>
+    <div class="backstage-main" id="backstageMain">
+        <!-- Content populated by JS -->
+    </div>
+</div>
+
+<script>
+// === I18N ===
+const I18N = {
+    en: {
+        subtitle: 'Document viewer & editor — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
+        dropText: 'Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse',
+        dropHint: 'Parsed, rendered, and edited entirely in your browser via WebAssembly',
+        trySample: 'Try a sample:',
+        download: 'Download',
+        ready: 'Ready',
+        searchText: 'Search text...',
+        replaceWith: 'Replace with...',
+        prev: '← Prev',
+        next: 'Next →',
+        replace: 'Replace',
+        replaceAll: 'Replace All',
+        find: 'Find:',
+        replaceLabel: 'Replace:',
+        parsing: 'Parsing and rendering...',
+        loadingSample: 'Loading sample...',
+        wasmLoading: 'Wasm is still loading...',
+        unsupported: 'Supported formats: .docx, .xlsx, .pptx, .pdf',
+        noChanges: 'No changes to save',
+        noMatches: 'No matches found',
+        matchOf: (cur, total) => `${cur} of ${total} matches`,
+        replaced: (n) => `Replaced ${n} occurrence(s)`,
+        parsedDocx: (ms) => `Parsed in ${ms}ms — click text to edit`,
+        parsedXlsx: (sheets, rows, ms) => `Parsed ${sheets} sheet(s), ${rows} rows in ${ms}ms`,
+        parsedPptx: (slides, shapes, ms) => `Parsed ${slides} slide(s), ${shapes} shapes in ${ms}ms`,
+        parsedPdf: (pages, ms) => `Parsed ${pages} page(s) in ${ms}ms`,
+        downloaded: (n) => `Downloaded with ${n} edit(s)`,
+        hankoName: 'Name (kanji)',
+        hankoStyle: 'Style',
+        hankoPreview: 'Preview',
+        signatures: 'Digital Signatures',
+        noSignatures: 'No signatures found',
+        // Ribbon — Oxi-original tab/group names
+        file: 'File',
+        home: 'Home', insert: 'Insert', layout: 'Layout', view: 'View',
+        formulas: 'Formulas', data: 'Data', review: 'Review',
+        tools: 'Tools', format: 'Format',
+        undo: 'History', clipboard: 'Clipboard', font: 'Typography',
+        paragraph: 'Paragraph', editing: 'Find',
+        alignment: 'Align', number: 'Number',
+        tables: 'Tables', illustrations: 'Media', links: 'Links',
+        pageSetup: 'Page', views: 'Views',
+        toggleLang: '日本語',
+        // Backstage
+        bsInfo: 'Document Info', bsNew: 'New', bsOpen: 'Open',
+        bsSave: 'Save', bsExport: 'Export', bsSettings: 'Settings', bsAbout: 'About Oxi',
+        bsTheme: 'Theme', bsThemeLight: 'Light', bsThemeDark: 'Dark', bsThemeAuto: 'Auto',
+        bsAiProvider: 'AI Provider', bsNone: 'None',
+    },
+    ja: {
+        subtitle: 'ドキュメント ビューア & エディタ — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
+        dropText: '.docx, .xlsx, .pptx, .pdf ファイルをドロップ — またはクリックして選択',
+        dropHint: 'WebAssemblyによりブラウザ内で完結。サーバーにファイルは送信されません',
+        trySample: 'サンプルを試す:',
+        download: 'ダウンロード',
+        ready: '準備完了',
+        searchText: 'テキストを検索...',
+        replaceWith: '置換テキスト...',
+        prev: '← 前へ',
+        next: '次へ →',
+        replace: '置換',
+        replaceAll: 'すべて置換',
+        find: '検索:',
+        replaceLabel: '置換:',
+        parsing: '解析・描画中...',
+        loadingSample: 'サンプルを読み込み中...',
+        wasmLoading: 'Wasmを読み込み中...',
+        unsupported: '対応形式: .docx, .xlsx, .pptx, .pdf',
+        noChanges: '変更がありません',
+        noMatches: '一致なし',
+        matchOf: (cur, total) => `${total}件中 ${cur}件目`,
+        replaced: (n) => `${n}件を置換しました`,
+        parsedDocx: (ms) => `${ms}msで解析完了 — テキストをクリックして編集`,
+        parsedXlsx: (sheets, rows, ms) => `${sheets}シート, ${rows}行を${ms}msで解析`,
+        parsedPptx: (slides, shapes, ms) => `${slides}スライド, ${shapes}図形を${ms}msで解析`,
+        parsedPdf: (pages, ms) => `${pages}ページを${ms}msで解析`,
+        downloaded: (n) => `${n}件の編集を含めてダウンロード`,
+        hankoName: '名前（漢字）',
+        hankoStyle: 'スタイル',
+        hankoPreview: 'プレビュー',
+        signatures: '電子署名',
+        noSignatures: '署名が見つかりません',
+        // Ribbon — Oxi独自のタブ/グループ名
+        file: 'ファイル',
+        home: 'ホーム', insert: '挿入', layout: 'レイアウト', view: '表示',
+        formulas: '数式', data: 'データ', review: 'レビュー',
+        tools: 'ツール', format: '書式',
+        undo: '履歴', clipboard: 'クリップボード', font: '文字',
+        paragraph: '段落', editing: '検索',
+        alignment: '配置', number: '数値',
+        tables: '表', illustrations: 'メディア', links: 'リンク',
+        pageSetup: 'ページ', views: '表示形式',
+        toggleLang: 'English',
+        // Backstage
+        bsInfo: 'ドキュメント情報', bsNew: '新規', bsOpen: '開く',
+        bsSave: '保存', bsExport: 'エクスポート', bsSettings: '設定', bsAbout: 'Oxiについて',
+        bsTheme: 'テーマ', bsThemeLight: 'ライト', bsThemeDark: 'ダーク', bsThemeAuto: '自動',
+        bsAiProvider: 'AIプロバイダー', bsNone: 'なし',
+    }
+};
+
+let currentLang = (navigator.language || '').startsWith('ja') ? 'ja' : 'en';
+
+function t(key) { return I18N[currentLang][key] || I18N.en[key] || key; }
+
+function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.dataset.i18n;
+        const val = t(key);
+        if (typeof val === 'string') el.textContent = val;
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        el.placeholder = t(el.dataset.i18nPlaceholder);
+    });
+    document.getElementById('langToggle').textContent = t('toggleLang');
+    // Update Find/Replace labels
+    const frLabels = document.querySelectorAll('.fr-row label');
+    if (frLabels[0]) frLabels[0].textContent = t('find');
+    if (frLabels[1]) frLabels[1].textContent = t('replaceLabel');
+}
+
+function toggleLang() {
+    currentLang = currentLang === 'en' ? 'ja' : 'en';
+    applyI18n();
+    // Re-build ribbon if visible
+    if (typeof rebuildCurrentRibbon === 'function') rebuildCurrentRibbon();
+}
+
+applyI18n();
+
+// === DARK MODE ===
+let darkMode = localStorage.getItem('oxi-dark-mode') === 'true';
+function applyDarkMode() {
+    document.documentElement.classList.toggle('dark', darkMode);
+    const btn = document.getElementById('darkModeToggle');
+    if (btn) btn.textContent = darkMode ? '\u2600' : '\u263D';
+    // Also update landing page toggle if present
+    const lbtn = document.getElementById('darkModeLanding');
+    if (lbtn) lbtn.textContent = darkMode ? '\u2600 Light' : '\u263D Dark';
+}
+function toggleDarkMode() {
+    darkMode = !darkMode;
+    localStorage.setItem('oxi-dark-mode', darkMode);
+    applyDarkMode();
+}
+applyDarkMode();
+
+// === BACKSTAGE VIEW ===
+function openBackstage() {
+    const overlay = document.getElementById('backstageOverlay');
+    overlay.classList.add('open');
+    showBackstagePanel('info');
+    // Update sidebar labels
+    const sidebar = document.getElementById('backstageSidebar');
+    const items = sidebar.querySelectorAll('.bs-item');
+    const keys = ['bsInfo','bsNew','bsOpen','bsSave','bsExport','bsSettings','bsAbout'];
+    items.forEach((item, i) => { if (keys[i]) item.textContent = t(keys[i]); });
+}
+function closeBackstage() {
+    document.getElementById('backstageOverlay').classList.remove('open');
+}
+document.getElementById('bsBack').addEventListener('click', closeBackstage);
+document.querySelectorAll('.bs-item').forEach(item => {
+    item.addEventListener('click', () => {
+        document.querySelectorAll('.bs-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        showBackstagePanel(item.dataset.bs);
+    });
+});
+
+function showBackstagePanel(panel) {
+    const main = document.getElementById('backstageMain');
+    if (panel === 'info') {
+        main.innerHTML = `<h2>${t('bsInfo')}</h2>
+            <div class="bs-section">
+                <div class="bs-row"><span class="bs-icon">&#x1F4C4;</span><div><div class="bs-label">${currentFileType ? (currentFileType.toUpperCase() + ' Document') : 'No file open'}</div><div class="bs-desc">Oxi Document Engine v0.1</div></div></div>
+            </div>`;
+    } else if (panel === 'settings') {
+        const aiProvider = localStorage.getItem('oxi-ai-provider') || 'none';
+        main.innerHTML = `<h2>${t('bsSettings')}</h2>
+            <div class="bs-section">
+                <h3>${t('bsTheme')}</h3>
+                <div style="display:flex;gap:8px;margin-bottom:16px">
+                    <button class="bs-theme-btn" data-theme="light" style="padding:8px 20px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${!darkMode?'var(--oxi-primary-light)':'var(--surface)'};color:var(--text)">${t('bsThemeLight')}</button>
+                    <button class="bs-theme-btn" data-theme="dark" style="padding:8px 20px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${darkMode?'var(--oxi-primary-light)':'var(--surface)'};color:var(--text)">${t('bsThemeDark')}</button>
+                </div>
+            </div>
+            <div class="bs-section">
+                <h3>${t('bsAiProvider')}</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Connect an AI provider for smart document assistance.</p>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='none'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="none" ${aiProvider==='none'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>${t('bsNone')}</strong>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='google'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="google" ${aiProvider==='google'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>Google (Gemini)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; Google Login required</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='microsoft'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="microsoft" ${aiProvider==='microsoft'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>Microsoft (Copilot)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; Microsoft Login required</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='anthropic'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="anthropic" ${aiProvider==='anthropic'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>Anthropic (Claude)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; API Key</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${aiProvider==='openai'?'var(--oxi-primary-light)':'var(--surface)'}">
+                        <input type="radio" name="ai-provider" value="openai" ${aiProvider==='openai'?'checked':''} style="accent-color:var(--oxi-primary)"> <strong>OpenAI (ChatGPT)</strong> <span style="font-size:12px;color:var(--text-secondary)">&#x2014; API Key</span>
+                    </label>
+                </div>
+            </div>`;
+        // Theme button handlers
+        main.querySelectorAll('.bs-theme-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                darkMode = btn.dataset.theme === 'dark';
+                localStorage.setItem('oxi-dark-mode', darkMode);
+                applyDarkMode();
+                showBackstagePanel('settings'); // refresh
+            });
+        });
+        // AI provider handlers
+        main.querySelectorAll('input[name="ai-provider"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                localStorage.setItem('oxi-ai-provider', radio.value);
+                showBackstagePanel('settings'); // refresh
+            });
+        });
+    } else if (panel === 'about') {
+        main.innerHTML = `<h2>${t('bsAbout')}</h2>
+            <div class="bs-section">
+                <div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">
+                    <div style="width:48px;height:48px;background:var(--oxi-primary);border-radius:12px;display:flex;align-items:center;justify-content:center;color:white;font-size:24px;font-weight:700">O</div>
+                    <div>
+                        <div style="font-size:20px;font-weight:600">Oxi</div>
+                        <div style="font-size:13px;color:var(--text-secondary)">Open-source document suite</div>
+                    </div>
+                </div>
+                <p style="font-size:13px;color:var(--text-secondary);line-height:1.6">
+                    Built with Rust + WebAssembly. Parse, render, and edit .docx / .xlsx / .pptx files natively in the browser.<br>
+                    MIT License &bull; <a href="https://github.com/Ryujiyasu/oxi" style="color:var(--oxi-primary)">GitHub</a>
+                </p>
+            </div>`;
+    } else if (panel === 'save') {
+        if (typeof downloadDocument === 'function') downloadDocument();
+        closeBackstage();
+    } else if (panel === 'new') {
+        main.innerHTML = `<h2>${t('bsNew')}</h2>
+            <div class="bs-section"><h3>Templates</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="bs-row" id="bsNewBlank" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px">
+                        <span class="bs-icon" style="font-size:32px">&#x1F4C4;</span>
+                        <span class="bs-label">Blank Document</span>
+                    </div>
+                </div>
+            </div>`;
+        const blankBtn = document.getElementById('bsNewBlank');
+        if (blankBtn) blankBtn.addEventListener('click', () => { closeBackstage(); if (typeof createNewDocument === 'function') createNewDocument(); });
+    } else if (panel === 'open') {
+        main.innerHTML = `<h2>${t('bsOpen')}</h2>
+            <div class="bs-section">
+                <h3>${currentLang === 'ja' ? 'ファイルを開く' : 'Open a file'}</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="bs-row" id="bsOpenFile" style="width:160px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px">&#x1F4C2;</span>
+                        <span class="bs-label">${currentLang === 'ja' ? 'ファイルを選択' : 'Browse files'}</span>
+                        <span class="bs-desc">.docx / .xlsx / .pptx / .pdf</span>
+                    </div>
+                </div>
+            </div>
+            <div class="bs-section">
+                <h3>${currentLang === 'ja' ? 'サンプル' : 'Samples'}</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="bs-row bs-sample-btn" data-sample="sample.docx" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px;color:var(--oxi-docs)">&#x1F4DD;</span>
+                        <span class="bs-label">sample.docx</span>
+                    </div>
+                    <div class="bs-row bs-sample-btn" data-sample="sample.xlsx" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px;color:var(--oxi-cells)">&#x1F4CA;</span>
+                        <span class="bs-label">sample.xlsx</span>
+                    </div>
+                    <div class="bs-row bs-sample-btn" data-sample="sample.pptx" style="width:120px;flex-direction:column;padding:16px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="font-size:32px;color:var(--oxi-slides)">&#x1F3AC;</span>
+                        <span class="bs-label">sample.pptx</span>
+                    </div>
+                </div>
+            </div>`;
+        document.getElementById('bsOpenFile').addEventListener('click', () => {
+            closeBackstage();
+            document.getElementById('fileInput').click();
+        });
+        main.querySelectorAll('.bs-sample-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                closeBackstage();
+                if (typeof loadSample === 'function') loadSample(btn.dataset.sample);
+            });
+        });
+    } else if (panel === 'export') {
+        const hasFile = !!currentFileType;
+        main.innerHTML = `<h2>${t('bsExport')}</h2>
+            <div class="bs-section">
+                <h3>${currentLang === 'ja' ? 'エクスポート形式' : 'Export format'}</h3>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <div class="bs-row" id="bsExportOriginal" style="padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;opacity:${hasFile?'1':'0.4'}">
+                        <span class="bs-icon">&#x1F4BE;</span>
+                        <div>
+                            <div class="bs-label">${currentLang === 'ja' ? '元の形式でダウンロード' : 'Download as original format'}</div>
+                            <div class="bs-desc">${hasFile ? '.' + currentFileType : (currentLang === 'ja' ? 'ファイルを開いてください' : 'Open a file first')}</div>
+                        </div>
+                    </div>
+                    <div class="bs-row" id="bsExportPdf" style="padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="color:var(--oxi-pdf)">&#x1F4C4;</span>
+                        <div>
+                            <div class="bs-label">${currentLang === 'ja' ? 'PDF を新規生成' : 'Generate new PDF'}</div>
+                            <div class="bs-desc">${currentLang === 'ja' ? 'A4・テキスト付き PDF を作成' : 'Create an A4 PDF with text content'}</div>
+                        </div>
+                    </div>
+                    <div class="bs-row" id="bsExportHanko" style="padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                        <span class="bs-icon" style="color:#E34234">&#x2B55;</span>
+                        <div>
+                            <div class="bs-label">${currentLang === 'ja' ? '判子 SVG をダウンロード' : 'Download hanko stamp SVG'}</div>
+                            <div class="bs-desc">${currentLang === 'ja' ? '名前を入力して判子画像を保存' : 'Enter a name and save a stamp image'}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        document.getElementById('bsExportOriginal').addEventListener('click', () => {
+            if (!hasFile) return;
+            closeBackstage();
+            if (typeof downloadDocument === 'function') downloadDocument();
+        });
+        document.getElementById('bsExportPdf').addEventListener('click', () => {
+            closeBackstage();
+            const title = prompt(currentLang === 'ja' ? 'PDF タイトル:' : 'PDF title:', 'Oxi Document');
+            if (!title) return;
+            const text = prompt(currentLang === 'ja' ? '本文テキスト:' : 'Text content:', 'Hello, World!');
+            if (text === null) return;
+            try {
+                const pdfBytes = create_pdf(title, text);
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = title + '.pdf'; a.click();
+                URL.revokeObjectURL(url);
+                showStatus(currentLang === 'ja' ? 'PDF を生成しました' : 'PDF generated', 'info');
+            } catch(e) { showStatus('Error: ' + e.message, 'error'); }
+        });
+        document.getElementById('bsExportHanko').addEventListener('click', () => {
+            closeBackstage();
+            const name = prompt(currentLang === 'ja' ? '名前（漢字）:' : 'Name (kanji):', '山田');
+            if (!name) return;
+            try {
+                const svg = preview_hanko(name);
+                const blob = new Blob([svg], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = 'hanko_' + name + '.svg'; a.click();
+                URL.revokeObjectURL(url);
+                showStatus(currentLang === 'ja' ? '判子 SVG をダウンロードしました' : 'Hanko SVG downloaded', 'info');
+            } catch(e) { showStatus('Error: ' + e.message, 'error'); }
+        });
+    }
+}
+// Close backstage on Escape
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const bs = document.getElementById('backstageOverlay');
+        if (bs.classList.contains('open')) { closeBackstage(); e.stopPropagation(); }
+    }
+});
+</script>
+
+<script type="module">
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+
+let wasmReady = false;
+let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
+let currentFileBytes = null; // original file bytes for editing
+let currentDocIR = null; // parsed IR for edit mode
+
+const HIGHLIGHT_COLORS = {
+    yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF',
+    blue: '#0000FF', red: '#FF0000', darkBlue: '#000080', darkCyan: '#008080',
+    darkGreen: '#008000', darkMagenta: '#800080', darkRed: '#800000',
+    darkYellow: '#808000', darkGray: '#808080', lightGray: '#C0C0C0',
+    black: '#000000', white: '#FFFFFF',
+};
+
+// Render blocks inside a table cell (recursive for nested tables)
+function renderCellBlocks(blocks, container) {
+    for (const cellBlock of blocks) {
+        if (cellBlock.Paragraph) {
+            const cellPara = cellBlock.Paragraph;
+            const cellParaDiv = document.createElement('div');
+            if (cellPara.alignment === 'Center') cellParaDiv.style.textAlign = 'center';
+            else if (cellPara.alignment === 'Right') cellParaDiv.style.textAlign = 'right';
+            else if (cellPara.alignment === 'Justify') cellParaDiv.style.textAlign = 'justify';
+            if (cellPara.style && cellPara.style.line_spacing) {
+                if (cellPara.style.line_spacing_rule === 'exact') {
+                    cellParaDiv.style.lineHeight = cellPara.style.line_spacing + 'pt';
+                    cellParaDiv.style.overflow = 'hidden';
+                } else if (cellPara.style.line_spacing_rule === 'atLeast') {
+                    cellParaDiv.style.lineHeight = cellPara.style.line_spacing + 'pt';
+                } else {
+                    cellParaDiv.style.lineHeight = String(cellPara.style.line_spacing);
+                }
+            }
+            // Apply paragraph default_run_style to cell paragraphs
+            if (cellPara.style && cellPara.style.space_before) cellParaDiv.style.marginTop = cellPara.style.space_before + 'pt';
+            if (cellPara.style && cellPara.style.space_after) cellParaDiv.style.marginBottom = cellPara.style.space_after + 'pt';
+            if (cellPara.style && cellPara.style.indent_left) cellParaDiv.style.paddingLeft = cellPara.style.indent_left + 'pt';
+            if (cellPara.style && cellPara.style.indent_right) cellParaDiv.style.paddingRight = cellPara.style.indent_right + 'pt';
+            if (cellPara.style && cellPara.style.indent_first_line) cellParaDiv.style.textIndent = cellPara.style.indent_first_line + 'pt';
+            // List marker in cell
+            if (cellPara.style && cellPara.style.list_marker) {
+                const markerSpan = document.createElement('span');
+                markerSpan.textContent = cellPara.style.list_marker;
+                markerSpan.contentEditable = 'false';
+                markerSpan.style.display = 'inline-block';
+                markerSpan.style.userSelect = 'none';
+                const listIndent = cellPara.style.list_indent || 18;
+                markerSpan.style.width = listIndent + 'pt';
+                markerSpan.style.marginLeft = '-' + listIndent + 'pt';
+                cellParaDiv.appendChild(markerSpan);
+            }
+            for (const run of cellPara.runs) {
+                const span = document.createElement('span');
+                span.textContent = run.text;
+                // Apply default_run_style from paragraph, then run overrides
+                const drs = cellPara.style && cellPara.style.default_run_style;
+                if (drs) {
+                    if (drs.font_family) span.style.fontFamily = drs.font_family + ", 'Yu Gothic', 'Noto Sans JP', sans-serif";
+                    if (drs.font_size) span.style.fontSize = drs.font_size + 'pt';
+                    if (drs.bold) span.style.fontWeight = 'bold';
+                    if (drs.italic) span.style.fontStyle = 'italic';
+                    if (drs.color) span.style.color = '#' + drs.color;
+                }
+                applyRunStyle(span, run);
+                cellParaDiv.appendChild(span);
+            }
+            container.appendChild(cellParaDiv);
+        } else if (cellBlock.Table) {
+            // Nested table
+            const nestedTable = cellBlock.Table;
+            const nestedEl = document.createElement('table');
+            nestedEl.className = 'edit-table';
+            nestedEl.style.borderCollapse = 'collapse';
+            nestedEl.style.width = '100%';
+            nestedEl.style.margin = '4px 0';
+            if (nestedTable.style && nestedTable.style.border) {
+                const bw = (nestedTable.style.border_width || 0.5) + 'pt';
+                const bc = nestedTable.style.border_color ? '#' + nestedTable.style.border_color : '#000';
+                nestedEl.style.border = `${bw} solid ${bc}`;
+            }
+            // Pre-pass for nested table vMerge
+            const nRowspanMap = {};
+            for (let nri = 0; nri < nestedTable.rows.length; nri++) {
+                let nci = 0;
+                for (const nc of nestedTable.rows[nri].cells) {
+                    if (nc.v_merge === 'restart') {
+                        let nspan = 1;
+                        for (let nrj = nri + 1; nrj < nestedTable.rows.length; nrj++) {
+                            let ncj = 0;
+                            let nfound = false;
+                            for (const nc2 of nestedTable.rows[nrj].cells) {
+                                if (ncj === nci && nc2.v_merge === 'continue') { nspan++; nfound = true; break; }
+                                ncj += (nc2.grid_span || 1);
+                            }
+                            if (!nfound) break;
+                        }
+                        nRowspanMap[nri + '-' + nci] = nspan;
+                    }
+                    nci += (nc.grid_span || 1);
+                }
+            }
+            for (let nri = 0; nri < nestedTable.rows.length; nri++) {
+                const nRow = nestedTable.rows[nri];
+                const nTr = document.createElement('tr');
+                if (nRow.height) nTr.style.height = nRow.height + 'pt';
+                let nci = 0;
+                for (const nCell of nRow.cells) {
+                    if (nCell.v_merge === 'continue') { nci += (nCell.grid_span || 1); continue; }
+                    const nTd = document.createElement('td');
+                    if (nestedTable.style && nestedTable.style.border) {
+                        nTd.style.border = '0.5pt solid #000';
+                    }
+                    if (nCell.width) nTd.style.width = nCell.width + 'pt';
+                    if (nCell.grid_span > 1) nTd.colSpan = nCell.grid_span;
+                    const nrsKey = nri + '-' + nci;
+                    if (nRowspanMap[nrsKey] && nRowspanMap[nrsKey] > 1) nTd.rowSpan = nRowspanMap[nrsKey];
+                    if (nCell.shading) nTd.style.backgroundColor = '#' + nCell.shading;
+                    if (nCell.v_align) nTd.style.verticalAlign = nCell.v_align === 'center' ? 'middle' : nCell.v_align;
+                    // Cell borders
+                    if (nCell.borders) {
+                        const bdrCss = (d) => d ? `${d.width||1}pt ${d.style==='double'?'double':d.style==='dashed'?'dashed':'solid'} ${d.color?'#'+d.color:'#000'}` : '';
+                        if (nCell.borders.top) nTd.style.borderTop = bdrCss(nCell.borders.top);
+                        if (nCell.borders.bottom) nTd.style.borderBottom = bdrCss(nCell.borders.bottom);
+                        if (nCell.borders.left) nTd.style.borderLeft = bdrCss(nCell.borders.left);
+                        if (nCell.borders.right) nTd.style.borderRight = bdrCss(nCell.borders.right);
+                    }
+                    // Cell margins
+                    const ncm = nCell.margins || (nestedTable.style && nestedTable.style.default_cell_margins);
+                    if (ncm) {
+                        if (ncm.top) nTd.style.paddingTop = ncm.top + 'pt';
+                        if (ncm.bottom) nTd.style.paddingBottom = ncm.bottom + 'pt';
+                        if (ncm.left) nTd.style.paddingLeft = ncm.left + 'pt';
+                        if (ncm.right) nTd.style.paddingRight = ncm.right + 'pt';
+                    }
+                    renderCellBlocks(nCell.blocks, nTd);
+                    nTr.appendChild(nTd);
+                    nci += (nCell.grid_span || 1);
+                }
+                nestedEl.appendChild(nTr);
+            }
+            container.appendChild(nestedEl);
+        }
+    }
+}
+
+async function initialize() {
+    try {
+        await init();
+        wasmReady = true;
+        window.__oxiWasmReady = true;
+        console.log('Wasm initialized');
+    } catch(e) {
+        showStatus('Failed to load Wasm: ' + e.message, 'error');
+    }
+}
+
+function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = type;
+}
+
+// === TOOLBAR ===
+const toolbar = document.getElementById('toolbar');
+const btnDownload = document.getElementById('btnDownload');
+
+btnDownload.addEventListener('click', downloadEdited);
+
+// === RIBBON MENU ===
+const ribbon = document.getElementById('ribbon');
+
+const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+const FONT_FAMILIES = [
+    'Calibri', 'Arial', 'Times New Roman', 'Helvetica', 'Georgia',
+    'Verdana', 'Courier New', 'Trebuchet MS', 'Comic Sans MS',
+    'Impact', 'Palatino Linotype', 'Lucida Console', 'Tahoma',
+    'MS Gothic', 'MS Mincho', 'Yu Gothic', 'Meiryo',
+];
+const COLOR_PALETTE = [
+    '#000000','#434343','#666666','#999999','#B7B7B7','#CCCCCC','#D9D9D9','#FFFFFF',
+    '#980000','#FF0000','#FF9900','#FFFF00','#00FF00','#00FFFF','#4A86E8','#0000FF',
+    '#9900FF','#FF00FF','#E6B8AF','#F4CCCC','#FCE5CD','#FFF2CC','#D9EAD3','#D0E0E3',
+    '#C9DAF8','#CFE2F3','#D9D2E9','#EAD1DC','#DD7E6B','#EA9999','#F9CB9C','#FFE599',
+    '#B6D7A8','#A2C4C9','#A4C2F4','#9FC5E8','#B4A7D6','#D5A6BD','#CC4125','#E06666',
+    '#F6B26B','#FFD966','#93C47D','#76A5AF','#6D9EEB','#6FA8DC','#8E7CC3','#C27BA0',
+    '#A61C00','#CC0000','#E69138','#F1C232','#6AA84F','#45818E','#3C78D8','#3D85C6',
+    '#674EA7','#A64D79','#85200C','#990000','#B45F06','#BF9000','#38761D','#134F5C',
+    '#1155CC','#0B5394','#351C75','#741B47',
+];
+
+let currentFontColor = '#FF0000';
+let currentHighlightColor = '#FFFF00';
+
+function buildRibbon(format) {
+    ribbon.className = 'ribbon visible ' + format;
+    ribbon.innerHTML = '';
+
+    const tabs = document.createElement('div');
+    tabs.className = 'ribbon-tabs';
+    const contentArea = document.createElement('div');
+    contentArea.className = 'ribbon-content';
+
+    // Ribbon button action: execCommand for formatting, or custom handler
+    function ribbonAction(cmd) {
+        return () => {
+            if (['bold', 'italic', 'underline', 'strikeThrough',
+                 'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull',
+                 'copy', 'cut', 'paste', 'undo', 'redo'].includes(cmd)) {
+                document.execCommand(cmd, false, null);
+            }
+        };
+    }
+
+    // Create font family dropdown
+    function createFontFamilySelect() {
+        const sel = document.createElement('select');
+        sel.className = 'ribbon-select ribbon-font-family';
+        sel.title = 'Font Family';
+        for (const f of FONT_FAMILIES) {
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = f;
+            opt.style.fontFamily = f;
+            sel.appendChild(opt);
+        }
+        sel.addEventListener('mousedown', (e) => { /* don't prevent — need dropdown */ });
+        sel.addEventListener('change', () => {
+            document.execCommand('fontName', false, sel.value);
+            sel.blur();
+        });
+        return { type: 'custom', el: sel };
+    }
+
+    // Create font size dropdown
+    function createFontSizeSelect() {
+        const sel = document.createElement('select');
+        sel.className = 'ribbon-select ribbon-font-size';
+        sel.title = 'Font Size';
+        for (const s of FONT_SIZES) {
+            const opt = document.createElement('option');
+            opt.value = s;
+            opt.textContent = s;
+            if (s === 11) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        sel.addEventListener('change', () => {
+            // execCommand fontSize only supports 1-7, so we use CSS instead
+            const size = sel.value + 'pt';
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && !selection.isCollapsed) {
+                // Wrap selection in a font-size span
+                document.execCommand('fontSize', false, '7');
+                // Find all font size=7 elements and replace with proper size
+                const fontEls = document.querySelectorAll('font[size="7"]');
+                for (const fe of fontEls) {
+                    fe.removeAttribute('size');
+                    fe.style.fontSize = size;
+                }
+            }
+            sel.blur();
+        });
+        return { type: 'custom', el: sel };
+    }
+
+    // Create color picker button
+    function createColorBtn(label, title, getColor, setColor, applyCmd) {
+        const wrapper = document.createElement('div');
+        wrapper.style.position = 'relative';
+        wrapper.style.display = 'inline-block';
+
+        const btn = document.createElement('button');
+        btn.className = 'ribbon-color-btn';
+        btn.title = title;
+        const letterSpan = document.createElement('span');
+        letterSpan.textContent = label;
+        const bar = document.createElement('span');
+        bar.className = 'ribbon-color-bar';
+        bar.style.background = getColor();
+        btn.appendChild(letterSpan);
+        btn.appendChild(bar);
+
+        const palette = document.createElement('div');
+        palette.className = 'color-palette';
+        for (const c of COLOR_PALETTE) {
+            const swatch = document.createElement('div');
+            swatch.className = 'color-swatch';
+            swatch.style.background = c;
+            swatch.title = c;
+            swatch.addEventListener('mousedown', (e) => e.preventDefault());
+            swatch.addEventListener('click', () => {
+                setColor(c);
+                bar.style.background = c;
+                palette.classList.remove('open');
+                if (applyCmd === 'foreColor') {
+                    document.execCommand('foreColor', false, c);
+                } else if (applyCmd === 'hiliteColor') {
+                    document.execCommand('hiliteColor', false, c);
+                }
+            });
+            palette.appendChild(swatch);
+        }
+        wrapper.appendChild(btn);
+        wrapper.appendChild(palette);
+
+        // Click on the letter part → apply current color
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', (e) => {
+            if (e.detail === 1) {
+                // Single click: apply current color
+                if (applyCmd === 'foreColor') document.execCommand('foreColor', false, getColor());
+                else if (applyCmd === 'hiliteColor') document.execCommand('hiliteColor', false, getColor());
+            }
+        });
+        // Right-click or long-press shows palette
+        btn.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            palette.classList.toggle('open');
+        });
+        // Also add a small dropdown arrow
+        const arrow = document.createElement('button');
+        arrow.className = 'ribbon-btn';
+        arrow.style.padding = '2px 2px';
+        arrow.style.fontSize = '8px';
+        arrow.style.minWidth = '14px';
+        arrow.textContent = '▼';
+        arrow.title = 'Choose ' + title;
+        arrow.addEventListener('mousedown', (e) => e.preventDefault());
+        arrow.addEventListener('click', () => {
+            // Close all other palettes first
+            document.querySelectorAll('.color-palette.open').forEach(p => {
+                if (p !== palette) p.classList.remove('open');
+            });
+            palette.classList.toggle('open');
+        });
+
+        const container = document.createElement('div');
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.appendChild(wrapper);
+        container.appendChild(arrow);
+        return { type: 'custom', el: container };
+    }
+
+    // Close color palettes on outside click
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.ribbon-color-btn') && !e.target.closest('.color-palette') && !e.target.closest('.ribbon-btn')) {
+            document.querySelectorAll('.color-palette.open').forEach(p => p.classList.remove('open'));
+        }
+    });
+
+    // Build font group items shared across formats
+    function fontGroupItems(includeStrike) {
+        const items = [
+            createFontFamilySelect(),
+            createFontSizeSelect(),
+            { text: 'B', title: 'Bold', style: 'font-weight:bold', action: ribbonAction('bold') },
+            { text: 'I', title: 'Italic', style: 'font-style:italic', action: ribbonAction('italic') },
+            { text: 'U', title: 'Underline', style: 'text-decoration:underline', action: ribbonAction('underline') },
+        ];
+        if (includeStrike) {
+            items.push({ text: 'S', title: 'Strikethrough', style: 'text-decoration:line-through', action: ribbonAction('strikeThrough') });
+        }
+        items.push(createColorBtn('A', 'Font Color', () => currentFontColor, (c) => { currentFontColor = c; }, 'foreColor'));
+        items.push(createColorBtn('ab', 'Highlight Color', () => currentHighlightColor, (c) => { currentHighlightColor = c; }, 'hiliteColor'));
+        return items;
+    }
+
+    let tabDefs;
+    if (format === 'docx') {
+        tabDefs = [
+            { name: t('home'), groups: [
+                { label: t('undo'), items: [
+                    { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
+                    { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
+                ]},
+                { label: t('clipboard'), items: [
+                    { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
+                    { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
+                    { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
+                ]},
+                { label: t('font'), items: fontGroupItems(true) },
+                { label: t('paragraph'), items: [
+                    { text: '☰', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '☰', title: 'Center', style: 'letter-spacing:1px', action: ribbonAction('justifyCenter') },
+                    { text: '☰', title: 'Align Right', action: ribbonAction('justifyRight') },
+                    { text: '☰', title: 'Justify', action: ribbonAction('justifyFull') },
+                ]},
+                { label: t('editing'), items: [
+                    { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
+                ]},
+            ]},
+            { name: t('insert'), groups: [
+                { label: t('tables'), items: [{ text: '⊞', title: 'Table' }] },
+                { label: t('illustrations'), items: [{ text: '🖼', title: 'Picture' }] },
+                { label: t('links'), items: [{ text: '🔗', title: 'Link' }] },
+            ]},
+            { name: t('layout'), groups: [
+                { label: t('pageSetup'), items: [
+                    { text: '▯', title: 'Margins' }, { text: '↔', title: 'Orientation' }, { text: '📐', title: 'Size' },
+                ]},
+            ]},
+            { name: t('view'), groups: [
+                { label: t('views'), items: [
+                    { text: '📖', title: 'Read Mode' }, { text: '📝', title: 'Print Layout' },
+                ]},
+            ]},
+        ];
+    } else if (format === 'xlsx') {
+        tabDefs = [
+            { name: t('home'), groups: [
+                { label: t('undo'), items: [
+                    { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
+                    { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
+                ]},
+                { label: t('clipboard'), items: [
+                    { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
+                    { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
+                    { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
+                ]},
+                { label: t('font'), items: fontGroupItems(false) },
+                { label: t('alignment'), items: [
+                    { text: '⬅', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '⬌', title: 'Center', action: ribbonAction('justifyCenter') },
+                    { text: '➡', title: 'Align Right', action: ribbonAction('justifyRight') },
+                ]},
+                { label: t('number'), items: [
+                    { text: '%', title: 'Percent Style' }, { text: ',', title: 'Comma Style' },
+                    { text: '.0', title: 'Increase Decimal' }, { text: '.', title: 'Decrease Decimal' },
+                ]},
+                { label: t('editing'), items: [
+                    { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
+                ]},
+            ]},
+            { name: t('insert'), groups: [
+                { label: 'Charts', items: [{ text: '📊', title: 'Chart' }] },
+                { label: t('tables'), items: [{ text: '⊞', title: 'Table' }] },
+            ]},
+            { name: t('formulas'), groups: [
+                { label: 'Function Library', items: [
+                    { text: 'fx', title: 'Insert Function' },
+                    { text: 'Σ', title: 'AutoSum' },
+                ]},
+            ]},
+            { name: t('data'), groups: [
+                { label: 'Sort & Filter', items: [
+                    { text: '↕', title: 'Sort' }, { text: '▼', title: 'Filter' },
+                ]},
+            ]},
+            { name: t('view'), groups: [
+                { label: 'Show', items: [
+                    { text: '⊞', title: 'Gridlines' }, { text: 'H', title: 'Headings' },
+                ]},
+            ]},
+        ];
+    } else if (format === 'pptx') {
+        tabDefs = [
+            { name: t('home'), groups: [
+                { label: t('undo'), items: [
+                    { text: '↩', title: 'Undo (Ctrl+Z)', action: ribbonAction('undo') },
+                    { text: '↪', title: 'Redo (Ctrl+Y)', action: ribbonAction('redo') },
+                ]},
+                { label: t('clipboard'), items: [
+                    { icon: '📋', title: 'Paste', action: ribbonAction('paste') },
+                    { icon: '✂️', title: 'Cut', action: ribbonAction('cut') },
+                    { icon: '📄', title: 'Copy', action: ribbonAction('copy') },
+                ]},
+                { label: t('font'), items: fontGroupItems(false) },
+                { label: t('paragraph'), items: [
+                    { text: '☰', title: 'Align Left', action: ribbonAction('justifyLeft') },
+                    { text: '☰', title: 'Center', action: ribbonAction('justifyCenter') },
+                    { text: '☰', title: 'Align Right', action: ribbonAction('justifyRight') },
+                ]},
+                { label: 'Drawing', items: [
+                    { text: '□', title: 'Shape' }, { text: '⬜', title: 'Shape Fill' }, { text: '▢', title: 'Shape Outline' },
+                ]},
+                { label: t('editing'), items: [
+                    { text: '🔍', title: 'Find & Replace', action: () => toggleFindReplace() },
+                ]},
+            ]},
+            { name: 'Insert', groups: [
+                { label: 'Images', items: [{ text: '🖼', title: 'Picture' }] },
+                { label: 'Text', items: [{ text: 'A', title: 'Text Box' }] },
+                { label: 'Slides', items: [{ text: '+', title: 'New Slide' }] },
+            ]},
+            { name: 'Design', groups: [
+                { label: 'Themes', items: [
+                    { text: '🎨', title: 'Themes' }, { text: '🖌', title: 'Variants' },
+                ]},
+            ]},
+            { name: 'Transitions', groups: [
+                { label: 'Transition', items: [
+                    { text: '▶', title: 'None' }, { text: '↝', title: 'Fade' }, { text: '→', title: 'Slide' },
+                ]},
+            ]},
+            { name: 'Slide Show', groups: [
+                { label: 'Start', items: [
+                    { text: '▶', title: 'From Beginning' }, { text: '▷', title: 'From Current Slide' },
+                ]},
+            ]},
+        ];
+    } else if (format === 'pdf') {
+        tabDefs = [
+            { name: 'View', groups: [
+                { label: 'Zoom', items: [
+                    { text: '🔍+', title: 'Zoom In', action: () => { currentZoom = Math.min(500, currentZoom + 25); applyZoom(); } },
+                    { text: '🔍−', title: 'Zoom Out', action: () => { currentZoom = Math.max(25, currentZoom - 25); applyZoom(); } },
+                    { text: '100%', title: 'Reset Zoom', action: () => { currentZoom = 100; applyZoom(); } },
+                ]},
+            ]},
+            { name: 'Hanko', groups: [
+                { label: 'Stamp', items: [
+                    { text: '◯', title: 'Round (丸印)' },
+                    { text: '□', title: 'Square (角印)' },
+                    { text: '⬭', title: 'Oval (小判型)' },
+                ]},
+            ]},
+            { name: 'Security', groups: [
+                { label: 'Signatures', items: [
+                    { text: '🔏', title: 'Verify Signatures' },
+                ]},
+            ]},
+        ];
+    }
+
+    function showTab(idx) {
+        // Skip file tab (index 0 in tabs.children is the File button)
+        const tabBtns = tabs.querySelectorAll('.ribbon-tab');
+        for (const t of tabBtns) t.classList.remove('active');
+        tabBtns[idx].classList.add('active');
+        contentArea.innerHTML = '';
+        const def = tabDefs[idx];
+        for (const group of def.groups) {
+            const g = document.createElement('div');
+            g.className = 'ribbon-group';
+            const itemsRow = document.createElement('div');
+            itemsRow.className = 'ribbon-group-items';
+            for (const item of group.items) {
+                if (item.type === 'custom') {
+                    itemsRow.appendChild(item.el);
+                    continue;
+                }
+                const btn = document.createElement('button');
+                btn.className = item.large ? 'ribbon-btn ribbon-btn-large' : 'ribbon-btn';
+                btn.title = item.title;
+                if (item.large) {
+                    const icon = document.createElement('span');
+                    icon.className = 'rb-icon';
+                    icon.textContent = item.icon || item.text;
+                    const lbl = document.createElement('span');
+                    lbl.className = 'rb-label';
+                    lbl.textContent = item.label || item.title;
+                    btn.appendChild(icon);
+                    btn.appendChild(lbl);
+                } else {
+                    btn.textContent = item.icon || item.text;
+                }
+                if (item.style) btn.style.cssText = item.style;
+                if (item.action) {
+                    btn.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                    });
+                    btn.addEventListener('click', item.action);
+                }
+                itemsRow.appendChild(btn);
+            }
+            g.appendChild(itemsRow);
+            const label = document.createElement('div');
+            label.className = 'ribbon-group-label';
+            label.textContent = group.label;
+            g.appendChild(label);
+            contentArea.appendChild(g);
+        }
+    }
+
+    // File tab (styled differently)
+    const fileTab = document.createElement('button');
+    fileTab.className = 'ribbon-tab-file';
+    fileTab.textContent = t('file');
+    fileTab.onclick = () => {
+        openBackstage();
+    };
+    tabs.appendChild(fileTab);
+
+    tabDefs.forEach((def, i) => {
+        const tab = document.createElement('button');
+        tab.className = 'ribbon-tab';
+        tab.textContent = def.name;
+        tab.onclick = () => showTab(i);
+        tabs.appendChild(tab);
+    });
+
+    ribbon.appendChild(tabs);
+    ribbon.appendChild(contentArea);
+    showTab(0);
+}
+
+function rebuildCurrentRibbon() {
+    if (currentFileType) buildRibbon(currentFileType);
+}
+
+function hideRibbon() {
+    ribbon.className = 'ribbon';
+    ribbon.innerHTML = '';
+}
+
+// Keyboard shortcuts for formatting (Ctrl/Cmd+B, I, U, Z, Y, H, F)
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'b') { e.preventDefault(); document.execCommand('bold'); }
+        else if (e.key === 'i') { e.preventDefault(); document.execCommand('italic'); }
+        else if (e.key === 'u') { e.preventDefault(); document.execCommand('underline'); }
+        else if (e.key === 'h' || e.key === 'f') { e.preventDefault(); toggleFindReplace(); }
+    }
+    if (e.key === 'Escape') {
+        const dlg = document.getElementById('findReplaceDialog');
+        if (dlg.classList.contains('open')) dlg.classList.remove('open');
+    }
+});
+
+// === ZOOM CONTROLS ===
+const statusBar = document.getElementById('statusBar');
+const zoomSlider = document.getElementById('zoomSlider');
+const zoomLabel = document.getElementById('zoomLabel');
+const zoomOut = document.getElementById('zoomOut');
+const zoomIn = document.getElementById('zoomIn');
+let currentZoom = 100;
+
+function applyZoom() {
+    const container = document.getElementById('pages-container');
+    container.style.transform = `scale(${currentZoom / 100})`;
+    container.style.transformOrigin = 'top center';
+    zoomLabel.textContent = currentZoom + '%';
+    zoomSlider.value = currentZoom;
+}
+
+zoomSlider.addEventListener('input', () => {
+    currentZoom = parseInt(zoomSlider.value);
+    applyZoom();
+});
+zoomOut.addEventListener('click', () => {
+    currentZoom = Math.max(50, currentZoom - 10);
+    applyZoom();
+});
+zoomIn.addEventListener('click', () => {
+    currentZoom = Math.min(200, currentZoom + 10);
+    applyZoom();
+});
+
+// === FIND & REPLACE ===
+function toggleFindReplace() {
+    const dlg = document.getElementById('findReplaceDialog');
+    dlg.classList.toggle('open');
+    if (dlg.classList.contains('open')) {
+        document.getElementById('frFind').focus();
+    }
+}
+
+document.getElementById('frClose').addEventListener('click', () => {
+    document.getElementById('findReplaceDialog').classList.remove('open');
+    clearFindHighlights();
+});
+
+let findMatches = [];
+let findCurrentIdx = -1;
+
+function clearFindHighlights() {
+    // Remove existing highlights
+    document.querySelectorAll('.fr-highlight').forEach(el => {
+        const parent = el.parentNode;
+        parent.replaceChild(document.createTextNode(el.textContent), el);
+        parent.normalize();
+    });
+    findMatches = [];
+    findCurrentIdx = -1;
+    document.getElementById('frStatus').textContent = '';
+}
+
+function performFind() {
+    clearFindHighlights();
+    const query = document.getElementById('frFind').value;
+    if (!query) return;
+
+    const container = document.getElementById('pages-container');
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+    const lowerQuery = query.toLowerCase();
+    for (const textNode of textNodes) {
+        const text = textNode.textContent;
+        const lowerText = text.toLowerCase();
+        let idx = 0;
+        const parts = [];
+        let lastEnd = 0;
+        while ((idx = lowerText.indexOf(lowerQuery, idx)) !== -1) {
+            if (idx > lastEnd) parts.push({ text: text.slice(lastEnd, idx), match: false });
+            parts.push({ text: text.slice(idx, idx + query.length), match: true });
+            lastEnd = idx + query.length;
+            idx = lastEnd;
+        }
+        if (parts.length > 0) {
+            if (lastEnd < text.length) parts.push({ text: text.slice(lastEnd), match: false });
+            const frag = document.createDocumentFragment();
+            for (const p of parts) {
+                if (p.match) {
+                    const mark = document.createElement('mark');
+                    mark.className = 'fr-highlight';
+                    mark.style.background = '#fff3a8';
+                    mark.style.padding = '0';
+                    mark.textContent = p.text;
+                    frag.appendChild(mark);
+                    findMatches.push(mark);
+                } else {
+                    frag.appendChild(document.createTextNode(p.text));
+                }
+            }
+            textNode.parentNode.replaceChild(frag, textNode);
+        }
+    }
+
+    if (findMatches.length > 0) {
+        findCurrentIdx = 0;
+        highlightCurrent();
+    }
+    updateFindStatus();
+}
+
+function highlightCurrent() {
+    findMatches.forEach((m, i) => {
+        m.style.background = i === findCurrentIdx ? '#ff9632' : '#fff3a8';
+    });
+    if (findMatches[findCurrentIdx]) {
+        findMatches[findCurrentIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function updateFindStatus() {
+    const status = document.getElementById('frStatus');
+    if (findMatches.length === 0) {
+        status.textContent = document.getElementById('frFind').value ? t('noMatches') : '';
+    } else {
+        status.textContent = I18N[currentLang].matchOf(findCurrentIdx + 1, findMatches.length);
+    }
+}
+
+document.getElementById('frFind').addEventListener('input', performFind);
+document.getElementById('frNext').addEventListener('click', () => {
+    if (findMatches.length === 0) return;
+    findCurrentIdx = (findCurrentIdx + 1) % findMatches.length;
+    highlightCurrent();
+    updateFindStatus();
+});
+document.getElementById('frPrev').addEventListener('click', () => {
+    if (findMatches.length === 0) return;
+    findCurrentIdx = (findCurrentIdx - 1 + findMatches.length) % findMatches.length;
+    highlightCurrent();
+    updateFindStatus();
+});
+document.getElementById('frReplaceOne').addEventListener('click', () => {
+    if (findMatches.length === 0 || findCurrentIdx < 0) return;
+    const replaceVal = document.getElementById('frReplace').value;
+    const mark = findMatches[findCurrentIdx];
+    mark.parentNode.replaceChild(document.createTextNode(replaceVal), mark);
+    findMatches.splice(findCurrentIdx, 1);
+    if (findCurrentIdx >= findMatches.length) findCurrentIdx = 0;
+    if (findMatches.length > 0) highlightCurrent();
+    updateFindStatus();
+});
+document.getElementById('frReplaceAll').addEventListener('click', () => {
+    if (findMatches.length === 0) return;
+    const replaceVal = document.getElementById('frReplace').value;
+    for (const mark of findMatches) {
+        mark.parentNode.replaceChild(document.createTextNode(replaceVal), mark);
+    }
+    const count = findMatches.length;
+    findMatches = [];
+    findCurrentIdx = -1;
+    document.getElementById('frStatus').textContent = I18N[currentLang].replaced(count);
+});
+
+function collectDocxEdits() {
+    const edits = [];
+    const runs = document.querySelectorAll('.edit-run[data-para][data-run]');
+    for (const el of runs) {
+        const paraIdx = parseInt(el.dataset.para);
+        const runIdx = parseInt(el.dataset.run);
+        const originalText = el.dataset.original;
+        const currentText = el.textContent;
+        if (currentText !== originalText) {
+            edits.push({ paragraph_index: paraIdx, run_index: runIdx, new_text: currentText });
+        }
+    }
+    return edits;
+}
+
+function collectXlsxEdits() {
+    const edits = [];
+    const cells = document.querySelectorAll('.edit-cell[data-sheet][data-row][data-col]');
+    for (const el of cells) {
+        const sheetIdx = parseInt(el.dataset.sheet);
+        const row = parseInt(el.dataset.row);
+        const col = parseInt(el.dataset.col);
+        const original = el.dataset.original;
+        const current = el.textContent;
+        if (current !== original) {
+            edits.push({ sheet_index: sheetIdx, row, col, new_value: current });
+        }
+    }
+    return edits;
+}
+
+function collectPptxEdits() {
+    const edits = [];
+    const runs = document.querySelectorAll('.edit-slide-run[data-slide][data-shape][data-para][data-run]');
+    for (const el of runs) {
+        const slideIdx = parseInt(el.dataset.slide);
+        const shapeIdx = parseInt(el.dataset.shape);
+        const paraIdx = parseInt(el.dataset.para);
+        const runIdx = parseInt(el.dataset.run);
+        const original = el.dataset.original;
+        const current = el.textContent;
+        if (current !== original) {
+            edits.push({ slide_index: slideIdx, shape_index: shapeIdx, paragraph_index: paraIdx, run_index: runIdx, new_text: current });
+        }
+    }
+    return edits;
+}
+
+const MIME_TYPES = {
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+function downloadEdited() {
+    if (!currentFileBytes || !currentFileType) return;
+
+    let edits;
+    if (currentFileType === 'docx') edits = collectDocxEdits();
+    else if (currentFileType === 'xlsx') edits = collectXlsxEdits();
+    else if (currentFileType === 'pptx') edits = collectPptxEdits();
+    else return;
+
+    if (edits.length === 0) {
+        showStatus(t('noChanges'), 'info');
+        return;
+    }
+
+    try {
+        const data = new Uint8Array(currentFileBytes);
+        let editedBytes;
+        if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
+        else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
+        else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
+
+        const blob = new Blob([editedBytes], { type: MIME_TYPES[currentFileType] });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `edited.${currentFileType}`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showStatus(I18N[currentLang].downloaded(edits.length), 'info');
+    } catch(e) {
+        showStatus('Save error: ' + e.message, 'error');
+        console.error(e);
+    }
+}
+
+// === Shared run styling helper (header/footer/nested) ===
+function applyRunStyle(span, run) {
+    if (run.is_math) {
+        span.style.fontFamily = "'Cambria Math', 'STIX Two Math', serif";
+        span.style.fontStyle = 'italic';
+        span.title = 'Math: ' + run.text;
+    }
+    if (!run.style) return;
+    const s = run.style;
+    if (s.bold) span.style.fontWeight = 'bold';
+    if (s.italic) span.style.fontStyle = 'italic';
+    if (s.underline) {
+        const uStyle = s.underline_style || 'single';
+        const uMap = {
+            'single': 'underline solid', 'double': 'underline double',
+            'thick': 'underline solid 2px', 'dotted': 'underline dotted',
+            'dash': 'underline dashed', 'wave': 'underline wavy',
+        };
+        span.style.textDecoration = uMap[uStyle] || 'underline';
+    }
+    if (s.strikethrough) {
+        span.style.textDecoration = (span.style.textDecoration || '') + ' line-through';
+        if (s.double_strikethrough) span.style.textDecorationStyle = 'double';
+    }
+    if (s.color) span.style.color = '#' + s.color;
+    if (s.font_size) span.style.fontSize = s.font_size + 'pt';
+    if (s.font_family || s.font_family_east_asia) {
+        const ea = s.font_family_east_asia ? "'" + s.font_family_east_asia + "', " : '';
+        span.style.fontFamily = ea + (s.font_family || 'Calibri') + ", 'Yu Gothic', 'Noto Sans JP', sans-serif";
+    }
+    if (s.highlight) span.style.backgroundColor = HIGHLIGHT_COLORS[s.highlight] || s.highlight;
+    else if (s.shading) span.style.backgroundColor = '#' + s.shading;
+    if (s.vertical_align === 'Superscript') { span.style.verticalAlign = 'super'; span.style.fontSize = ((s.font_size||11)*0.6)+'pt'; }
+    else if (s.vertical_align === 'Subscript') { span.style.verticalAlign = 'sub'; span.style.fontSize = ((s.font_size||11)*0.6)+'pt'; }
+    if (s.character_spacing) span.style.letterSpacing = s.character_spacing + 'pt';
+    if (s.all_caps) span.style.textTransform = 'uppercase';
+    else if (s.small_caps) span.style.fontVariant = 'small-caps';
+    if (s.rtl) { span.style.direction = 'rtl'; span.style.unicodeBidi = 'embed'; }
+    if (s.vanish) span.style.display = 'none';
+    if (s.outline) { span.style.webkitTextStroke = '1px'; }
+    if (s.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
+    if (s.bold_cs) span.style.fontWeight = 'bold';
+    if (s.italic_cs) span.style.fontStyle = 'italic';
+    if (s.font_size_cs && !s.font_size) span.style.fontSize = s.font_size_cs + 'pt';
+}
+
+// === DOCX RENDERER (DOM) ===
+function renderEditableDocx(doc) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    // We only track body-level paragraphs (not inside tables) for editing
+    let bodyParaIdx = 0;
+
+    for (const page of doc.pages) {
+        const pageDiv = document.createElement('div');
+        pageDiv.className = 'edit-page';
+        pageDiv.style.position = 'relative'; // For floating images & text boxes
+
+        // Apply page dimensions from IR
+        if (page.size) {
+            pageDiv.style.width = page.size.width + 'pt';
+            pageDiv.style.maxWidth = page.size.width + 'pt';
+        }
+        if (page.margin) {
+            pageDiv.style.paddingTop = page.margin.top + 'pt';
+            pageDiv.style.paddingBottom = page.margin.bottom + 'pt';
+            pageDiv.style.paddingLeft = page.margin.left + 'pt';
+            pageDiv.style.paddingRight = page.margin.right + 'pt';
+        }
+        // Page borders
+        if (page.page_borders) {
+            const pb = page.page_borders;
+            const bdrCss = (d) => {
+                if (!d) return '';
+                const w = d.width ? d.width + 'pt' : '1pt';
+                const c = d.color ? '#' + d.color : '#000';
+                const s = d.style === 'double' ? 'double' : d.style === 'dashed' ? 'dashed' : d.style === 'dotted' ? 'dotted' : 'solid';
+                return `${w} ${s} ${c}`;
+            };
+            if (pb.top) pageDiv.style.borderTop = bdrCss(pb.top);
+            if (pb.bottom) pageDiv.style.borderBottom = bdrCss(pb.bottom);
+            if (pb.left) pageDiv.style.borderLeft = bdrCss(pb.left);
+            if (pb.right) pageDiv.style.borderRight = bdrCss(pb.right);
+        }
+
+        // Column layout support
+        let blocksContainer = pageDiv;
+        if (page.columns && page.columns.num > 1) {
+            const colWrapper = document.createElement('div');
+            colWrapper.style.columnCount = page.columns.num;
+            if (page.columns.space) colWrapper.style.columnGap = page.columns.space + 'pt';
+            colWrapper.style.columnRule = '1px solid #e0e0e0';
+            blocksContainer = colWrapper;
+        }
+
+        // Render header
+        if (page.header && page.header.length > 0) {
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'edit-header';
+            headerDiv.style.borderBottom = '1px solid #e0e0e0';
+            headerDiv.style.marginBottom = '8pt';
+            headerDiv.style.paddingBottom = '4pt';
+            headerDiv.style.color = '#666';
+            headerDiv.style.fontSize = '9pt';
+            for (const hBlock of page.header) {
+                if (hBlock.Paragraph) {
+                    const hPara = document.createElement('div');
+                    if (hBlock.Paragraph.alignment === 'Center') hPara.style.textAlign = 'center';
+                    else if (hBlock.Paragraph.alignment === 'Right') hPara.style.textAlign = 'right';
+                    else if (hBlock.Paragraph.alignment === 'Justify') hPara.style.textAlign = 'justify';
+                    // Apply paragraph style to header
+                    if (hBlock.Paragraph.style) {
+                        if (hBlock.Paragraph.style.space_before) hPara.style.marginTop = hBlock.Paragraph.style.space_before + 'pt';
+                        if (hBlock.Paragraph.style.space_after) hPara.style.marginBottom = hBlock.Paragraph.style.space_after + 'pt';
+                        if (hBlock.Paragraph.style.indent_left) hPara.style.paddingLeft = hBlock.Paragraph.style.indent_left + 'pt';
+                        if (hBlock.Paragraph.style.indent_right) hPara.style.paddingRight = hBlock.Paragraph.style.indent_right + 'pt';
+                        if (hBlock.Paragraph.style.indent_first_line) hPara.style.textIndent = hBlock.Paragraph.style.indent_first_line + 'pt';
+                    }
+                    for (const run of hBlock.Paragraph.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        applyRunStyle(span, run);
+                    hPara.appendChild(span);
+                    }
+                    if (hBlock.Paragraph.runs.length === 0) hPara.innerHTML = '&nbsp;';
+                    headerDiv.appendChild(hPara);
+                }
+            }
+            pageDiv.appendChild(headerDiv);
+        }
+
+        let prevParaStyleId = null;
+        for (let blockIdx = 0; blockIdx < page.blocks.length; blockIdx++) {
+            const block = page.blocks[blockIdx];
+            if (block.Paragraph) {
+                const para = block.Paragraph;
+                const paraDiv = document.createElement('div');
+                paraDiv.className = 'edit-para';
+
+                // Heading level
+                if (para.style && para.style.heading_level) {
+                    paraDiv.classList.add('heading' + para.style.heading_level);
+                }
+
+                // Alignment
+                const align = para.alignment;
+                if (align === 'Center') paraDiv.classList.add('align-center');
+                else if (align === 'Right') paraDiv.classList.add('align-right');
+                else if (align === 'Justify') paraDiv.classList.add('align-justify');
+
+                // Bidi / RTL
+                if (para.style && para.style.bidi) {
+                    paraDiv.style.direction = 'rtl';
+                    paraDiv.style.unicodeBidi = 'bidi-override';
+                    if (!align || align === 'Left') paraDiv.style.textAlign = 'right';
+                }
+
+                // Paragraph spacing
+                if (para.style) {
+                    let sb = para.style.space_before || 0;
+                    const sa = para.style.space_after || 0;
+                    // Contextual spacing: suppress space_before if prev paragraph has same style
+                    if (para.style.contextual_spacing && para.style.style_id && para.style.style_id === prevParaStyleId) {
+                        sb = 0;
+                    }
+                    if (sb > 0) paraDiv.style.marginTop = sb + 'pt';
+                    if (sa > 0) paraDiv.style.marginBottom = sa + 'pt';
+
+                    // Line spacing
+                    if (para.style.line_spacing) {
+                        if (para.style.line_spacing_rule === 'exact') {
+                            paraDiv.style.lineHeight = para.style.line_spacing + 'pt';
+                            paraDiv.style.overflow = 'hidden';
+                        } else if (para.style.line_spacing_rule === 'atLeast') {
+                            paraDiv.style.lineHeight = para.style.line_spacing + 'pt';
+                        } else {
+                            paraDiv.style.lineHeight = String(para.style.line_spacing);
+                        }
+                    }
+                    // Paragraph shading
+                    if (para.style.shading) {
+                        paraDiv.style.backgroundColor = '#' + para.style.shading;
+                    }
+                    // Keep lines together / keep with next
+                    if (para.style.keep_lines) {
+                        paraDiv.style.breakInside = 'avoid';
+                    }
+                    if (para.style.keep_next) {
+                        paraDiv.style.breakAfter = 'avoid';
+                    }
+                    // Widow/orphan control
+                    if (para.style.widow_control !== false) {
+                        paraDiv.style.widows = '2';
+                        paraDiv.style.orphans = '2';
+                    } else {
+                        paraDiv.style.widows = '1';
+                        paraDiv.style.orphans = '1';
+                    }
+                    // Page break before
+                    if (para.style.page_break_before) {
+                        paraDiv.style.pageBreakBefore = 'always';
+                        paraDiv.style.borderTop = '2px dashed #ccc';
+                        paraDiv.style.marginTop = '12pt';
+                    }
+                    // Paragraph borders
+                    if (para.style.borders) {
+                        const b = para.style.borders;
+                        const bdrCss = (d) => {
+                            if (!d) return '';
+                            const w = d.width ? d.width + 'pt' : '1pt';
+                            const c = d.color ? '#' + d.color : '#000';
+                            const s = d.style === 'double' ? 'double' :
+                                      d.style === 'dashed' ? 'dashed' :
+                                      d.style === 'dotted' ? 'dotted' : 'solid';
+                            return `${w} ${s} ${c}`;
+                        };
+                        if (b.top) paraDiv.style.borderTop = bdrCss(b.top);
+                        if (b.bottom) paraDiv.style.borderBottom = bdrCss(b.bottom);
+                        if (b.left) paraDiv.style.borderLeft = bdrCss(b.left);
+                        if (b.right) paraDiv.style.borderRight = bdrCss(b.right);
+                        paraDiv.style.paddingLeft = paraDiv.style.paddingLeft || '4pt';
+                        paraDiv.style.paddingRight = paraDiv.style.paddingRight || '4pt';
+                    }
+                }
+
+                // Indentation
+                if (para.style && para.style.indent_left) {
+                    paraDiv.style.paddingLeft = para.style.indent_left + 'pt';
+                }
+                if (para.style && para.style.indent_right) {
+                    paraDiv.style.paddingRight = para.style.indent_right + 'pt';
+                }
+                if (para.style && para.style.indent_first_line) {
+                    paraDiv.style.textIndent = para.style.indent_first_line + 'pt';
+                }
+
+                // List marker
+                if (para.style && para.style.list_marker) {
+                    const markerSpan = document.createElement('span');
+                    markerSpan.className = 'edit-list-marker';
+                    markerSpan.textContent = para.style.list_marker;
+                    markerSpan.contentEditable = 'false';
+                    markerSpan.style.display = 'inline-block';
+                    markerSpan.style.userSelect = 'none';
+                    const listIndent = para.style.list_indent || 18;
+                    markerSpan.style.width = listIndent + 'pt';
+                    markerSpan.style.marginLeft = '-' + listIndent + 'pt';
+                    markerSpan.style.textAlign = 'left';
+                    paraDiv.appendChild(markerSpan);
+                }
+
+                // Collect tab stop positions for this paragraph (in pt), sorted by position
+                const tabStops = ((para.style && para.style.tab_stops) || []).slice().sort((a, b) => a.position - b.position);
+                // Default tab interval in Word is 0.5 inch = 36pt
+                const defaultTabInterval = 36;
+                let tabIndex = 0; // Track which tab stop we're at
+
+                for (let ri = 0; ri < para.runs.length; ri++) {
+                    const run = para.runs[ri];
+
+                    // Split run text by tab characters and render each segment
+                    const segments = run.text.split('\t');
+                    for (let si = 0; si < segments.length; si++) {
+                        // Insert tab spacer before segments after the first
+                        if (si > 0) {
+                            const tabSpan = document.createElement('span');
+                            tabSpan.className = 'edit-tab';
+                            tabSpan.contentEditable = 'false';
+                            tabSpan.innerHTML = '\u00A0';
+                            tabSpan.style.display = 'inline-block';
+                            // Use defined tab stop position if available
+                            if (tabIndex < tabStops.length) {
+                                const ts = tabStops[tabIndex];
+                                tabSpan.style.minWidth = '8pt';
+                                // Position-based tab: set width to reach the tab stop
+                                const tabPos = ts.position;
+                                const prevPos = tabIndex > 0 ? tabStops[tabIndex - 1].position : 0;
+                                tabSpan.style.width = (tabPos - prevPos) + 'pt';
+                                // Tab alignment
+                                if (ts.alignment === 'Right') {
+                                    tabSpan.style.textAlign = 'right';
+                                } else if (ts.alignment === 'Center') {
+                                    tabSpan.style.textAlign = 'center';
+                                }
+                                // Leader character
+                                if (ts.leader === 'dot') {
+                                    tabSpan.style.borderBottom = '1px dotted #000';
+                                } else if (ts.leader === 'hyphen') {
+                                    tabSpan.style.borderBottom = '1px dashed #000';
+                                } else if (ts.leader === 'underscore') {
+                                    tabSpan.style.borderBottom = '1px solid #000';
+                                }
+                                tabIndex++;
+                            } else {
+                                tabSpan.style.minWidth = defaultTabInterval + 'pt';
+                            }
+                            tabSpan.style.userSelect = 'none';
+                            paraDiv.appendChild(tabSpan);
+                        }
+
+                        if (segments[si].length === 0 && si < segments.length - 1) continue;
+
+                        const span = document.createElement('span');
+                        span.className = 'edit-run';
+                        span.contentEditable = 'true';
+
+                        // Ruby (furigana) rendering
+                        if (run.ruby) {
+                            span.contentEditable = 'false';
+                            const rubyEl = document.createElement('ruby');
+                            rubyEl.textContent = run.ruby.base;
+                            const rt = document.createElement('rt');
+                            rt.textContent = run.ruby.text;
+                            if (run.ruby.font_size) rt.style.fontSize = run.ruby.font_size + 'pt';
+                            rubyEl.appendChild(rt);
+                            span.textContent = '';
+                            span.appendChild(rubyEl);
+                        } else {
+                            span.textContent = segments[si];
+                        }
+
+                        span.dataset.para = bodyParaIdx;
+                        span.dataset.run = ri;
+                        if (si === 0) span.dataset.original = run.text;
+
+                    // Tracked changes styling
+                    if (run.tracked_change) {
+                        span.contentEditable = 'false';
+                        if (run.tracked_change.change_type === 'insert') {
+                            span.style.color = '#2e7d32';
+                            span.style.textDecoration = 'underline';
+                            span.style.textDecorationColor = '#2e7d32';
+                            span.title = 'Inserted' + (run.tracked_change.author ? ' by ' + run.tracked_change.author : '') + (run.tracked_change.date ? ' on ' + run.tracked_change.date : '');
+                        } else if (run.tracked_change.change_type === 'delete') {
+                            span.style.color = '#c62828';
+                            span.style.textDecoration = 'line-through';
+                            span.style.textDecorationColor = '#c62828';
+                            span.title = 'Deleted' + (run.tracked_change.author ? ' by ' + run.tracked_change.author : '') + (run.tracked_change.date ? ' on ' + run.tracked_change.date : '');
+                        }
+                    }
+
+                    // Comment range highlighting
+                    if (run.comment_range_start && run.comment_range_start.length > 0) {
+                        span.style.backgroundColor = span.style.backgroundColor || 'rgba(255, 212, 0, 0.3)';
+                        span.dataset.commentIds = run.comment_range_start.join(',');
+                    }
+
+                    // Footnote/endnote reference styling
+                    if (run.footnote_ref || run.endnote_ref) {
+                        span.style.verticalAlign = 'super';
+                        span.style.fontSize = '0.7em';
+                        span.style.color = '#0563C1';
+                        span.contentEditable = 'false';
+                        span.title = (run.footnote_ref ? 'Footnote ' : 'Endnote ') + (run.footnote_ref || run.endnote_ref);
+                    }
+
+                    // Apply paragraph default_run_style as baseline, then overlay run style
+                    const drs = para.style && para.style.default_run_style;
+                    if (drs && !run.tracked_change && !run.footnote_ref && !run.endnote_ref) {
+                        if (drs.font_family) span.style.fontFamily = drs.font_family + ", 'Yu Gothic', 'Noto Sans JP', sans-serif";
+                        if (drs.font_size) span.style.fontSize = drs.font_size + 'pt';
+                        if (drs.bold) span.style.fontWeight = 'bold';
+                        if (drs.italic) span.style.fontStyle = 'italic';
+                        if (drs.color) span.style.color = '#' + drs.color;
+                    }
+
+                    // Preserve visual styling (run-level overrides paragraph defaults)
+                    if (run.style) {
+                        if (run.style.bold) span.style.fontWeight = 'bold';
+                        if (run.style.italic) span.style.fontStyle = 'italic';
+                        if (run.style.underline) {
+                            const uStyle = run.style.underline_style || 'single';
+                            const uMap = {
+                                'single': 'underline solid',
+                                'double': 'underline double',
+                                'thick': 'underline solid 2px',
+                                'dotted': 'underline dotted',
+                                'dash': 'underline dashed',
+                                'wave': 'underline wavy',
+                                'dottedHeavy': 'underline dotted 2px',
+                                'dashHeavy': 'underline dashed 2px',
+                                'wavyHeavy': 'underline wavy 2px',
+                                'dashDot': 'underline dashed',
+                                'dashDotDot': 'underline dashed',
+                                'words': 'underline solid',
+                            };
+                            span.style.textDecoration = uMap[uStyle] || 'underline';
+                        }
+                        if (run.style.strikethrough) {
+                            span.style.textDecoration = span.style.textDecoration
+                                ? span.style.textDecoration + ' line-through'
+                                : 'line-through';
+                            if (run.style.double_strikethrough) {
+                                span.style.textDecorationStyle = 'double';
+                            }
+                        }
+                        if (run.style.color && !run.url) span.style.color = '#' + run.style.color;
+                        if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                        if (run.style.font_family || run.style.font_family_east_asia) {
+                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
+                            const la = run.style.font_family || 'Calibri';
+                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                        }
+                        if (run.style.highlight) {
+                            span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
+                        } else if (run.style.shading) {
+                            span.style.backgroundColor = '#' + run.style.shading;
+                        }
+                        // Superscript / Subscript
+                        if (run.style.vertical_align === 'Superscript') {
+                            span.style.verticalAlign = 'super';
+                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                        } else if (run.style.vertical_align === 'Subscript') {
+                            span.style.verticalAlign = 'sub';
+                            span.style.fontSize = ((run.style.font_size || 11) * 0.6) + 'pt';
+                        }
+                        // Character spacing (tracking)
+                        if (run.style.character_spacing) {
+                            span.style.letterSpacing = run.style.character_spacing + 'pt';
+                        }
+                        // Small caps / All caps
+                        if (run.style.all_caps) {
+                            span.style.textTransform = 'uppercase';
+                        } else if (run.style.small_caps) {
+                            span.style.fontVariant = 'small-caps';
+                        }
+                        // RTL run
+                        if (run.style.rtl) {
+                            span.style.direction = 'rtl';
+                            span.style.unicodeBidi = 'embed';
+                        }
+                        // Hidden text
+                        if (run.style.vanish) span.style.display = 'none';
+                        // Text effects
+                        if (run.style.outline) { span.style.webkitTextStroke = '1px'; span.style.color = span.style.color || 'transparent'; }
+                        if (run.style.shadow) span.style.textShadow = '1px 1px 2px rgba(0,0,0,0.3)';
+                        if (run.style.emboss) span.style.textShadow = '-1px -1px 0 rgba(255,255,255,0.6), 1px 1px 0 rgba(0,0,0,0.3)';
+                        if (run.style.imprint) span.style.textShadow = '1px 1px 0 rgba(255,255,255,0.6), -1px -1px 0 rgba(0,0,0,0.3)';
+                        // Kerning — enable when font size >= threshold
+                        if (run.style.kern) {
+                            const fs = run.style.font_size || (drs && drs.font_size) || 11;
+                            span.style.fontKerning = fs >= run.style.kern ? 'normal' : 'none';
+                        }
+                        // Fit text to width — scale font to fit
+                        if (run.style.fit_text) {
+                            span.style.display = 'inline-block';
+                            span.style.width = run.style.fit_text + 'pt';
+                            span.style.overflow = 'hidden';
+                            span.style.whiteSpace = 'nowrap';
+                            // Use CSS transform scaleX to squeeze text
+                            const measure = document.createElement('span');
+                            measure.style.cssText = span.style.cssText;
+                            measure.style.display = 'inline';
+                            measure.style.visibility = 'hidden';
+                            measure.style.position = 'absolute';
+                            measure.textContent = span.textContent;
+                            document.body.appendChild(measure);
+                            const naturalW = measure.offsetWidth;
+                            document.body.removeChild(measure);
+                            if (naturalW > 0) {
+                                const targetPx = run.style.fit_text * 96 / 72;
+                                const scale = targetPx / naturalW;
+                                if (scale < 1) {
+                                    span.style.transform = 'scaleX(' + scale.toFixed(3) + ')';
+                                    span.style.transformOrigin = 'left';
+                                }
+                            }
+                        }
+                        // Complex script properties
+                        if (run.style.bold_cs) span.style.fontWeight = 'bold';
+                        if (run.style.italic_cs) span.style.fontStyle = 'italic';
+                        if (run.style.font_size_cs && !run.style.font_size) {
+                            span.style.fontSize = run.style.font_size_cs + 'pt';
+                        }
+                        // East Asian layout: combine (kumimoji)
+                        if (run.style.combine) {
+                            span.style.writingMode = 'horizontal-tb';
+                            span.style.textCombineUpright = 'all';
+                        }
+                        // East Asian layout: vertical-in-horizontal (tate-chu-yoko)
+                        if (run.style.vert_in_horz) {
+                            span.style.writingMode = 'horizontal-tb';
+                            span.style.textCombineUpright = 'all';
+                        }
+                    }
+
+                    // Hyperlink wrapping
+                    if (run.url) {
+                        span.style.color = '#0563C1';
+                        span.style.textDecoration = 'underline';
+                        span.style.cursor = 'pointer';
+                        span.title = run.url;
+                        span.addEventListener('click', (e) => {
+                            if (e.ctrlKey || e.metaKey) {
+                                if (run.url.startsWith('#')) {
+                                    // Internal bookmark link
+                                    const anchor = document.getElementById('bk_' + run.url.substring(1));
+                                    if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                } else {
+                                    window.open(run.url, '_blank', 'noopener,noreferrer');
+                                }
+                            }
+                        });
+                    }
+
+                    // Bookmark anchor
+                    if (run.bookmark_name) {
+                        span.id = 'bk_' + run.bookmark_name;
+                    }
+
+                    // Prevent Enter from creating new DOM nodes inside span
+                    span.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') e.preventDefault();
+                    });
+
+                    paraDiv.appendChild(span);
+                    } // end segments loop
+                }
+
+                // Empty paragraph — show placeholder
+                if (para.runs.length === 0) {
+                    const span = document.createElement('span');
+                    span.className = 'edit-run';
+                    span.innerHTML = '&nbsp;';
+                    paraDiv.appendChild(span);
+                }
+
+                blocksContainer.appendChild(paraDiv);
+                prevParaStyleId = (para.style && para.style.style_id) || null;
+                bodyParaIdx++;
+
+            } else if (block.Table) {
+                const table = block.Table;
+                const tableEl = document.createElement('table');
+                tableEl.className = 'edit-table';
+                tableEl.style.borderCollapse = 'collapse';
+
+                // Table width
+                if (table.style && table.style.width) {
+                    if (table.style.width_type === 'pct') {
+                        tableEl.style.width = table.style.width + '%';
+                    } else {
+                        tableEl.style.width = table.style.width + 'pt';
+                    }
+                }
+                // Table indent
+                if (table.style && table.style.indent) {
+                    tableEl.style.marginLeft = table.style.indent + 'pt';
+                }
+                // Table cell spacing
+                if (table.style && table.style.cell_spacing) {
+                    tableEl.style.borderCollapse = 'separate';
+                    tableEl.style.borderSpacing = table.style.cell_spacing + 'pt';
+                }
+                // Table layout mode (fixed vs auto)
+                if (table.style && table.style.layout === 'fixed') {
+                    tableEl.style.tableLayout = 'fixed';
+                }
+                // Table alignment
+                if (table.style && table.style.alignment) {
+                    if (table.style.alignment === 'center') {
+                        tableEl.style.marginLeft = 'auto';
+                        tableEl.style.marginRight = 'auto';
+                    } else if (table.style.alignment === 'right') {
+                        tableEl.style.marginLeft = 'auto';
+                    }
+                }
+
+                // Apply table border styles
+                if (table.style && table.style.border) {
+                    const bw = (table.style.border_width || 0.5) + 'pt';
+                    const bc = table.style.border_color ? '#' + table.style.border_color : '#000';
+                    const bs = (table.style.border_style === 'double') ? 'double' :
+                               (table.style.border_style === 'dashed') ? 'dashed' :
+                               (table.style.border_style === 'dotted') ? 'dotted' : 'solid';
+                    tableEl.style.border = `${bw} ${bs} ${bc}`;
+                    // Apply to cells via CSS custom property
+                    tableEl.dataset.borderWidth = bw;
+                    tableEl.dataset.borderColor = bc;
+                    tableEl.dataset.borderStyle = bs;
+                }
+
+                // Pre-pass: compute rowspan for vertical merges
+                const rowspanMap = {}; // "rowIdx-colIdx" -> rowspan count
+                for (let ri = 0; ri < table.rows.length; ri++) {
+                    let ci = 0;
+                    for (const cell of table.rows[ri].cells) {
+                        if (cell.v_merge === 'restart') {
+                            let span = 1;
+                            for (let rj = ri + 1; rj < table.rows.length; rj++) {
+                                let cj = 0;
+                                let found = false;
+                                for (const c2 of table.rows[rj].cells) {
+                                    if (cj === ci && c2.v_merge === 'continue') {
+                                        span++;
+                                        found = true;
+                                        break;
+                                    }
+                                    cj += (c2.grid_span || 1);
+                                }
+                                if (!found) break;
+                            }
+                            rowspanMap[ri + '-' + ci] = span;
+                        }
+                        ci += (cell.grid_span || 1);
+                    }
+                }
+
+                const tblLook = table.style && table.style.tbl_look;
+                for (let ri = 0; ri < table.rows.length; ri++) {
+                    const row = table.rows[ri];
+                    const tr = document.createElement('tr');
+                    if (row.height) tr.style.height = row.height + 'pt';
+                    if (row.cant_split) tr.style.breakInside = 'avoid';
+                    // Table conditional formatting: banded rows, first/last row
+                    if (tblLook) {
+                        if (tblLook.first_row && ri === 0) {
+                            tr.style.fontWeight = 'bold';
+                            tr.style.backgroundColor = '#4472C4';
+                            tr.style.color = '#FFFFFF';
+                        } else if (tblLook.last_row && ri === table.rows.length - 1) {
+                            tr.style.fontWeight = 'bold';
+                            tr.style.borderTop = '2pt solid #4472C4';
+                        } else if (tblLook.banded_rows) {
+                            const dataRow = tblLook.first_row ? ri - 1 : ri;
+                            const bandSize = tblLook.row_band_size || 1;
+                            if (Math.floor(dataRow / bandSize) % 2 === 1) {
+                                tr.style.backgroundColor = '#D9E2F3';
+                            }
+                        }
+                    }
+                    const totalCols = row.cells.reduce((sum, c) => sum + (c.grid_span || 1), 0);
+                    let ci = 0;
+                    for (const cell of row.cells) {
+                        // Skip cells that are vertical merge continuations
+                        if (cell.v_merge === 'continue') {
+                            ci += (cell.grid_span || 1);
+                            continue;
+                        }
+
+                        const td = document.createElement('td');
+                        // Table conditional formatting: first/last column, banded columns
+                        if (tblLook) {
+                            if (tblLook.first_column && ci === 0) {
+                                td.style.fontWeight = 'bold';
+                            }
+                            if (tblLook.last_column && ci + (cell.grid_span || 1) >= totalCols) {
+                                td.style.fontWeight = 'bold';
+                            }
+                            if (tblLook.banded_columns && !tblLook.first_row) {
+                                const bandSize = tblLook.col_band_size || 1;
+                                if (Math.floor(ci / bandSize) % 2 === 1) {
+                                    td.style.backgroundColor = td.style.backgroundColor || '#D9E2F3';
+                                }
+                            }
+                        }
+                        // Apply table border to cells
+                        if (table.style && table.style.border) {
+                            const bw = tableEl.dataset.borderWidth || '0.5pt';
+                            const bc = tableEl.dataset.borderColor || '#000';
+                            const bs = tableEl.dataset.borderStyle || 'solid';
+                            td.style.border = `${bw} ${bs} ${bc}`;
+                        }
+                        // Cell width
+                        if (cell.width) td.style.width = cell.width + 'pt';
+                        // Horizontal merge (gridSpan)
+                        if (cell.grid_span && cell.grid_span > 1) {
+                            td.colSpan = cell.grid_span;
+                        }
+                        // Vertical merge rowspan from pre-pass
+                        const rsKey = ri + '-' + ci;
+                        if (rowspanMap[rsKey] && rowspanMap[rsKey] > 1) {
+                            td.rowSpan = rowspanMap[rsKey];
+                        }
+                        // Cell shading
+                        if (cell.shading) td.style.backgroundColor = '#' + cell.shading;
+                        // Vertical alignment
+                        if (cell.v_align) {
+                            td.style.verticalAlign = cell.v_align === 'center' ? 'middle' : cell.v_align;
+                        }
+                        // Cell-specific borders
+                        if (cell.borders) {
+                            const cb = cell.borders;
+                            const bdrCss = (d) => {
+                                if (!d) return '';
+                                const w = d.width ? d.width + 'pt' : '1pt';
+                                const c = d.color ? '#' + d.color : '#000';
+                                const s = d.style === 'double' ? 'double' :
+                                          d.style === 'dashed' ? 'dashed' :
+                                          d.style === 'dotted' ? 'dotted' : 'solid';
+                                return `${w} ${s} ${c}`;
+                            };
+                            if (cb.top) td.style.borderTop = bdrCss(cb.top);
+                            if (cb.bottom) td.style.borderBottom = bdrCss(cb.bottom);
+                            if (cb.left) td.style.borderLeft = bdrCss(cb.left);
+                            if (cb.right) td.style.borderRight = bdrCss(cb.right);
+                        }
+                        // Cell margins (cell-level overrides table-level defaults)
+                        const cm = cell.margins || (table.style && table.style.default_cell_margins);
+                        if (cm) {
+                            if (cm.top) td.style.paddingTop = cm.top + 'pt';
+                            if (cm.bottom) td.style.paddingBottom = cm.bottom + 'pt';
+                            if (cm.left) td.style.paddingLeft = cm.left + 'pt';
+                            if (cm.right) td.style.paddingRight = cm.right + 'pt';
+                        }
+
+                        // Render blocks inside table cells (supports nested tables)
+                        renderCellBlocks(cell.blocks, td);
+                        tr.appendChild(td);
+                        ci += (cell.grid_span || 1);
+                    }
+                    // Append to thead for header rows, tbody otherwise
+                    if (row.header) {
+                        let thead = tableEl.querySelector('thead');
+                        if (!thead) { thead = document.createElement('thead'); tableEl.appendChild(thead); }
+                        thead.appendChild(tr);
+                    } else {
+                        let tbody = tableEl.querySelector('tbody');
+                        if (!tbody) { tbody = document.createElement('tbody'); tableEl.appendChild(tbody); }
+                        tbody.appendChild(tr);
+                    }
+                }
+                blocksContainer.appendChild(tableEl);
+
+            } else if (block.Image) {
+                const img = block.Image;
+                if (img.data && img.data.length > 0) {
+                    const imgEl = document.createElement('img');
+                    const ct = img.content_type || 'image/png';
+                    let binary = '';
+                    for (let i = 0; i < img.data.length; i++) binary += String.fromCharCode(img.data[i]);
+                    imgEl.src = `data:${ct};base64,${btoa(binary)}`;
+                    imgEl.style.maxWidth = '100%';
+                    imgEl.style.height = 'auto';
+                    imgEl.style.margin = '8px 0';
+                    // Image cropping via clip-path
+                    if (img.crop) {
+                        const t = img.crop.top || 0;
+                        const r = img.crop.right || 0;
+                        const b = img.crop.bottom || 0;
+                        const l = img.crop.left || 0;
+                        imgEl.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
+                    }
+                    blocksContainer.appendChild(imgEl);
+                }
+            } else if (block.UnsupportedElement) {
+                const elem = block.UnsupportedElement;
+                const placeholder = document.createElement('div');
+                placeholder.style.cssText = 'border:2px dashed var(--oxi-primary,#5b4fc7);border-radius:8px;padding:16px;margin:8px 0;text-align:center;color:var(--oxi-primary,#5b4fc7);background:var(--oxi-primary-light,#ede8ff);font-size:13px;';
+                placeholder.textContent = `[${elem.element_type}] — この要素は現在未対応です`;
+                if (elem.fallback_image) {
+                    const img = document.createElement('img');
+                    img.src = `data:image/png;base64,${elem.fallback_image}`;
+                    img.style.cssText = 'max-width:100%;margin-top:8px;';
+                    placeholder.appendChild(img);
+                }
+                blocksContainer.appendChild(placeholder);
+            }
+        }
+
+        // Append column wrapper if multi-column
+        if (blocksContainer !== pageDiv) {
+            pageDiv.appendChild(blocksContainer);
+        }
+
+        // Render floating images
+        if (page.floating_images && page.floating_images.length > 0) {
+            for (const fImg of page.floating_images) {
+                if (fImg.data && fImg.data.length > 0) {
+                    const fImgEl = document.createElement('img');
+                    const ct = fImg.content_type || 'image/png';
+                    let binary = '';
+                    for (let i = 0; i < fImg.data.length; i++) binary += String.fromCharCode(fImg.data[i]);
+                    fImgEl.src = `data:${ct};base64,${btoa(binary)}`;
+                    fImgEl.style.position = 'absolute';
+                    if (fImg.position) {
+                        // Anchor reference: adjust position based on h_relative/v_relative
+                        let xOff = fImg.position.x;
+                        let yOff = fImg.position.y;
+                        const hr = fImg.position.h_relative || 'column';
+                        const vr = fImg.position.v_relative || 'paragraph';
+                        // For page-relative, subtract page margins
+                        if (hr === 'page' && page.margin) xOff -= 0; // already relative to page
+                        else if (hr === 'margin' && page.margin) xOff += 0; // relative to margin = default
+                        // column is default behavior
+                        if (vr === 'page' && page.margin) yOff -= 0;
+                        fImgEl.style.left = xOff + 'pt';
+                        fImgEl.style.top = yOff + 'pt';
+                    }
+                    fImgEl.style.width = fImg.width + 'pt';
+                    fImgEl.style.height = fImg.height + 'pt';
+                    if (fImg.alt_text) fImgEl.alt = fImg.alt_text;
+                    if (fImg.crop) {
+                        const t = fImg.crop.top || 0;
+                        const r = fImg.crop.right || 0;
+                        const b = fImg.crop.bottom || 0;
+                        const l = fImg.crop.left || 0;
+                        fImgEl.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
+                    }
+                    // Wrap type behavior
+                    if (fImg.wrap_type === 'None') {
+                        fImgEl.style.zIndex = '10';
+                        fImgEl.style.pointerEvents = 'none';
+                    } else if (fImg.wrap_type === 'TopAndBottom') {
+                        // Simulate top-and-bottom: use CSS shape-outside not available,
+                        // just ensure proper z-index
+                        fImgEl.style.zIndex = '1';
+                    } else {
+                        // Square / Tight: use CSS float for approximate wrapping
+                        fImgEl.style.zIndex = '1';
+                    }
+                    pageDiv.appendChild(fImgEl);
+                }
+            }
+        }
+
+        // Render text boxes
+        if (page.text_boxes && page.text_boxes.length > 0) {
+            for (const tb of page.text_boxes) {
+                const tbDiv = document.createElement('div');
+                tbDiv.style.position = 'absolute';
+                if (tb.position) {
+                    tbDiv.style.left = tb.position.x + 'pt';
+                    tbDiv.style.top = tb.position.y + 'pt';
+                }
+                tbDiv.style.width = tb.width + 'pt';
+                tbDiv.style.minHeight = tb.height + 'pt';
+                if (tb.border) tbDiv.style.border = '1px solid #000';
+                if (tb.fill) tbDiv.style.backgroundColor = '#' + tb.fill;
+                tbDiv.style.padding = '4pt';
+                tbDiv.style.overflow = 'hidden';
+                tbDiv.style.zIndex = '5';
+                tbDiv.style.boxSizing = 'border-box';
+                for (const tbBlock of tb.blocks) {
+                    if (tbBlock.Paragraph) {
+                        const tbPara = document.createElement('div');
+                        if (tbBlock.Paragraph.alignment === 'Center') tbPara.style.textAlign = 'center';
+                        else if (tbBlock.Paragraph.alignment === 'Right') tbPara.style.textAlign = 'right';
+                        else if (tbBlock.Paragraph.alignment === 'Justify') tbPara.style.textAlign = 'justify';
+                        for (const run of tbBlock.Paragraph.runs) {
+                            const span = document.createElement('span');
+                            span.textContent = run.text;
+                            if (run.style) {
+                                if (run.style.bold) span.style.fontWeight = 'bold';
+                                if (run.style.italic) span.style.fontStyle = 'italic';
+                                if (run.style.underline) span.style.textDecoration = 'underline';
+                                if (run.style.color) span.style.color = '#' + run.style.color;
+                                if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
+                                if (run.style.font_family || run.style.font_family_east_asia) {
+                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
+                            const la = run.style.font_family || 'Calibri';
+                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                        }
+                            }
+                            tbPara.appendChild(span);
+                        }
+                        if (tbBlock.Paragraph.runs.length === 0) tbPara.innerHTML = '&nbsp;';
+                        tbDiv.appendChild(tbPara);
+                    }
+                }
+                pageDiv.appendChild(tbDiv);
+            }
+        }
+
+        // Render shapes (DrawingML / VML)
+        if (page.shapes && page.shapes.length > 0) {
+            for (const shape of page.shapes) {
+                const shapeDiv = document.createElement('div');
+                shapeDiv.style.position = 'absolute';
+                if (shape.position) {
+                    shapeDiv.style.left = shape.position.x + 'pt';
+                    shapeDiv.style.top = shape.position.y + 'pt';
+                }
+                shapeDiv.style.width = shape.width + 'pt';
+                shapeDiv.style.height = shape.height + 'pt';
+                shapeDiv.style.zIndex = '3';
+                shapeDiv.style.boxSizing = 'border-box';
+
+                // Fill (gradient or solid)
+                if (shape.gradient_stops && shape.gradient_stops.length >= 2) {
+                    const angle = (shape.gradient_angle || 0) + 90; // CSS angle offset
+                    const stops = shape.gradient_stops.map(s => '#' + s.color + ' ' + s.position + '%').join(', ');
+                    shapeDiv.style.background = `linear-gradient(${angle}deg, ${stops})`;
+                } else if (shape.fill) {
+                    shapeDiv.style.backgroundColor = '#' + shape.fill;
+                }
+                // Stroke
+                if (shape.stroke_color || shape.stroke_width) {
+                    const sw = (shape.stroke_width || 0.75) + 'pt';
+                    const sc = shape.stroke_color ? '#' + shape.stroke_color : '#000';
+                    shapeDiv.style.border = `${sw} solid ${sc}`;
+                }
+                // Shape-specific styling
+                const st = shape.shape_type;
+                if (st === 'ellipse' || st === 'oval') {
+                    shapeDiv.style.borderRadius = '50%';
+                } else if (st === 'roundRect' || st === 'roundrect') {
+                    shapeDiv.style.borderRadius = '8pt';
+                } else if (st === 'line') {
+                    shapeDiv.style.borderTop = (shape.stroke_width || 1) + 'pt solid ' + (shape.stroke_color ? '#' + shape.stroke_color : '#000');
+                    shapeDiv.style.height = '0';
+                    shapeDiv.style.backgroundColor = 'transparent';
+                } else if (st === 'triangle' || st === 'rtTriangle') {
+                    // CSS triangle approximation
+                    shapeDiv.style.backgroundColor = 'transparent';
+                    shapeDiv.style.border = 'none';
+                    shapeDiv.style.width = '0';
+                    shapeDiv.style.height = '0';
+                    shapeDiv.style.borderLeft = (shape.width / 2) + 'pt solid transparent';
+                    shapeDiv.style.borderRight = (shape.width / 2) + 'pt solid transparent';
+                    shapeDiv.style.borderBottom = shape.height + 'pt solid ' + (shape.fill ? '#' + shape.fill : '#4472C4');
+                }
+                // Rotation
+                if (shape.rotation) {
+                    shapeDiv.style.transform = `rotate(${shape.rotation}deg)`;
+                }
+                // Text inside shape
+                if (shape.text_blocks && shape.text_blocks.length > 0) {
+                    shapeDiv.style.display = 'flex';
+                    shapeDiv.style.alignItems = 'center';
+                    shapeDiv.style.justifyContent = 'center';
+                    shapeDiv.style.padding = '4pt';
+                    shapeDiv.style.overflow = 'hidden';
+                    renderCellBlocks(shape.text_blocks, shapeDiv);
+                }
+                pageDiv.appendChild(shapeDiv);
+            }
+        }
+
+        // Render footnotes
+        if (page.footnotes && page.footnotes.length > 0) {
+            const fnDiv = document.createElement('div');
+            fnDiv.className = 'edit-footnotes';
+            fnDiv.style.borderTop = '1px solid #999';
+            fnDiv.style.marginTop = '12pt';
+            fnDiv.style.paddingTop = '6pt';
+            fnDiv.style.fontSize = '9pt';
+            fnDiv.style.color = '#333';
+            for (const fn of page.footnotes) {
+                const noteDiv = document.createElement('div');
+                noteDiv.style.marginBottom = '2pt';
+                const numSpan = document.createElement('span');
+                numSpan.textContent = fn.number + '. ';
+                numSpan.style.fontWeight = 'bold';
+                numSpan.style.verticalAlign = 'super';
+                numSpan.style.fontSize = '0.8em';
+                noteDiv.appendChild(numSpan);
+                for (const block of fn.blocks) {
+                    if (block.Paragraph) {
+                        for (const run of block.Paragraph.runs) {
+                            const span = document.createElement('span');
+                            span.textContent = run.text;
+                            if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                            if (run.style && run.style.italic) span.style.fontStyle = 'italic';
+                            noteDiv.appendChild(span);
+                        }
+                    }
+                }
+                fnDiv.appendChild(noteDiv);
+            }
+            pageDiv.appendChild(fnDiv);
+        }
+
+        // Render endnotes
+        if (page.endnotes && page.endnotes.length > 0) {
+            const enDiv = document.createElement('div');
+            enDiv.className = 'edit-endnotes';
+            enDiv.style.borderTop = '2px solid #999';
+            enDiv.style.marginTop = '12pt';
+            enDiv.style.paddingTop = '6pt';
+            enDiv.style.fontSize = '9pt';
+            enDiv.style.color = '#333';
+            const enTitle = document.createElement('div');
+            enTitle.textContent = 'Endnotes';
+            enTitle.style.fontWeight = 'bold';
+            enTitle.style.marginBottom = '4pt';
+            enDiv.appendChild(enTitle);
+            for (const en of page.endnotes) {
+                const noteDiv = document.createElement('div');
+                noteDiv.style.marginBottom = '2pt';
+                const numSpan = document.createElement('span');
+                numSpan.textContent = en.number + '. ';
+                numSpan.style.fontWeight = 'bold';
+                numSpan.style.verticalAlign = 'super';
+                numSpan.style.fontSize = '0.8em';
+                noteDiv.appendChild(numSpan);
+                for (const block of en.blocks) {
+                    if (block.Paragraph) {
+                        for (const run of block.Paragraph.runs) {
+                            const span = document.createElement('span');
+                            span.textContent = run.text;
+                            if (run.style && run.style.bold) span.style.fontWeight = 'bold';
+                            if (run.style && run.style.italic) span.style.fontStyle = 'italic';
+                            noteDiv.appendChild(span);
+                        }
+                    }
+                }
+                enDiv.appendChild(noteDiv);
+            }
+            pageDiv.appendChild(enDiv);
+        }
+
+        // Render footer
+        if (page.footer && page.footer.length > 0) {
+            const footerDiv = document.createElement('div');
+            footerDiv.className = 'edit-footer';
+            footerDiv.style.borderTop = '1px solid #e0e0e0';
+            footerDiv.style.marginTop = '8pt';
+            footerDiv.style.paddingTop = '4pt';
+            footerDiv.style.color = '#666';
+            footerDiv.style.fontSize = '9pt';
+            for (const fBlock of page.footer) {
+                if (fBlock.Paragraph) {
+                    const fPara = document.createElement('div');
+                    if (fBlock.Paragraph.alignment === 'Center') fPara.style.textAlign = 'center';
+                    else if (fBlock.Paragraph.alignment === 'Right') fPara.style.textAlign = 'right';
+                    else if (fBlock.Paragraph.alignment === 'Justify') fPara.style.textAlign = 'justify';
+                    if (fBlock.Paragraph.style) {
+                        if (fBlock.Paragraph.style.space_before) fPara.style.marginTop = fBlock.Paragraph.style.space_before + 'pt';
+                        if (fBlock.Paragraph.style.space_after) fPara.style.marginBottom = fBlock.Paragraph.style.space_after + 'pt';
+                        if (fBlock.Paragraph.style.indent_left) fPara.style.paddingLeft = fBlock.Paragraph.style.indent_left + 'pt';
+                    }
+                    for (const run of fBlock.Paragraph.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        applyRunStyle(span, run);
+                        fPara.appendChild(span);
+                    }
+                    if (fBlock.Paragraph.runs.length === 0) fPara.innerHTML = '&nbsp;';
+                    footerDiv.appendChild(fPara);
+                }
+            }
+            pageDiv.appendChild(footerDiv);
+        }
+
+        container.appendChild(pageDiv);
+    }
+
+    // Render comments panel (document-level)
+    if (doc.comments && doc.comments.length > 0) {
+        const commentsDiv = document.createElement('div');
+        commentsDiv.className = 'edit-comments-panel';
+        commentsDiv.style.maxWidth = '800px';
+        commentsDiv.style.margin = '16px auto';
+        commentsDiv.style.padding = '12pt';
+        commentsDiv.style.background = '#fffde7';
+        commentsDiv.style.border = '1px solid #fdd835';
+        commentsDiv.style.borderRadius = '8px';
+        const commTitle = document.createElement('div');
+        commTitle.textContent = 'Comments';
+        commTitle.style.fontWeight = 'bold';
+        commTitle.style.marginBottom = '8pt';
+        commTitle.style.fontSize = '11pt';
+        commentsDiv.appendChild(commTitle);
+        for (const comment of doc.comments) {
+            const cDiv = document.createElement('div');
+            cDiv.style.marginBottom = '6pt';
+            cDiv.style.paddingBottom = '6pt';
+            cDiv.style.borderBottom = '1px solid #e0d68a';
+            const metaSpan = document.createElement('span');
+            metaSpan.style.fontWeight = 'bold';
+            metaSpan.style.fontSize = '9pt';
+            metaSpan.style.color = '#555';
+            metaSpan.textContent = (comment.author || 'Unknown') + (comment.date ? ' (' + comment.date.substring(0, 10) + ')' : '') + ': ';
+            cDiv.appendChild(metaSpan);
+            for (const cBlock of comment.blocks) {
+                if (cBlock.Paragraph) {
+                    for (const run of cBlock.Paragraph.runs) {
+                        const span = document.createElement('span');
+                        span.textContent = run.text;
+                        span.style.fontSize = '10pt';
+                        cDiv.appendChild(span);
+                    }
+                }
+            }
+            commentsDiv.appendChild(cDiv);
+        }
+        container.appendChild(commentsDiv);
+    }
+}
+
+// === XLSX RENDERER ===
+function colName(idx) {
+    let name = '';
+    let n = idx;
+    while (n >= 0) {
+        name = String.fromCharCode(65 + (n % 26)) + name;
+        n = Math.floor(n / 26) - 1;
+    }
+    return name;
+}
+
+// Number formatting helper
+function formatCellValue(val, style) {
+    let raw = '';
+    let isNumber = false;
+    if (typeof val === 'object' && val !== null) {
+        if ('String' in val) raw = val.String;
+        else if ('Number' in val) { raw = val.Number; isNumber = true; }
+        else if ('Boolean' in val) return val.Boolean ? 'TRUE' : 'FALSE';
+        else if ('Error' in val) return val.Error;
+        else if ('Empty' in val) return '';
+    } else if (typeof val === 'string') {
+        return val;
+    }
+    if (!isNumber) return String(raw);
+
+    const fmt = style && style.number_format;
+    if (!fmt || fmt === 'General') {
+        if (raw === Math.floor(raw)) return String(Math.floor(raw));
+        return String(raw);
+    }
+
+    // Date formats (Excel serial number to date)
+    if (fmt.includes('yy') || (fmt.includes('mm') && fmt.includes('dd'))) {
+        const base = new Date(1899, 11, 30);
+        const d = new Date(base.getTime() + raw * 86400000);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yy = String(d.getFullYear()).slice(-2);
+        const yyyy = String(d.getFullYear());
+        if (fmt.includes('h:mm') || fmt.includes('H:mm')) {
+            const hh = String(d.getHours());
+            const mi = String(d.getMinutes()).padStart(2, '0');
+            return `${d.getMonth()+1}/${d.getDate()}/${yy} ${hh}:${mi}`;
+        }
+        if (fmt.includes('yyyy')) return `${yyyy}-${mm}-${dd}`;
+        return `${mm}-${dd}-${yy}`;
+    }
+
+    // Percentage
+    if (fmt.includes('%')) {
+        const pct = raw * 100;
+        if (fmt.includes('.00')) return pct.toFixed(2) + '%';
+        return Math.round(pct) + '%';
+    }
+
+    // Scientific
+    if (fmt.includes('E+')) {
+        return raw.toExponential(2).toUpperCase();
+    }
+
+    // Decimal fixed (0.00 or #,##0.00)
+    if (fmt === '0.00' || fmt.includes('#,##0.00')) {
+        const fixed = raw.toFixed(2);
+        if (fmt.includes(',')) {
+            return Number(fixed).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return fixed;
+    }
+
+    // Comma thousands (#,##0)
+    if (fmt === '#,##0' || fmt.includes(',')) {
+        return Math.round(raw).toLocaleString('en-US');
+    }
+
+    // Fixed integer (0)
+    if (fmt === '0') return String(Math.round(raw));
+
+    // Fallback
+    if (raw === Math.floor(raw)) return String(Math.floor(raw));
+    return String(raw);
+}
+
+// Build merge coverage info
+function buildMergeInfo(mergeCells) {
+    const covered = new Set();
+    const origins = new Map();
+    if (!mergeCells) return { covered, origins };
+    for (const mc of mergeCells) {
+        const rowspan = mc.end_row - mc.start_row + 1;
+        const colspan = mc.end_col - mc.start_col + 1;
+        origins.set(`${mc.start_row},${mc.start_col}`, { rowspan, colspan });
+        for (let r = mc.start_row; r <= mc.end_row; r++) {
+            for (let c = mc.start_col; c <= mc.end_col; c++) {
+                if (r !== mc.start_row || c !== mc.start_col) {
+                    covered.add(`${r},${c}`);
+                }
+            }
+        }
+    }
+    return { covered, origins };
+}
+
+function getColWidthPx(sheet, colIdx) {
+    const charWidth = 7;
+    if (sheet.col_widths && colIdx < sheet.col_widths.length) {
+        return Math.round(sheet.col_widths[colIdx] * charWidth);
+    }
+    return Math.round((sheet.default_col_width || 8.43) * charWidth);
+}
+
+function getRowHeightPx(row, defaultRowHeight) {
+    if (row && row.height != null) return Math.round(row.height * 1.333);
+    return Math.round((defaultRowHeight || 15) * 1.333);
+}
+
+// === XLSX EDITABLE RENDERER ===
+function renderEditableXlsx(workbook) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    // Formula bar
+    const formulaBar = document.createElement('div');
+    formulaBar.className = 'formula-bar';
+    const cellRefEl = document.createElement('div');
+    cellRefEl.className = 'cell-ref';
+    cellRefEl.textContent = 'A1';
+    const fxLabel = document.createElement('div');
+    fxLabel.className = 'fx-label';
+    fxLabel.textContent = 'fx';
+    const formulaInput = document.createElement('input');
+    formulaInput.className = 'formula-input';
+    formulaBar.appendChild(cellRefEl);
+    formulaBar.appendChild(fxLabel);
+    formulaBar.appendChild(formulaInput);
+
+    const tabs = document.createElement('div');
+    tabs.className = 'sheet-tabs';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'spreadsheet-wrapper';
+
+    // Range selection state
+    let rangeStart = null; // {r, c}
+    let rangeEnd = null;
+    let isSelecting = false;
+
+    function clearRangeSelection() {
+        wrapper.querySelectorAll('.range-selected, .range-border-top, .range-border-bottom, .range-border-left, .range-border-right').forEach(el => {
+            el.classList.remove('range-selected', 'range-border-top', 'range-border-bottom', 'range-border-left', 'range-border-right');
+        });
+        wrapper.querySelectorAll('th.col-selected, th.row-selected').forEach(el => {
+            el.classList.remove('col-selected', 'row-selected');
+        });
+    }
+
+    function applyRangeSelection() {
+        clearRangeSelection();
+        if (!rangeStart || !rangeEnd) return;
+        const r1 = Math.min(rangeStart.r, rangeEnd.r), r2 = Math.max(rangeStart.r, rangeEnd.r);
+        const c1 = Math.min(rangeStart.c, rangeEnd.c), c2 = Math.max(rangeStart.c, rangeEnd.c);
+
+        // Update cell ref display
+        if (r1 === r2 && c1 === c2) {
+            cellRefEl.textContent = colName(c1) + r1;
+        } else {
+            cellRefEl.textContent = colName(c1) + r1 + ':' + colName(c2) + r2;
+        }
+
+        // Highlight column and row headers
+        const headerCells = wrapper.querySelectorAll('thead th');
+        for (let c = c1; c <= c2; c++) {
+            if (headerCells[c + 1]) headerCells[c + 1].classList.add('col-selected');
+        }
+        const rowHeaders = wrapper.querySelectorAll('th.row-header');
+        for (let r = r1; r <= r2; r++) {
+            const rh = rowHeaders[r - 1]; // rows are 1-indexed
+            if (rh) rh.classList.add('row-selected');
+        }
+
+        for (let r = r1; r <= r2; r++) {
+            for (let c = c1; c <= c2; c++) {
+                const cell = wrapper.querySelector(`td.edit-cell[data-row="${r}"][data-col="${c}"]`);
+                if (!cell) continue;
+                cell.classList.add('range-selected');
+                if (r === r1) cell.classList.add('range-border-top');
+                if (r === r2) cell.classList.add('range-border-bottom');
+                if (c === c1) cell.classList.add('range-border-left');
+                if (c === c2) cell.classList.add('range-border-right');
+            }
+        }
+    }
+
+    function showSheet(idx) {
+        for (const t of tabs.children) t.classList.remove('active');
+        tabs.children[idx].classList.add('active');
+
+        const sheet = workbook.sheets[idx];
+        const dataColCount = sheet.col_count || 1;
+        const colCount = Math.max(dataColCount, 26);
+        const { covered, origins } = buildMergeInfo(sheet.merge_cells);
+
+        const rowMap = {};
+        let maxRow = 0;
+        for (const row of sheet.rows) {
+            rowMap[row.index] = row;
+            if (row.index > maxRow) maxRow = row.index;
+        }
+        const minRows = 50;
+        if (maxRow < minRows) maxRow = minRows;
+
+        wrapper.innerHTML = '';
+        const table = document.createElement('table');
+
+        // Colgroup for column widths
+        const colgroup = document.createElement('colgroup');
+        const rowHeaderCol = document.createElement('col');
+        rowHeaderCol.style.width = '40px';
+        colgroup.appendChild(rowHeaderCol);
+        for (let c = 0; c < colCount; c++) {
+            const col = document.createElement('col');
+            col.style.width = getColWidthPx(sheet, c) + 'px';
+            colgroup.appendChild(col);
+        }
+        table.appendChild(colgroup);
+
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headerRow.innerHTML = '<th class="row-header"></th>';
+        for (let c = 0; c < colCount; c++) {
+            const th = document.createElement('th');
+            th.textContent = colName(c);
+            headerRow.appendChild(th);
+        }
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        for (let r = 1; r <= maxRow; r++) {
+            const row = rowMap[r];
+            const tr = document.createElement('tr');
+            const rowH = getRowHeightPx(row, sheet.default_row_height);
+            tr.style.height = rowH + 'px';
+
+            const th = document.createElement('th');
+            th.className = 'row-header';
+            th.textContent = r;
+            tr.appendChild(th);
+
+            const cellMap = {};
+            if (row) {
+                for (const cell of row.cells) cellMap[cell.col] = cell;
+            }
+
+            for (let c = 0; c < colCount; c++) {
+                const key = `${r},${c}`;
+                if (covered.has(key)) continue;
+
+                const td = document.createElement('td');
+                td.contentEditable = 'true';
+                td.className = 'edit-cell';
+                td.dataset.sheet = idx;
+                td.dataset.row = r;
+                td.dataset.col = c;
+
+                const merge = origins.get(key);
+                if (merge) {
+                    if (merge.rowspan > 1) td.rowSpan = merge.rowspan;
+                    if (merge.colspan > 1) td.colSpan = merge.colspan;
+                }
+
+                const cell = cellMap[c];
+                let display = '';
+                if (cell) {
+                    display = formatCellValue(cell.value, cell.style);
+                    if (cell.style) {
+                        if (cell.style.bold) td.style.fontWeight = 'bold';
+                        if (cell.style.italic) td.style.fontStyle = 'italic';
+                        if (cell.style.font_color) td.style.color = '#' + cell.style.font_color;
+                        if (cell.style.bg_color) td.style.background = '#' + cell.style.bg_color;
+                        if (cell.style.horizontal_align) td.style.textAlign = cell.style.horizontal_align;
+                        if (cell.style.border_top) td.style.borderTop = '1px solid #333';
+                        if (cell.style.border_bottom) td.style.borderBottom = '1px solid #333';
+                        if (cell.style.border_left) td.style.borderLeft = '1px solid #333';
+                        if (cell.style.border_right) td.style.borderRight = '1px solid #333';
+                        if (cell.style.font_size) td.style.fontSize = cell.style.font_size + 'pt';
+                    }
+                    // Numbers default right-align
+                    if (cell.value && typeof cell.value === 'object' && 'Number' in cell.value) {
+                        if (!cell.style || !cell.style.horizontal_align) {
+                            td.style.textAlign = 'right';
+                        }
+                    }
+                }
+                td.textContent = display;
+                td.dataset.original = display;
+
+                td.addEventListener('focus', () => {
+                    cellRefEl.textContent = colName(c) + r;
+                    formulaInput.value = td.textContent;
+                });
+                td.addEventListener('input', () => {
+                    formulaInput.value = td.textContent;
+                });
+                td.addEventListener('keydown', (e) => {
+                    function moveTo(dr, dc) {
+                        const nr = r + dr, nc = c + dc;
+                        const next = wrapper.querySelector(
+                            `td.edit-cell[data-row="${nr}"][data-col="${nc}"]`
+                        );
+                        if (next) { e.preventDefault(); next.focus(); }
+                    }
+                    if (e.key === 'Tab') {
+                        e.preventDefault();
+                        moveTo(0, e.shiftKey ? -1 : 1);
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        moveTo(e.shiftKey ? -1 : 1, 0);
+                    } else if (e.key === 'ArrowDown' && !e.shiftKey) {
+                        moveTo(1, 0);
+                    } else if (e.key === 'ArrowUp' && !e.shiftKey) {
+                        moveTo(-1, 0);
+                    } else if (e.key === 'ArrowRight' && window.getSelection().focusOffset >= td.textContent.length) {
+                        moveTo(0, 1);
+                    } else if (e.key === 'ArrowLeft' && window.getSelection().focusOffset === 0) {
+                        moveTo(0, -1);
+                    } else if (e.key === 'Escape') {
+                        td.textContent = td.dataset.original;
+                        td.blur();
+                    }
+                    // Shift+Arrow for range selection
+                    if (e.shiftKey && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+                        e.preventDefault();
+                        if (!rangeStart) rangeStart = { r, c };
+                        if (!rangeEnd) rangeEnd = { r, c };
+                        if (e.key === 'ArrowDown') rangeEnd.r++;
+                        else if (e.key === 'ArrowUp') rangeEnd.r = Math.max(1, rangeEnd.r - 1);
+                        else if (e.key === 'ArrowRight') rangeEnd.c++;
+                        else if (e.key === 'ArrowLeft') rangeEnd.c = Math.max(0, rangeEnd.c - 1);
+                        applyRangeSelection();
+                    }
+                });
+
+                // Mouse range selection
+                td.addEventListener('mousedown', (e) => {
+                    if (e.button !== 0) return;
+                    rangeStart = { r, c };
+                    rangeEnd = { r, c };
+                    isSelecting = true;
+                    applyRangeSelection();
+                });
+                td.addEventListener('mouseover', () => {
+                    if (!isSelecting) return;
+                    rangeEnd = { r, c };
+                    applyRangeSelection();
+                });
+
+                tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+
+        // Stop mouse range selection on mouseup
+        document.addEventListener('mouseup', () => { isSelecting = false; });
+    }
+
+    workbook.sheets.forEach((sheet, i) => {
+        const tab = document.createElement('div');
+        tab.className = 'sheet-tab';
+        tab.textContent = sheet.name || `Sheet ${i + 1}`;
+        tab.onclick = () => showSheet(i);
+        tabs.appendChild(tab);
+    });
+
+    container.appendChild(formulaBar);
+    container.appendChild(wrapper);
+    container.appendChild(tabs);
+    if (workbook.sheets.length > 0) showSheet(0);
+}
+
+// === PPTX EDITABLE RENDERER ===
+function renderEditablePptx(presentation) {
+    const container = document.getElementById('pages-container');
+    container.innerHTML = '';
+
+    const layout = document.createElement('div');
+    layout.className = 'pptx-layout';
+
+    // Thumbnail panel
+    const thumbPanel = document.createElement('div');
+    thumbPanel.className = 'slide-thumbnails';
+
+    // Main slide area
+    const mainArea = document.createElement('div');
+    mainArea.className = 'slide-main';
+
+    const maxWidth = Math.min(900, window.innerWidth - 64 - 180);
+    const scale = maxWidth / presentation.slide_width;
+    const thumbScale = 120 / presentation.slide_width;
+
+    // Build slide wrappers
+    const slideWrappers = [];
+
+    presentation.slides.forEach((slide, slideIdx) => {
+        // Main editable slide
+        const wrapper = document.createElement('div');
+        wrapper.className = 'slide-wrapper';
+        wrapper.dataset.slideIdx = slideIdx;
+        wrapper.style.width = (presentation.slide_width * scale) + 'px';
+        wrapper.style.height = (presentation.slide_height * scale) + 'px';
+        wrapper.style.background = slide.background_color ? '#' + slide.background_color : 'white';
+        wrapper.style.display = slideIdx === 0 ? '' : 'none';
+
+        buildSlideContent(wrapper, slide, slideIdx, scale, true);
+        slideWrappers.push(wrapper);
+        mainArea.appendChild(wrapper);
+
+        // Thumbnail
+        const thumb = document.createElement('div');
+        thumb.className = 'slide-thumb' + (slideIdx === 0 ? ' active' : '');
+        const numEl = document.createElement('div');
+        numEl.className = 'slide-thumb-num';
+        numEl.textContent = slideIdx + 1;
+        const preview = document.createElement('div');
+        preview.className = 'slide-thumb-preview';
+        preview.style.width = '120px';
+        preview.style.height = (presentation.slide_height * thumbScale) + 'px';
+        preview.style.position = 'relative';
+        preview.style.overflow = 'hidden';
+        preview.style.background = slide.background_color ? '#' + slide.background_color : 'white';
+
+        buildSlideContent(preview, slide, slideIdx, thumbScale, false);
+
+        thumb.appendChild(numEl);
+        thumb.appendChild(preview);
+        thumb.addEventListener('click', () => {
+            thumbPanel.querySelectorAll('.slide-thumb').forEach(t => t.classList.remove('active'));
+            thumb.classList.add('active');
+            slideWrappers.forEach((w, i) => w.style.display = i === slideIdx ? '' : 'none');
+            counter.textContent = `Slide ${slideIdx + 1} / ${presentation.slides.length}`;
+        });
+        thumbPanel.appendChild(thumb);
+    });
+
+    const counter = document.createElement('div');
+    counter.className = 'slide-counter';
+    counter.textContent = `Slide 1 / ${presentation.slides.length}`;
+    mainArea.appendChild(counter);
+
+    layout.appendChild(thumbPanel);
+    layout.appendChild(mainArea);
+    container.appendChild(layout);
+}
+
+function buildSlideContent(container, slide, slideIdx, scale, editable) {
+    slide.shapes.forEach((shape, shapeIdx) => {
+        const div = document.createElement('div');
+        div.className = 'slide-shape';
+        div.style.left = (shape.x * scale) + 'px';
+        div.style.top = (shape.y * scale) + 'px';
+        div.style.width = (shape.width * scale) + 'px';
+        div.style.height = (shape.height * scale) + 'px';
+        if (shape.fill_color) div.style.backgroundColor = '#' + shape.fill_color;
+        if (shape.border_color) {
+            const bw = shape.border_width || 1;
+            div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
+            div.style.boxSizing = 'border-box';
+        }
+
+        const content = shape.content;
+        if (content && content.TextBox) {
+            content.TextBox.paragraphs.forEach((para, paraIdx) => {
+                const p = document.createElement('p');
+                const align = para.alignment;
+                if (align === 'Center') p.style.textAlign = 'center';
+                else if (align === 'Right') p.style.textAlign = 'right';
+                else if (align === 'Justify') p.style.textAlign = 'justify';
+
+                para.runs.forEach((run, runIdx) => {
+                    const span = document.createElement('span');
+                    span.textContent = run.text;
+                    const fontSize = run.font_size || 18;
+                    span.style.fontSize = (fontSize * scale) + 'px';
+                    if (run.bold) span.style.fontWeight = 'bold';
+                    if (run.italic) span.style.fontStyle = 'italic';
+                    if (run.color) span.style.color = '#' + run.color;
+                    if (run.font_family) span.style.fontFamily = run.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+
+                    if (editable) {
+                        span.className = 'edit-slide-run';
+                        span.contentEditable = 'true';
+                        span.dataset.slide = slideIdx;
+                        span.dataset.shape = shapeIdx;
+                        span.dataset.para = paraIdx;
+                        span.dataset.run = runIdx;
+                        span.dataset.original = run.text;
+                        span.style.outline = 'none';
+                        span.style.borderBottom = '1px solid transparent';
+                        span.addEventListener('focus', () => { span.style.borderBottomColor = '#4a6cf7'; });
+                        span.addEventListener('blur', () => { span.style.borderBottomColor = 'transparent'; });
+                        span.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+                    }
+                    p.appendChild(span);
+                });
+                div.appendChild(p);
+            });
+        } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
+            const img = document.createElement('img');
+            const bytes = content.Image.data;
+            const ct = content.Image.content_type || 'image/png';
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            img.src = `data:${ct};base64,${btoa(binary)}`;
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'contain';
+            div.appendChild(img);
+        }
+
+        container.appendChild(div);
+    });
+}
+
+// === FILE HANDLER ===
+async function handleFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['docx', 'xlsx', 'pptx', 'pdf'].includes(ext)) {
+        showStatus(t('unsupported'), 'error');
+        return;
+    }
+    if (!wasmReady) {
+        showStatus(t('wasmLoading'), 'info');
+        return;
+    }
+
+    showStatus(t('parsing'), 'info');
+    currentFileType = ext;
+    btnDownload.textContent = `${t('download')} .${ext}`;
+
+    toolbar.classList.add('visible');
+    buildRibbon(ext);
+    statusBar.classList.add('visible');
+    statusBar.className = 'status-bar visible ' + ext;
+    // Show Office-style title bar, hide landing header
+    const titleBar = document.getElementById('titleBar');
+    const landingHeader = document.getElementById('landingHeader');
+    titleBar.style.display = 'flex';
+    titleBar.className = 'title-bar ' + ext;
+    document.getElementById('titleText').textContent = file.name + ' - Oxi';
+    if (landingHeader) landingHeader.style.display = 'none';
+    currentZoom = 100;
+    applyZoom();
+    document.querySelector('.container').classList.toggle('xlsx-active', ext === 'xlsx');
+
+    try {
+        const buffer = await file.arrayBuffer();
+        currentFileBytes = buffer;
+        const data = new Uint8Array(buffer);
+        const t0 = performance.now();
+
+        if (ext === 'docx') {
+            currentDocIR = parse_document(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            renderEditableDocx(currentDocIR);
+            showStatus(I18N[currentLang].parsedDocx(elapsed), 'info');
+        } else if (ext === 'xlsx') {
+            currentDocIR = parse_spreadsheet(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            let totalRows = 0;
+            for (const s of currentDocIR.sheets) totalRows += s.rows.length;
+            showStatus(I18N[currentLang].parsedXlsx(currentDocIR.sheets.length, totalRows, elapsed), 'info');
+            renderEditableXlsx(currentDocIR);
+        } else if (ext === 'pptx') {
+            currentDocIR = parse_presentation(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            let totalShapes = 0;
+            for (const s of currentDocIR.slides) totalShapes += s.shapes.length;
+            showStatus(I18N[currentLang].parsedPptx(currentDocIR.slides.length, totalShapes, elapsed), 'info');
+            renderEditablePptx(currentDocIR);
+        } else if (ext === 'pdf') {
+            currentDocIR = parse_pdf(data);
+            const elapsed = (performance.now() - t0).toFixed(1);
+            showStatus(I18N[currentLang].parsedPdf(currentDocIR.pages.length, elapsed), 'info');
+            renderPdfViewer(currentDocIR, data);
+        }
+    } catch(e) {
+        showStatus('Error: ' + e.message, 'error');
+        console.error(e);
+    }
+}
+
+function renderPdfViewer(doc, rawData) {
+    const viewer = document.getElementById('pages-container');
+    viewer.innerHTML = '';
+
+    // Document info panel
+    const meta = document.createElement('div');
+    meta.className = 'pdf-meta';
+    const info = doc.info || {};
+    meta.innerHTML = `
+        <h3>📄 PDF Document</h3>
+        <table>
+            ${info.title ? `<tr><td><strong>Title</strong></td><td>${info.title}</td></tr>` : ''}
+            ${info.author ? `<tr><td><strong>Author</strong></td><td>${info.author}</td></tr>` : ''}
+            ${info.producer ? `<tr><td><strong>Producer</strong></td><td>${info.producer}</td></tr>` : ''}
+            ${info.creator ? `<tr><td><strong>Creator</strong></td><td>${info.creator}</td></tr>` : ''}
+            <tr><td><strong>Pages</strong></td><td>${doc.pages.length}</td></tr>
+            <tr><td><strong>Version</strong></td><td>${doc.version ? `${doc.version.major}.${doc.version.minor}` : '?'}</td></tr>
+        </table>
+    `;
+    viewer.appendChild(meta);
+
+    // Signature panel
+    try {
+        const sigs = pdf_verify_signatures(rawData);
+        const sigPanel = document.createElement('div');
+        sigPanel.className = 'pdf-sig-panel';
+        if (sigs && sigs.length > 0) {
+            sigPanel.innerHTML = '<h3>' + I18N[currentLang].signatures + '</h3>' +
+                sigs.map(s => `<div class="sig-entry">
+                    <span class="sig-name">${s.signer_name || 'Unknown'}</span>
+                    <span class="sig-status ${s.integrity_valid ? 'valid' : 'invalid'}">${s.integrity_valid ? '✓' : '✗'}</span>
+                </div>`).join('');
+        } else {
+            sigPanel.innerHTML = '<h3>' + I18N[currentLang].signatures + '</h3><p>' + I18N[currentLang].noSignatures + '</p>';
+        }
+        viewer.appendChild(sigPanel);
+    } catch(e) { console.warn('Signature check:', e); }
+
+    // Hanko stamp generator
+    const hankoPanel = document.createElement('div');
+    hankoPanel.className = 'hanko-panel';
+    hankoPanel.innerHTML = `
+        <h3>Hanko Stamp Generator</h3>
+        <div class="hanko-controls">
+            <label>${I18N[currentLang].hankoName}: <input type="text" id="hankoName" value="山田" maxlength="8"></label>
+            <label>${I18N[currentLang].hankoStyle}:
+                <select id="hankoStyle">
+                    <option value="Round">Round (丸印)</option>
+                    <option value="Square">Square (角印)</option>
+                    <option value="Oval">Oval (小判型)</option>
+                </select>
+            </label>
+            <button id="hankoPreviewBtn">${I18N[currentLang].hankoPreview}</button>
+        </div>
+        <div class="hanko-preview" id="hankoPreviewArea"></div>
+    `;
+    viewer.appendChild(hankoPanel);
+
+    // Hanko preview logic
+    const updateHanko = () => {
+        const name = document.getElementById('hankoName').value || '印';
+        const svg = preview_hanko(name);
+        document.getElementById('hankoPreviewArea').innerHTML = svg;
+    };
+    document.getElementById('hankoPreviewBtn').addEventListener('click', updateHanko);
+    document.getElementById('hankoName').addEventListener('input', updateHanko);
+    updateHanko();
+
+    // Pages with text content
+    doc.pages.forEach((page, i) => {
+        const pageDiv = document.createElement('div');
+        pageDiv.className = 'pdf-page';
+        const header = document.createElement('div');
+        header.className = 'pdf-page-header';
+        header.textContent = `Page ${i + 1}`;
+        pageDiv.appendChild(header);
+
+        const content = document.createElement('div');
+        content.style.whiteSpace = 'pre-wrap';
+        content.style.fontFamily = 'monospace';
+        content.style.fontSize = '13px';
+        content.style.padding = '12px';
+
+        const texts = (page.contents || [])
+            .filter(c => c.Text)
+            .map(c => c.Text.text)
+            .join('\n');
+        content.textContent = texts || '(no text content)';
+        pageDiv.appendChild(content);
+        viewer.appendChild(pageDiv);
+    });
+}
+
+// Event handlers
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+initialize();
+
+// === NEW DOCUMENT ===
+function createNewDocument() {
+    if (!wasmReady) {
+        showStatus(t('wasmLoading'), 'info');
+        return;
+    }
+    try {
+        const bytes = create_blank_docx();
+        currentFileBytes = bytes.buffer;
+        currentFileType = 'docx';
+        currentDocIR = parse_document(bytes);
+
+        toolbar.classList.add('visible');
+        btnDownload.textContent = `${t('download')} .docx`;
+        buildRibbon('docx');
+        statusBar.classList.add('visible');
+        statusBar.className = 'status-bar visible docx';
+        const titleBar = document.getElementById('titleBar');
+        const landingHeader = document.getElementById('landingHeader');
+        titleBar.style.display = 'flex';
+        titleBar.className = 'title-bar docx';
+        document.getElementById('titleText').textContent = 'Document1 - Oxi';
+        if (landingHeader) landingHeader.style.display = 'none';
+        currentZoom = 100;
+        applyZoom();
+        document.querySelector('.container').classList.remove('xlsx-active');
+
+        renderEditableDocx(currentDocIR);
+        showStatus('New document created', 'info');
+    } catch(e) {
+        showStatus('Error: ' + e.message, 'error');
+        console.error(e);
+    }
+}
+
+// === SAMPLE LOADER ===
+async function loadSample(filename) {
+    if (!wasmReady) {
+        showStatus(t('wasmLoading'), 'info');
+        return;
+    }
+    try {
+        showStatus(t('loadingSample'), 'info');
+        // Try relative paths for both docs/ and web/ deployments
+        let resp = await fetch(filename);
+        if (!resp.ok) resp = await fetch('../docs/' + filename);
+        if (!resp.ok) resp = await fetch('../tests/fixtures/' + filename.replace('sample', 'basic_test'));
+        if (!resp.ok) throw new Error('Failed to fetch sample: ' + resp.status);
+        const buffer = await resp.arrayBuffer();
+        const blob = new Blob([buffer]);
+        const file = new File([blob], filename);
+        document.getElementById('sampleButtons').style.display = 'none';
+        await handleFile(file);
+    } catch(e) {
+        showStatus('Error loading sample: ' + e.message, 'error');
+        console.error(e);
+    }
+}
+
+// Expose module functions to global scope for inline onclick handlers
+window.createNewDocument = createNewDocument;
+window.loadSample = loadSample;
+window.downloadDocument = downloadEdited;
+</script>
+</body>
+</html>

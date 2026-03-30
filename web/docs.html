@@ -483,6 +483,66 @@ function applyI18n() {
 import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout } from './oxi_wasm.js';
 await init();
 
+// Tauri headless render mode
+if (window.__TAURI__) {
+  try {
+    const [docxPath, outputDir, dpi] = await window.__TAURI__.core.invoke('get_render_args');
+    if (docxPath && outputDir) {
+      // Read docx via Tauri command
+      const base64Data = await window.__TAURI__.core.invoke('read_file_base64', { path: docxPath });
+      const binary = atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const layout = layout_document(bytes);
+      const scale = dpi / 72;
+      for (let pi = 0; pi < layout.pages.length; pi++) {
+        const pg = layout.pages[pi];
+        // Inline render since renderPage isn't defined yet at this point
+        const w = Math.ceil(pg.width * scale);
+        const h = Math.ceil(pg.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+        ctx.scale(scale, scale);
+        for (const el of pg.elements) {
+          const kind = el.kind || '';
+          if (kind === 'text') {
+            const fs = el.font_size || 11;
+            const fam = el.font_family || 'Calibri, sans-serif';
+            ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
+            ctx.fillStyle = el.color || '#000000';
+            if (el.character_spacing) ctx.letterSpacing = `${el.character_spacing}px`;
+            ctx.fillText(el.text || '', el.x, el.y + fs * 0.85);
+            if (el.character_spacing) ctx.letterSpacing = '0px';
+          } else if (kind === 'shading') {
+            const r = el.corner_radius || 0;
+            if (el.color) { ctx.fillStyle = el.color; if (r>0){ctx.beginPath();ctx.roundRect(el.x,el.y,el.width,el.height,r);ctx.fill();}else ctx.fillRect(el.x,el.y,el.width,el.height); }
+            if (el.stroke_color) { ctx.strokeStyle = el.stroke_color; ctx.lineWidth = el.stroke_width||1; if(r>0){ctx.beginPath();ctx.roundRect(el.x,el.y,el.width,el.height,r);ctx.stroke();}else ctx.strokeRect(el.x,el.y,el.width,el.height); }
+          } else if (kind === 'border' || kind === 'rect') {
+            ctx.beginPath(); ctx.strokeStyle = el.color||'#000000'; ctx.lineWidth = el.width||0.5;
+            if(el.x1!=null){ctx.moveTo(el.x1,el.y1);ctx.lineTo(el.x2,el.y2);}else{ctx.moveTo(el.x,el.y);ctx.lineTo(el.x+el.width,el.y+el.height);}ctx.stroke();
+          } else if (kind === 'image' && el.image_data) {
+            try { const img=new Image(); img.src=`data:${el.content_type||'image/png'};base64,${el.image_data}`; await new Promise(r=>{img.onload=r;setTimeout(r,2000);}); ctx.drawImage(img,el.x,el.y,el.width,el.height); } catch{}
+          } else if (kind === 'clip_start') { ctx.save();ctx.beginPath();ctx.rect(el.x,el.y,el.width,el.height);ctx.clip(); }
+          else if (kind === 'clip_end') { ctx.restore(); }
+        }
+        const dataUrl = canvas.toDataURL('image/png');
+        const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+        const pageNum = String(pi + 1).padStart(4, '0');
+        await window.__TAURI__.core.invoke('save_png', {
+          path: `${outputDir}\\page_${pageNum}.png`,
+          dataBase64: base64,
+        });
+      }
+      document.title = `Done: ${layout.pages.length} pages`;
+    }
+  } catch (e) {
+    // Not in render mode or error, continue normally
+    console.log('Render mode:', e);
+  }
+}
+
 const $ = id => document.getElementById(id);
 const canvasArea = $('canvasArea');
 const emptyState = $('emptyState');
@@ -607,9 +667,32 @@ function renderBorder(ctx, elem) {
 }
 
 function renderShading(ctx, elem) {
+  const x = elem.x, y = elem.y, w = elem.width, h = elem.height;
+  const r = elem.corner_radius || 0;
+
+  // Fill
   if (elem.color) {
     ctx.fillStyle = elem.color;
-    ctx.fillRect(elem.x, elem.y, elem.width, elem.height);
+    if (r > 0) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x, y, w, h);
+    }
+  }
+
+  // Stroke
+  if (elem.stroke_color) {
+    ctx.strokeStyle = elem.stroke_color;
+    ctx.lineWidth = elem.stroke_width || 1;
+    if (r > 0) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(x, y, w, h);
+    }
   }
 }
 

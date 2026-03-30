@@ -1,0 +1,17 @@
+{
+  "name": "oxi-wasm",
+  "type": "module",
+  "description": "WebAssembly bindings for the Oxi document processing suite",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "oxi_wasm_bg.wasm",
+    "oxi_wasm.js",
+    "oxi_wasm.d.ts"
+  ],
+  "main": "oxi_wasm.js",
+  "types": "oxi_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

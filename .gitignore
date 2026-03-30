@@ -44,6 +44,7 @@ tools/golden-test/target/
 tools/golden-test/compare_tmp/
 
 # Local analysis scripts and notes (not part of OSS)
+# Local analysis notes (not part of OSS)
 docs/internal/
 tools/analyze_*.py
 tools/**/analyze_[!di]*.py
