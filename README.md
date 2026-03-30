@@ -306,15 +306,76 @@ LibreOffice timed out (>45s) on 4 large government xlsx files. Oxi parsed all in
 - Round-trip editing (.docx structural editing, .xlsx/.pptx basic text editing)
 - PDF parse, text extraction, generation, PAdES signatures
 - Hanko (Japanese digital stamp) SVG generation
-- WASM build + web demo
+- WASM build + unified Canvas editor (click-to-edit, instant re-layout)
 - Basic formula evaluation (.xlsx: SUM, AVERAGE, IF, etc.)
+- Ra autonomous specification loop (COM-measured Word compatibility)
 
-### Next
-- .docx layout accuracy improvements (font metrics, CJK justification)
+### v1.x — Word Parity
+- .docx layout accuracy → SSIM 0.95+ (Ra loop continues)
+- IME (Japanese/CJK input) support in Canvas editor
+- Text selection & formatting toolbar integration
 - .xlsx layout engine (cell rendering, charts)
 - .pptx layout engine (slide rendering, masters)
 - Vertical writing & ruby (furigana)
-- oxi-hyde integration (standard Extension)
+
+### v2 — oxidocs Native Format
+
+**Architectural Guarantee: oxidocs core can always be losslessly converted to .docx.**
+
+oxidocs is Oxi's native document format, designed with two explicit layers:
+
+```
+oxidocs
+├── core layer   Word-compatible fields. Owned by Oxi core. Forks cannot modify.
+│                Always exportable to .docx.
+└── ext layer    Fork/Extension additions. On .docx export: customXml/ or discard.
+```
+
+**Output patterns:**
+
+| Pattern | Format | Use case | Compatibility |
+|---------|--------|----------|---------------|
+| A | .docx + oxi extensions in customXml/ | External sharing, submission, archive | Opens in all Word clients |
+| B | .oxidocs (native, optimized) | Internal storage, Fork sharing, waterdocs base | Smaller than .docx. Always convertible to Pattern A |
+
+Like Git's loose objects vs packfiles — internal format is optimized, external output is the interchange format.
+
+**v2 deliverables:**
+- [ ] oxidocs specification (core layer / ext layer definition)
+- [ ] oxidocs ↔ .docx bidirectional conversion (Pattern A / B)
+- [ ] oxidocs-to-docx Generator (full generation, no original file required)
+- [ ] Dual font engine: GDI for .docx, DirectWrite for .oxidocs
+- [ ] docs/governance.md: Architectural Guarantee formalized
+
+### v2.x — waterdocs (oxidocs + hyde encryption)
+
+```
+waterdocs
+├── core layer (after decryption → .docx exportable)
+└── hyde layer (encryption metadata, not included in .docx)
+```
+
+- [ ] waterdocs format definition (oxi-hyde Extension)
+- [ ] Encryption/decryption flow preserving core layer guarantee
+- [ ] oxi-hyde integration as standard Extension
+
+### Future
+- oxi-argo (zero-knowledge proofs for document provenance)
+- oxi-mcp (AI agent workflow integration)
+- Desktop application (oxi-tauri)
+
+### Implementation Gap: oxidocs-to-docx Generator
+
+The most critical task for v2. Without a complete generator that can produce valid .docx from any oxidocs without the original file, the Architectural Guarantee is aspirational, not real.
+
+`create_blank_docx` is the foundation. The generator must map every oxidocs core field to OOXML. Ra's reverse-engineered specifications feed directly into this — every COM-measured behavior becomes a generation rule.
+
+### Governance Impact
+
+The following will be added to docs/governance.md:
+- **oxidocs schema ownership** — core layer definition is owned by Oxi core; Forks cannot modify it
+- **ext layer export policy** — each Fork must declare how its Extensions behave on .docx export (customXml / discard / error)
+- **waterdocs core/Extension boundary** — encryption is an Extension, but post-decryption core layer guarantee is Oxi core's responsibility
 
 ---
 
