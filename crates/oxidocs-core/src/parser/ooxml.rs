@@ -415,26 +415,6 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
     let mut depth = 0;
     let mut in_body = false;
 
-    // Resolve default font size for charGrid calculation:
-    // Priority: Normal/default paragraph style font_size > docDefaults rPr sz > 10.5pt
-    let default_font_size = {
-        let mut fs = 10.5_f32;
-        if let Some(ref rpr) = styles.doc_default_run_style {
-            if let Some(sz) = rpr.font_size {
-                fs = sz;
-            }
-        }
-        // Check default paragraph style (often "a" in Japanese docs)
-        if let Some(ref default_id) = styles.default_paragraph_style_id {
-            if let Some(sdef) = styles.styles.get(default_id) {
-                if let Some(sz) = sdef.paragraph.default_run_style.as_ref().and_then(|r| r.font_size) {
-                    fs = sz;
-                }
-            }
-        }
-        fs
-    };
-
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
@@ -559,7 +539,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     }
                     "sectPr" if in_body && depth == 0 => {
                         // Final section properties (for the last section)
-                        final_sect_pr = Some(parse_section_properties(&mut reader, default_font_size)?);
+                        final_sect_pr = Some(parse_section_properties(&mut reader)?);
                     }
                     _ if in_body => {
                         depth += 1;
@@ -1244,7 +1224,7 @@ fn parse_paragraph_properties(
                         style.borders = Some(parse_paragraph_borders(reader)?);
                     }
                     "sectPr" if depth == 0 => {
-                        sect_pr = Some(parse_section_properties(reader, 10.5)?);
+                        sect_pr = Some(parse_section_properties(reader)?);
                     }
                     _ => {
                         depth += 1;
@@ -4166,7 +4146,6 @@ struct SectionProperties {
 /// Parse w:sectPr (section properties - page size, margins, document grid)
 fn parse_section_properties(
     reader: &mut Reader<&[u8]>,
-    default_font_size: f32,
 ) -> Result<SectionProperties, ParseError> {
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
@@ -4393,27 +4372,11 @@ fn parse_section_properties(
                         }
                         // linesAndChars: compute character grid pitch
                         if grid_type == "linesAndChars" {
-                            // Character pitch = content_width / chars_per_line
-                            // content_width = page_width - left_margin - right_margin
-                            // chars_per_line = content_width / (defaultFontSize + charSpace*defaultFontSize/4096)
-                            // COM-confirmed: GridDistanceHorizontal=5.25, CharsLine=48, pitch=510.2/48=10.629
-                            let default_fs = default_font_size;
-                            let char_space_extra = if char_space > 0 {
-                                char_space as f32 * default_fs / 4096.0
-                            } else { 0.0 };
-                            let base_pitch = default_fs + char_space_extra;
-                            // Compute content width and chars per line
-                            let content_w = page_size.width - margin.left - margin.right;
-                            if content_w > 0.0 && base_pitch > 0.0 {
-                                let chars_per_line = (content_w / base_pitch).floor();
-                                if chars_per_line > 0.0 {
-                                    grid_char_pitch = Some(content_w / chars_per_line);
-                                } else {
-                                    grid_char_pitch = Some(base_pitch);
-                                }
-                            } else {
-                                grid_char_pitch = Some(base_pitch);
-                            }
+                            // charSpace is in twips (extra space per char beyond default)
+                            // Character pitch = default_char_width + charSpace/20
+                            // For Japanese: default char width ≈ 10.5pt (MS Mincho/Gothic at 10.5pt)
+                            let char_space_pt = char_space as f32 / 20.0;
+                            grid_char_pitch = Some(10.5 + char_space_pt);
                         }
                     }
                     "headerReference" => {
