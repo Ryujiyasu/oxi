@@ -146,9 +146,6 @@ impl FontMetrics {
     /// For mixed-run lines: use max(word_ascent_pt) across all runs.
     pub fn word_ascent_pt(&self, font_size: f32) -> f32 {
         if self.is_cjk_83_64_font() {
-            // CJK 83/64 multiplier: line height = (win_ascent+win_descent)/UPM * fontSize * 83/64
-            // COM average matches raw value (no floor quantization needed for non-grid case).
-            // Grid snap case: grid snap overrides the raw value anyway.
             let win_sum = self.win_ascent + self.win_descent;
             let total = win_sum * font_size * (83.0 / 64.0);
             return total * self.win_ascent / (self.win_ascent + self.win_descent);
