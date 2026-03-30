@@ -108,11 +108,23 @@ def diff_document(docx_path: str, verbose: bool = True) -> dict:
     word_pages = word_data["pages"]
     oxi_pages = len(oxi_data["pages"])
 
-    # Flatten Word paragraphs into per-page lines
-    word_page_lines = defaultdict(list)
+    # Flatten Word paragraphs into per-page lines, merging same-Y entries
+    word_page_lines_raw = defaultdict(list)
     for p in word_data["paragraphs"]:
         for line in p["lines"]:
-            word_page_lines[p["page"]].append(line)
+            word_page_lines_raw[p["page"]].append(line)
+
+    # Merge lines at the same Y (table cells on same row)
+    word_page_lines = {}
+    for page, lines in word_page_lines_raw.items():
+        merged = {}
+        for line in lines:
+            y_key = round(line["y"] * 2) / 2  # round to 0.5pt
+            if y_key in merged:
+                merged[y_key]["chars"] += line["chars"]
+            else:
+                merged[y_key] = {"y": line["y"], "x": line["x"], "chars": line["chars"]}
+        word_page_lines[page] = sorted(merged.values(), key=lambda l: l["y"])
 
     report = {
         "doc_id": doc_id,
