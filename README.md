@@ -135,6 +135,41 @@ This approach keeps Oxi fully open-source and CI-friendly while honestly quantif
 
 ---
 
+## Dual Font Engine: GDI + DirectWrite
+
+Oxi uses two font engines for different purposes:
+
+| Format | Engine | Reason |
+|--------|--------|--------|
+| .docx (Word compatible) | **GDI** | Word uses GDI text metrics. Integer-pixel rounding, tmHeight line heights, hinting-dependent character widths. Pixel-identical layout requires matching GDI behavior exactly. |
+| .oxidocs (Oxi native) | **DirectWrite** | Platform-independent floating-point precision. No legacy rounding artifacts. Better support for variable fonts, OpenType features, and high-DPI rendering. |
+| .pdf (export) | **DirectWrite** | PDF spec uses floating-point coordinates. GDI integer rounding is unnecessary and reduces quality. |
+
+### Why two engines?
+
+Word's layout is built on GDI — a 30-year-old API that rounds character widths to integer pixels and computes line heights by rounding ascent and descent separately before adding them. These rounding decisions cascade: a 0.18pt/character difference at Calibri 11pt becomes 10.8pt of accumulated error over 60 characters, enough to change where lines break and pages split.
+
+Oxi's Phase 1 goal is Word-compatible rendering, so GDI metrics are mandatory. But GDI's integer rounding is a legacy constraint, not a design virtue. For Oxi's native format (.oxidocs), DirectWrite provides:
+
+- **Cross-platform consistency** — floating-point metrics produce identical layout on Windows, macOS, Linux, and WASM
+- **Variable font support** — GDI cannot handle variable fonts; DirectWrite can
+- **High-DPI rendering** — GDI's 96dpi-era rounding is meaningless on 4K/Retina displays
+- **Modern typography** — many OpenType features are only accessible through DirectWrite
+
+### Implementation
+
+Both engines implement a shared `FontEngine` trait. The layout engine depends only on this trait, so switching between GDI and DirectWrite is a one-line configuration change per document:
+
+```
+FontEngine trait
+├── GdiEngine       — Word-compatible metrics (integer px rounding)
+└── DWriteEngine    — Oxi-native metrics (floating-point precision)
+```
+
+Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. Converting .docx to .oxidocs recalculates layout with DirectWrite metrics. No pixel accuracy is lost for Word documents; no legacy constraints limit Oxi-native documents.
+
+---
+
 ## Architecture
 
 ```
