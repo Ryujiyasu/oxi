@@ -1,34 +1,31 @@
-"""Oxi CLI (docx-to-pdf) → PyMuPDF → PNG レンダラー"""
+"""Oxi GDI Renderer → PNG レンダラー (Windows GDI TextOutW for pixel-accurate comparison)"""
 
 import subprocess
 import os
-import time
-import tempfile
 from pathlib import Path
 from .config import OXI_ROOT, OXI_PNG_DIR, RENDER_DPI
 
-# Max seconds per file before killing oxi
-RENDER_TIMEOUT = 30
+RENDER_TIMEOUT = 60
+
+# GDI renderer binary path
+GDI_RENDERER = os.path.join(OXI_ROOT, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
 
 
 def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
     """
-    oxi-cli docx-to-pdf で各.docxをPDF化し、PyMuPDFでPNG化する。
+    oxi-gdi-renderer で各.docxをGDI描画しPNG化する。
     戻り値: {docx_path: [page1.png, page2.png, ...]}
     """
-    import fitz
-
     results = {}
-    oxi_bin = os.path.join(OXI_ROOT, "target", "debug", "oxi.exe")
-    if not os.path.exists(oxi_bin):
-        oxi_bin = os.path.join(OXI_ROOT, "target", "release", "oxi.exe")
-    if not os.path.exists(oxi_bin):
+
+    if not os.path.exists(GDI_RENDERER):
         raise FileNotFoundError(
-            "oxi binary not found. Run: cargo build --bin oxi"
+            f"GDI renderer not found: {GDI_RENDERER}\n"
+            "Build with: cd tools/oxi-gdi-renderer && cargo build --release"
         )
 
     for docx_path in docx_paths:
-        doc_id  = Path(docx_path).stem
+        doc_id = Path(docx_path).stem
         out_dir = Path(OXI_PNG_DIR) / doc_id
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -38,13 +35,15 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
             results[docx_path] = [str(p) for p in existing]
             continue
 
-        # docx → pdf via oxi-cli
-        pdf_path = os.path.join(str(out_dir), f"{doc_id}.pdf")
+        # GDI renderer outputs: {prefix}_p1.png, {prefix}_p2.png, ...
+        prefix = str(out_dir / "oxi")
 
         try:
             proc = subprocess.Popen(
-                [oxi_bin, "docx-to-pdf",
-                 os.path.abspath(docx_path), pdf_path],
+                [GDI_RENDERER,
+                 os.path.abspath(docx_path),
+                 prefix,
+                 str(RENDER_DPI)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -53,47 +52,33 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-                print(f"[NG] Oxi timeout ({doc_id}): >{RENDER_TIMEOUT}s")
+                print(f"[NG] Oxi GDI timeout ({doc_id}): >{RENDER_TIMEOUT}s")
                 results[docx_path] = []
                 continue
 
             if proc.returncode != 0:
                 err_text = stderr.decode("utf-8", errors="replace")[:300]
-                print(f"[NG] Oxi error ({doc_id}):\n{err_text}")
+                print(f"[NG] Oxi GDI error ({doc_id}):\n{err_text}")
                 results[docx_path] = []
                 continue
 
-            # pdf → png via PyMuPDF
-            doc = fitz.open(pdf_path)
-            zoom = RENDER_DPI / 72
-            mat = fitz.Matrix(zoom, zoom)
-            png_paths = []
+            # Rename output files: oxi_p1.png -> page_0001.png
+            page_idx = 1
+            while True:
+                src = out_dir / f"oxi_p{page_idx}.png"
+                if not src.exists():
+                    break
+                dst = out_dir / f"page_{page_idx:04d}.png"
+                src.rename(dst)
+                page_idx += 1
 
-            for page_idx in range(len(doc)):
-                page = doc[page_idx]
-                pix = page.get_pixmap(matrix=mat)
-                png_path = str(out_dir / f"page_{page_idx+1:04d}.png")
-                pix.save(png_path)
-                png_paths.append(png_path)
-
-            doc.close()
-            results[docx_path] = png_paths
-            print(f"  Oxi: {doc_id} ({len(png_paths)} pages)")
+            png_paths = sorted(out_dir.glob("page_*.png"))
+            results[docx_path] = [str(p) for p in png_paths]
+            print(f"  Oxi GDI: {doc_id} ({len(png_paths)} pages)")
 
         except Exception as e:
-            print(f"[NG] Oxi error ({doc_id}): {e}")
+            print(f"[NG] Oxi GDI error ({doc_id}): {e}")
             results[docx_path] = []
 
-        finally:
-            if os.path.exists(pdf_path):
-                try:
-                    os.unlink(pdf_path)
-                except PermissionError:
-                    time.sleep(1)
-                    try:
-                        os.unlink(pdf_path)
-                    except PermissionError:
-                        pass
-
-    print(f"[OK] Oxi rendering done: {len(results)} files")
+    print(f"[OK] Oxi GDI rendering done: {len(results)} files")
     return results

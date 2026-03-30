@@ -98,7 +98,9 @@ impl FontMetrics {
             return font_size / 2.0;
         }
 
-        (advance_em * ppem).round() * 72.0 / 96.0
+        // Twips-based width: round(advance_em * fontSize * 20) / 20.0
+        let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
+        width_tw / 20.0
     }
 
     /// Simple line height in points (no pixel rounding).
@@ -477,8 +479,16 @@ impl FontMetricsRegistry {
             if is_halfwidth_katakana(c) || advance_em <= 0.51 { return font_size / 2.0; }
         }
 
+        // Twips-based width: round(advance * fontSize * 20 / UPM) / 20.0
+        // COM-confirmed 2026-03-30: matches Word line break positions
+        if metrics.char_widths.contains_key(&c) {
+            let advance_em = metrics.char_width_em(c);
+            let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
+            return width_tw / 20.0;
+        }
+
         // GDI hinting override: use pre-measured width if available
-        let ppem = (font_size * 96.0 / 72.0) as u32;
+        let ppem = (font_size * 96.0 / 72.0).round() as u32;
         if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
             if let Some(char_widths) = font_ppems.get(&ppem) {
                 if let Some(&width_px) = char_widths.get(&(c as u32)) {
@@ -509,7 +519,7 @@ impl FontMetricsRegistry {
     /// Returns the ppem-specific width map (codepoint → width_px), avoiding
     /// repeated HashMap lookups in per-character loops.
     pub fn get_gdi_char_widths(&self, family: &str, font_size: f32) -> Option<&HashMap<u32, u32>> {
-        let ppem = (font_size * 96.0 / 72.0) as u32;
+        let ppem = (font_size * 96.0 / 72.0).round() as u32;
         self.gdi_widths.get(family)?.get(&ppem)
     }
 
@@ -535,16 +545,22 @@ impl FontMetricsRegistry {
             }
         }
 
-        // GDI hinting override via pre-resolved map (for proportional chars)
+        // Word uses twips-based character width: MulDiv(advance, fontSize_tw, UPM)
+        // = round(advance_em * fontSize * 20) / 20.0
+        // COM-confirmed 2026-03-30: twips method gives correct line break positions
+        // for Cambria 11pt (85 chars/line matching Word, GDI pixel method gives 92)
+        // Only use twips method when we have measured advance widths for this char.
+        if metrics.char_widths.contains_key(&c) {
+            let advance_em = metrics.char_width_em(c);
+            let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
+            return width_tw / 20.0;
+        }
+
+        // GDI hinting override via pre-resolved map (for fonts without metric data)
         if let Some(char_widths) = gdi_map {
             if let Some(&width_px) = char_widths.get(&(c as u32)) {
                 return width_px as f32 * 72.0 / 96.0;
             }
-        }
-
-        // If the font has this character's width measured, use it directly
-        if metrics.char_widths.contains_key(&c) {
-            return metrics.char_width_pt(c, font_size);
         }
 
         // CJK character + Latin font → GDI fallback to MS UI Gothic
