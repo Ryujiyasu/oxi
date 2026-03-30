@@ -143,19 +143,33 @@ def diff_document(docx_path: str, verbose: bool = True) -> dict:
         "mean_row_dy": 999,
     }
 
-    # === Compare paragraphs ===
+    # === Compare paragraphs (nearest-Y match) ===
     total_para_dy = 0
     total_line_dchar = 0
     n_para = 0
     n_lines = 0
 
     for pi in range(min(len(word["pages"]), oxi_pages)):
-        w_paras = word["pages"][pi]["paragraphs"]
+        w_paras = [p for p in word["pages"][pi]["paragraphs"] if p.get("lines")]
         o_paras = oxi["pages"][pi]["paragraphs"]
 
-        for qi in range(min(len(w_paras), len(o_paras))):
-            wp = w_paras[qi]
-            op = o_paras[qi]
+        # Match Word paragraphs to nearest Oxi paragraph by Y coordinate
+        used_oxi = set()
+        for wp in w_paras:
+            # Find nearest Oxi paragraph not yet used
+            best_oi = None
+            best_dy = float("inf")
+            for oi, op in enumerate(o_paras):
+                if oi in used_oxi:
+                    continue
+                dy = abs(op["y"] - wp["y"])
+                if dy < best_dy:
+                    best_dy = dy
+                    best_oi = oi
+            if best_oi is None:
+                continue
+            used_oxi.add(best_oi)
+            op = o_paras[best_oi]
             dy = op["y"] - wp["y"]
             total_para_dy += abs(dy)
             n_para += 1
