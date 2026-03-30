@@ -96,13 +96,24 @@ def get_word_structure(cache_path: str) -> dict:
         pages_dict[pg]["paragraphs"].append(para)
 
     # Tables: extract row Y positions per page
+    # Build page→max_y map from paragraphs to determine page boundaries
+    page_max_y = {}
+    for p in data.get("paragraphs", []):
+        pg = p["page"]
+        page_max_y[pg] = max(page_max_y.get(pg, 0), p["y"])
+
     for t in data.get("tables", []):
         for rd in t.get("row_data", []):
             row_y = rd["y"]
-            # Determine which page this row is on
+            # Find page: row belongs to the page where its Y falls within range
+            # A row at y < margin_top (typ 72pt) on a later page has small y
+            # Use nearest paragraph page as reference
             pg = 1
+            best_dist = float("inf")
             for p in data.get("paragraphs", []):
-                if p["y"] <= row_y:
+                dist = abs(p["y"] - row_y)
+                if dist < best_dist:
+                    best_dist = dist
                     pg = p["page"]
             pages_dict[pg]["table_rows"].append({
                 "row": len(pages_dict[pg]["table_rows"]),
