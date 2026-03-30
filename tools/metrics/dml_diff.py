@@ -5,6 +5,7 @@ Usage:
   python dml_diff.py <docx_dir> [--summary]          # batch summary
 
 Requires: Word DML cache in pipeline_data/word_dml/ (run word_dml_extract.py first)
+Uses: cargo run --release --example layout_json -- <docx> --structure
 """
 import json
 import subprocess
@@ -17,78 +18,103 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "pipeline_data",
 OXI_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 
 
-def get_oxi_layout(docx_path: str) -> dict:
-    """Run Oxi layout_json and parse output."""
+def get_oxi_structure(docx_path: str) -> dict:
+    """Run Oxi layout_json --structure and parse output."""
     result = subprocess.run(
-        ["cargo", "run", "--release", "--example", "layout_json", "--", docx_path],
+        ["cargo", "run", "--release", "--example", "layout_json", "--", docx_path, "--structure"],
         capture_output=True, text=True, errors="replace",
         cwd=OXI_ROOT, timeout=120,
     )
 
     pages = []
-    current_page = {"lines": [], "borders": []}
-    prev_y = None
-    line_chars = 0
-    line_x = 0
-    line_text = ""
+    current_page = {"paragraphs": [], "table_rows": []}
+
+    current_para = None  # {"index": N, "y": Y, "lines": [...]}
 
     for raw in result.stdout.split("\n"):
         line = raw.rstrip("\r")
         if line.startswith("PAGE\t"):
-            if current_page["lines"]:
+            if current_para:
+                current_page["paragraphs"].append(current_para)
+                current_para = None
+            if pages or current_page["paragraphs"] or current_page["table_rows"]:
                 pages.append(current_page)
             parts = line.split("\t")
             current_page = {
                 "width": float(parts[2]),
                 "height": float(parts[3]),
-                "lines": [],
-                "borders": [],
+                "paragraphs": [],
+                "table_rows": [],
             }
-            prev_y = None
-            line_chars = 0
-        elif line.startswith("TEXT\t"):
+        elif line.startswith("PARA\t"):
+            if current_para:
+                current_page["paragraphs"].append(current_para)
             parts = line.split("\t")
-            y = float(parts[2])
-            x = float(parts[1])
-            if prev_y is None or abs(y - prev_y) > 0.5:
-                if prev_y is not None:
-                    current_page["lines"].append({
-                        "y": round(prev_y, 2),
-                        "x": round(line_x, 2),
-                        "chars": line_chars,
-                        "text": line_text[:60],
-                    })
-                line_x = x
-                line_chars = 0
-                line_text = ""
-                prev_y = y
-        elif line.startswith("T\t"):
-            line_chars += len(line[2:])
-            line_text += line[2:]
-        elif line.startswith("BORDER\t"):
-            parts = line.split("\t")
-            current_page["borders"].append({
-                "y1": float(parts[2]),
-                "y2": float(parts[4]),
-                "x1": float(parts[1]),
-                "x2": float(parts[3]),
-            })
+            idx = int(parts[1])
+            y = float(parts[2].split("=")[1])
+            current_para = {"index": idx, "y": y, "lines": []}
+        elif line.startswith("  LINE\t"):
+            parts = line.strip().split("\t")
+            ly = float(parts[1].split("=")[1])
+            lc = int(parts[2].split("=")[1])
+            if current_para:
+                current_para["lines"].append({"y": ly, "chars": lc})
+        elif line.startswith("  ROW\t"):
+            parts = line.strip().split("\t")
+            ri = int(parts[1])
+            ry = float(parts[2].split("=")[1])
+            rh = float(parts[3].split("=")[1])
+            current_page["table_rows"].append({"row": ri, "y": ry, "h": rh})
+        elif line.startswith("TABLE_START"):
+            if current_para:
+                current_page["paragraphs"].append(current_para)
+                current_para = None
 
-    if prev_y is not None and line_chars > 0:
-        current_page["lines"].append({
-            "y": round(prev_y, 2),
-            "x": round(line_x, 2),
-            "chars": line_chars,
-            "text": line_text[:60],
-        })
-    if current_page["lines"]:
+    if current_para:
+        current_page["paragraphs"].append(current_para)
+    if current_page["paragraphs"] or current_page["table_rows"]:
         pages.append(current_page)
 
     return {"pages": pages}
 
 
+def get_word_structure(cache_path: str) -> dict:
+    """Parse Word DML cache into paragraph/table structure."""
+    with open(cache_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    pages_dict = defaultdict(lambda: {"paragraphs": [], "table_rows": []})
+
+    # Paragraphs: group lines by paragraph, split by page
+    for p in data.get("paragraphs", []):
+        pg = p["page"]
+        para = {
+            "index": p["index"],
+            "y": p["y"],
+            "lines": p.get("lines", [{"y": p["y"], "chars": len(p.get("text", ""))}]),
+        }
+        pages_dict[pg]["paragraphs"].append(para)
+
+    # Tables: extract row Y positions per page
+    for t in data.get("tables", []):
+        for rd in t.get("row_data", []):
+            row_y = rd["y"]
+            # Determine which page this row is on
+            pg = 1
+            for p in data.get("paragraphs", []):
+                if p["y"] <= row_y:
+                    pg = p["page"]
+            pages_dict[pg]["table_rows"].append({
+                "row": len(pages_dict[pg]["table_rows"]),
+                "y": row_y,
+            })
+
+    pages = [pages_dict[pg] for pg in sorted(pages_dict.keys())]
+    return {"pages": pages, "total_pages": data.get("pages", len(pages))}
+
+
 def diff_document(docx_path: str, verbose: bool = True) -> dict:
-    """Compare Word DML cache vs Oxi layout for a single document."""
+    """Compare Word DML cache vs Oxi structure for a single document."""
     doc_id = Path(docx_path).stem
     cache_path = os.path.join(CACHE_DIR, f"{doc_id}.json")
 
@@ -97,129 +123,118 @@ def diff_document(docx_path: str, verbose: bool = True) -> dict:
             print(f"[SKIP] No Word DML cache for {doc_id}")
         return {"status": "no_cache"}
 
-    with open(cache_path, encoding="utf-8") as f:
-        word_data = json.load(f)
-
+    word = get_word_structure(cache_path)
     if verbose:
-        print(f"Running Oxi layout_json...")
-    oxi_data = get_oxi_layout(docx_path)
+        print(f"Running Oxi layout_json --structure...")
+    oxi = get_oxi_structure(docx_path)
 
-    # Compare pages
-    word_pages = word_data["pages"]
-    oxi_pages = len(oxi_data["pages"])
-
-    # Flatten Word paragraphs into per-page lines, merging same-Y entries
-    word_page_lines_raw = defaultdict(list)
-    for p in word_data["paragraphs"]:
-        for line in p["lines"]:
-            word_page_lines_raw[p["page"]].append(line)
-
-    # Merge lines at the same Y (table cells on same row)
-    word_page_lines = {}
-    for page, lines in word_page_lines_raw.items():
-        merged = {}
-        for line in lines:
-            y_key = round(line["y"] * 2) / 2  # round to 0.5pt
-            if y_key in merged:
-                merged[y_key]["chars"] += line["chars"]
-            else:
-                merged[y_key] = {"y": line["y"], "x": line["x"], "chars": line["chars"]}
-        word_page_lines[page] = sorted(merged.values(), key=lambda l: l["y"])
+    word_pages = word.get("total_pages", len(word["pages"]))
+    oxi_pages = len(oxi["pages"])
 
     report = {
         "doc_id": doc_id,
         "word_pages": word_pages,
         "oxi_pages": oxi_pages,
         "page_match": word_pages == oxi_pages,
-        "diffs": [],
+        "para_diffs": [],
+        "table_row_diffs": [],
+        "mean_para_dy": 999,
+        "mean_line_dchar": 999,
+        "mean_row_dy": 999,
     }
 
-    # Compare line-by-line per page
-    total_y_err = 0
-    total_char_diff = 0
-    n_compared = 0
-    page_diffs = []
+    # === Compare paragraphs ===
+    total_para_dy = 0
+    total_line_dchar = 0
+    n_para = 0
+    n_lines = 0
 
-    word_page_nums = sorted(word_page_lines.keys())
-    for pi, word_pg in enumerate(word_page_nums):
-        if pi >= oxi_pages:
-            page_diffs.append({
-                "page": pi + 1,
-                "error": "Oxi missing this page",
-            })
-            continue
+    for pi in range(min(len(word["pages"]), oxi_pages)):
+        w_paras = word["pages"][pi]["paragraphs"]
+        o_paras = oxi["pages"][pi]["paragraphs"]
 
-        w_lines = word_page_lines[word_pg]
-        o_lines = oxi_data["pages"][pi]["lines"]
+        for qi in range(min(len(w_paras), len(o_paras))):
+            wp = w_paras[qi]
+            op = o_paras[qi]
+            dy = op["y"] - wp["y"]
+            total_para_dy += abs(dy)
+            n_para += 1
 
-        pd = {
-            "page": pi + 1,
-            "word_lines": len(w_lines),
-            "oxi_lines": len(o_lines),
-            "line_count_match": len(w_lines) == len(o_lines),
-            "y_errors": [],
-            "char_diffs": [],
-        }
+            # Compare lines within paragraph
+            w_lines = wp.get("lines", [])
+            o_lines = op.get("lines", [])
+            line_diffs = []
+            for li in range(min(len(w_lines), len(o_lines))):
+                wl = w_lines[li]
+                ol = o_lines[li]
+                ldy = ol["y"] - wl["y"]
+                dch = ol["chars"] - wl["chars"]
+                total_line_dchar += abs(dch)
+                n_lines += 1
+                if abs(dch) > 0 or abs(ldy) > 1.0:
+                    line_diffs.append({
+                        "line": li + 1,
+                        "word_y": wl["y"], "oxi_y": ol["y"], "dy": round(ldy, 2),
+                        "word_chars": wl["chars"], "oxi_chars": ol["chars"], "dch": dch,
+                    })
 
-        for li in range(min(len(w_lines), len(o_lines))):
-            wl = w_lines[li]
-            ol = o_lines[li]
-            dy = ol["y"] - wl["y"]
-            dc = ol["chars"] - wl["chars"]
-            total_y_err += abs(dy)
-            total_char_diff += abs(dc)
-            n_compared += 1
-
-            if abs(dy) > 0.5 or abs(dc) > 2:
-                pd["y_errors"].append({
-                    "line": li + 1,
-                    "word_y": wl["y"],
-                    "oxi_y": ol["y"],
+            if abs(dy) > 1.0 or len(w_lines) != len(o_lines) or line_diffs:
+                report["para_diffs"].append({
+                    "page": pi + 1,
+                    "para": wp["index"],
                     "dy": round(dy, 2),
-                    "word_chars": wl["chars"],
-                    "oxi_chars": ol["chars"],
-                    "d_chars": dc,
+                    "word_lines": len(w_lines),
+                    "oxi_lines": len(o_lines),
+                    "line_diffs": line_diffs,
                 })
 
-        page_diffs.append(pd)
+    if n_para > 0:
+        report["mean_para_dy"] = round(total_para_dy / n_para, 2)
+    if n_lines > 0:
+        report["mean_line_dchar"] = round(total_line_dchar / n_lines, 2)
 
-    report["page_diffs"] = page_diffs
-    if n_compared > 0:
-        report["mean_y_error"] = round(total_y_err / n_compared, 3)
-        report["mean_char_diff"] = round(total_char_diff / n_compared, 3)
-    else:
-        report["mean_y_error"] = 999
-        report["mean_char_diff"] = 999
+    # === Compare table rows ===
+    total_row_dy = 0
+    n_rows = 0
+    for pi in range(min(len(word["pages"]), oxi_pages)):
+        w_rows = word["pages"][pi]["table_rows"]
+        o_rows = oxi["pages"][pi]["table_rows"]
+        for ri in range(min(len(w_rows), len(o_rows))):
+            wr = w_rows[ri]
+            orr = o_rows[ri]
+            dy = orr["y"] - wr["y"]
+            total_row_dy += abs(dy)
+            n_rows += 1
+            if abs(dy) > 0.5:
+                report["table_row_diffs"].append({
+                    "page": pi + 1, "row": ri,
+                    "word_y": wr["y"], "oxi_y": orr["y"], "dy": round(dy, 2),
+                })
+
+    if n_rows > 0:
+        report["mean_row_dy"] = round(total_row_dy / n_rows, 2)
 
     # Print report
     if verbose:
         print(f"\n{'='*60}")
         print(f"DML DIFF: {doc_id}")
         print(f"{'='*60}")
-        print(f"Pages: Word={word_pages}, Oxi={oxi_pages} {'OK' if report['page_match'] else 'NG'}")
-        if n_compared > 0:
-            print(f"Mean |dy|: {report['mean_y_error']:.2f}pt")
-            print(f"Mean |Δchars|: {report['mean_char_diff']:.2f}")
+        pg_status = "OK" if report["page_match"] else "NG"
+        print(f"Pages: Word={word_pages}, Oxi={oxi_pages} {pg_status}")
+        print(f"Paragraphs: |dy|={report['mean_para_dy']:.2f}pt, |dch|={report['mean_line_dchar']:.2f}")
+        if n_rows > 0:
+            print(f"Table rows: |dy|={report['mean_row_dy']:.2f}pt ({n_rows} rows)")
 
-        for pd in page_diffs:
-            if "error" in pd:
-                print(f"\n  Page {pd['page']}: {pd['error']}")
-                continue
+        # Show worst paragraph diffs
+        for pd in report["para_diffs"][:15]:
+            lines_status = "OK" if pd["word_lines"] == pd["oxi_lines"] else f"W={pd['word_lines']} O={pd['oxi_lines']}"
+            print(f"  P{pd['para']:3d} dy={pd['dy']:+6.1f}  lines={lines_status}")
+            for ld in pd["line_diffs"][:5]:
+                print(f"    L{ld['line']}: W y={ld['word_y']:.1f} ({ld['word_chars']}ch) O y={ld['oxi_y']:.1f} ({ld['oxi_chars']}ch) dch={ld['dch']:+d}")
 
-            match = "OK" if pd["line_count_match"] else "NG"
-            print(f"\n  Page {pd['page']}: lines Word={pd['word_lines']} Oxi={pd['oxi_lines']} {match}")
-
-            for err in pd["y_errors"][:10]:
-                markers = []
-                if abs(err["dy"]) > 1:
-                    markers.append(f"dy={err['dy']:+.1f}pt")
-                if abs(err["d_chars"]) > 2:
-                    markers.append(f"Δch={err['d_chars']:+d}")
-                print(f"    line {err['line']:3d}: Word y={err['word_y']:7.1f} ({err['word_chars']:3d}ch) "
-                      f"Oxi y={err['oxi_y']:7.1f} ({err['oxi_chars']:3d}ch) {' '.join(markers)}")
-
-            if len(pd["y_errors"]) > 10:
-                print(f"    ... and {len(pd['y_errors'])-10} more")
+        # Show table row diffs
+        for td in report["table_row_diffs"][:10]:
+            print(f"  TblRow {td['row']}: W y={td['word_y']:.1f} O y={td['oxi_y']:.1f} dy={td['dy']:+.1f}")
 
     return report
 
@@ -231,6 +246,8 @@ def batch_summary(docx_dir: str):
 
     for f in docx_files:
         doc_id = f.stem
+        if doc_id.startswith("~$"):
+            continue
         cache_path = os.path.join(CACHE_DIR, f"{doc_id}.json")
         if not os.path.exists(cache_path):
             continue
@@ -242,30 +259,30 @@ def batch_summary(docx_dir: str):
         except Exception as e:
             print(f"  [ERROR] {doc_id}: {e}")
 
-    # Sort by mean_y_error descending
-    results.sort(key=lambda r: -r.get("mean_y_error", 0))
+    results.sort(key=lambda r: -(r.get("mean_para_dy", 0) + r.get("mean_row_dy", 0)))
 
-    print(f"\n{'='*60}")
-    print(f"DML DIFF SUMMARY ({len(results)} documents)")
-    print(f"{'='*60}")
-    print(f"{'Document':40s} {'Pages':>8s} {'|dy|':>7s} {'|Δch|':>7s}")
-    print(f"{'-'*40} {'-'*8} {'-'*7} {'-'*7}")
+    print(f"\n{'='*70}")
+    print(f"DML STRUCTURAL DIFF SUMMARY ({len(results)} documents)")
+    print(f"{'='*70}")
+    print(f"{'Document':40s} {'Pages':>7s} {'P|dy|':>7s} {'|dch|':>7s} {'R|dy|':>7s}")
+    print(f"{'-'*40} {'-'*7} {'-'*7} {'-'*7} {'-'*7}")
 
-    total_dy = 0
-    total_dc = 0
-    n = 0
+    tp = 0; tl = 0; tr = 0; n = 0
     for r in results:
         pg = f"{r['oxi_pages']}/{r['word_pages']}"
-        dy = r.get("mean_y_error", 999)
-        dc = r.get("mean_char_diff", 999)
+        pdy = r.get("mean_para_dy", 999)
+        ldch = r.get("mean_line_dchar", 999)
+        rdy = r.get("mean_row_dy", 999)
         marker = " NG" if not r["page_match"] else ""
-        print(f"{r['doc_id'][:40]:40s} {pg:>8s} {dy:7.2f} {dc:7.2f}{marker}")
-        total_dy += dy
-        total_dc += dc
+        rdy_str = f"{rdy:7.2f}" if rdy < 999 else "      -"
+        print(f"{r['doc_id'][:40]:40s} {pg:>7s} {pdy:7.2f} {ldch:7.2f} {rdy_str}{marker}")
+        if pdy < 999: tp += pdy
+        if ldch < 999: tl += ldch
+        if rdy < 999: tr += rdy
         n += 1
 
     if n > 0:
-        print(f"\n{'Average':40s} {'':>8s} {total_dy/n:7.2f} {total_dc/n:7.2f}")
+        print(f"\n{'Average':40s} {'':>7s} {tp/n:7.2f} {tl/n:7.2f} {tr/n:7.2f}")
 
 
 def main():
