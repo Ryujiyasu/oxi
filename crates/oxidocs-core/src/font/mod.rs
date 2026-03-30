@@ -478,7 +478,7 @@ impl FontMetricsRegistry {
         }
 
         // GDI hinting override: use pre-measured width if available
-        let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        let ppem = (font_size * 96.0 / 72.0) as u32;
         if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
             if let Some(char_widths) = font_ppems.get(&ppem) {
                 if let Some(&width_px) = char_widths.get(&(c as u32)) {
@@ -509,7 +509,7 @@ impl FontMetricsRegistry {
     /// Returns the ppem-specific width map (codepoint → width_px), avoiding
     /// repeated HashMap lookups in per-character loops.
     pub fn get_gdi_char_widths(&self, family: &str, font_size: f32) -> Option<&HashMap<u32, u32>> {
-        let ppem = (font_size * 96.0 / 72.0).round() as u32;
+        let ppem = (font_size * 96.0 / 72.0) as u32;
         self.gdi_widths.get(family)?.get(&ppem)
     }
 
