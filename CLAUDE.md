@@ -12,7 +12,7 @@ The goal is to parse, render, and eventually edit .docx / .xlsx / .pptx files na
 - **oxicells-core**: .xlsx engine — parser, IR
 - **oxislides-core**: .pptx engine — parser, IR
 - **oxi-wasm**: WebAssembly bindings via wasm-bindgen
-- **web/**: React + Canvas demo app
+- **web/**: Vanilla JS + Canvas editor
 
 ## IR Design Principles
 
@@ -49,59 +49,59 @@ cargo clippy                         # Lint
 cd crates/oxi-wasm && wasm-pack build --target web  # Wasm build
 ```
 
-## Ra: Word仕様自動解析ループ
+## Ra: Autonomous Word Specification Analysis Loop
 
-各セッション開始時に以下を確認し、自律的に仕様解析を継続する。
+At the start of each session, check the current state and continue autonomous specification analysis.
 
-### ステート管理
-- 仕様書: `docs/spec/word_layout_spec_ra.md`
-- 計測データ: `pipeline_data/ra_manual_measurements.json`
-- SSIMベースライン: `pipeline_data/ssim_baseline.json`
+### State Management
+- Specification: `docs/spec/word_layout_spec_ra.md`
+- Measurement data: `pipeline_data/ra_manual_measurements.json`
+- SSIM baseline: `pipeline_data/ssim_baseline.json`
 
-### 自律ループ手順
-1. `docs/spec/word_layout_spec_ra.md` を読み、未解決の疑問を確認
-2. 最も影響の大きい未解決疑問を選択
-3. Python COM計測スクリプトを `tools/metrics/` に作成
-4. 実行して結果を `pipeline_data/ra_manual_measurements.json` に追記
-5. 結果を分析し、仕様書を更新
-6. 仕様が確定したドメインは Rust 実装に反映
-7. `python -m pipeline.verify` で SSIM リグレッションチェック
-8. net positive なら commit、negative なら revert
-9. 1 に戻る
+### Autonomous Loop Procedure
+1. Read `docs/spec/word_layout_spec_ra.md`, identify unresolved questions
+2. Select the highest-impact unresolved question
+3. Create Python COM measurement script in `tools/metrics/`
+4. Execute and append results to `pipeline_data/ra_manual_measurements.json`
+5. Analyze results and update specification
+6. Implement confirmed specifications in Rust
+7. Run `python -m pipeline.verify` for SSIM regression check
+8. If net positive → commit; if negative → revert
+9. Return to step 1
 
-### ドメイン状況（2026-03-28）
-- **char_width**: フォールバック実装済み（MS UI Gothic）。現テスト文書では効果なし
-- **page_break**: widow/orphan、keepNext/keepTogether 実装済み。段落途中改ページ修正済み（net +0.041）
-- **spacing**: コラプス（max(sa,sb)）実装済み。net +0.71
-- **line_height**: テーブルセル内リセット実装済み。net +0.66
-- **grid_snap**: 実装済み
-- **justify**: docDefaults jc=both 継承修正済み。Justify(均等割付)が全文書で有効化
-- **SSIM: 0.7496 → 0.7884（+0.039）** ベースライン: 147文書399ページ
-- **GDI幅オーバーライド**: 9フォント完全GDI幅テーブル組み込み済み（1055KB）
-- **残りの改善余地**: 1ec文書72.7ptオーバーフロー、見出し行高さ、Desktop GDIレンダラー
+### Domain Status (2026-03-28)
+- **char_width**: Fallback implemented (MS UI Gothic). No effect on current test documents
+- **page_break**: widow/orphan, keepNext/keepTogether implemented. Mid-paragraph page break fixed (net +0.041)
+- **spacing**: Collapse (max(sa,sb)) implemented. net +0.71
+- **line_height**: Table cell reset implemented. net +0.66
+- **grid_snap**: Implemented
+- **justify**: docDefaults jc=both inheritance fixed. Justify enabled for all documents
+- **SSIM: 0.7496 → 0.7884 (+0.039)** Baseline: 147 documents, 399 pages
+- **GDI width overrides**: 9 fonts with complete GDI width tables (1055KB)
+- **Remaining improvements**: 1ec document 72.7pt overflow, heading line height, Desktop GDI renderer
 
-### 計測テンプレート
-行高さの正しい計測方法は「2段落のY座標差分」:
+### Measurement Template
+Correct method for measuring line height is "Y coordinate difference between 2 paragraphs":
 ```python
 y1 = doc.Paragraphs(1).Range.Information(6)  # wdVerticalPositionRelativeToPage
 y2 = doc.Paragraphs(2).Range.Information(6)
 gap = y2 - y1  # = line_height + spacing
 ```
-`Format.LineSpacing` は設定値を返すだけで、実際のレンダリング高さではない。
+`Format.LineSpacing` returns the setting value only, not the actual rendered height.
 
-### 重要ルール
-- DLL解析禁止。COM API経由のブラックボックス測定のみ
-- 推測で実装しない。必ずCOM実測で値を確定してから実装
-- SSIMが下がる変更は revert（net positive ルール）
+### Critical Rules
+- No DLL disassembly. Black-box measurement via COM API only
+- Never implement from speculation. Always confirm values via COM measurement first
+- Revert any change that decreases SSIM (net positive rule)
 
-### 言い訳不可能な設計
-Raは「言い訳できない環境」を前提としている。
-- Wordのレイアウトは**決定論的**（同じ入力→同じ出力）
-- COM APIで**全ての値が計測可能**（Y座標、行高さ、文字幅、段落間隔…）
-- 差がある = 未実装の仕様がある = COM計測で特定 → 実装で解消
-- **仕様は有限個。計測結果は永久資産。**一度計測すれば二度とやり直す必要がない
-- 1つの仕様修正が複数文書を同時に改善する（収束する構造）
-- 「できない」ではなく「まだやっていない」— 時間と計測回数の問題でしかない
+### No Excuses by Design
+Ra is built on the premise that there are no valid excuses for layout differences.
+- Word's layout is **deterministic** — same input always produces the same output
+- Every value is **measurable via COM API** — Y coordinates, line heights, character widths, paragraph spacing
+- Any difference = unimplemented specification = identifiable via COM measurement → fixable
+- **Specifications are finite. Measurement results are permanent assets.** Once measured, never needs re-derivation
+- Fixing one specification gap improves multiple documents simultaneously (convergent structure)
+- Not "cannot do" but "not yet done" — purely a matter of measurement count and implementation time
 
 ## License
 
