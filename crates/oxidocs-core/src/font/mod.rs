@@ -89,16 +89,13 @@ impl FontMetrics {
         let ppem = (font_size * 96.0 / 72.0).round();
         let advance_em = self.char_width_em(c);
 
-        // CJK monospace fonts (UPM=256): fullwidth = ceil_even(ppem), halfwidth = fullwidth/2
+        // CJK monospace fonts (UPM=256): COM confirmed — fullwidth = fontSize, halfwidth = fontSize/2
+        // No GDI pixel rounding; Word uses the point value directly.
         if self.units_per_em == 256 && is_fullwidth(c) {
-            let ppem_i = ppem as i32;
-            let even_px = (ppem_i + 1) & !1; // ceil to even
-            return even_px as f32 * 72.0 / 96.0;
+            return font_size;
         }
         if self.units_per_em == 256 && (is_halfwidth_katakana(c) || advance_em <= 0.51) {
-            let ppem_i = ppem as i32;
-            let even_px = (ppem_i + 1) & !1;
-            return (even_px / 2) as f32 * 72.0 / 96.0;
+            return font_size / 2.0;
         }
 
         (advance_em * ppem).round() * 72.0 / 96.0

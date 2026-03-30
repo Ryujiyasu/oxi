@@ -1231,7 +1231,11 @@ impl LayoutEngine {
         );
 
         // Line-break the text
-        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style, page.grid_char_pitch);
+        // Character grid pitch: only apply in TextBox content, not body paragraphs.
+        // Body paragraphs use natural font width for line wrapping; charGrid
+        // affects justify distribution and character count per line in a different way.
+        let effective_char_pitch = if in_textbox { page.grid_char_pitch } else { None };
+        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style, effective_char_pitch);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -1252,7 +1256,7 @@ impl LayoutEngine {
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
             // check if only 1 line would fit on this page — if so, push the
             // entire paragraph to the next page.
-            let widow_orphan_break = if para.style.widow_control && lines.len() >= 2 {
+            let widow_orphan_break = if !in_textbox && para.style.widow_control && lines.len() >= 2 {
                 if line_idx == 0 && !needs_page_break {
                     // Orphan: check if the next line would overflow — that would leave
                     // only 1 line on this page. Push entire paragraph to next page.
@@ -1307,7 +1311,12 @@ impl LayoutEngine {
             let is_last_line = line_idx == lines.len() - 1;
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
-                Alignment::Center => (available_width - extra_indent - line_text_width) / 2.0,
+                Alignment::Center => {
+                    // Word GDI: integer pixel division at 96dpi for center alignment
+                    let slack_tw = ((available_width - extra_indent - line_text_width) * 20.0).round() as i32;
+                    let center_tw = slack_tw / 2; // integer division (truncate)
+                    center_tw as f32 / 20.0
+                },
                 Alignment::Right => available_width - extra_indent - line_text_width,
                 Alignment::Justify => 0.0,
                 // Distribute: when justification applies (multi-fragment lines), offset is 0
@@ -1359,15 +1368,24 @@ impl LayoutEngine {
 
                 // Phase 2: Distribute remaining slack at word spaces (only if slack > 0 after compression)
                 if slack > 0.0 {
+                    // Count ASCII word spaces only — CJK fullwidth spaces (U+3000) are NOT
+                    // word boundaries for justify purposes.
                     let space_count = line.fragments.iter()
                         .enumerate()
-                        .filter(|(i, f)| *i < line.fragments.len() - 1 && f.text.trim().is_empty())
+                        .filter(|(i, f)| {
+                            *i < line.fragments.len() - 1
+                            && f.text.chars().all(|c| c == ' ')
+                            && !f.text.is_empty()
+                        })
                         .count();
 
                     if space_count > 0 {
                         let per_space = slack / space_count as f32;
                         for (fi, frag) in line.fragments.iter().enumerate() {
-                            if fi < line.fragments.len() - 1 && frag.text.trim().is_empty() {
+                            if fi < line.fragments.len() - 1
+                                && frag.text.chars().all(|c| c == ' ')
+                                && !frag.text.is_empty()
+                            {
                                 frag_spacing_after[fi] += per_space;
                             }
                         }
@@ -1539,15 +1557,21 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         grid_char_pitch: Option<f32>,
     ) -> Vec<Line> {
+        // Helper: convert pt to twips for Word-GDI-compatible integer comparison
+        let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
+        let available_tw = pt_to_tw(available_width);
+
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
         let mut current_width = first_line_indent;
+        let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
 
         // Word buffer spans across fragment boundaries so that a single word
         // split across two runs (e.g. "te" in Run1 + "st" in Run2) is kept
         // together for line-break decisions.
         let mut word = String::new();
         let mut word_width: f32 = 0.0;
+        let mut word_grid_extra: f32 = 0.0; // charGrid extra width for line-break
         let mut word_style: Option<RunStyle> = None;
         let mut word_field_type: Option<FieldType> = None;
         let mut word_run_index: usize = 0;
@@ -1559,9 +1583,10 @@ impl LayoutEngine {
                 if !word.is_empty() {
                     let ws = word_style.take().unwrap_or_else(|| $style.clone());
                     let wft = word_field_type.take();
-                    if current_width + word_width > available_width && !current_line.fragments.is_empty() {
+                    if pt_to_tw(current_width + current_grid_extra + word_width + word_grid_extra) > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0;
+                        current_width = 0.0; current_grid_extra = 0.0;
+                        current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
@@ -1574,7 +1599,9 @@ impl LayoutEngine {
                         char_offset: word_char_offset,
                     });
                     current_width += word_width;
+                    current_grid_extra += word_grid_extra;
                     word_width = 0.0;
+                    word_grid_extra = 0.0;
                 }
             };
         }
@@ -1603,11 +1630,14 @@ impl LayoutEngine {
                     (latin_metrics, latin_gdi_map)
                 };
                 let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map) + cs;
-                // linesAndChars: character grid adds micro-expansion (+0.125pt/char)
-                // but never shrinks below natural width. COM-confirmed: no effect
-                // on line breaking for this document. Disabled to prevent
-                // shrinking 12pt chars to 10.63pt grid pitch.
-                // TODO: implement correct char grid expansion when needed.
+                // charGrid: extra width per char for line-break accounting
+                // Fragment width stays natural; the extra is distributed via justify
+                let char_grid_extra = if let Some(pitch) = grid_char_pitch {
+                    if pitch > 0.0 && char_width > 0.0 && ch != ' ' && ch != '\t' && ch != '\n' {
+                        let grid_w = (char_width / pitch).ceil() * pitch;
+                        grid_w - char_width
+                    } else { 0.0 }
+                } else { 0.0 };
 
                 if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace
@@ -1622,7 +1652,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0;
+                        current_width = 0.0; current_grid_extra = 0.0;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -1669,7 +1699,7 @@ impl LayoutEngine {
                                 run_index: frag_run_index,
                                 char_offset: char_pos_in_run,
                             });
-                            current_width += char_width;
+                            current_width += char_width; current_grid_extra += char_grid_extra;
                         }
                     }
                 } else if is_break_after(ch) {
@@ -1682,7 +1712,7 @@ impl LayoutEngine {
                         word_char_offset = char_pos_in_run;
                     }
                     word.push(ch);
-                    word_width += char_width;
+                    word_width += char_width; word_grid_extra += char_grid_extra;
                     flush_word!(style);
                 } else if kinsoku::is_cjk(ch) {
                     // CJK characters can break at any point
@@ -1698,7 +1728,7 @@ impl LayoutEngine {
                         current_width += 2.5; // COM-confirmed: 2.5pt auto space
                     }
 
-                    if current_width + char_width > available_width && !current_line.fragments.is_empty() {
+                    if pt_to_tw(current_width + current_grid_extra + char_width + char_grid_extra) > available_tw && !current_line.fragments.is_empty() {
                         if kinsoku::is_line_start_prohibited(ch) && !current_line.fragments.is_empty() {
                             current_line.fragments.push(LineFragment {
                                 text: char_to_string(ch),
@@ -1711,11 +1741,11 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0;
+                            current_width = 0.0; current_grid_extra = 0.0;
                             continue;
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0;
+                        current_width = 0.0; current_grid_extra = 0.0;
                     }
 
                     if kinsoku::is_line_end_prohibited(ch) {
@@ -1729,7 +1759,7 @@ impl LayoutEngine {
                             run_index: frag_run_index,
                             char_offset: char_pos_in_run,
                         });
-                        current_width += char_width;
+                        current_width += char_width; current_grid_extra += char_grid_extra;
                         continue;
                     }
 
@@ -1743,7 +1773,7 @@ impl LayoutEngine {
                         run_index: frag_run_index,
                         char_offset: char_pos_in_run,
                     });
-                    current_width += char_width;
+                    current_width += char_width; current_grid_extra += char_grid_extra;
                 } else {
                     // Regular word character — accumulate
                     if word_style.is_none() {
@@ -1753,7 +1783,7 @@ impl LayoutEngine {
                         word_char_offset = char_pos_in_run;
                     }
                     word.push(ch);
-                    word_width += char_width;
+                    word_width += char_width; word_grid_extra += char_grid_extra;
                 }
                 char_pos_in_run += 1; // character index (not byte offset) for JS compatibility
             }
@@ -1766,9 +1796,9 @@ impl LayoutEngine {
                 fragments.last().map(|f| f.1.clone()).unwrap_or_default()
             });
             let wft = word_field_type.take();
-            if current_width + word_width > available_width && !current_line.fragments.is_empty() {
+            if pt_to_tw(current_width + word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0;
+                current_width = 0.0; current_grid_extra = 0.0;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
@@ -2083,9 +2113,9 @@ impl LayoutEngine {
                         if des > max_descent { max_descent = des; }
                     }
                 }
-                let _natural = max_ascent + max_descent;
-                // COM confirmed: text at top of line box for exact/atLeast spacing
-                0.0
+                let natural = max_ascent + max_descent;
+                // Extra space above text (text at bottom of line box)
+                (line_height - natural).max(0.0)
             }
             _ => {
                 // Grid-snapped lines: text is vertically centered within the grid cell.
@@ -2109,8 +2139,13 @@ impl LayoutEngine {
                 }
                 let natural = max_ascent + max_descent;
                 if line_height > natural + 0.5 {
-                    // Center text within grid cell (grid snap case)
-                    (line_height - natural) / 2.0
+                    // Center fontSize (not CJK natural) within grid cell.
+                    // GDI TextOutW places character cell (= fontSize height) at y.
+                    // CJK 83/64 expands line spacing but not the GDI character cell.
+                    let font_size = if !line.fragments.is_empty() {
+                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
+                    } else { para_font_size };
+                    (line_height - font_size) / 2.0
                 } else {
                     // No grid snap: apply font internal leading offset
                     // COM-confirmed: offset = (CJK_height - fontSize) / 2
@@ -2211,7 +2246,9 @@ impl LayoutEngine {
                 let bw = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
                 if table.style.border || cell.borders.as_ref().map_or(false, |b| b.top.is_some()) { pad_t += bw; }
                 if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) { pad_b += bw; }
-                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
+                // For line-wrapping estimation, use cell_w (not inner_w after padding)
+                // Word allows text to extend into cell margins for wrapping purposes
+                let inner_w = cell_w.max(0.0);
                 let mut cell_content_h = pad_t;
 
                 for block in &cell.blocks {
@@ -2252,6 +2289,16 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
+            // Grid snap row content height, then round to 0.5pt (10tw)
+            // COM-confirmed: table row height = round_10tw(ceil(content / pitch) * pitch)
+            if let Some(pitch) = table_grid_pitch {
+                if pitch > 0.0 && row_height > 0.0 {
+                    let snapped = (row_height / pitch).ceil() * pitch;
+                    // Round to 0.5pt (10 twips) — matches Word internal precision
+                    row_height = (snapped * 2.0).round() / 2.0;
+                }
+            }
+
             // Apply trHeight constraint
             // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
             if let Some(h) = row.height {
@@ -2266,7 +2313,6 @@ impl LayoutEngine {
                 let metrics = self.doc_default_metrics();
                 row_height = self.line_height_inner(self.default_font_size, None, None, metrics, true, table_grid_pitch, true);
             }
-
             // Page break check: if this row won't fit, push current page and reset
             // Allow break if there are elements from previous rows OR from before the table
             let has_content = !elements.is_empty() || !current_elements.is_empty();
