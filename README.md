@@ -170,6 +170,24 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 ---
 
+## Layout Accuracy (SSIM Progress)
+
+Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Similarity Index) across 157 real-world .docx documents (415 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
+
+| Date | avg SSIM | Pages >= 0.90 | Key Changes |
+|------|----------|---------------|-------------|
+| 2026-03-28 | 0.7496 | — | Baseline: 147 docs, grid snap, spacing collapse, justify |
+| 2026-03-28 | 0.7884 | — | Twips char width, paragraph border Y, GDI height ppem round |
+| 2026-03-30 | 0.8083 | — | DML-driven improvement loop, GDI renderer pipeline |
+| 2026-03-31 | 0.8152 | 79/157 (50%) | ceil_10tw line height, text_y_offset grid conditional, table cell lineSpacing fix, contextualSpacing style inheritance |
+| 2026-04-01 | **0.8164** | **79/157 (50%)** | pPr/rPr empty paragraph font, tab_stops inheritance, space_before page 1 |
+
+**Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
+
+**DML structural comparison**: 147 documents cached. Paragraph Y, line-break positions, and table row heights compared independently using `layout_json --structure` and `dml_diff.py`.
+
+---
+
 ## Architecture
 
 ```
