@@ -2441,13 +2441,13 @@ impl LayoutEngine {
                         .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing));
                     let effective_line_rule = para.style.line_spacing_rule.as_deref()
                         .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref()));
-                    // Reset inherited Normal-style spacing (1.15x, sa=10) to Single/0 in table cells.
-                    // BUT preserve style-defined exact/atLeast spacing (e.g. "一太郎" style).
+                    // COM-confirmed (2026-03-31): table cells inherit Normal style's lineSpacing.
+                    // test_table_borders.docx: Cell(1,1) ls=13.80 (1.15x from Normal), NOT reset to Single.
+                    // Only override with table style's lineSpacing if the table style explicitly sets it.
                     let style_has_explicit_rule = effective_line_rule == Some("exact") || effective_line_rule == Some("atLeast");
                     let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
-                    let (effective_line_spacing, effective_line_rule) = if should_reset {
-                        // Use table style's lineSpacing if available (e.g. TableGrid: line=240 auto=Single).
-                        // COM-confirmed: this controls the actual cell line height.
+                    let tbl_has_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing).is_some();
+                    let (effective_line_spacing, effective_line_rule) = if tbl_has_ls && !para.style.has_direct_spacing {
                         let tbl_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing);
                         let tbl_lr = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref());
                         (tbl_ls, tbl_lr)
@@ -2866,15 +2866,16 @@ impl LayoutEngine {
         let mut height = 0.0;
         // Table cells snap to grid in default Word mode
         let snap = para.style.snap_to_grid;
-        // Apply table style pPr as fallback, with has_direct_spacing reset
+        // COM-confirmed (2026-03-31): table cells inherit Normal style's lineSpacing.
+        // Only override with table style if it explicitly defines lineSpacing.
         let raw_ls = para.style.line_spacing
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing));
         let raw_lr = para.style.line_spacing_rule.as_deref()
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
         let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
         let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
-        let (eff_ls, eff_lr): (Option<f32>, Option<&str>) = if should_reset {
-            // Use table style's lineSpacing if available (COM-confirmed).
+        let tbl_has_ls = table_para_style.and_then(|ps| ps.line_spacing).is_some();
+        let (eff_ls, eff_lr): (Option<f32>, Option<&str>) = if tbl_has_ls && !para.style.has_direct_spacing {
             let tbl_ls = table_para_style.and_then(|ps| ps.line_spacing);
             let tbl_lr = table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref());
             (tbl_ls, tbl_lr)
