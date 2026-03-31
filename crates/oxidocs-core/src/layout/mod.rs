@@ -2088,7 +2088,10 @@ impl LayoutEngine {
                         }
                     }
                 }
-                spaced
+                // Ceil to 10 twips (0.5pt) — Word internal line height precision.
+                // COM-confirmed: 80/80 tests (5 fonts × 4 sizes × 4 spacings).
+                let tw = spaced * 20.0;
+                (tw / 10.0).ceil() * 10.0 / 20.0
             }
         }
     }
