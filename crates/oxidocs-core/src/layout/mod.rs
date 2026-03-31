@@ -1425,7 +1425,7 @@ impl LayoutEngine {
 
             // Matches Word output: exact/atLeast line spacing places text at BOTTOM of line box.
             // Extra space goes above text (ascent increased, descent unchanged).
-            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height);
+            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch);
 
             // Compute max ascent across all fragments for baseline alignment.
             // All fragments in a line share the same baseline (matches Word output).
@@ -1981,7 +1981,15 @@ impl LayoutEngine {
                         }
                     }
                 }
-                spaced
+                // No grid snap: ceil to 10 twips (0.5pt) — Word internal line height.
+                // COM-confirmed: 80/80 tests (5 fonts × 4 sizes × 4 spacings) all match.
+                // Table cells use raw value (table row height has separate calculation).
+                if !in_table_cell {
+                    let tw = spaced * 20.0;
+                    (tw / 10.0).ceil() * 10.0 / 20.0
+                } else {
+                    spaced
+                }
             }
         }
     }
@@ -2094,6 +2102,7 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         para_font_size: f32,
         line_height: f32,
+        grid_pitch: Option<f32>,
     ) -> f32 {
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
@@ -2139,17 +2148,22 @@ impl LayoutEngine {
                         if des > max_descent { max_descent = des; }
                     }
                 }
-                let natural = max_ascent + max_descent;
-                if line_height > natural + 0.5 {
-                    // Center fontSize within grid cell.
-                    // GDI TextOutW places character cell (= fontSize height) at y.
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
-                    } else { para_font_size };
-                    (line_height - font_size) / 2.0
+                // Only center text vertically when document grid is active.
+                // Grid snap expands line_height beyond natural height; text centers in the cell.
+                // Without grid, GDI TextOutW places text at cursor_y (no offset).
+                // COM-confirmed: test_line_height.docx all fonts show y = cursor_y (no offset).
+                let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
+                if has_grid {
+                    let natural = max_ascent + max_descent;
+                    if line_height > natural + 0.5 {
+                        let font_size = if !line.fragments.is_empty() {
+                            line.fragments[0].style.font_size.unwrap_or(para_font_size)
+                        } else { para_font_size };
+                        (line_height - font_size) / 2.0
+                    } else {
+                        0.0
+                    }
                 } else {
-                    // No grid snap: COM shows text starts at line top (offset=0).
-                    // Word places text at the top of the line box, not centered.
                     0.0
                 }
             }
