@@ -685,6 +685,9 @@ pub struct ParagraphStyle {
     /// Paragraph background/shading color (hex from w:shd fill)
     #[serde(default)]
     pub shading: Option<String>,
+    /// pPr/rPr: paragraph-level default run properties for empty paragraph height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ppr_rpr: Option<RunStyle>,
     /// Page break before this paragraph (w:pageBreakBefore)
     #[serde(default)]
     pub page_break_before: bool,
@@ -775,6 +778,7 @@ impl Default for ParagraphStyle {
             style_id: None,
             tab_stops: Vec::new(),
             shading: None,
+            ppr_rpr: None,
             page_break_before: false,
             borders: None,
             keep_next: false,
