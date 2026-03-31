@@ -998,6 +998,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     style.num_ilvl = ds.num_ilvl;
                 }
             }
+            // Inherit tab stops from style
+            if style.tab_stops.is_empty() && !ds.tab_stops.is_empty() {
+                style.tab_stops = ds.tab_stops.clone();
+            }
             // Inherit paragraph borders from style
             if style.borders.is_none() {
                 style.borders = ds.borders.clone();
