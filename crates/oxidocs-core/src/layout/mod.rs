@@ -2026,10 +2026,14 @@ impl LayoutEngine {
         let use_standard = in_table_cell && self.adjust_line_height_in_table;
 
         if line.fragments.is_empty() {
-            let font_size = para_font_size;
-            // COM-confirmed: empty paragraphs use the paragraph's own font metrics,
-            // not the document default. Resolve via paragraph style's default run style.
-            let metrics = self.metrics_for(&RunStyle::default(), para_style);
+            // Empty paragraph: use pPr/rPr font size if available (direct paragraph property),
+            // otherwise fall back to paragraph style's default run style.
+            // COM-confirmed: 3a4f P1 empty, pPr/rPr/sz=48 (24pt) → uses Century 24pt height.
+            let font_size = para_style.ppr_rpr.as_ref()
+                .and_then(|r| r.font_size)
+                .unwrap_or(para_font_size);
+            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+            let metrics = self.metrics_for(&rpr_ref, para_style);
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -2887,14 +2891,17 @@ impl LayoutEngine {
         // COM-confirmed: table cells use no-grid line height (grid snap disabled inside cells).
         // Use COM table with grid_pitch=None to get no_grid value.
         if para.runs.is_empty() {
-            let metrics = self.doc_default_metrics();
-            // COM-confirmed: table cells use no-grid line height
+            // Use pPr/rPr font for empty paragraph height
+            let empty_fs = para.style.ppr_rpr.as_ref()
+                .and_then(|r| r.font_size)
+                .unwrap_or(self.resolve_font_size(&RunStyle::default(), &para.style));
+            let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+            let metrics = self.metrics_for(&rpr_ref, &para.style);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             if is_single_empty {
-                // COM-confirmed: table cells use floor(descent), no grid snap
-                height += metrics.word_line_height_table_cell(self.default_font_size);
+                height += metrics.word_line_height_table_cell(empty_fs);
             } else {
-                height += self.line_height_inner(self.default_font_size, eff_ls, eff_lr, metrics, false, None, true);
+                height += self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true);
             }
         } else {
             let para_font_size = self.resolve_font_size(

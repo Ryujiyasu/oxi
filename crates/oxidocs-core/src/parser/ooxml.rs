@@ -1167,6 +1167,42 @@ fn parse_paragraph_properties(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "rPr" if depth == 0 => {
+                        // pPr/rPr: paragraph-level default run properties (empty para font)
+                        let mut ppr_rpr = RunStyle::default();
+                        let mut rd = 0;
+                        loop {
+                            match reader.read_event()? {
+                                Event::Empty(e2) => {
+                                    let l = local_name(e2.name().as_ref());
+                                    if l == "sz" {
+                                        for a in e2.attributes().flatten() {
+                                            if local_name(a.key.as_ref()) == "val" {
+                                                if let Ok(v) = std::str::from_utf8(&a.value) {
+                                                    if let Ok(hp) = v.parse::<f32>() { ppr_rpr.font_size = Some(hp / 2.0); }
+                                                }
+                                            }
+                                        }
+                                    } else if l == "rFonts" {
+                                        for a in e2.attributes().flatten() {
+                                            let k = local_name(a.key.as_ref());
+                                            let v = String::from_utf8_lossy(&a.value).to_string();
+                                            match k.as_str() {
+                                                "ascii" | "hAnsi" => { ppr_rpr.font_family = Some(v); }
+                                                "eastAsia" => { ppr_rpr.font_family_east_asia = Some(v); }
+                                                _ => {}
+                                            }
+                                        }
+                                    } else if l == "b" { ppr_rpr.bold = true; }
+                                }
+                                Event::Start(_) => { rd += 1; }
+                                Event::End(_) => { if rd == 0 { break; } rd -= 1; }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
+                        style.ppr_rpr = Some(ppr_rpr);
+                    }
                     "numPr" if depth == 0 => {
                         num_pr = Some(parse_num_pr(reader)?);
                     }
