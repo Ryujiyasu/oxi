@@ -987,9 +987,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     style.default_run_style = ds.default_run_style.clone();
                 }
             }
-            // Inherit keepNext, keepLines from style
+            // Inherit keepNext, keepLines, contextualSpacing from style
             if ds.keep_next { style.keep_next = true; }
             if ds.keep_lines { style.keep_lines = true; }
+            if ds.contextual_spacing { style.contextual_spacing = true; }
             // Inherit numPr from style definition
             if style.num_id.is_none() {
                 if let Some(ref nid) = ds.num_id {
