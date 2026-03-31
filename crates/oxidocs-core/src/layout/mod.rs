@@ -1136,8 +1136,11 @@ impl LayoutEngine {
             }
         }
 
-        // Suppress space_before at the top of a page
-        if (*cursor_y - page_top).abs() < 0.01 {
+        // Suppress space_before at the top of a page (page 2+).
+        // COM-confirmed: page 1 preserves space_before (H1 sb=24 → y=96=72+24).
+        // Page 2+ suppresses it.
+        let is_page_2_plus = !pages.is_empty() || !current_elements.is_empty();
+        if (*cursor_y - page_top).abs() < 0.01 && is_page_2_plus {
             effective_spacing = 0.0;
         }
 
