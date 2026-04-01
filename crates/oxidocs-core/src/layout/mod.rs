@@ -2263,10 +2263,19 @@ impl LayoutEngine {
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
-                // Matches Word output: content starts after border width (filled rect, ~0.4pt)
+                // Border overhead for row height calculation.
+                // COM-confirmed: insideH borders add ~0.25pt overhead per edge.
+                // Table outer borders (top of first row, bottom of last row) also add overhead.
+                // Middle rows without insideH have no border overhead.
                 let bw = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
-                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.top.is_some()) { pad_t += bw; }
-                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) { pad_b += bw; }
+                let has_cell_top = cell.borders.as_ref().map_or(false, |b| b.top.is_some());
+                let has_cell_bot = cell.borders.as_ref().map_or(false, |b| b.bottom.is_some());
+                let has_tbl_top = table.style.border && row_idx == 0;
+                let has_tbl_bot = table.style.border && row_idx == num_rows - 1;
+                let has_inside_top = table.style.has_inside_h && row_idx > 0;
+                let has_inside_bot = table.style.has_inside_h && row_idx < num_rows - 1;
+                if has_cell_top || has_tbl_top || has_inside_top { pad_t += bw; }
+                if has_cell_bot || has_tbl_bot || has_inside_bot { pad_b += bw; }
                 // For line-wrapping estimation, use cell_w (not inner_w after padding)
                 // Word allows text to extend into cell margins for wrapping purposes
                 let inner_w = cell_w.max(0.0);
@@ -2382,13 +2391,18 @@ impl LayoutEngine {
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
 
-                // Matches Word output: border is rendered as filled rect, content starts after border width
-                // Add border width to effective padding so text doesn't overlap the border line
+                // Border padding: only for edges with actual borders.
                 let border_w = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
-                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.top.is_some()) {
+                let has_cell_top_b = cell.borders.as_ref().map_or(false, |b| b.top.is_some());
+                let has_cell_bot_b = cell.borders.as_ref().map_or(false, |b| b.bottom.is_some());
+                let has_tbl_top_b = table.style.border && row_idx == 0;
+                let has_tbl_bot_b = table.style.border && row_idx == num_rows - 1;
+                let has_inside_top_b = table.style.has_inside_h && row_idx > 0;
+                let has_inside_bot_b = table.style.has_inside_h && row_idx < num_rows - 1;
+                if has_cell_top_b || has_tbl_top_b || has_inside_top_b {
                     pad_t += border_w;
                 }
-                if table.style.border || cell.borders.as_ref().map_or(false, |b| b.bottom.is_some()) {
+                if has_cell_bot_b || has_tbl_bot_b || has_inside_bot_b {
                     pad_b += border_w;
                 }
 

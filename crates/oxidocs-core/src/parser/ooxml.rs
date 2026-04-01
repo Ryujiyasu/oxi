@@ -3545,6 +3545,9 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
             if let Some(tbl_style) = styles.table_styles.get(style_id) {
                 if tbl_style.border {
                     style.border = true;
+                    if tbl_style.has_inside_h {
+                        style.has_inside_h = true;
+                    }
                     if style.border_color.is_none() {
                         style.border_color = tbl_style.border_color.clone();
                     }
@@ -3694,6 +3697,9 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         }
                         if !is_none {
                             style.border = true;
+                            if local == "insideH" {
+                                style.has_inside_h = true;
+                            }
                             if style.border_color.is_none() {
                                 style.border_color = border_color_val;
                             }

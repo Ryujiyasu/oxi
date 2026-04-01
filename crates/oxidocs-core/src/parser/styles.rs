@@ -1403,6 +1403,10 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<TableStyle
                         }
                         if !is_none {
                             style.border = true;
+                            let local_border = local_name(e.name().as_ref());
+                            if local_border == "insideH" {
+                                style.has_inside_h = true;
+                            }
                             if style.border_color.is_none() { style.border_color = border_color; }
                             if style.border_width.is_none() { style.border_width = border_sz; }
                             style.border_style = Some("single".to_string());
