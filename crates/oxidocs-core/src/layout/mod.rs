@@ -2237,11 +2237,10 @@ impl LayoutEngine {
         let default_pad_t = default_pad.as_ref().and_then(|m| m.top).unwrap_or(0.0);
         let default_pad_b = default_pad.as_ref().and_then(|m| m.bottom).unwrap_or(0.0);
 
-        // Table cell grid snap depends on compat mode:
-        // - compat=15 (Word 2013+): grid snap enabled in table cells
-        // - compat=14 (Word 2010): grid snap disabled in table cells
-        // - adjustLineHeightInTable=true: always disable (Word 6.0 compat)
-        let table_grid_pitch: Option<f32> = if self.adjust_line_height_in_table || self.compat_mode < 15 {
+        // Table cell grid snap: COM-confirmed always enabled regardless of compat mode.
+        // adjustLineHeightInTable is always false (COM measurement of 151 documents).
+        // Previous compat<15 check was incorrect — Word 2010 mode also grid-snaps table cells.
+        let table_grid_pitch: Option<f32> = if self.adjust_line_height_in_table {
             None
         } else {
             grid_pitch
