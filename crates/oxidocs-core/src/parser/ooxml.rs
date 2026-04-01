@@ -64,25 +64,37 @@ impl OoxmlParser {
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
+        // OOXML: sections without explicit header/footer inherit from previous section
+        let mut prev_header_refs: Vec<HdrFtrRef> = Vec::new();
+        let mut prev_footer_refs: Vec<HdrFtrRef> = Vec::new();
         for section in sections {
+            let effective_header_refs = if section.properties.header_refs.is_empty() {
+                &prev_header_refs
+            } else {
+                &section.properties.header_refs
+            };
+            let effective_footer_refs = if section.properties.footer_refs.is_empty() {
+                &prev_footer_refs
+            } else {
+                &section.properties.footer_refs
+            };
             // Determine which header/footer type to use
             // First page of a section with title_pg uses "first" type
             let hdr_type = if section.properties.title_pg && page_index == 0 { "first" } else { "default" };
-            let use_headers: Vec<HdrFtrRef> = section.properties.header_refs.iter()
+            let use_headers: Vec<HdrFtrRef> = effective_header_refs.iter()
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
-            let use_footers: Vec<HdrFtrRef> = section.properties.footer_refs.iter()
+            let use_footers: Vec<HdrFtrRef> = effective_footer_refs.iter()
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
             // Fall back: if no matching type, try any available reference
             let header = if use_headers.is_empty() {
-                // Try "default", then "first", then any
-                let fallback: Vec<HdrFtrRef> = section.properties.header_refs.iter()
+                let fallback: Vec<HdrFtrRef> = effective_header_refs.iter()
                     .filter(|r| r.ref_type == "default").cloned().collect();
                 if fallback.is_empty() {
-                    self.parse_header_footer_blocks(&section.properties.header_refs, &ctx, &styles)
+                    self.parse_header_footer_blocks(effective_header_refs, &ctx, &styles)
                 } else {
                     self.parse_header_footer_blocks(&fallback, &ctx, &styles)
                 }
@@ -90,10 +102,10 @@ impl OoxmlParser {
                 self.parse_header_footer_blocks(&use_headers, &ctx, &styles)
             };
             let footer = if use_footers.is_empty() {
-                let fallback: Vec<HdrFtrRef> = section.properties.footer_refs.iter()
+                let fallback: Vec<HdrFtrRef> = effective_footer_refs.iter()
                     .filter(|r| r.ref_type == "default").cloned().collect();
                 if fallback.is_empty() {
-                    self.parse_header_footer_blocks(&section.properties.footer_refs, &ctx, &styles)
+                    self.parse_header_footer_blocks(effective_footer_refs, &ctx, &styles)
                 } else {
                     self.parse_header_footer_blocks(&fallback, &ctx, &styles)
                 }
@@ -142,6 +154,13 @@ impl OoxmlParser {
                     page_number_start: section.properties.page_number_start,
                     page_borders: section.properties.page_borders,
                 });
+            }
+            // Update previous refs for inheritance
+            if !section.properties.header_refs.is_empty() {
+                prev_header_refs = section.properties.header_refs;
+            }
+            if !section.properties.footer_refs.is_empty() {
+                prev_footer_refs = section.properties.footer_refs;
             }
             page_index += 1;
         }
