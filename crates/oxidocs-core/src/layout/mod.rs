@@ -602,6 +602,7 @@ impl LayoutEngine {
                         &mut cursor_y,
                         content_width,
                         grid_pitch,
+                        page.grid_char_pitch,
                         start_y,
                         content_height,
                         page.size.width,
@@ -1052,6 +1053,7 @@ impl LayoutEngine {
                         inner_x,
                         &mut cursor_y,
                         inner_width,
+                        None,
                         None,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut tb_pages, &mut tb_elems,
@@ -2187,6 +2189,7 @@ impl LayoutEngine {
         cursor_y: &mut f32,
         content_width: f32,
         grid_pitch: Option<f32>,
+        grid_char_pitch: Option<f32>,
         page_top: f32,
         content_height: f32,
         page_width: f32,
@@ -2321,8 +2324,10 @@ impl LayoutEngine {
 
             // Grid snap row content height, then round to 0.5pt (10tw)
             // COM-confirmed: table row height = round_10tw(ceil(content / pitch) * pitch)
+            // linesAndChars mode: Word does NOT grid-snap table row heights
+            // (COM-measured: row heights are natural content height, not grid multiples)
             if let Some(pitch) = table_grid_pitch {
-                if pitch > 0.0 && row_height > 0.0 {
+                if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none() {
                     let snapped = (row_height / pitch).ceil() * pitch;
                     // Round to 0.5pt (10 twips) — matches Word internal precision
                     row_height = (snapped * 2.0).round() / 2.0;
@@ -2443,6 +2448,7 @@ impl LayoutEngine {
                     let mut dummy_elems = Vec::new();
                     let nested_elements = self.layout_table(
                         nested, nested_x, &mut nested_y, nested_content_w, table_grid_pitch,
+                        grid_char_pitch,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut dummy_pages, &mut dummy_elems,
                     );
