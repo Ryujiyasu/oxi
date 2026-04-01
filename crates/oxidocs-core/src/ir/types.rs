@@ -797,6 +797,9 @@ impl Default for ParagraphStyle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TableStyle {
     pub border: bool,
+    /// Whether the table has inside horizontal borders (insideH)
+    #[serde(default)]
+    pub has_inside_h: bool,
     /// Border color (hex), e.g. "000000"
     #[serde(default)]
     pub border_color: Option<String>,
