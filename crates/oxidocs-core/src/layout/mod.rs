@@ -2160,18 +2160,31 @@ impl LayoutEngine {
                         if des > max_descent { max_descent = des; }
                     }
                 }
-                // Only center text vertically when document grid is active.
-                // Grid snap expands line_height beyond natural height; text centers in the cell.
+                // Only apply text_y_offset when document grid is active.
                 // Without grid, GDI TextOutW places text at cursor_y (no offset).
                 // COM-confirmed: test_line_height.docx all fonts show y = cursor_y (no offset).
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
-                    let natural = max_ascent + max_descent;
-                    if line_height > natural + 0.5 {
-                        let font_size = if !line.fragments.is_empty() {
-                            line.fragments[0].style.font_size.unwrap_or(para_font_size)
-                        } else { para_font_size };
-                        (line_height - font_size) / 2.0
+                    // COM-confirmed (2026-04-02): text_y_offset is ppem-based, font-independent.
+                    // Formula: ofs = (n * default_ppem - ppem_floor(fontSize)) * 10tw
+                    // where:
+                    //   n = ceil(fontSize * 83/64 / pitch)  [grid level, CJK multiplier for ALL fonts]
+                    //   ppem_floor = floor(fontSize * 96/72)
+                    //   default_ppem = floor(default_font_size * 96/72)
+                    //   10tw = 0.5pt
+                    // 1-grid: exact match for all font sizes (12 data points)
+                    // 2-grid: max 0.5pt error (acceptable, rare font sizes >13.5pt in 18pt grid)
+                    let font_size = if !line.fragments.is_empty() {
+                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
+                    } else { para_font_size };
+                    let pitch = grid_pitch.unwrap_or(0.0);
+                    if pitch > 0.0 {
+                        let default_ppem = (self.default_font_size * 96.0 / 72.0).floor();
+                        let ppem = (font_size * 96.0 / 72.0).floor();
+                        let n = (font_size * 83.0 / 64.0 / pitch).ceil().max(1.0);
+                        // Clamp to non-negative: negative means font > grid reference size
+                        // (e.g., 12pt text in 10.5pt-default doc) — Word positions at grid top
+                        ((n * default_ppem - ppem) * 0.5).max(0.0)
                     } else {
                         0.0
                     }
