@@ -150,6 +150,8 @@ impl FontMetrics {
         if self.is_cjk_83_64_font() {
             let win_sum = self.win_ascent + self.win_descent;
             let total = win_sum * font_size * (83.0 / 64.0);
+            // COM-confirmed: CJK 83/64 height uses floor quantization to 1/8pt
+            let total = (total * 8.0).floor() / 8.0;
             return total * self.win_ascent / (self.win_ascent + self.win_descent);
         }
 
@@ -170,6 +172,7 @@ impl FontMetrics {
         if self.is_cjk_83_64_font() {
             let win_sum = self.win_ascent + self.win_descent;
             let total = win_sum * font_size * (83.0 / 64.0);
+            let total = (total * 8.0).floor() / 8.0;
             return total * self.win_descent / (self.win_ascent + self.win_descent);
         }
 
@@ -201,7 +204,8 @@ impl FontMetrics {
         let font_descent = (self.win_descent * ppem).floor();    // floor for table cells
         let base = (font_ascent + font_descent) * 72.0 / 96.0;
         if self.is_cjk_83_64_font() {
-            base * 83.0 / 64.0
+            let raw = base * 83.0 / 64.0;
+            (raw * 8.0).floor() / 8.0
         } else {
             base
         }

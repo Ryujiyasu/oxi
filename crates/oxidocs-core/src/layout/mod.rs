@@ -1952,7 +1952,8 @@ impl LayoutEngine {
             // Table cells: tmHeight only (no tmExternalLeading) — COM-confirmed.
             let gdi_height_pt = h_px as f32 * 72.0 / 96.0;
             if metrics.is_cjk_83_64_font() {
-                gdi_height_pt * 83.0 / 64.0
+                let raw = gdi_height_pt * 83.0 / 64.0;
+                (raw * 8.0).floor() / 8.0
             } else {
                 gdi_height_pt
             }
