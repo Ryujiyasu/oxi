@@ -1989,12 +1989,12 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // No grid snap: round to 10 twips (0.5pt) — Word internal line height.
-                // COM-confirmed: round (not ceil) matches Word for multiple spacings.
+                // No grid snap: ceil to 10 twips (0.5pt) — Word internal line height.
+                // COM-confirmed: 80/80 tests (5 fonts x 4 sizes x 4 spacings) all match.
                 // Table cells use raw value (table row height has separate calculation).
                 if !in_table_cell {
                     let tw = spaced * 20.0;
-                    (tw / 10.0).round() * 10.0 / 20.0
+                    (tw / 10.0).ceil() * 10.0 / 20.0
                 } else {
                     spaced
                 }
@@ -2100,10 +2100,10 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // Round to 10 twips (0.5pt) — Word internal line height precision.
-                // COM-confirmed: round matches Word for multiple spacing (e.g. 1.15x).
+                // Ceil to 10 twips (0.5pt) — Word internal line height precision.
+                // COM-confirmed: 80/80 tests (5 fonts x 4 sizes x 4 spacings).
                 let tw = spaced * 20.0;
-                (tw / 10.0).round() * 10.0 / 20.0
+                (tw / 10.0).ceil() * 10.0 / 20.0
             }
         }
     }
@@ -2119,12 +2119,8 @@ impl LayoutEngine {
         line_height: f32,
         grid_pitch: Option<f32>,
     ) -> f32 {
-        let is_exact_or_atleast = matches!(
-            (para_style.line_spacing_rule.as_deref(), para_style.line_spacing),
-            (Some("exact"), Some(_)) | (Some("atLeast"), Some(_))
-        );
-
-        if is_exact_or_atleast {
+        match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
+            (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                 // exact/atLeast: text at bottom of line box (extra space above).
                 let mut max_ascent: f32 = 0.0;
                 let mut max_descent: f32 = 0.0;
@@ -2144,7 +2140,8 @@ impl LayoutEngine {
                 }
                 let natural = max_ascent + max_descent;
                 (line_height - natural).max(0.0)
-        } else {
+            }
+            _ => {
                 // Grid-snapped lines: text is vertically centered within the grid cell.
                 // COM-confirmed: P1 20pt in 35.7pt grid cell → 4.9pt offset above text.
                 // Compute natural height and center within line_height.
@@ -2169,30 +2166,25 @@ impl LayoutEngine {
                 // COM-confirmed: test_line_height.docx all fonts show y = cursor_y (no offset).
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
-                    // COM-confirmed (2026-04-02): text_y_offset centers text within grid cell.
-                    // offset_tw = (n * grid_pitch_tw - inner_tw) / 2
-                    // inner_tw = fontSize_tw + extra (extra ≈ 30tw for n=1, ~70tw for n=2)
-                    // Approximation: offset = (n * pitch - fontSize) / 2, in twips, rounded to 5tw.
+                    // COM-confirmed (2026-04-02): text_y_offset is ppem-based, font-independent.
+                    // Formula: ofs = (n * default_ppem - ppem_floor(fontSize)) * 10tw
+                    // Exact for fonts where fontSize <= grid pitch (n=1, most common case).
                     let font_size = if !line.fragments.is_empty() {
                         line.fragments[0].style.font_size.unwrap_or(para_font_size)
                     } else { para_font_size };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let pitch_tw = pitch * 20.0;
-                        let fs_tw = font_size * 20.0;
-                        let n = (fs_tw / pitch_tw).ceil().max(1.0) as u32;
-                        // inner_tw ≈ fs_tw + n * 30tw (COM-measured approximation)
-                        let inner_tw = fs_tw + (n as f32) * 30.0;
-                        let offset_tw = ((n as f32) * pitch_tw - inner_tw) / 2.0;
-                        // Round to 5tw
-                        let rounded = ((offset_tw / 5.0).round() * 5.0).max(0.0);
-                        rounded / 20.0
+                        let default_ppem = (self.default_font_size * 96.0 / 72.0).floor();
+                        let ppem = (font_size * 96.0 / 72.0).floor();
+                        let n = (font_size * 83.0 / 64.0 / pitch).ceil().max(1.0);
+                        ((n * default_ppem - ppem) * 0.5).max(0.0)
                     } else {
                         0.0
                     }
                 } else {
                     0.0
                 }
+            }
         }
     }
 
