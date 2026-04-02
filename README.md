@@ -176,12 +176,10 @@ Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Si
 
 | Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
 |------|----------|---------------|---------------|-------------|
-| 2026-03-28 | 0.7496 | — | — | Baseline: 147 docs, grid snap, spacing collapse, justify |
-| 2026-03-28 | 0.7884 | — | — | Twips char width, paragraph border Y, GDI height ppem round |
+| 2026-03-28 | 0.7884 | — | — | Baseline: 147 docs, grid snap, spacing collapse, justify, twips char width, GDI height ppem round |
 | 2026-03-30 | 0.8083 | — | — | DML-driven improvement loop, GDI renderer pipeline |
 | 2026-03-31 | 0.8152 | 79/157 (50%) | — | ceil_10tw line height, text_y_offset, table cell lineSpacing |
-| 2026-04-01 | 0.8164 | 79/157 (50%) | — | pPr/rPr empty paragraph font, tab_stops, space_before page 1 |
-| 2026-04-01 | 0.8191 | 121/415 (29%) | — | linesAndChars table row snap, compat table grid snap |
+| 2026-04-01 | 0.8191 | 121/415 (29%) | — | pPr/rPr empty paragraph font, tab_stops, linesAndChars table row snap |
 | 2026-04-02 | **0.8194** | **133/424 (31%)** | **11/24 (45%)** | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
