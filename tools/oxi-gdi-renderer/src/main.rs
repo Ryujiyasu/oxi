@@ -101,7 +101,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, color, underline, underline_style, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, ..
                     } => {
                         let fs = (*font_size as f64 * scale).round() as i32;
                         let family = font_family.as_deref().unwrap_or("Calibri");
@@ -119,14 +119,34 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             })
                             .unwrap_or(COLORREF(0x00000000));
 
+                        // Draw highlight background before text
+                        if let Some(ref hl) = highlight {
+                            let hl_rgb = {
+                                let c = hl.strip_prefix('#').unwrap_or(hl);
+                                if c.len() == 6 {
+                                    let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(255);
+                                    let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(255);
+                                    let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(0);
+                                    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
+                                } else {
+                                    COLORREF(0x0000FFFF) // default yellow
+                                }
+                            };
+                            let hl_brush = CreateSolidBrush(hl_rgb);
+                            let r = RECT { left: x, top: y, right: x + ew, bottom: y + eh };
+                            FillRect(mem_dc, &r, hl_brush);
+                            let _ = DeleteObject(hl_brush);
+                        }
+
                         SetTextColor(mem_dc, rgb);
 
                         // Create font
                         let weight = if *bold { 700i32 } else { 400i32 };
+                        let ital = if *italic { 1u32 } else { 0u32 };
                         let family_wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
                         let font = CreateFontW(
                             -fs, 0, 0, 0, weight,
-                            0, 0, 0,
+                            ital, 0, 0,
                             1, // DEFAULT_CHARSET
                             0, 0,
                             5, // CLEARTYPE_QUALITY — matches Word GDI rendering
@@ -173,6 +193,19 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             }
                             SelectObject(mem_dc, old_pen);
                             let _ = DeleteObject(pen);
+                        }
+
+                        // Strikethrough
+                        if *strikethrough {
+                            let mut tm = TEXTMETRICW::default();
+                            GetTextMetricsW(mem_dc, &mut tm);
+                            let st_y = y + tm.tmAscent / 2;
+                            let st_pen = CreatePen(PS_SOLID, 1, rgb);
+                            let old_pen = SelectObject(mem_dc, st_pen);
+                            MoveToEx(mem_dc, x, st_y, None);
+                            LineTo(mem_dc, x + ew, st_y);
+                            SelectObject(mem_dc, old_pen);
+                            let _ = DeleteObject(st_pen);
                         }
 
                         SelectObject(mem_dc, old_font);
