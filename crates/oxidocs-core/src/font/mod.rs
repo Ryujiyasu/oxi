@@ -479,9 +479,16 @@ impl FontMetricsRegistry {
             if is_halfwidth_katakana(c) || advance_em <= 0.51 { return font_size / 2.0; }
         }
 
-        // GDI ABC width table: HIGHEST PRIORITY for Latin fonts.
-        // Word uses GDI integer-pixel character widths (GetCharABCWidths).
-        // These include font hinting and match Word's exact line break positions.
+        // Twips-based width: round(advance * fontSize * 20 / UPM) / 20.0
+        // COM-confirmed: matches Word character placement (510tw vs GDI ABC 540tw for "Hello ")
+        // Word uses twips-based widths, NOT GDI ABC pixel widths.
+        if metrics.char_widths.contains_key(&c) {
+            let advance_em = metrics.char_width_em(c);
+            let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
+            return width_tw / 20.0;
+        }
+
+        // GDI hinting override: fallback for fonts not in compact.json
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
         if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
             if let Some(char_widths) = font_ppems.get(&ppem) {
@@ -489,13 +496,6 @@ impl FontMetricsRegistry {
                     return width_px as f32 * 72.0 / 96.0;
                 }
             }
-        }
-
-        // Twips-based width fallback: round(advance * fontSize * 20 / UPM) / 20.0
-        if metrics.char_widths.contains_key(&c) {
-            let advance_em = metrics.char_width_em(c);
-            let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
-            return width_tw / 20.0;
         }
 
         // If the font has this character's width measured, use it directly
