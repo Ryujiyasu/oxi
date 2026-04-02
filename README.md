@@ -174,6 +174,14 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Similarity Index) across 157 real-world .docx documents (415 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
 
+```mermaid
+xychart-beta
+  title "Average SSIM vs Microsoft Word"
+  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02"]
+  y-axis 0.78 --> 0.83
+  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194]
+```
+
 | Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
 |------|----------|---------------|---------------|-------------|
 | 2026-03-28 | 0.7884 | — | — | Baseline: 147 docs, grid snap, spacing collapse, justify, twips char width, GDI height ppem round |
