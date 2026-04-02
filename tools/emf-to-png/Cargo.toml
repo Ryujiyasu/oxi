@@ -1,0 +1,8 @@
+[package]
+name = "emf-to-png"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+windows = { version = "0.58", features = ["Win32_Graphics_Gdi", "Win32_Foundation"] }
+image = "0.25"

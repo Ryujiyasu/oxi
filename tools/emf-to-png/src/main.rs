@@ -46,12 +46,27 @@ fn convert_emf_to_png(emf_path: &str, out_path: &str, dpi: u32) {
         let frame_w = header.rclFrame.right - header.rclFrame.left;
         let frame_h = header.rclFrame.bottom - header.rclFrame.top;
 
-        // Use A4 page size (595.3 x 841.9 pt) to match Oxi full-page output
-        let page_w_pt = 595.3_f64;
-        let page_h_pt = 841.9_f64;
-        let w = (page_w_pt * dpi as f64 / 72.0).ceil() as i32;
-        let h = (page_h_pt * dpi as f64 / 72.0).ceil() as i32;
-        eprintln!("EMF frame: {}x{} (0.01mm), rendering to {}x{} px at {} DPI (A4 page)", frame_w, frame_h, w, h, dpi);
+        // Derive page size from EMF frame + device metrics.
+        // EMF frame is in 0.01mm. We need full-page pixel size.
+        // For Word CopyAsPicture, the EMF content covers the page margins area.
+        // We play the EMF into the full page rectangle for simplest mapping.
+        let frame_w_mm = frame_w as f64 / 100.0;
+        let frame_h_mm = frame_h as f64 / 100.0;
+        // Full page including margins (approximate from frame * page/content ratio)
+        // Use MulDiv-based sizes for Letter/A4 detection
+        let page_w_pt: f64;
+        let page_h_pt: f64;
+        if frame_h_mm > 270.0 { // A4-ish
+            page_w_pt = 595.3;
+            page_h_pt = 841.9;
+        } else { // Letter
+            page_w_pt = 612.0;
+            page_h_pt = 792.0;
+        }
+        let w = (page_w_pt * dpi as f64 / 72.0).round() as i32;
+        let h = (page_h_pt * dpi as f64 / 72.0).round() as i32;
+        eprintln!("EMF frame: {:.1}x{:.1}mm, page: {:.0}x{:.0}pt, rendering to {}x{}px at {}DPI",
+            frame_w_mm, frame_h_mm, page_w_pt, page_h_pt, w, h, dpi);
 
         // Create memory DC and bitmap
         let screen_dc = GetDC(HWND(std::ptr::null_mut()));
@@ -65,21 +80,28 @@ fn convert_emf_to_png(emf_path: &str, out_path: &str, dpi: u32) {
         FillRect(mem_dc, &rect, white_brush);
         let _ = DeleteObject(white_brush);
 
-        // Play EMF into content area (margin-based mapping).
-        // CopyAsPicture EMF has ~5.6% coordinate overshoot from TextBox overhang,
-        // which is a known limitation. The margin-based mapping gives SSIM=1.0
-        // at the top where coordinates are most accurate.
-        let margin_l = (42.55 * dpi as f64 / 72.0).round() as i32;
-        let margin_t = (56.7 * dpi as f64 / 72.0).round() as i32;
-        let margin_r = (42.55 * dpi as f64 / 72.0).round() as i32;
-        let margin_b = (56.7 * dpi as f64 / 72.0).round() as i32;
-        let content_rect = RECT {
-            left: margin_l,
-            top: margin_t,
-            right: w - margin_r,
-            bottom: h - margin_b,
+        // Word CopyAsPicture EMF frame = content bounding box (text area only).
+        // Frame is in 0.01mm. Convert to pt for page mapping.
+        let frame_w_pt = frame_w_mm / 25.4 * 72.0;
+        let frame_h_pt = frame_h_mm / 25.4 * 72.0;
+        // gen_memo margins: left=90pt, top=72pt (Letter page)
+        // TODO: auto-detect or accept as CLI args
+        let margin_l_pt = 90.0_f64;
+        let margin_t_pt = 72.0_f64;
+        let scale_factor = dpi as f64 / 72.0;
+        let origin_x = (margin_l_pt * scale_factor).round() as i32;
+        let origin_y = (margin_t_pt * scale_factor).round() as i32;
+        let content_w = (frame_w_pt * scale_factor).round() as i32;
+        let content_h = (frame_h_pt * scale_factor).round() as i32;
+        let play_rect = RECT {
+            left: origin_x,
+            top: origin_y,
+            right: origin_x + content_w,
+            bottom: origin_y + content_h,
         };
-        let ok = PlayEnhMetaFile(mem_dc, hemf, &content_rect);
+        eprintln!("Frame: {:.1}x{:.1}pt, play: ({},{}) -> ({},{})",
+            frame_w_pt, frame_h_pt, play_rect.left, play_rect.top, play_rect.right, play_rect.bottom);
+        let ok = PlayEnhMetaFile(mem_dc, hemf, &play_rect);
         if !ok.as_bool() {
             eprintln!("PlayEnhMetaFile failed");
         }

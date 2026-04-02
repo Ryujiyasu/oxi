@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/oxi-common", "crates/oxicells-core", "crates/oxidocs-core", "crates/oxihanko", "crates/oxipdf-core", "crates/oxi-wasm", "crates/oxislides-core", "crates/oxi-cli"]
-exclude = ["tools/font-metrics-gen", "tools/golden-test", "crates/oxi-desktop", "tools/oxi-gdi-renderer"]
+exclude = ["tools/font-metrics-gen", "tools/golden-test", "crates/oxi-desktop", "tools/oxi-gdi-renderer", "tools/emf-to-png"]
 resolver = "2"
 
 [profile.release]

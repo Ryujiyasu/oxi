@@ -589,7 +589,10 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             let ds = &defined.paragraph;
                             if style.space_before.is_none() { style.space_before = ds.space_before; }
                             if style.space_after.is_none() { style.space_after = ds.space_after; }
-                            if style.line_spacing.is_none() { style.line_spacing = ds.line_spacing; }
+                            if style.line_spacing.is_none() {
+                                style.line_spacing = ds.line_spacing;
+                                style.line_spacing_rule = ds.line_spacing_rule.clone();
+                            }
                             if let Some(ref drs) = ds.default_run_style {
                                 style.default_run_style = Some(drs.clone());
                             }
@@ -991,6 +994,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             }
             if style.line_spacing.is_none() {
                 style.line_spacing = ds.line_spacing;
+                style.line_spacing_rule = ds.line_spacing_rule.clone();
             }
             // Merge style's default_run_style field-by-field (style definition takes priority for unset fields)
             if let Some(ref style_rs) = ds.default_run_style {
@@ -4412,7 +4416,7 @@ fn parse_section_properties(
                     "docGrid" => {
                         let mut grid_type = String::new();
                         let mut line_pitch = 0u32;
-                        let mut char_space = 0u32;
+                        let mut char_space: Option<u32> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -4422,7 +4426,7 @@ fn parse_section_properties(
                                     line_pitch = val.parse().unwrap_or(0);
                                 }
                                 "charSpace" => {
-                                    char_space = val.parse().unwrap_or(0);
+                                    char_space = Some(val.parse().unwrap_or(0));
                                 }
                                 _ => {}
                             }
@@ -4437,12 +4441,13 @@ fn parse_section_properties(
                             doc_grid_no_type = true;
                         }
                         // linesAndChars: compute character grid pitch
+                        // Only when charSpace attribute is explicitly present;
+                        // Word ignores char grid when charSpace is absent
                         if grid_type == "linesAndChars" {
-                            // charSpace is in twips (extra space per char beyond default)
-                            // Character pitch = default_char_width + charSpace/20
-                            // For Japanese: default char width ≈ 10.5pt (MS Mincho/Gothic at 10.5pt)
-                            let char_space_pt = char_space as f32 / 20.0;
-                            grid_char_pitch = Some(10.5 + char_space_pt);
+                            if let Some(cs) = char_space {
+                                let char_space_pt = cs as f32 / 20.0;
+                                grid_char_pitch = Some(10.5 + char_space_pt);
+                            }
                         }
                     }
                     "headerReference" => {
