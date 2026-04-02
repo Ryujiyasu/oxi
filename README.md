@@ -182,7 +182,7 @@ Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Si
 | 2026-03-31 | 0.8152 | 79/157 (50%) | — | ceil_10tw line height, text_y_offset, table cell lineSpacing |
 | 2026-04-01 | 0.8164 | 79/157 (50%) | — | pPr/rPr empty paragraph font, tab_stops, space_before page 1 |
 | 2026-04-01 | 0.8191 | 121/415 (29%) | — | linesAndChars table row snap, compat table grid snap |
-| 2026-04-02 | **0.8191** | **121/415 (29%)** | **11/24 (45%)** | Table border overhead fix, text_y_offset grid centering, GDI width tables ppem 7-50 |
+| 2026-04-02 | **0.8194** | **133/424 (31%)** | **11/24 (45%)** | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
