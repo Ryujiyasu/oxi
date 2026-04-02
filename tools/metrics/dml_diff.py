@@ -85,29 +85,54 @@ def get_word_structure(cache_path: str) -> dict:
 
     pages_dict = defaultdict(lambda: {"paragraphs": [], "table_rows": []})
 
-    # Paragraphs: group lines by paragraph, split by page
+    # Build table row Y ranges per page to filter out cell-interior paragraphs.
+    # A paragraph whose Y falls within a table row range is a cell paragraph.
+    table_row_ranges = []  # list of (page, y_start, y_end)
+    for t in data.get("tables", []):
+        rows = t.get("row_data", [])
+        for ri, rd in enumerate(rows):
+            row_y = rd["y"]
+            # Estimate row end: next row's Y or row_y + 200 for last row
+            if ri + 1 < len(rows):
+                row_end = rows[ri + 1]["y"]
+            else:
+                row_end = row_y + 200
+            # Find page via nearest paragraph
+            pg = 1
+            best_dist = float("inf")
+            for p in data.get("paragraphs", []):
+                dist = abs(p["y"] - row_y)
+                if dist < best_dist:
+                    best_dist = dist
+                    pg = p["page"]
+            table_row_ranges.append((pg, row_y - 0.5, row_end))
+
+    def is_in_table(pg, y):
+        for tp, ys, ye in table_row_ranges:
+            if tp == pg and ys <= y <= ye:
+                return True
+        return False
+
+    # Paragraphs: only include body paragraphs (not inside table cells)
+    # Also skip empty paragraphs (no text) since Oxi doesn't emit them in structure output
     for p in data.get("paragraphs", []):
         pg = p["page"]
+        if is_in_table(pg, p["y"]):
+            continue
+        text = p.get("text", "").strip()
+        if not text:
+            continue
         para = {
             "index": p["index"],
             "y": p["y"],
-            "lines": p.get("lines", [{"y": p["y"], "chars": len(p.get("text", ""))}]),
+            "lines": p.get("lines", [{"y": p["y"], "chars": len(text)}]),
         }
         pages_dict[pg]["paragraphs"].append(para)
 
     # Tables: extract row Y positions per page
-    # Build page→max_y map from paragraphs to determine page boundaries
-    page_max_y = {}
-    for p in data.get("paragraphs", []):
-        pg = p["page"]
-        page_max_y[pg] = max(page_max_y.get(pg, 0), p["y"])
-
     for t in data.get("tables", []):
         for rd in t.get("row_data", []):
             row_y = rd["y"]
-            # Find page: row belongs to the page where its Y falls within range
-            # A row at y < margin_top (typ 72pt) on a later page has small y
-            # Use nearest paragraph page as reference
             pg = 1
             best_dist = float("inf")
             for p in data.get("paragraphs", []):

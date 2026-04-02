@@ -59,8 +59,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
     let scale = dpi as f64 / 72.0;
 
     for (page_idx, page) in result.pages.iter().enumerate() {
-        let w = (page.width as f64 * scale).ceil() as i32;
-        let h = (page.height as f64 * scale).ceil() as i32;
+        let w = (page.width as f64 * scale).round() as i32;
+        let h = (page.height as f64 * scale).round() as i32;
 
         unsafe {
             // Create memory DC and bitmap

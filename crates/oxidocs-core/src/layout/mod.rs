@@ -1236,10 +1236,10 @@ impl LayoutEngine {
         );
 
         // Line-break the text
-        // Character grid pitch: only apply in TextBox content, not body paragraphs.
-        // Body paragraphs use natural font width for line wrapping; charGrid
-        // affects justify distribution and character count per line in a different way.
-        let effective_char_pitch = if in_textbox { page.grid_char_pitch } else { None };
+        // Character grid pitch: apply in body paragraphs, NOT in TextBox content.
+        // Word does not apply charGrid inside text boxes (COM-confirmed: 1ec1091177b1_006.docx
+        // TextBox 14pt text wraps at ~509pt width with natural 14pt char widths, not 21pt grid widths).
+        let effective_char_pitch = if in_textbox { None } else { page.grid_char_pitch };
         let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style, effective_char_pitch);
 
         // Widow/orphan control: pre-compute line heights for lookahead
@@ -1947,6 +1947,9 @@ impl LayoutEngine {
         // Falls back to formula-based calculation.
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
         let base = if let Some((h_px, _a_px, _d_px)) = self.registry.gdi_height(&metrics.family, ppem) {
+            // GDI table stores tmHeight (MulDiv-based ascent + descent).
+            // Body paragraphs with COM lookup use that (more accurate).
+            // Table cells: tmHeight only (no tmExternalLeading) — COM-confirmed.
             let gdi_height_pt = h_px as f32 * 72.0 / 96.0;
             if metrics.is_cjk_83_64_font() {
                 gdi_height_pt * 83.0 / 64.0
@@ -1986,12 +1989,12 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // No grid snap: ceil to 10 twips (0.5pt) — Word internal line height.
-                // COM-confirmed: 80/80 tests (5 fonts × 4 sizes × 4 spacings) all match.
+                // No grid snap: round to 10 twips (0.5pt) — Word internal line height.
+                // COM-confirmed: round (not ceil) matches Word for multiple spacings.
                 // Table cells use raw value (table row height has separate calculation).
                 if !in_table_cell {
                     let tw = spaced * 20.0;
-                    (tw / 10.0).ceil() * 10.0 / 20.0
+                    (tw / 10.0).round() * 10.0 / 20.0
                 } else {
                     spaced
                 }
@@ -2097,10 +2100,10 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // Ceil to 10 twips (0.5pt) — Word internal line height precision.
-                // COM-confirmed: 80/80 tests (5 fonts × 4 sizes × 4 spacings).
+                // Round to 10 twips (0.5pt) — Word internal line height precision.
+                // COM-confirmed: round matches Word for multiple spacing (e.g. 1.15x).
                 let tw = spaced * 20.0;
-                (tw / 10.0).ceil() * 10.0 / 20.0
+                (tw / 10.0).round() * 10.0 / 20.0
             }
         }
     }
@@ -2278,19 +2281,14 @@ impl LayoutEngine {
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
-                // Border overhead for row height calculation.
-                // COM-confirmed: insideH borders add ~0.25pt overhead per edge.
-                // Table outer borders (top of first row, bottom of last row) also add overhead.
-                // Middle rows without insideH have no border overhead.
-                let bw = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
-                let has_cell_top = cell.borders.as_ref().map_or(false, |b| b.top.is_some());
-                let has_cell_bot = cell.borders.as_ref().map_or(false, |b| b.bottom.is_some());
-                let has_tbl_top = table.style.border && row_idx == 0;
-                let has_tbl_bot = table.style.border && row_idx == num_rows - 1;
-                let has_inside_top = table.style.has_inside_h && row_idx > 0;
-                let has_inside_bot = table.style.has_inside_h && row_idx < num_rows - 1;
-                if has_cell_top || has_tbl_top || has_inside_top { pad_t += bw; }
-                if has_cell_bot || has_tbl_bot || has_inside_bot { pad_b += bw; }
+                // COM-confirmed (2026-04-02): only insideH border adds row height overhead.
+                // Outer borders (top/bottom/left/right) do NOT affect row height.
+                // The overhead equals the insideH border width, applied once per row (not per edge).
+                let border_overhead = if table.style.has_inside_h {
+                    table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 })
+                } else {
+                    0.0
+                };
                 // For line-wrapping estimation, use cell_w (not inner_w after padding)
                 // Word allows text to extend into cell margins for wrapping purposes
                 let inner_w = cell_w.max(0.0);
@@ -2329,6 +2327,7 @@ impl LayoutEngine {
                     }
                 }
                 cell_content_h += pad_b;
+                cell_content_h += border_overhead;
 
                 row_height = row_height.max(cell_content_h);
                 grid_idx += span;
@@ -2408,20 +2407,9 @@ impl LayoutEngine {
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
 
-                // Border padding: only for edges with actual borders.
-                let border_w = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
-                let has_cell_top_b = cell.borders.as_ref().map_or(false, |b| b.top.is_some());
-                let has_cell_bot_b = cell.borders.as_ref().map_or(false, |b| b.bottom.is_some());
-                let has_tbl_top_b = table.style.border && row_idx == 0;
-                let has_tbl_bot_b = table.style.border && row_idx == num_rows - 1;
-                let has_inside_top_b = table.style.has_inside_h && row_idx > 0;
-                let has_inside_bot_b = table.style.has_inside_h && row_idx < num_rows - 1;
-                if has_cell_top_b || has_tbl_top_b || has_inside_top_b {
-                    pad_t += border_w;
-                }
-                if has_cell_bot_b || has_tbl_bot_b || has_inside_bot_b {
-                    pad_b += border_w;
-                }
+                // COM-confirmed (2026-04-02): border padding does NOT affect text positioning.
+                // insideH overhead only affects row height (handled in first pass via border_overhead).
+                // Text position within cell is determined by cell margins only.
 
                 // Emit cell shading (background fill) before cell content
                 if let Some(ref shading_color) = cell.shading {
