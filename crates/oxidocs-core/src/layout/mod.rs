@@ -1983,7 +1983,15 @@ impl LayoutEngine {
                     Some(factor) => base * factor,
                     None => base,
                 };
-                if snap_to_grid {
+                // COM-confirmed (2026-04-03, gen2_023): grid snap is only applied when
+                // lineSpacing is Single (factor=1.0) or unset. Multiple spacing (factor≠1.0)
+                // does NOT get grid-snapped. MS Mincho 11pt line=276: gap=16.5pt (no snap),
+                // NOT 18pt (with snap).
+                let is_single = match line_spacing {
+                    Some(f) => (f - 1.0).abs() < 0.001,
+                    None => true,
+                };
+                if snap_to_grid && is_single {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
                             return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
@@ -2092,9 +2100,13 @@ impl LayoutEngine {
                     Some(factor) => base * factor,
                     None => base,
                 };
-                // Grid snap = ROUND((lh + pitch/2) / pitch) * pitch
-                // round-half-up: floor((lh + pitch/2) / pitch + 0.5) * pitch
-                if snap_to_grid {
+                // COM-confirmed (2026-04-03): grid snap only for Single (factor=1.0) or unset.
+                // Multiple spacing (factor≠1.0) does NOT get grid-snapped.
+                let is_single_line = match line_spacing {
+                    Some(f) => (f - 1.0).abs() < 0.001,
+                    None => true,
+                };
+                if snap_to_grid && is_single_line {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
                             return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
