@@ -350,8 +350,32 @@ impl LayoutEngine {
 
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
         let total_content_width = page.size.width - page.margin.left - page.margin.right;
-        let content_height = page.size.height - page.margin.top - page.margin.bottom;
-        let start_y = page.margin.top;
+        // COM-confirmed (2026-04-03, order_08): when header extends below margin.top,
+        // body content starts below the header (header pushes body down).
+        // header_distance + header_content_height = header_bottom.
+        // start_y = max(margin.top, header_bottom)
+        let header_bottom = if !page.header.is_empty() {
+            let header_y = page.header_distance.unwrap_or(36.0);
+            let mut hdr_h = 0.0_f32;
+            for block in &page.header {
+                if let Block::Paragraph(para) = block {
+                    let fs = para.runs.first()
+                        .and_then(|r| r.style.font_size)
+                        .unwrap_or(self.default_font_size);
+                    let metrics = para.runs.first()
+                        .map(|r| self.metrics_for(&r.style, &para.style))
+                        .unwrap_or_else(|| self.doc_default_metrics());
+                    let lh = metrics.word_line_height(fs, 96.0);
+                    hdr_h += lh;
+                    hdr_h += para.style.space_after.unwrap_or(0.0);
+                }
+            }
+            header_y + hdr_h
+        } else {
+            0.0
+        };
+        let start_y = page.margin.top.max(header_bottom);
+        let content_height = page.size.height - start_y - page.margin.bottom;
 
         // Multi-column layout: compute column X positions and widths
         // COM-confirmed: col_x = margin + Σ(prev_width + prev_spacing)
