@@ -172,14 +172,14 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 ## Layout Accuracy (SSIM Progress)
 
-Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Similarity Index) across 157 real-world .docx documents (415 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
+Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Similarity Index) across 177 real-world .docx documents (438 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
 
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word"
-  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02"]
+  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194]
+  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212]
 ```
 
 | Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
@@ -188,11 +188,12 @@ xychart-beta
 | 2026-03-30 | 0.8083 | — | — | DML-driven improvement loop, GDI renderer pipeline |
 | 2026-03-31 | 0.8152 | 79/157 (50%) | — | ceil_10tw line height, text_y_offset, table cell lineSpacing |
 | 2026-04-01 | 0.8191 | 121/415 (29%) | — | pPr/rPr empty paragraph font, tab_stops, linesAndChars table row snap |
-| 2026-04-02 | **0.8194** | **133/424 (31%)** | **11/24 (45%)** | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
+| 2026-04-02 | 0.8194 | 133/424 (31%) | 11/24 (45%) | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
+| 2026-04-03 | **0.8212** | — | — | CJK 83/64 eighth-pt floor, charGrid pitch, charSpace 1/4096pt, header overflow fix, margin 10tw rounding, field result dedup |
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
-**DML structural comparison**: 147 documents cached. Paragraph Y, line-break positions, and table row heights compared independently using `layout_json --structure` and `dml_diff.py`.
+**DML structural comparison**: 177 documents cached. Paragraph Y, line-break positions, and table row heights compared independently using `layout_json --structure` and `dml_diff.py`.
 
 ---
 
