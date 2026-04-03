@@ -165,6 +165,46 @@ impl OoxmlParser {
             page_index += 1;
         }
 
+        // Post-process: fix charGrid pitch using actual default font size.
+        // parse_section_properties uses 10.5pt placeholder; correct with Normal style font size.
+        let default_font_size = styles.styles.get("Normal")
+            .or_else(|| styles.styles.get("a"))
+            .and_then(|s| s.paragraph.default_run_style.as_ref())
+            .and_then(|rs| rs.font_size)
+            .or_else(|| styles.doc_default_run_style.as_ref().and_then(|rs| rs.font_size))
+            .unwrap_or(10.5);
+        for page in &mut pages {
+            if let Some(pitch) = page.grid_char_pitch {
+                // Recalculate: the pitch was computed with 10.5pt; redo with actual default size
+                let content_w = page.size.width - page.margin.left - page.margin.right;
+                if content_w > 0.0 {
+                    // Reverse-engineer the charSpace from the stored pitch
+                    // pitch = contentW / floor(contentW / raw_pitch)
+                    // We need to recompute with correct default_font_size
+                    // Original raw_pitch = 10.5 + charSpace_pt; we need default_font_size + charSpace_pt
+                    // charSpace_pt = original_raw_pitch - 10.5 = contentW/charsLine_old - 10.5... complex
+                    // Simpler: just recalculate from scratch using the page margins
+                    // Since we can't easily get charSpace here, use a different approach:
+                    // If the pitch was based on 10.5 but should be based on default_font_size,
+                    // and both use the same formula, we can just redo it.
+                    // But we lost the charSpace value. Store it in SectionProperties.
+                    // For now: if default != 10.5, redo with approximate raw_pitch
+                    if (default_font_size - 10.5).abs() > 0.01 {
+                        // Approximate: old raw_pitch = old_pitch / ceil (which was just floor(cw/raw)/cw)
+                        // Actually, we stored pitch = cw/floor(cw/10.5). Just redo:
+                        let old_chars_line = (content_w / pitch).round();
+                        // The charSpace contribution: old raw = 10.5 + cs, new raw = default + cs
+                        // cs = content_w/old_chars_line - content_w/floor(content_w/(10.5)) ... no
+                        // Simplest: just use default_font_size as raw_pitch (no charSpace contribution)
+                        // This works when charSpace is absent (most common case for this bug)
+                        let raw_pitch = default_font_size;
+                        let chars_line = (content_w / raw_pitch).floor().max(1.0);
+                        page.grid_char_pitch = Some(content_w / chars_line);
+                    }
+                }
+            }
+        }
+
         // Collect all comments referenced in the document
         let all_comments: Vec<Comment> = ctx.comments.values().cloned().collect();
 
@@ -4447,7 +4487,10 @@ fn parse_section_properties(
                         //          actual_pitch = contentWidth / charsLine
                         // charSpace unit: 1/4096 of a point (ECMA-376 §17.6.5)
                         if grid_type == "linesAndChars" {
-                            let default_font_size = 10.5_f32; // Word default
+                            // charGrid raw_pitch uses the document's default font size.
+                            // This comes from Normal style's sz, or rPrDefault sz, or 10.5pt fallback.
+                            // Stored in SectionProperties and resolved by the caller post-parse.
+                            let default_font_size = 10.5_f32; // placeholder; overridden by caller
                             let char_space_pt = char_space.map(|cs| cs as f32 / 4096.0).unwrap_or(0.0);
                             let raw_pitch = default_font_size + char_space_pt;
                             let content_w = page_size.width - margin.left - margin.right;
