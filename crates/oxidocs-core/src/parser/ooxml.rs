@@ -724,6 +724,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut num_pr_ref: Option<NumPrRef> = None;
     let mut para_sect_pr: Option<SectionProperties> = None;
     let mut depth = 0;
+    // Field state: tracks fldChar begin/separate/end across runs.
+    // Runs between "separate" and "end" contain cached field results
+    // that should be suppressed when the field is evaluated (e.g. PAGE).
+    let mut field_result_depth: i32 = 0; // >0 = inside field result region
 
     loop {
         match reader.read_event()? {
@@ -741,7 +745,23 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         para_sect_pr = spr;
                     }
                     "r" if depth == 0 => {
-                        let (run, dr) = parse_run(reader, ctx, styles, None)?;
+                        let (mut run, dr) = parse_run(reader, ctx, styles, None)?;
+                        // Track field state: fldChar begin/separate/end spans across runs
+                        if run.text.contains('\u{FFFE}') {
+                            // Marker for fldChar separate (set in parse_run)
+                            run.text = run.text.replace('\u{FFFE}', "");
+                            field_result_depth += 1;
+                        }
+                        if run.text.contains('\u{FFFF}') {
+                            // Marker for fldChar end
+                            run.text = run.text.replace('\u{FFFF}', "");
+                            field_result_depth -= 1;
+                        }
+                        // Suppress cached field result text (between separate and end)
+                        // when the field was already evaluated (e.g. PAGE → "#")
+                        if field_result_depth > 0 && run.field_type.is_none() {
+                            run.text.clear();
+                        }
                         runs.push(run);
                         if let Some(drawing) = dr {
                             if let Some(image) = drawing.image {
@@ -1849,7 +1869,18 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                     }
                     "tab" => text.push('\t'),
                     "fldChar" => {
-                        // fldChar with fldCharType="separate" or "end" — no action needed
+                        // Track field state via marker characters
+                        // (parsed by parent parse_paragraph to manage field_result_depth)
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "fldCharType" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                match val.as_ref() {
+                                    "separate" => text.push('\u{FFFE}'),
+                                    "end" => text.push('\u{FFFF}'),
+                                    _ => {} // "begin" — no marker needed
+                                }
+                            }
+                        }
                     }
                     "footnoteReference" => {
                         for attr in e.attributes().flatten() {
