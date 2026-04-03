@@ -2334,8 +2334,7 @@ impl LayoutEngine {
                     match block {
                         Block::Paragraph(para) => {
                             let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref());
-                            let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
-                                                        cell_content_h += para_h;
+                            cell_content_h += para_h;
                         }
                         Block::Table(nested) => {
                             // Estimate nested table height from rows
