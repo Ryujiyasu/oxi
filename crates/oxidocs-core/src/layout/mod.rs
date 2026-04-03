@@ -1151,7 +1151,15 @@ impl LayoutEngine {
         let indent_left = para.style.indent_left.unwrap_or(0.0);
         let indent_right = para.style.indent_right.unwrap_or(0.0);
         let first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
-        let available_width = content_width - indent_left - indent_right;
+        // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
+        // for line-break purposes. Text starts at margin and charsLine determines wrapping.
+        // data_guideline: indent=12pt but x0=71 (margin), 38ch/line (=charsLine+1 kinsoku).
+        let effective_char_pitch = if in_textbox { None } else { page.grid_char_pitch };
+        let available_width = if effective_char_pitch.is_some() {
+            content_width  // charGrid: ignore indents for wrapping
+        } else {
+            content_width - indent_left - indent_right
+        };
 
         // Render list marker if present
         if let Some(ref marker) = para.style.list_marker {
@@ -1236,11 +1244,8 @@ impl LayoutEngine {
         );
 
         // Line-break the text
-        // Character grid pitch: apply in body paragraphs, NOT in TextBox content.
-        // Word does not apply charGrid inside text boxes (COM-confirmed: 1ec1091177b1_006.docx
-        // TextBox 14pt text wraps at ~509pt width with natural 14pt char widths, not 21pt grid widths).
-        let effective_char_pitch = if in_textbox { None } else { page.grid_char_pitch };
-        let lines = self.break_into_lines(&fragments, available_width, first_line_indent, &para.style, effective_char_pitch);
+        let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
+        let lines = self.break_into_lines(&fragments, available_width, effective_first_indent, &para.style, effective_char_pitch);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
