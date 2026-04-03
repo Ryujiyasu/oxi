@@ -4443,9 +4443,11 @@ fn parse_section_properties(
                         // linesAndChars: compute character grid pitch
                         // Only when charSpace attribute is explicitly present;
                         // Word ignores char grid when charSpace is absent
+                        // charSpace unit: 1/4096 of a point (NOT twips)
+                        // ECMA-376 §17.6.5: "specifies the number of ... 4096ths of a point"
                         if grid_type == "linesAndChars" {
                             if let Some(cs) = char_space {
-                                let char_space_pt = cs as f32 / 20.0;
+                                let char_space_pt = cs as f32 / 4096.0;
                                 grid_char_pitch = Some(10.5 + char_space_pt);
                             }
                         }
