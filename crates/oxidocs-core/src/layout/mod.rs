@@ -1638,11 +1638,12 @@ impl LayoutEngine {
                 };
                 let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map) + cs;
                 // charGrid: extra width per char for line-break accounting
-                // Fragment width stays natural; the extra is distributed via justify
+                // Each character occupies exactly 1 grid cell for wrapping purposes.
+                // COM-confirmed: Word uses 1 cell per char regardless of font size.
+                // MS Mincho 11pt in 10.63pt grid → still 1 cell, NOT 2.
                 let char_grid_extra = if let Some(pitch) = grid_char_pitch {
                     if pitch > 0.0 && char_width > 0.0 && ch != ' ' && ch != '\t' && ch != '\n' {
-                        let grid_w = (char_width / pitch).ceil() * pitch;
-                        grid_w - char_width
+                        (pitch - char_width).max(0.0)
                     } else { 0.0 }
                 } else { 0.0 };
 
