@@ -4413,6 +4413,11 @@ fn parse_section_properties(
                         }
                     }
                     "pgMar" => {
+                        // COM-confirmed (2026-04-03): Word rounds page margins
+                        // to nearest 0.5pt (10 twips). round(twips/10)*0.5
+                        let round_10tw = |tw: f32| -> f32 {
+                            (tw / 10.0).round() * 0.5
+                        };
                         let mut gutter = 0.0f32;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -4420,37 +4425,37 @@ fn parse_section_properties(
                             match key.as_str() {
                                 "top" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.top = v / 20.0;
+                                        margin.top = round_10tw(v);
                                     }
                                 }
                                 "bottom" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.bottom = v / 20.0;
+                                        margin.bottom = round_10tw(v);
                                     }
                                 }
                                 "left" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.left = v / 20.0;
+                                        margin.left = round_10tw(v);
                                     }
                                 }
                                 "right" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.right = v / 20.0;
+                                        margin.right = round_10tw(v);
                                     }
                                 }
                                 "gutter" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        gutter = v / 20.0;
+                                        gutter = round_10tw(v);
                                     }
                                 }
                                 "header" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        header_distance = Some(v / 20.0);
+                                        header_distance = Some(round_10tw(v));
                                     }
                                 }
                                 "footer" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        footer_distance = Some(v / 20.0);
+                                        footer_distance = Some(round_10tw(v));
                                     }
                                 }
                                 _ => {}

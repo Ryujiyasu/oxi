@@ -2146,10 +2146,15 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // Ceil to 10 twips (0.5pt) — Word internal line height precision.
-                // COM-confirmed: 80/80 tests (5 fonts x 4 sizes x 4 spacings).
+                // Round to 10 twips (0.5pt) — Word internal line height precision.
+                // COM-confirmed (2026-04-03): empty paragraphs use floor, text paragraphs use ceil.
+                // Meiryo 10.5pt: CJK 83/64=20.375pt → text=ceil→20.5pt, empty=floor→20.0pt.
                 let tw = spaced * 20.0;
-                (tw / 10.0).ceil() * 10.0 / 20.0
+                if line.fragments.is_empty() {
+                    (tw / 10.0).floor() * 10.0 / 20.0
+                } else {
+                    (tw / 10.0).ceil() * 10.0 / 20.0
+                }
             }
         }
     }
