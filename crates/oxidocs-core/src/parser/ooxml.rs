@@ -4441,14 +4441,19 @@ fn parse_section_properties(
                             doc_grid_no_type = true;
                         }
                         // linesAndChars: compute character grid pitch
-                        // Only when charSpace attribute is explicitly present;
-                        // Word ignores char grid when charSpace is absent
-                        // charSpace unit: 1/4096 of a point (NOT twips)
-                        // ECMA-376 §17.6.5: "specifies the number of ... 4096ths of a point"
+                        // COM-confirmed (2026-04-03): charGrid is active even without charSpace.
+                        // Formula: raw_pitch = default_font_size + charSpace/4096
+                        //          charsLine = floor(contentWidth / raw_pitch)
+                        //          actual_pitch = contentWidth / charsLine
+                        // charSpace unit: 1/4096 of a point (ECMA-376 §17.6.5)
                         if grid_type == "linesAndChars" {
-                            if let Some(cs) = char_space {
-                                let char_space_pt = cs as f32 / 4096.0;
-                                grid_char_pitch = Some(10.5 + char_space_pt);
+                            let default_font_size = 10.5_f32; // Word default
+                            let char_space_pt = char_space.map(|cs| cs as f32 / 4096.0).unwrap_or(0.0);
+                            let raw_pitch = default_font_size + char_space_pt;
+                            let content_w = page_size.width - margin.left - margin.right;
+                            if raw_pitch > 0.0 && content_w > 0.0 {
+                                let chars_line = (content_w / raw_pitch).floor().max(1.0);
+                                grid_char_pitch = Some(content_w / chars_line);
                             }
                         }
                     }
