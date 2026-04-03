@@ -1435,12 +1435,14 @@ fn parse_paragraph_properties(
                         }
                     }
                     "ind" => {
+                        // Track leftChars/rightChars for override logic
+                        // Must be outside attr loop: leftChars overrides left regardless of XML attr order
+                        let mut left_chars: Option<f32> = None;
+                        let mut right_chars: Option<f32> = None;
+                        let mut first_line_chars: Option<f32> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
-                            // Track leftChars/rightChars for override logic
-                            let mut left_chars: Option<f32> = None;
-                            let mut right_chars: Option<f32> = None;
                             match key.as_str() {
                                 "left" | "start" => {
                                     style.indent_left =
@@ -1462,6 +1464,9 @@ fn parse_paragraph_properties(
                                     style.indent_first_line =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                 }
+                                "firstLineChars" => {
+                                    first_line_chars = val.parse::<f32>().ok();
+                                }
                                 "hanging" => {
                                     // Hanging indent: negative first-line indent
                                     style.indent_first_line =
@@ -1469,13 +1474,16 @@ fn parse_paragraph_properties(
                                 }
                                 _ => {}
                             }
-                            // leftChars/rightChars override left/right
-                            if let Some(lc) = left_chars {
-                                style.indent_left = Some(lc / 100.0 * 10.5);
-                            }
-                            if let Some(rc) = right_chars {
-                                style.indent_right = Some(rc / 100.0 * 10.5);
-                            }
+                        }
+                        // *Chars attributes override twip values regardless of XML attr order
+                        if let Some(lc) = left_chars {
+                            style.indent_left = Some(lc / 100.0 * 10.5);
+                        }
+                        if let Some(rc) = right_chars {
+                            style.indent_right = Some(rc / 100.0 * 10.5);
+                        }
+                        if let Some(fc) = first_line_chars {
+                            style.indent_first_line = Some(fc / 100.0 * 10.5);
                         }
                     }
                     "shd" => {
