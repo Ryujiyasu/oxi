@@ -2320,8 +2320,11 @@ impl LayoutEngine {
                                     nr_h = nr_h.max(nc_h);
                                 }
                                 if let Some(h) = nr.height {
-                                    if nr.height_rule.as_deref() == Some("exact") { nr_h = h; }
-                                    else { nr_h = nr_h.max(h); }
+                                    match nr.height_rule.as_deref() {
+                                        Some("exact") => { nr_h = h; }
+                                        Some("atLeast") => { nr_h = nr_h.max(h); }
+                                        _ => {}
+                                    }
                                 }
                                 cell_content_h += nr_h;
                             }
@@ -2349,12 +2352,13 @@ impl LayoutEngine {
             }
 
             // Apply trHeight constraint
-            // rule=exact: fixed height; rule=auto/atLeast: minimum height, expand to fit content
+            // rule=exact: fixed height; rule=atLeast: minimum height; auto(default): content-only
+            // COM-confirmed (2026-04-03): hRule absent = auto, trHeight val is informational.
             if let Some(h) = row.height {
-                if row.height_rule.as_deref() == Some("exact") {
-                    row_height = h;
-                } else {
-                    row_height = row_height.max(h);
+                match row.height_rule.as_deref() {
+                    Some("exact") => { row_height = h; }
+                    Some("atLeast") => { row_height = row_height.max(h); }
+                    _ => {} // auto: content determines height
                 }
             }
 
@@ -2934,20 +2938,22 @@ impl LayoutEngine {
                 para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
                 &para.style,
             );
-            let mut total_text_w: f32 = 0.0;
+            // Use break_into_lines for accurate line count (handles kinsoku, word break, etc.)
+            let indent_l = para.style.indent_left.unwrap_or(0.0);
+            let indent_r = para.style.indent_right.unwrap_or(0.0);
+            let first_indent = para.style.indent_first_line.unwrap_or(0.0);
+            let effective_width = (available_width - indent_l - indent_r).max(1.0);
+
+            let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
+                .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
+                .collect();
+            let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None);
+            let line_count = lines.len().max(1);
+
             let mut max_line_height: f32 = 0.0;
             for run in &para.runs {
                 let font_size = self.resolve_font_size(&run.style, &para.style);
                 let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
-                let cs = snap_character_spacing(run.style.character_spacing.unwrap_or(0.0));
-                let run_w: f32 = run.text.chars()
-                    .map(|ch| {
-                        let m = self.metrics_for_char(ch, &run.style, &para.style);
-                        self.registry.char_width_pt_with_fallback(ch, font_size, m) + cs
-                    })
-                    .sum();
-                total_text_w += run_w;
-                // COM-confirmed: table cells use no-grid line height
                 let is_single_run = match (eff_lr, eff_ls) {
                     (Some("exact"), _) | (Some("atLeast"), _) => false,
                     (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
@@ -2960,38 +2966,6 @@ impl LayoutEngine {
                 };
                 if lh > max_line_height { max_line_height = lh; }
             }
-            // Estimate line count (at least 1), accounting for indents
-            let indent_l = para.style.indent_left.unwrap_or(0.0);
-            let indent_r = para.style.indent_right.unwrap_or(0.0);
-            let first_indent = para.style.indent_first_line.unwrap_or(0.0);
-            let effective_width = (available_width - indent_l - indent_r).max(1.0);
-            // Hanging indent (negative first_indent): first line is WIDER by |indent|
-            // Positive first_indent: first line is NARROWER
-            let first_line_width = (effective_width - first_indent).max(1.0);
-            // Greedy line count estimation
-            // Kinsoku (line-break rules) and character spacing rounding can cause
-            // actual layout to need 1 more line than the greedy estimate.
-            // Use actual effective width for line count estimation.
-            // Previous 1-char safety margin caused false 2-line estimates
-            // for text that barely fits (e.g. 492pt text in 500pt cell).
-            let safe_width = effective_width.max(1.0);
-            let safe_first = first_line_width.max(1.0);
-            let line_count = if safe_width > 0.0 && total_text_w > 0.0 {
-                let mut remaining = total_text_w;
-                let mut lines = 0u32;
-                // First line
-                if remaining > 0.0 {
-                    remaining -= safe_first;
-                    lines += 1;
-                }
-                // Subsequent lines
-                if remaining > 0.0 {
-                    lines += (remaining / safe_width).ceil() as u32;
-                }
-                lines.max(1)
-            } else {
-                1
-            };
             height += max_line_height * line_count as f32;
         }
 
