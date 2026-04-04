@@ -3000,10 +3000,116 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
 
-                // Next page elements become the new elements
-                elements = next_page_elems;
+                // Handle multi-page overflow: if next_page_elems still overflow,
+                // keep splitting into additional pages.
+                let mut remaining = next_page_elems;
+                let mut current_split_base = page_top;
+                loop {
+                    // Find the maximum Y in remaining elements
+                    let max_y = remaining.iter().map(|e| {
+                        match &e.content {
+                            LayoutContent::TableBorder { y2, .. } => *y2,
+                            _ => e.y + e.height,
+                        }
+                    }).fold(0.0_f32, f32::max);
+
+                    if max_y <= page_bottom + 0.5 {
+                        // Everything fits on this page
+                        break;
+                    }
+
+                    // Need another split at page_bottom
+                    let next_split = page_bottom;
+                    let mut this_page: Vec<LayoutElement> = Vec::new();
+                    let mut overflow: Vec<LayoutElement> = Vec::new();
+
+                    for elem in remaining {
+                        let elem_top = elem.y;
+                        match &elem.content {
+                            LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width } => {
+                                if (y1 - y2).abs() < 0.1 {
+                                    if *y1 <= next_split + 0.5 {
+                                        this_page.push(elem);
+                                    } else {
+                                        let shift = next_split - page_top;
+                                        let mut e = elem;
+                                        e.y -= shift;
+                                        if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = e.content {
+                                            *y1 -= shift;
+                                            *y2 -= shift;
+                                        }
+                                        overflow.push(e);
+                                    }
+                                } else {
+                                    let vy_top = *y1;
+                                    let vy_bot = *y2;
+                                    if vy_top < next_split {
+                                        this_page.push(LayoutElement::new(
+                                            elem.x, elem.y, elem.width, next_split - vy_top,
+                                            LayoutContent::TableBorder {
+                                                x1: *x1, y1: vy_top, x2: *x2, y2: next_split,
+                                                color: color.clone(), width: *width,
+                                            },
+                                        ));
+                                    }
+                                    if vy_bot > next_split {
+                                        let shift = next_split - page_top;
+                                        let new_y1 = page_top;
+                                        let new_y2 = vy_bot - shift;
+                                        overflow.push(LayoutElement::new(
+                                            elem.x, new_y1, elem.width, new_y2 - new_y1,
+                                            LayoutContent::TableBorder {
+                                                x1: *x1, y1: new_y1, x2: *x2, y2: new_y2,
+                                                color: color.clone(), width: *width,
+                                            },
+                                        ));
+                                    }
+                                }
+                            }
+                            LayoutContent::CellShading { ref color } => {
+                                let shade_bottom = elem.y + elem.height;
+                                if elem.y < next_split {
+                                    let clip_h = (next_split - elem.y).min(elem.height);
+                                    this_page.push(LayoutElement::new(
+                                        elem.x, elem.y, elem.width, clip_h,
+                                        LayoutContent::CellShading { color: color.clone() },
+                                    ));
+                                }
+                                if shade_bottom > next_split {
+                                    let shift = next_split - page_top;
+                                    let new_y = (elem.y - shift).max(page_top);
+                                    let new_h = shade_bottom - shift - new_y;
+                                    overflow.push(LayoutElement::new(
+                                        elem.x, new_y, elem.width, new_h.max(0.0),
+                                        LayoutContent::CellShading { color: color.clone() },
+                                    ));
+                                }
+                            }
+                            _ => {
+                                if elem_top < next_split {
+                                    this_page.push(elem);
+                                } else {
+                                    let shift = next_split - page_top;
+                                    let mut e = elem;
+                                    e.y -= shift;
+                                    overflow.push(e);
+                                }
+                            }
+                        }
+                    }
+
+                    pages.push(LayoutPage {
+                        width: page_width,
+                        height: page_height,
+                        elements: this_page,
+                    });
+                    remaining = overflow;
+                }
+
+                elements = remaining;
                 let overflow_on_next = row_bottom - split_y;
-                *cursor_y = page_top + overflow_on_next;
+                let pages_used = ((overflow_on_next) / content_height).floor() as usize;
+                *cursor_y = page_top + overflow_on_next - (pages_used as f32 * content_height);
             } else {
                 *cursor_y += row_height;
             }
