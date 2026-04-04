@@ -2028,12 +2028,12 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // No grid snap: round to 10 twips (0.5pt) — Word internal line height.
-                // Single spacing: pixel-based heights produce .0/.5 twips (ceil=round).
-                // Multiple spacing: fractional twips rounded to nearest 10tw (COM-confirmed).
+                // No grid snap: ceil to 10 twips (0.5pt) — Word internal line height.
+                // COM-confirmed: 80/80 tests (5 fonts x 4 sizes x 4 spacings) all match.
+                // Table cells use raw value (table row height has separate calculation).
                 if !in_table_cell {
                     let tw = spaced * 20.0;
-                    ((tw / 10.0) + 0.5).floor() * 10.0 / 20.0
+                    (tw / 10.0).ceil() * 10.0 / 20.0
                 } else {
                     spaced
                 }
@@ -2143,12 +2143,11 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // Round to nearest 10 twips (0.5pt) — Word internal line height precision.
-                // Single spacing: pixel-based heights produce .0/.5 twips (ceil=round).
-                // Multiple spacing: fractional twips rounded to nearest 10tw.
-                // COM-confirmed: Cambria 11pt × 1.15 = 14.5pt (not 15.0).
+                // Ceil to 10 twips (0.5pt) — Word internal line height precision.
+                // COM-confirmed: both empty and text paragraphs use ceil.
+                // Meiryo 10.5pt: CJK 83/64=20.375pt → ceil→20.5pt for both.
                 let tw = spaced * 20.0;
-                ((tw / 10.0) + 0.5).floor() * 10.0 / 20.0
+                (tw / 10.0).ceil() * 10.0 / 20.0
             }
         }
     }
