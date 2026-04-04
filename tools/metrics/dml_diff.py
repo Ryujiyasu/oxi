@@ -269,21 +269,33 @@ def diff_document(docx_path: str, verbose: bool = True) -> dict:
     if n_lines > 0:
         report["mean_line_dchar"] = round(total_line_dchar / n_lines, 2)
 
-    # === Compare table rows ===
+    # === Compare table rows (nearest-Y match) ===
     total_row_dy = 0
     n_rows = 0
     for pi in range(min(len(word["pages"]), oxi_pages)):
         w_rows = word["pages"][pi]["table_rows"]
         o_rows = oxi["pages"][pi]["table_rows"]
-        for ri in range(min(len(w_rows), len(o_rows))):
-            wr = w_rows[ri]
-            orr = o_rows[ri]
+        used_oxi = set()
+        for wr in w_rows:
+            best_oi = None
+            best_dy = float("inf")
+            for oi, orr in enumerate(o_rows):
+                if oi in used_oxi:
+                    continue
+                dy = abs(orr["y"] - wr["y"])
+                if dy < best_dy:
+                    best_dy = dy
+                    best_oi = oi
+            if best_oi is None:
+                continue
+            used_oxi.add(best_oi)
+            orr = o_rows[best_oi]
             dy = orr["y"] - wr["y"]
             total_row_dy += abs(dy)
             n_rows += 1
             if abs(dy) > 0.5:
                 report["table_row_diffs"].append({
-                    "page": pi + 1, "row": ri,
+                    "page": pi + 1, "row": wr["row"],
                     "word_y": wr["y"], "oxi_y": orr["y"], "dy": round(dy, 2),
                 })
 
