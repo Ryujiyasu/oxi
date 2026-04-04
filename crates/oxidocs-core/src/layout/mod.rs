@@ -1548,8 +1548,9 @@ impl LayoutEngine {
                 elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
                 }));
-                // Advance cursor past the border (space + width affect next paragraph Y)
-                *cursor_y = border_y + bw.max(0.5);
+                // Advance cursor to border midpoint (COM-confirmed: space + bw/2).
+                // gen2_036 Title 26pt: lineH=34 + space(4) + bw/2(0.5) = 38.5 = Word.
+                *cursor_y = border_y + bw / 2.0;
             }
             if let Some(ref top) = borders.top {
                 let bw = top.width;
