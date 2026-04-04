@@ -2406,7 +2406,17 @@ impl LayoutEngine {
             // Page break check: if this row won't fit, push current page and reset
             // Allow break if there are elements from previous rows OR from before the table
             let has_content = !elements.is_empty() || !current_elements.is_empty();
-            if *cursor_y + row_height > page_top + content_height && has_content {
+            let page_bottom = page_top + content_height;
+            let row_overflows = *cursor_y + row_height > page_bottom;
+            // Row splitting: when cantSplit=false (default) and the row overflows,
+            // split it across pages rather than moving the entire row to the next page.
+            // Word splits rows at the page boundary, keeping partial content on each page.
+            // Only split single-cell rows in single-row tables (1x1 "box" tables).
+            // Multi-row or multi-cell table splitting is too complex and can cause
+            // regressions in page count for other documents.
+            let is_single_cell_row = row.cells.len() == 1 && num_rows == 1;
+            let needs_row_split = row_overflows && !row.cant_split && has_content && is_single_cell_row;
+            if row_overflows && has_content && !needs_row_split {
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
@@ -2883,7 +2893,120 @@ impl LayoutEngine {
                 }
             }
 
-            *cursor_y += row_height;
+            // Row splitting across pages: when the row content extends beyond
+            // the current page bottom, split elements between current and next page.
+            // This handles single-cell rows with many paragraphs (e.g. list boxes).
+            let row_bottom = *cursor_y + row_height;
+            if row_bottom > page_bottom + 0.5 && !row.cant_split {
+                let split_y = page_bottom;
+                // Partition elements: those fitting on current page vs overflow
+                let row_elements = elements.split_off(elements_before_row);
+                let mut current_page_elems: Vec<LayoutElement> = Vec::new();
+                let mut next_page_elems: Vec<LayoutElement> = Vec::new();
+
+                for elem in row_elements {
+                    let elem_top = elem.y;
+                    match &elem.content {
+                        LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width } => {
+                            // Horizontal borders: keep on their respective page
+                            if (y1 - y2).abs() < 0.1 {
+                                // Horizontal line
+                                if *y1 <= split_y + 0.5 {
+                                    current_page_elems.push(elem);
+                                } else {
+                                    // Shift to next page
+                                    let shift = split_y - page_top;
+                                    let mut e = elem;
+                                    e.y -= shift;
+                                    if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = e.content {
+                                        *y1 -= shift;
+                                        *y2 -= shift;
+                                    }
+                                    next_page_elems.push(e);
+                                }
+                            } else {
+                                // Vertical border: split at page boundary
+                                // Current page portion
+                                let vy_top = *y1;
+                                let vy_bot = *y2;
+                                if vy_top < split_y {
+                                    current_page_elems.push(LayoutElement::new(
+                                        elem.x, elem.y, elem.width, split_y - vy_top,
+                                        LayoutContent::TableBorder {
+                                            x1: *x1, y1: vy_top, x2: *x2, y2: split_y,
+                                            color: color.clone(), width: *width,
+                                        },
+                                    ));
+                                }
+                                // Next page portion
+                                if vy_bot > split_y {
+                                    let shift = split_y - page_top;
+                                    let new_y1 = page_top;
+                                    let new_y2 = vy_bot - shift;
+                                    next_page_elems.push(LayoutElement::new(
+                                        elem.x, new_y1, elem.width, new_y2 - new_y1,
+                                        LayoutContent::TableBorder {
+                                            x1: *x1, y1: new_y1, x2: *x2, y2: new_y2,
+                                            color: color.clone(), width: *width,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                        LayoutContent::CellShading { ref color } => {
+                            // Split shading across pages
+                            let shade_bottom = elem.y + elem.height;
+                            if elem.y < split_y {
+                                let clip_h = (split_y - elem.y).min(elem.height);
+                                current_page_elems.push(LayoutElement::new(
+                                    elem.x, elem.y, elem.width, clip_h,
+                                    LayoutContent::CellShading { color: color.clone() },
+                                ));
+                            }
+                            if shade_bottom > split_y {
+                                let shift = split_y - page_top;
+                                let new_y = (elem.y - shift).max(page_top);
+                                let new_h = shade_bottom - shift - new_y;
+                                next_page_elems.push(LayoutElement::new(
+                                    elem.x, new_y, elem.width, new_h.max(0.0),
+                                    LayoutContent::CellShading { color: color.clone() },
+                                ));
+                            }
+                        }
+                        _ => {
+                            // Text and other elements
+                            if elem_top < split_y {
+                                current_page_elems.push(elem);
+                            } else {
+                                let shift = split_y - page_top;
+                                let mut e = elem;
+                                e.y -= shift;
+                                next_page_elems.push(e);
+                            }
+                        }
+                    }
+                }
+
+                // Add a closing horizontal border at split point on current page
+                // and an opening horizontal border at page_top on next page
+                // (to show table continuation)
+
+                // Push current page elements
+                elements.extend(current_page_elems);
+                current_elements.extend(std::mem::take(&mut elements));
+                pages.push(LayoutPage {
+                    width: page_width,
+                    height: page_height,
+                    elements: std::mem::take(current_elements),
+                });
+
+                // Next page elements become the new elements
+                elements = next_page_elems;
+                let overflow_on_next = row_bottom - split_y;
+                *cursor_y = page_top + overflow_on_next;
+            } else {
+                *cursor_y += row_height;
+            }
         }
 
         elements
