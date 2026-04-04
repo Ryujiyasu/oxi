@@ -2391,8 +2391,9 @@ impl LayoutEngine {
             // Apply trHeight constraint
             // rule=exact: fixed height; rule=atLeast: minimum height
             // COM-confirmed (2026-04-04): when hRule is absent but trHeight val is specified,
-            // Word treats it as atLeast (COM reports HeightRule=1). Only truly absent
-            // trHeight (no val) is auto/content-only.
+            // Word treats it as atLeast (COM reports HeightRule=1).
+            // Note: actual rendered gap may be smaller than atLeast value when multi-cell
+            // rows have cells with different content heights and spacing interactions.
             if let Some(h) = row.height {
                 match row.height_rule.as_deref() {
                     Some("exact") => { row_height = h; }
