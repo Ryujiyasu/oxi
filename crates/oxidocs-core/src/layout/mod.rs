@@ -2214,18 +2214,21 @@ impl LayoutEngine {
                 // COM-confirmed: test_line_height.docx all fonts show y = cursor_y (no offset).
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
-                    // COM-confirmed (2026-04-02): text_y_offset is ppem-based, font-independent.
-                    // Formula: ofs = (n * default_ppem - ppem_floor(fontSize)) * 10tw
-                    // Exact for fonts where fontSize <= grid pitch (n=1, most common case).
+                    // COM-confirmed (2026-04-04): text is vertically centered within the
+                    // grid cell. The offset places text in the middle of the pitch.
+                    // Measured: MS Gothic 12pt pitch=18 → offset=1.0 ≈ (18-16)/2 (via GDI)
+                    //           Century 10.5pt pitch=18 → offset=2.5 ≈ (18-13)/2 (via GDI)
+                    // Best approximation: (pitch - GDI_height_pt) / 2, floor to 0.5pt.
+                    // Fallback when GDI table unavailable: (pitch - fontSize) / 2.
                     let font_size = if !line.fragments.is_empty() {
                         line.fragments[0].style.font_size.unwrap_or(para_font_size)
                     } else { para_font_size };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let default_ppem = (self.default_font_size * 96.0 / 72.0).floor();
-                        let ppem = (font_size * 96.0 / 72.0).floor();
-                        let n = (font_size * 83.0 / 64.0 / pitch).ceil().max(1.0);
-                        ((n * default_ppem - ppem) * 0.5).max(0.0)
+                        let natural = max_ascent + max_descent;
+                        let raw = (pitch - natural).max(0.0) / 2.0;
+                        // Floor to 0.5pt (10 twips)
+                        (raw * 2.0).floor() / 2.0
                     } else {
                         0.0
                     }
