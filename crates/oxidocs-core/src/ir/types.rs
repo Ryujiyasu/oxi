@@ -649,6 +649,10 @@ pub struct ParagraphStyle {
     /// Word resets inherited spacing to Single/0 inside table cells.
     #[serde(default)]
     pub has_direct_spacing: bool,
+    /// True when line_spacing was inherited from docDefaults pPrDefault (not from Normal style or direct).
+    /// Word resets docDefaults lineSpacing to Single inside table cells but keeps Normal style's lineSpacing.
+    #[serde(default)]
+    pub line_spacing_from_doc_defaults: bool,
     /// w:spacing beforeLines — in 1/100 of a line (raw value from OOXML)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_lines: Option<f32>,
@@ -763,6 +767,7 @@ impl Default for ParagraphStyle {
             space_before: None,
             space_after: None,
             has_direct_spacing: false,
+            line_spacing_from_doc_defaults: false,
             before_lines: None,
             after_lines: None,
             indent_left: None,
