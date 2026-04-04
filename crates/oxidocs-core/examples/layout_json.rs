@@ -122,8 +122,10 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                     }
 
                     // Detect line boundary within paragraph
+                    // Use threshold > text_y_offset variation (different fonts on same line
+                    // can have ~2pt Y difference), but < smallest line height (~8pt).
                     if let Some(ly) = current_line_y {
-                        if (ey - ly).abs() > 0.5 {
+                        if (ey - ly).abs() > 4.0 {
                             writeln!(out, "  LINE\ty={:.2}\tchars={}", ly, line_chars).unwrap();
                             line_chars = 0;
                             para_line_count += 1;

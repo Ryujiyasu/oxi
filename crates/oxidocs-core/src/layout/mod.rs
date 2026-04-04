@@ -1271,8 +1271,7 @@ impl LayoutEngine {
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
-            let lh = self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch);
-            lh
+            self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
         }).collect();
 
         for (line_idx, line) in lines.iter().enumerate() {
@@ -2029,12 +2028,12 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // No grid snap: ceil to 10 twips (0.5pt) — Word internal line height.
-                // COM-confirmed: 80/80 tests (5 fonts x 4 sizes x 4 spacings) all match.
-                // Table cells use raw value (table row height has separate calculation).
+                // No grid snap: round to 10 twips (0.5pt) — Word internal line height.
+                // Single spacing: pixel-based heights produce .0/.5 twips (ceil=round).
+                // Multiple spacing: fractional twips rounded to nearest 10tw (COM-confirmed).
                 if !in_table_cell {
                     let tw = spaced * 20.0;
-                    (tw / 10.0).ceil() * 10.0 / 20.0
+                    ((tw / 10.0) + 0.5).floor() * 10.0 / 20.0
                 } else {
                     spaced
                 }
@@ -2144,12 +2143,12 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // Round to 10 twips (0.5pt) — Word internal line height precision.
-                // COM-confirmed (2026-04-04): both empty and text paragraphs use ceil.
-                // Meiryo 10.5pt: CJK 83/64=20.375pt → ceil→20.5pt for both.
-                // Previous floor for empty was incorrect (LOD_Handbook P2→P3=20.5pt).
+                // Round to nearest 10 twips (0.5pt) — Word internal line height precision.
+                // Single spacing: pixel-based heights produce .0/.5 twips (ceil=round).
+                // Multiple spacing: fractional twips rounded to nearest 10tw.
+                // COM-confirmed: Cambria 11pt × 1.15 = 14.5pt (not 15.0).
                 let tw = spaced * 20.0;
-                (tw / 10.0).ceil() * 10.0 / 20.0
+                ((tw / 10.0) + 0.5).floor() * 10.0 / 20.0
             }
         }
     }
