@@ -1,0 +1,212 @@
+<mxfile host="app.diagrams.net" modified="2026-04-03T00:00:00.000Z" agent="Claude" version="21.0.0">
+  <diagram name="Word vs Oxi Pipeline" id="pipeline-comparison">
+    <mxGraphModel dx="1800" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Word vs Oxi: Rendering Pipeline Comparison" style="text;html=1;fontSize=24;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="300" y="20" width="1000" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Column Headers -->
+        <mxCell id="header_word" value="Microsoft Word (COM実測で判明)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="80" width="600" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="header_oxi" value="Oxi (Rust + WebAssembly)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="920" y="80" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 1: INPUT ===== -->
+        <mxCell id="stage1_label" value="Stage 1&#xa;入力" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fillColor=#f5f5f5;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="140" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w1" value=".docx (ZIP archive)&#xa;OLE / COM Automation&#xa;&#xa;独自バイナリパーサー&#xa;(非公開実装)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="140" width="500" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="o1" value=".docx (ZIP archive)&#xa;&#xa;OoxmlParser::new() → ZipArchive&#xa;read_part() で各XML読み出し&#xa;parser/ooxml.rs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="140" width="500" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow 1→2 -->
+        <mxCell id="wa1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="w1" target="w2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o1" target="o2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 2: XML PARSING ===== -->
+        <mxCell id="stage2_label" value="Stage 2&#xa;XML解析" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fillColor=#f5f5f5;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="240" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w2" value="styles.xml → 内部スタイルDB&#xa;document.xml → 内部DOM&#xa;theme, numbering, rels 等&#xa;&#xa;独自XML→内部構造変換&#xa;(OOXML仕様準拠だが拡張あり)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="230" width="500" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="o2" value="parse_styles() → StyleSheet&#xa;parse_body() → Vec&lt;Block&gt;&#xa;parse_theme(), parse_numbering()&#xa;parse_relationships()&#xa;&#xa;parser/styles.rs, parser/ooxml.rs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="230" width="500" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="wa2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="w2" target="w3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o2" target="o3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 3: IR ===== -->
+        <mxCell id="stage3_label" value="Stage 3&#xa;IR構築" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fillColor=#f5f5f5;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="355" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w3" value="内部DOM (非公開)&#xa;&#xa;Document → Section → Body&#xa;  → Paragraph → Run&#xa;  → Table → Row → Cell&#xa;&#xa;COM API経由でアクセス可能:&#xa;doc.Paragraphs(n).Range&#xa;doc.Tables(n).Rows(n)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="345" width="500" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="o3" value="Document IR (ir/types.rs)&#xa;&#xa;Document → Vec&lt;Page&gt;&#xa;  Page → Vec&lt;Block&gt;&#xa;    Block::Paragraph → Vec&lt;Run&gt;&#xa;    Block::Table → Vec&lt;TableRow&gt;&#xa;    Block::Image&#xa;  + floating_images, text_boxes&#xa;  + header/footer, styles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="345" width="500" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="wa3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="w3" target="w4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o3" target="o4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 4: FONT METRICS ===== -->
+        <mxCell id="stage4_label" value="Stage 4&#xa;フォント計測" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fillColor=#fff2cc;strokeColor=#d6b656;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="500" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w4" value="GDI フォントエンジン&#xa;&#xa;CreateFontW() → HFONT&#xa;GetTextExtentPoint32W() → 文字幅&#xa;&#xa;96 DPI 整数ピクセルグリッド&#xa;Twips丸め: round(advance×fontSize×20/UPM)/20&#xa;&#xa;行高さ:&#xa;  Western: round(winAsc×ppem) + round(winDesc×ppem)&#xa;  CJK: fontSize × 83/64 (floor to 1/8pt)&#xa;&#xa;※ GDI = Windows固有、他OSでは再現不可" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="490" width="500" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="o4" value="FontMetricsRegistry (font/mod.rs)&#xa;&#xa;事前計測JSONテーブル (font/data/*.json)&#xa;~100フォント、文字幅+メトリクス&#xa;&#xa;char_width_pt(): Twips丸め再現&#xa;  Western: GDI pixel snap at 96 DPI&#xa;  CJK (UPM=256): fullwidth=fontSize&#xa;&#xa;word_line_height():&#xa;  Western: win基準 + hhea超過分加算&#xa;  CJK: fontSize × 83/64 (floor to 1/8pt)&#xa;&#xa;※ GDI幅テーブルで Word完全互換" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="490" width="500" height="170" as="geometry" />
+        </mxCell>
+
+        <!-- Key difference callout -->
+        <mxCell id="diff1" value="&lt;b&gt;差異:&lt;/b&gt; Wordは実行時GDI呼び出し&#xa;Oxiは事前計測テーブル参照&#xa;→ フォント未登録時は精度低下" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="715" y="560" width="170" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="wa4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="w4" target="w5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o4" target="o5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 5: LAYOUT ENGINE ===== -->
+        <mxCell id="stage5_label" value="Stage 5&#xa;レイアウト" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fillColor=#fff2cc;strokeColor=#d6b656;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="700" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w5" value="レイアウトエンジン (非公開 C++ 実装)&#xa;&#xa;COM実測で判明した仕様:&#xa;  ● Grid snap: ROUND((lh + pitch/2) / pitch) × pitch&#xa;  ● Spacing collapse: max(space_after, space_before)&#xa;  ● Line break: GDI文字幅ベースの折り返し&#xa;  ● 禁則処理 (JIS X 4051)&#xa;  ● テーブルセル: grid snap常に有効&#xa;  ● adjustLineHeightInTable: 常にfalse&#xa;  ● Widow/Orphan, keepNext, keepTogether&#xa;  ● beforeLines = value/100 × linePitch&#xa;  ● text_y_offset = (lineHeight - fontSize) / 2&#xa;&#xa;出力: DML (DrawingML) 構造&#xa;  各要素の絶対座標 (X, Y, W, H)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="690" width="500" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="o5" value="LayoutEngine (layout/mod.rs)&#xa;&#xa;layout() → layout_page() → layout_paragraph()&#xa;  ● Grid snap: ROUND丸め再現&#xa;  ● Spacing collapse: max(sa, sb)&#xa;  ● break_into_lines(): 文字幅計測→行分割&#xa;  ● kinsoku.rs: 禁則処理 (JIS X 4051)&#xa;  ● layout_table(): セルレイアウト&#xa;  ● テーブルセル grid snap 有効&#xa;  ● Widow/Orphan, keepNext, keepTogether&#xa;  ● beforeLines = value/100 × linePitch&#xa;  ● text_y_offset = (lineHeight - fontSize) / 2&#xa;&#xa;出力: LayoutResult&#xa;  Vec&lt;LayoutPage&gt; → Vec&lt;LayoutElement&gt;&#xa;  各要素: x, y, width, height + content" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="690" width="500" height="220" as="geometry" />
+        </mxCell>
+
+        <mxCell id="wa5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="w5" target="w6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o5" target="o6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 6: RENDERING ===== -->
+        <mxCell id="stage6_label" value="Stage 6&#xa;描画" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fillColor=#f5f5f5;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="950" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w6" value="GDI レンダリング&#xa;&#xa;TextOutW() → テキスト描画&#xa;MoveToEx/LineTo → 罫線&#xa;FillRect → 背景色&#xa;&#xa;EMF出力: CopyAsPicture→PlayEnhMetaFile&#xa;画面表示: WM_PAINT → BitBlt&#xa;PDF出力: 内蔵PDFエクスポーター" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="940" width="500" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Oxi has two rendering paths -->
+        <mxCell id="o6" value="A) WASM → ブラウザ描画&#xa;  layout_document() → JSON&#xa;  Canvas 2D / DOM&#xa;&#xa;B) GDI レンダラー (検証用)&#xa;  oxi-gdi-renderer/&#xa;  CreateFontW → TextOutW → PNG&#xa;  Word EMFとpixel比較" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="940" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="o6b" value="C) PDF出力&#xa;  docx_to_pdf()&#xa;  → oxipdf_core::write_pdf()&#xa;  テキスト+画像+罫線" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="940" width="170" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STAGE 7: OUTPUT ===== -->
+        <mxCell id="wa6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="w6" target="w7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa6a" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o6" target="o7a">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oa6b" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" parent="1" source="o6b" target="o7b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w7" value="画面表示 (Windows GDI)&#xa;印刷 (GDI → プリンタDC)&#xa;PDF / EMF エクスポート" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="1090" width="360" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="o7a" value="ブラウザ (Canvas/DOM)&#xa;PNG (GDI検証用)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="990" y="1090" width="260" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="o7b" value="PDF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="1090" width="100" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ===== VERIFICATION LOOP (bottom) ===== -->
+        <mxCell id="verify_title" value="検証ループ (DML-Driven)" style="text;html=1;fontSize=14;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="500" y="1160" width="600" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="v1" value="Word COM&#xa;DML抽出&#xa;word_dml_extract.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="1200" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="v2" value="構造比較&#xa;dml_diff.py&#xa;(1分/cycle)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="430" y="1200" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="v3" value="Oxi修正&#xa;layout/mod.rs&#xa;font/mod.rs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="660" y="1200" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="v4" value="GDI Pixel比較&#xa;oxi-gdi-renderer&#xa;SSIM検証" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="890" y="1200" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="v5" value="SSIM&#xa;Baseline&#xa;更新" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="1200" width="140" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="va1" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="v1" target="v2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="va2" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="v2" target="v3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="va3" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="v3" target="v4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="va4" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="v4" target="v5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Feedback loop arrow -->
+        <mxCell id="vloop" value="差異あり → 再修正" style="edgeStyle=orthogonalEdgeStyle;curved=1;dashed=1;strokeColor=#b85450;" edge="1" parent="1" source="v4" target="v2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="960" y="1290" />
+              <mxPoint x="500" y="1290" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===== KEY INSIGHT BOXES ===== -->
+        <mxCell id="insight1" value="&lt;b&gt;核心的な違い&lt;/b&gt;&#xa;&#xa;Word: GDIに完全依存 (Windows専用)&#xa;  → 実行時にフォントエンジン呼び出し&#xa;  → OS/ハードウェア依存の整数丸め&#xa;&#xa;Oxi: 事前計測テーブル (クロスプラットフォーム)&#xa;  → GDI丸めロジックをRustで再現&#xa;  → ブラウザ/WASM上で動作可能&#xa;  → フォント追加 = JSONテーブル追加" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1090" width="320" height="180" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

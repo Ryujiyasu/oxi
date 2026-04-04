@@ -2518,13 +2518,21 @@ impl LayoutEngine {
                     // paragraphs that inherit from Normal style (no direct spacing in pPr).
                     // COM-measured: Normal outside table = ls=13.80(1.15x) sa=10,
                     //               Normal inside table = ls=12.00(Single) sa=0.
-                    let effective_line_spacing = para.style.line_spacing
-                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing));
-                    let effective_line_rule = para.style.line_spacing_rule.as_deref()
-                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref()));
-                    // COM-confirmed (2026-03-31): table cells inherit Normal style's lineSpacing.
-                    // test_table_borders.docx: Cell(1,1) ls=13.80 (1.15x from Normal), NOT reset to Single.
-                    // Only override with table style's lineSpacing if the table style explicitly sets it.
+                    // COM-confirmed: Word resets docDefaults-only lineSpacing to Single in table cells,
+                    // but keeps Normal style's lineSpacing. gen2_036: docDefaults line=276 → cell ls=12(Single).
+                    // test_table_borders.docx: Normal style line=276 → cell ls=13.80(1.15x).
+                    let effective_line_spacing = if para.style.line_spacing_from_doc_defaults {
+                        None // Reset to single
+                    } else {
+                        para.style.line_spacing
+                            .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing))
+                    };
+                    let effective_line_rule = if para.style.line_spacing_from_doc_defaults {
+                        None
+                    } else {
+                        para.style.line_spacing_rule.as_deref()
+                            .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref()))
+                    };
                     let style_has_explicit_rule = effective_line_rule == Some("exact") || effective_line_rule == Some("atLeast");
                     let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
                     let tbl_has_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing).is_some();

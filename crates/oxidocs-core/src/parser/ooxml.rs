@@ -649,6 +649,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             if style.line_spacing.is_none() {
                                 style.line_spacing = doc_para.line_spacing;
                                 style.line_spacing_rule = doc_para.line_spacing_rule.clone();
+                                style.line_spacing_from_doc_defaults = true;
                             }
                             if style.indent_left.is_none() { style.indent_left = doc_para.indent_left; }
                             if style.indent_right.is_none() { style.indent_right = doc_para.indent_right; }
@@ -1137,6 +1138,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         if style.line_spacing.is_none() {
             style.line_spacing = doc_para.line_spacing;
             style.line_spacing_rule = doc_para.line_spacing_rule.clone();
+            style.line_spacing_from_doc_defaults = true;
         }
         if style.indent_left.is_none() {
             style.indent_left = doc_para.indent_left;
