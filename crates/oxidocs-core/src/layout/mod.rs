@@ -1190,10 +1190,8 @@ impl LayoutEngine {
             let default_style = RunStyle::default();
             let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
             let mut marker_font_size = self.resolve_font_size(marker_style, &para.style);
-            // Symbol bullets (•) are rendered smaller than text in Word
-            if marker.contains('\u{2022}') || marker.contains('\u{25CF}') {
-                marker_font_size *= 2.0;
-            }
+            // Symbol font bullets (•/●) have large glyphs relative to em-square.
+            // No font size adjustment needed — use the paragraph's font size directly.
             let marker_metrics = self.metrics_for(marker_style, &para.style);
             let marker_width: f32 = marker
                 .chars()
