@@ -2227,8 +2227,8 @@ impl LayoutEngine {
                     if pitch > 0.0 {
                         let natural = max_ascent + max_descent;
                         let raw = (pitch - natural).max(0.0) / 2.0;
-                        // Floor to 0.5pt (10 twips)
-                        (raw * 2.0).floor() / 2.0
+                        // Round to 0.5pt (10 twips) — COM-confirmed best fit
+                        (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
                         0.0
                     }
