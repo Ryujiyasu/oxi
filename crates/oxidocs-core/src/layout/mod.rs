@@ -2389,13 +2389,15 @@ impl LayoutEngine {
             }
 
             // Apply trHeight constraint
-            // rule=exact: fixed height; rule=atLeast: minimum height; auto(default): content-only
-            // COM-confirmed (2026-04-03): hRule absent = auto, trHeight val is informational.
+            // rule=exact: fixed height; rule=atLeast: minimum height
+            // COM-confirmed (2026-04-04): when hRule is absent but trHeight val is specified,
+            // Word treats it as atLeast (COM reports HeightRule=1). Only truly absent
+            // trHeight (no val) is auto/content-only.
             if let Some(h) = row.height {
                 match row.height_rule.as_deref() {
                     Some("exact") => { row_height = h; }
-                    Some("atLeast") => { row_height = row_height.max(h); }
-                    _ => {} // auto: content determines height
+                    Some("atLeast") | None => { row_height = row_height.max(h); }
+                    _ => {} // explicit "auto" string: content determines height
                 }
             }
 
