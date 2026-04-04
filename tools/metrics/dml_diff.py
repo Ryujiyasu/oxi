@@ -129,17 +129,43 @@ def get_word_structure(cache_path: str) -> dict:
         }
         pages_dict[pg]["paragraphs"].append(para)
 
-    # Tables: extract row Y positions per page
+    # Tables: extract row Y positions per page.
+    # Word DML cache doesn't include page info for table rows.
+    # Assign pages by detecting Y-coordinate resets (new table on next page).
+    # Build flat list of all row Y values, then assign pages.
+    all_rows_y = []
     for t in data.get("tables", []):
         for rd in t.get("row_data", []):
+            all_rows_y.append(rd["y"])
+
+    # Assign page: Y < previous table's last Y means new page.
+    # Also use paragraph page info as anchors.
+    para_pages = {}  # y -> page
+    for p in data.get("paragraphs", []):
+        para_pages[p["y"]] = p["page"]
+
+    # For each table, assign rows to pages.
+    # Detect page breaks within a table: Y coordinate drops significantly.
+    for t in data.get("tables", []):
+        rows = t.get("row_data", [])
+        if not rows:
+            continue
+        # Start page from nearest paragraph
+        first_y = rows[0]["y"]
+        pg = 1
+        best_dist = float("inf")
+        for p in data.get("paragraphs", []):
+            dist = abs(p["y"] - first_y)
+            if dist < best_dist:
+                best_dist = dist
+                pg = p["page"]
+        prev_y = rows[0]["y"]
+        for rd in rows:
             row_y = rd["y"]
-            pg = 1
-            best_dist = float("inf")
-            for p in data.get("paragraphs", []):
-                dist = abs(p["y"] - row_y)
-                if dist < best_dist:
-                    best_dist = dist
-                    pg = p["page"]
+            # Detect page break: Y drops by more than half the page height
+            if row_y < prev_y - 200:
+                pg += 1
+            prev_y = row_y
             pages_dict[pg]["table_rows"].append({
                 "row": len(pages_dict[pg]["table_rows"]),
                 "y": row_y,
