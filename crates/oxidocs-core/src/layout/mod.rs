@@ -1137,12 +1137,10 @@ impl LayoutEngine {
         // Apply paragraph spacing (space_before).
         // Word uses max(prev_space_after, space_before) — spacing collapse.
         let mut space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
-            let raw = bl / 100.0 * pitch;
-            if para.style.snap_to_grid && pitch > 0.0 {
-                ((raw / pitch) + 0.5).floor() * pitch
-            } else {
-                raw
-            }
+            // beforeLines is specified as percentage of linePitch (e.g., 50 = 0.5 lines).
+            // COM-confirmed (2026-04-06): the value is exact (bl/100 * pitch), no grid snap.
+            // beforeLines=50 at pitch=17.5 gives exactly 8.75pt, not 17.5pt.
+            bl / 100.0 * pitch
         } else {
             para.style.space_before.unwrap_or(0.0)
         };
@@ -1560,12 +1558,8 @@ impl LayoutEngine {
         }
 
         let space_after = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
-            let raw = al / 100.0 * pitch;
-            if para.style.snap_to_grid && pitch > 0.0 {
-                ((raw / pitch) + 0.5).floor() * pitch
-            } else {
-                raw
-            }
+            // afterLines: exact value (al/100 * pitch), no grid snap needed.
+            al / 100.0 * pitch
         } else {
             para.style.space_after.unwrap_or(0.0)
         };
