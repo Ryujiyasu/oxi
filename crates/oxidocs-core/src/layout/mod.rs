@@ -2223,7 +2223,10 @@ impl LayoutEngine {
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
                         let natural = max_ascent + max_descent;
-                        let raw = (pitch - natural).max(0.0) / 2.0;
+                        // Use line_height (grid-snapped) not pitch for centering.
+                        // COM-confirmed: 20pt MS Gothic in 17.85pt grid → line_height=35.7pt,
+                        // offset=(35.7-25.875)/2=4.9pt. Using pitch would give 0.
+                        let raw = (line_height - natural).max(0.0) / 2.0;
                         // Round to 0.5pt (10 twips) — COM-confirmed best fit
                         (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
