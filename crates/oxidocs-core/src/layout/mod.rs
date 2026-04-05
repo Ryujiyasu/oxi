@@ -1274,6 +1274,34 @@ impl LayoutEngine {
             self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
         }).collect();
 
+        // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
+        // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
+        let is_multiple_spacing = match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
+            (Some("exact"), _) | (Some("atLeast"), _) => false,
+            (_, Some(f)) if (f - 1.0).abs() > 0.001 => true,
+            _ => false,
+        };
+        let raw_spaced_tw: f32 = if is_multiple_spacing && !lines.is_empty() {
+            let first_line = &lines[0];
+            let base = {
+                let mut ma: f32 = 0.0; let mut md: f32 = 0.0;
+                if first_line.fragments.is_empty() {
+                    let m = self.doc_default_metrics();
+                    ma = m.word_ascent_pt(para_font_size); md = m.word_descent_pt(para_font_size);
+                } else {
+                    for frag in &first_line.fragments {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                        if m.word_ascent_pt(fs) > ma { ma = m.word_ascent_pt(fs); }
+                        if m.word_descent_pt(fs) > md { md = m.word_descent_pt(fs); }
+                    }
+                }
+                ma + md
+            };
+            base * para.style.line_spacing.unwrap_or(1.0) * 20.0
+        } else { 0.0 };
+        let mut cumul_line_idx: usize = 0;
+
         for (line_idx, line) in lines.iter().enumerate() {
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
@@ -1505,7 +1533,17 @@ impl LayoutEngine {
                 x += adjusted_width + frag_spacing_after[frag_idx];
             }
 
-            *cursor_y += line_height;
+            // Multiple spacing: cumulative ceil for non-last lines
+            let is_last = line_idx == lines.len() - 1;
+            if is_multiple_spacing && raw_spaced_tw > 0.0 && !is_last {
+                let j = cumul_line_idx;
+                let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                *cursor_y += (cn - cc) as f32 / 20.0;
+            } else {
+                *cursor_y += line_height;
+            }
+            cumul_line_idx += 1;
 
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
