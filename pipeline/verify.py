@@ -46,8 +46,9 @@ def verify(docx_dir: str, limit: int = 0) -> bool:
         page = str(s["page"])
         new_score = s["ssim_score"]
 
-        if doc_id in baseline and page in baseline[doc_id]:
-            old_score = baseline[doc_id][page]
+        page_key = page if (doc_id in baseline and page in baseline.get(doc_id, {})) else f"{int(page):04d}"
+        if doc_id in baseline and page_key in baseline[doc_id]:
+            old_score = baseline[doc_id][page_key]
             diff = new_score - old_score
 
             if diff < -0.001:  # Allow 0.001 tolerance for floating point
