@@ -51,8 +51,12 @@ def load_baseline() -> dict:
     """Load saved baseline."""
     if not os.path.exists(BASELINE_PATH):
         return {}
-    with open(BASELINE_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(BASELINE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except UnicodeDecodeError:
+        with open(BASELINE_PATH, "r", encoding="cp932") as f:
+            return json.load(f)
 
 
 if __name__ == "__main__":
