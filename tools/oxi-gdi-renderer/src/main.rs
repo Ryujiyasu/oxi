@@ -101,7 +101,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, ..
                     } => {
                         let fs = (*font_size as f64 * scale).round() as i32;
                         let family = font_family.as_deref().unwrap_or("Calibri");
@@ -155,9 +155,20 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         );
                         let old_font = SelectObject(mem_dc, font);
 
+                        // Apply character spacing (justify gap, explicit cs from XML)
+                        let cs_px = (*character_spacing as f64 * scale).round() as i32;
+                        if cs_px != 0 {
+                            SetTextCharacterExtra(mem_dc, cs_px);
+                        }
+
                         // Draw text
                         let text_wide: Vec<u16> = text.encode_utf16().collect();
                         TextOutW(mem_dc, x, y, &text_wide);
+
+                        // Reset character extra
+                        if cs_px != 0 {
+                            SetTextCharacterExtra(mem_dc, 0);
+                        }
 
                         // Underline: use OTM metrics for correct positioning
                         if *underline {
