@@ -85,6 +85,7 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
         // Word COM reports paragraph Y as the top of the line (= min Y across fragments),
         // not the Y of any individual fragment which may be shifted by baseline_adjust.
         let mut first_line_min_y: f32 = 0.0;
+        let mut current_line_min_y: f32 = f32::MAX; // min Y across fragments of current line
         let mut pending_para_emit: Option<usize> = None; // para index to emit once first line scanned
 
         for elem in &page.elements {
@@ -121,6 +122,7 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                         // all fragments on the first line to find the min Y (handles
                         // baseline alignment where individual fragments are shifted down).
                         first_line_min_y = elem.y;
+                        current_line_min_y = elem.y;
                         pending_para_emit = if !in_table { para_idx } else { None };
                         current_para = para_idx;
                         current_line_y = Some(ey);
@@ -129,14 +131,15 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                         para_line_count = 0;
                     }
 
-                    // Track min Y for the first line (baseline alignment correction).
+                    // Track min Y for the current line (baseline alignment correction).
                     // Mixed fonts on same line have different Y due to baseline_adjust;
                     // the min Y corresponds to the tallest font (= line top, matching Word COM).
+                    // Apply to ALL lines (including subsequent), not just the first.
                     if pending_para_emit.is_some() {
                         if elem.y < first_line_min_y {
                             first_line_min_y = elem.y;
                         }
-                        // Update current_line_y to use min (for LINE output)
+                        // Update current_line_y to use min (for first LINE output)
                         let min_ey = (first_line_min_y * 2.0).round() / 2.0;
                         current_line_y = Some(min_ey);
                     }
@@ -153,10 +156,20 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                             writeln!(out, "  LINE\ty={:.2}\tchars={}", ly, line_chars).unwrap();
                             line_chars = 0;
                             para_line_count += 1;
+                            // Start tracking min Y for the new line
                             current_line_y = Some(ey);
+                            current_line_min_y = elem.y;
+                        } else {
+                            // Same line: track min Y across fragments
+                            if elem.y < current_line_min_y {
+                                current_line_min_y = elem.y;
+                                let min_ey = (current_line_min_y * 2.0).round() / 2.0;
+                                current_line_y = Some(min_ey);
+                            }
                         }
                     } else {
                         current_line_y = Some(ey);
+                        current_line_min_y = elem.y;
                     }
 
                     line_chars += text.chars().count();

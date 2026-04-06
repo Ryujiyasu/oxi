@@ -2282,11 +2282,19 @@ impl LayoutEngine {
                         }
                     }
                 }
-                // Ceil to 10 twips (0.5pt) — Word internal line height precision.
-                // COM-confirmed: both empty and text paragraphs use ceil.
-                // Meiryo 10.5pt: CJK 83/64=20.375pt → ceil→20.5pt for both.
+                // Round to 10 twips (0.5pt) — Word internal line height precision.
+                // COM-confirmed (2026-04-07): LayoutMode=0 uses ROUND to 0.5pt.
+                //   ＭＳ 明朝 10.5 LM=0: 13.625*1.15=15.66 → round 15.5pt (Word: 15.5pt)
+                //   游明朝 10.5 LM=0:   17.5*1.15=20.125 → round 20.0pt (Word: 20.0pt)
+                //   ＭＳ 明朝 14 LM=0:  18.125*1.15=20.84 → round 21.0pt (Word: 21.0pt)
+                // LayoutMode≥1 uses CEIL.
+                //   Meiryo 10.5: CJK 83/64=20.375pt → ceil 20.5pt for both.
                 let tw = spaced * 20.0;
-                (tw / 10.0).ceil() * 10.0 / 20.0
+                if grid_pitch.is_none() {
+                    (tw / 10.0).round() * 10.0 / 20.0
+                } else {
+                    (tw / 10.0).ceil() * 10.0 / 20.0
+                }
             }
         }
     }
