@@ -667,10 +667,10 @@ fn format_size_key(size: f32) -> String {
 /// Normalize common font family name aliases used in OOXML.
 fn normalize_family_name(name: &str) -> String {
     match name {
-        "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" => "MS Gothic".to_string(),
-        "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" => "MS PGothic".to_string(),
-        "ＭＳ 明朝" | "MS 明朝" | "ＭＳ Mincho" => "MS Mincho".to_string(),
-        "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" => "MS PMincho".to_string(),
+        "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
+        "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
+        "ＭＳ 明朝" | "MS 明朝" | "ＭＳ Mincho" | "MS明朝" => "MS Mincho".to_string(),
+        "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" | "MSＰ明朝" => "MS PMincho".to_string(),
         "游ゴシック" | "Yu Gothic UI" => "Yu Gothic Regular".to_string(),
         "游ゴシック Medium" => "Yu Gothic Regular".to_string(),
         "游明朝" => "Yu Mincho Regular".to_string(),

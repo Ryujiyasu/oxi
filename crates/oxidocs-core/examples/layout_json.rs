@@ -81,6 +81,11 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
         let mut para_line_count: usize = 0;
         let mut in_table = false;
         let mut table_rows: Vec<f32> = Vec::new(); // unique Y positions of table row borders
+        // Track min Y of the first line for mixed-font baseline alignment.
+        // Word COM reports paragraph Y as the top of the line (= min Y across fragments),
+        // not the Y of any individual fragment which may be shifted by baseline_adjust.
+        let mut first_line_min_y: f32 = 0.0;
+        let mut pending_para_emit: Option<usize> = None; // para index to emit once first line scanned
 
         for elem in &page.elements {
             match &elem.content {
@@ -90,6 +95,10 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
 
                     // Detect paragraph boundary
                     if para_idx != current_para {
+                        // Emit deferred PARA if still pending (single-line paragraph)
+                        if let Some(idx) = pending_para_emit.take() {
+                            writeln!(out, "PARA\t{}\ty={:.2}", idx, first_line_min_y).unwrap();
+                        }
                         // Flush previous paragraph
                         if current_para.is_some() && line_chars > 0 {
                             writeln!(out, "  LINE\ty={:.2}\tchars={}", current_line_y.unwrap_or(0.0), line_chars).unwrap();
@@ -108,12 +117,11 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                             in_table = false;
                             table_rows.clear();
                         }
-                        // Start new paragraph
-                        if let Some(idx) = para_idx {
-                            if !in_table {
-                                writeln!(out, "PARA\t{}\ty={:.2}", idx, elem.y).unwrap();
-                            }
-                        }
+                        // Start new paragraph: defer PARA emit until we've scanned
+                        // all fragments on the first line to find the min Y (handles
+                        // baseline alignment where individual fragments are shifted down).
+                        first_line_min_y = elem.y;
+                        pending_para_emit = if !in_table { para_idx } else { None };
                         current_para = para_idx;
                         current_line_y = Some(ey);
                         line_chars = 0;
@@ -121,11 +129,27 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                         para_line_count = 0;
                     }
 
+                    // Track min Y for the first line (baseline alignment correction).
+                    // Mixed fonts on same line have different Y due to baseline_adjust;
+                    // the min Y corresponds to the tallest font (= line top, matching Word COM).
+                    if pending_para_emit.is_some() {
+                        if elem.y < first_line_min_y {
+                            first_line_min_y = elem.y;
+                        }
+                        // Update current_line_y to use min (for LINE output)
+                        let min_ey = (first_line_min_y * 2.0).round() / 2.0;
+                        current_line_y = Some(min_ey);
+                    }
+
                     // Detect line boundary within paragraph
                     // Use threshold > text_y_offset variation (different fonts on same line
                     // can have ~2pt Y difference), but < smallest line height (~8pt).
                     if let Some(ly) = current_line_y {
                         if (ey - ly).abs() > 4.0 {
+                            // Emit deferred PARA with corrected min Y
+                            if let Some(idx) = pending_para_emit.take() {
+                                writeln!(out, "PARA\t{}\ty={:.2}", idx, first_line_min_y).unwrap();
+                            }
                             writeln!(out, "  LINE\ty={:.2}\tchars={}", ly, line_chars).unwrap();
                             line_chars = 0;
                             para_line_count += 1;
@@ -147,6 +171,10 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
                         }
                     }
                     if !in_table {
+                        // Emit deferred PARA if still pending
+                        if let Some(idx) = pending_para_emit.take() {
+                            writeln!(out, "PARA\t{}\ty={:.2}", idx, first_line_min_y).unwrap();
+                        }
                         // Flush any pending paragraph
                         if current_para.is_some() && line_chars > 0 {
                             writeln!(out, "  LINE\ty={:.2}\tchars={}", current_line_y.unwrap_or(0.0), line_chars).unwrap();
@@ -168,6 +196,10 @@ fn output_structure(result: &layout::LayoutResult, out: &mut impl Write) {
             }
         }
 
+        // Emit deferred PARA if still pending (last paragraph on page)
+        if let Some(idx) = pending_para_emit.take() {
+            writeln!(out, "PARA\t{}\ty={:.2}", idx, first_line_min_y).unwrap();
+        }
         // Flush last paragraph
         if line_chars > 0 {
             writeln!(out, "  LINE\ty={:.2}\tchars={}", current_line_y.unwrap_or(0.0), line_chars).unwrap();
