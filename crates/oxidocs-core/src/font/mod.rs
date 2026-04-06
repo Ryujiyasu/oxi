@@ -182,6 +182,26 @@ impl FontMetrics {
         font_descent * 15.0 / 20.0
     }
 
+    /// Line height for LayoutMode=0 (no document grid).
+    /// COM-confirmed (2026-04-06): LayoutMode=0 uses direct font metrics formula
+    /// WITHOUT GDI pixel rounding. For non-CJK: floor(win_sum * fontSize * 20 / 10) * 10 / 20.
+    /// For CJK 83/64: GDI height * 83/64, floor to 1/8pt.
+    /// Verified: Calibri 11pt=13.0pt, Cambria 11pt=12.5pt, MS Gothic 10.5pt=13.5pt.
+    pub fn word_line_height_no_grid(&self, font_size: f32) -> f32 {
+        if self.is_cjk_83_64_font() {
+            // CJK 83/64 fonts use GDI height even at LayoutMode=0
+            let ppem = (font_size * 96.0 / 72.0).round() as u32;
+            // Fall back to the standard CJK formula (caller may override with GDI table)
+            let win_sum = self.win_ascent + self.win_descent;
+            let total = win_sum * font_size * (83.0 / 64.0);
+            return (total * 8.0).floor() / 8.0;
+        }
+        // Non-CJK: direct twips calculation, no pixel rounding
+        let win_sum = self.win_ascent + self.win_descent;
+        let tw = win_sum * font_size * 20.0;
+        (tw / 10.0).floor() * 10.0 / 20.0
+    }
+
     /// Standard line height WITHOUT CJK 83/64 multiplier.
     /// Used when adjustLineHeightInTable=true (compat65).
     pub fn word_line_height_standard(&self, font_size: f32) -> f32 {
