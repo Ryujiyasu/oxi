@@ -265,6 +265,10 @@ pub struct FontMetricsRegistry {
     /// GDI-measured tmHeight/tmAscent/tmDescent: font → ppem → (height, ascent, descent) in pixels
     /// ceil(winAscent/upm*ppem) + ceil(winDescent/upm*ppem) ≠ tmHeight due to hinting.
     gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>>,
+    /// COM-measured character widths in twips: font → size_key → codepoint → twips
+    /// Higher precision than GDI pixel overrides. Used where the standard twips formula
+    /// (round(advance*fontSize*20/UPM)) doesn't match Word's actual character placement.
+    com_twips_widths: HashMap<String, HashMap<String, HashMap<u32, f32>>>,
 }
 
 impl FontMetricsRegistry {
@@ -405,12 +409,36 @@ impl FontMetricsRegistry {
             result
         };
 
+        // Load COM-measured twips width overrides (higher precision than GDI pixel).
+        // Format: font → size_key → {codepoint_str: twips_width}
+        let com_twips_widths: HashMap<String, HashMap<String, HashMap<u32, f32>>> = {
+            let tw_json = include_str!("data/com_tw_overrides.json");
+            let raw: HashMap<String, HashMap<String, HashMap<String, f32>>> =
+                serde_json::from_str(tw_json).unwrap_or_default();
+            let mut result = HashMap::new();
+            for (font, size_map) in raw {
+                let mut font_result = HashMap::new();
+                for (size_key, char_map) in size_map {
+                    let mut char_result = HashMap::new();
+                    for (cp_str, tw) in char_map {
+                        if let Ok(cp) = cp_str.parse::<u32>() {
+                            char_result.insert(cp, tw);
+                        }
+                    }
+                    font_result.insert(size_key, char_result);
+                }
+                result.insert(font, font_result);
+            }
+            result
+        };
+
         Self {
             fonts,
             default_family: "Calibri".to_string(),
             com_line_heights,
             gdi_widths,
             gdi_heights,
+            com_twips_widths,
         }
     }
 
@@ -567,6 +595,20 @@ impl FontMetricsRegistry {
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
                 return font_size / 2.0;
+            }
+        }
+
+        // COM-measured twips override: highest precision, takes priority over formula.
+        // Used where the standard twips formula doesn't match Word's actual placement.
+        {
+            let size_key = format_size_key(font_size);
+            if let Some(size_map) = self.com_twips_widths
+                .get(&metrics.family)
+                .and_then(|fm| fm.get(&size_key))
+            {
+                if let Some(&tw) = size_map.get(&(c as u32)) {
+                    return tw / 20.0;
+                }
             }
         }
 
