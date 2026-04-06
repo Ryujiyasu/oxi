@@ -711,7 +711,11 @@ fn normalize_family_name(name: &str) -> String {
     match name {
         "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
         "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
-        "ＭＳ 明朝" | "MS 明朝" | "ＭＳ Mincho" | "MS明朝" => "MS Mincho".to_string(),
+        "ＭＳ 明朝" | "MS 明朝" | "ＭＳ Mincho" => "MS Mincho".to_string(),
+        // "MS明朝" (half-width, no space) maps to Yu Mincho Regular:
+        // GDI resolves it to MS PGothic (proportional), and Word uses 游明朝-equivalent
+        // line heights. Yu Mincho gives correct CJK 83/64 height and proportional Latin widths.
+        "MS明朝" => "Yu Mincho Regular".to_string(),
         "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" | "MSＰ明朝" => "MS PMincho".to_string(),
         "游ゴシック" | "Yu Gothic UI" => "Yu Gothic Regular".to_string(),
         "游ゴシック Medium" => "Yu Gothic Regular".to_string(),
