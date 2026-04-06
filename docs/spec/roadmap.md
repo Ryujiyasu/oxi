@@ -27,6 +27,9 @@
 - .pptx slide layout engine and masters
 - Vertical writing & ruby (furigana)
 
+### Planned (post SSIM 0.95)
+- EMF/WMF renderer — pure Rust implementation based on [MS-EMF]/[MS-WMF] spec. No OS API dependency (must run in WASM). ~100 GDI record types; implement incrementally starting from bitmap/text/basic shapes. WMF via EMF conversion layer. Validate against Word EMF output using Ra methodology.
+
 ---
 
 ## v2 — oxidocs Native Format
