@@ -40,6 +40,22 @@ Oxi doesn't reject Microsoft Word — it observes Word's behavior, reproduces it
 
 ---
 
+## Landscape — Why Not Use ...?
+
+| Solution | Approach | Limitation |
+|----------|----------|------------|
+| **LibreOffice / Collabora Online** | C++ server-side rendering | Breaks Word layouts. Requires server infrastructure. No pixel-fidelity goal |
+| **ZetaOffice** | LibreOffice compiled to WASM | 100MB+ download. Layout accuracy = LibreOffice quality. Not a rewrite, just a port |
+| **ONLYOFFICE** | JavaScript canvas rendering | Closest architecture to Oxi, but AGPL license. No COM-measured Word compatibility |
+| **Apryse (PDFTron)** | C++ → WASM viewer | Proprietary. Converts to internal format — not native OOXML rendering |
+| **docMentis** | Rust+WASM viewer | WASM engine is proprietary (closed source). Telemetry on by default. No pixel-fidelity target |
+| **Google Docs** | Server-rendered | Proprietary. Requires server. Intentionally diverges from Word layout |
+| **docx-rs / rdocx** | Rust DOCX libraries | Read/write and export only — no layout engine for browser rendering |
+
+**Oxi's unique combination:** OSS (MIT) + Rust/WASM client-side + COM-measured pixel-perfect Word compatibility + zero server cost. No other project occupies this intersection.
+
+---
+
 ## Vision: The Oxi Ecosystem
 
 Oxi's core mission is one thing: **pixel-perfect document rendering**. Everything else is an extension or a fork.
@@ -55,7 +71,7 @@ Each Fork decides which Extensions to adopt, which to skip, and which to build. 
 Extensions add functionality on top of Oxi's rendering core without compromising pixel accuracy.
 
 Available extensions:
-- **oxi-hyde** — Hardware-backed encryption and PQC signatures (TPM 2.0 + ML-KEM-768) for document integrity
+- **oxi-hyde** — Hardware-backed encryption + post-quantum cryptography (TPM 2.0 + ML-KEM). The only OSS that abstracts TPM + PQC at the application layer — no competing Rust crate or framework exists (as of April 2026). Key never leaves TPM hardware; ciphertext is architecturally anonymized. Targets CNSA 2.0 compliance ahead of the 2027 deadline
 - **oxi-argo** — Zero-knowledge proofs for document provenance and selective disclosure
 - **oxi-mcp** — Model Context Protocol integration for AI agent workflows
 - **oxi-tauri** — Desktop application wrapper
@@ -191,7 +207,7 @@ xychart-beta
 | 2026-04-02 | 0.8194 | 133/424 (31%) | 11/24 (45%) | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
 | 2026-04-03 | 0.8212 | — | — | CJK 83/64 eighth-pt floor, charGrid pitch, charSpace 1/4096pt, header overflow fix, margin 10tw rounding, field result dedup |
 | 2026-04-04 | 0.8286 | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
-| 2026-04-06 | **0.8305** | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
+| 2026-04-05 | **0.8305** | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
