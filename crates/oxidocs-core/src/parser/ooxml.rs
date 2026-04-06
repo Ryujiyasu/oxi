@@ -4523,7 +4523,9 @@ fn parse_section_properties(
                         {
                             grid_line_pitch = Some(line_pitch as f32 / 20.0);
                         } else if grid_type.is_empty() && line_pitch > 0 {
-                            // docGrid exists with linePitch but no type attribute
+                            // docGrid exists with linePitch but no type attribute.
+                            // COM-confirmed: grid snap IS active (LayoutMode=2), same formula.
+                            grid_line_pitch = Some(line_pitch as f32 / 20.0);
                             doc_grid_no_type = true;
                         }
                         // linesAndChars: compute character grid pitch
