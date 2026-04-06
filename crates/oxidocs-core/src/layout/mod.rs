@@ -2139,8 +2139,37 @@ impl LayoutEngine {
 
         let run_base = max_ascent + max_descent;
 
-        // Word uses run font height only, no max with default.
-        let base = run_base;
+        // For body paragraphs with Single spacing, use COM table height if available.
+        // word_ascent_pt + word_descent_pt = GDI tmHeight only (misses tmExternalLeading).
+        // COM table values are measured from Word and include the full line height.
+        // Divergence: Calibri 11pt formula=13.5 vs COM=15.75 (+2.25pt).
+        let is_single = match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
+            (Some("exact"), _) | (Some("atLeast"), _) => false,
+            (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
+            _ => true,
+        };
+        let mut base = run_base;
+        if is_single && !in_table_cell {
+            let grid_for_lookup = if snap_to_grid { grid_pitch } else { None };
+            if line.fragments.is_empty() {
+                let font_size = para_style.ppr_rpr.as_ref()
+                    .and_then(|r| r.font_size)
+                    .unwrap_or(para_font_size);
+                let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                let metrics = self.metrics_for(&rpr_ref, para_style);
+                if let Some(h) = self.registry.com_line_height(&metrics.family, font_size, grid_for_lookup) {
+                    base = base.max(h);
+                }
+            } else {
+                for frag in &line.fragments {
+                    let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                    let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                    if let Some(h) = self.registry.com_line_height(&metrics.family, font_size, grid_for_lookup) {
+                        base = base.max(h);
+                    }
+                }
+            }
+        }
 
         // Apply line spacing rule
         let line_spacing = para_style.line_spacing;
