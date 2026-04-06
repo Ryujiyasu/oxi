@@ -2139,37 +2139,33 @@ impl LayoutEngine {
 
         let run_base = max_ascent + max_descent;
 
-        // For body paragraphs with Single spacing, use COM table height if available.
-        // word_ascent_pt + word_descent_pt = GDI tmHeight only (misses tmExternalLeading).
-        // COM table values are measured from Word and include the full line height.
-        // Divergence: Calibri 11pt formula=13.5 vs COM=15.75 (+2.25pt).
-        let is_single = match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
-            (Some("exact"), _) | (Some("atLeast"), _) => false,
-            (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
-            _ => true,
-        };
-        let mut base = run_base;
-        if is_single && !in_table_cell {
-            let grid_for_lookup = if snap_to_grid { grid_pitch } else { None };
+        // For LayoutMode=0 (no grid, grid_pitch=None), use direct font metrics formula.
+        // COM-confirmed (2026-04-06): LayoutMode=0 uses floor(win_sum*fontSize*20/10)*10/20
+        // without GDI pixel rounding. The ascent+descent formula uses pixel_round which
+        // overshoots by 0.5pt (e.g. Calibri 11pt: 13.5 vs actual 13.0).
+        let base = if grid_pitch.is_none() && !in_table_cell {
+            // LayoutMode=0: use no-grid formula for each fragment
+            let mut no_grid_max: f32 = 0.0;
             if line.fragments.is_empty() {
                 let font_size = para_style.ppr_rpr.as_ref()
                     .and_then(|r| r.font_size)
                     .unwrap_or(para_font_size);
                 let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                 let metrics = self.metrics_for(&rpr_ref, para_style);
-                if let Some(h) = self.registry.com_line_height(&metrics.family, font_size, grid_for_lookup) {
-                    base = base.max(h);
-                }
+                no_grid_max = metrics.word_line_height_no_grid(font_size);
             } else {
                 for frag in &line.fragments {
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
                     let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                    if let Some(h) = self.registry.com_line_height(&metrics.family, font_size, grid_for_lookup) {
-                        base = base.max(h);
-                    }
+                    let h = metrics.word_line_height_no_grid(font_size);
+                    if h > no_grid_max { no_grid_max = h; }
                 }
             }
-        }
+            // Use max of no-grid height and run_base (for mixed-font baseline coverage)
+            run_base.max(no_grid_max)
+        } else {
+            run_base
+        };
 
         // Apply line spacing rule
         let line_spacing = para_style.line_spacing;
