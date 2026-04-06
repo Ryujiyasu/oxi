@@ -113,6 +113,7 @@ pub enum LayoutContent {
 pub struct LayoutEngine {
     default_font_size: f32,
     default_font_family: Option<String>,
+    default_font_family_east_asia: Option<String>,
     registry: FontMetricsRegistry,
     /// Compatibility: adjustLineHeightInTable=true disables grid snap in table cells.
     adjust_line_height_in_table: bool,
@@ -162,6 +163,7 @@ impl LayoutEngine {
         Self {
             default_font_size: 11.0,
             default_font_family: None,
+            default_font_family_east_asia: None,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
@@ -178,9 +180,13 @@ impl LayoutEngine {
         let default_font_family = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family.clone());
+        let default_font_family_east_asia = doc.styles.doc_default_run_style
+            .as_ref()
+            .and_then(|s| s.font_family_east_asia.clone());
         Self {
             default_font_size,
             default_font_family,
+            default_font_family_east_asia,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
@@ -247,7 +253,7 @@ impl LayoutEngine {
     fn resolve_font_family_for_text<'a>(&'a self, text: &str, run_style: &'a RunStyle, para_style: &'a ParagraphStyle) -> Option<&'a str> {
         let has_cjk = text.chars().any(|c| kinsoku::is_cjk(c));
         if has_cjk {
-            // Prefer East Asian font for CJK text
+            // Prefer East Asian font for CJK text: run → paragraph → docDefaults
             if let Some(ref ff) = run_style.font_family_east_asia {
                 return Some(ff.as_str());
             }
@@ -255,6 +261,10 @@ impl LayoutEngine {
                 if let Some(ref ff) = drs.font_family_east_asia {
                     return Some(ff.as_str());
                 }
+            }
+            // Fall back to document-level default East Asian font (from docDefaults/theme)
+            if let Some(ref ff) = self.default_font_family_east_asia {
+                return Some(ff.as_str());
             }
         }
         self.resolve_font_family(run_style, para_style)
@@ -296,6 +306,10 @@ impl LayoutEngine {
             if let Some(ref ff) = drs.font_family_east_asia {
                 return Some(self.registry.get(ff.as_str()));
             }
+        }
+        // Fall back to document-level default East Asian font
+        if let Some(ref ff) = self.default_font_family_east_asia {
+            return Some(self.registry.get(ff.as_str()));
         }
         None
     }
