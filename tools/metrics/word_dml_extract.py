@@ -19,6 +19,7 @@ def extract_dml(docx_path: str) -> dict:
     """Extract layout positions from Word via COM."""
     word = win32com.client.Dispatch("Word.Application")
     word.Visible = False
+    word.DisplayAlerts = False  # Suppress "Save changes?" dialogs
 
     doc = word.Documents.Open(os.path.abspath(docx_path), ReadOnly=True)
 

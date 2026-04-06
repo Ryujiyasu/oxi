@@ -177,9 +177,9 @@ Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Si
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word"
-  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05"]
+  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05", "04-06"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286]
+  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286, 0.8305]
 ```
 
 | Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
@@ -190,11 +190,12 @@ xychart-beta
 | 2026-04-01 | 0.8191 | 121/415 (29%) | — | pPr/rPr empty paragraph font, tab_stops, linesAndChars table row snap |
 | 2026-04-02 | 0.8194 | 133/424 (31%) | 11/24 (45%) | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
 | 2026-04-03 | 0.8212 | — | — | CJK 83/64 eighth-pt floor, charGrid pitch, charSpace 1/4096pt, header overflow fix, margin 10tw rounding, field result dedup |
-| 2026-04-05 | **0.8286** | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
+| 2026-04-04 | 0.8286 | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
+| 2026-04-06 | **0.8305** | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
-**DML structural comparison**: 177 documents cached. Avg P|dy|=0.94pt, T|dy|=1.63pt. Paragraph Y, line-break positions, and table row heights compared using `layout_json --structure` and `dml_diff.py`.
+**DML structural comparison**: 177 documents cached. Paragraph Y, line-break positions, and table row heights compared using `layout_json --structure` and `dml_diff.py`.
 
 ---
 
