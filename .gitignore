@@ -54,3 +54,8 @@ tools/**/*_deep*.py
 !tools/metrics/analyze_isolated.py
 tools/acrobat_analysis.py
 tools/oxi-gdi-renderer/target/
+
+# GDI renderer / layout-json output PNGs (generated artifacts)
+--layout-json_*.png
+--output_*.png
+tools/oxi-gdi-renderer/--*.png
