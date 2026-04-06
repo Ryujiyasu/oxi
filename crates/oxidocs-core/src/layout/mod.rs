@@ -1297,6 +1297,7 @@ impl LayoutEngine {
             let first_line = &lines[0];
             let base = {
                 let mut ma: f32 = 0.0; let mut md: f32 = 0.0;
+                let mut has_latin = false;
                 if first_line.fragments.is_empty() {
                     let m = self.doc_default_metrics();
                     ma = m.word_ascent_pt(para_font_size); md = m.word_descent_pt(para_font_size);
@@ -1306,9 +1307,49 @@ impl LayoutEngine {
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         if m.word_ascent_pt(fs) > ma { ma = m.word_ascent_pt(fs); }
                         if m.word_descent_pt(fs) > md { md = m.word_descent_pt(fs); }
+                        if !frag.text.chars().all(|c| kinsoku::is_cjk(c)) {
+                            has_latin = true;
+                        }
+                    }
+                    // COM-confirmed (2026-04-07): Latin text on a line causes Word to also
+                    // consider the ASCII font's CJK 83/64 height for the base.
+                    if has_latin {
+                        if let Some(frag) = first_line.fragments.first() {
+                            let fs = frag.style.font_size.unwrap_or(para_font_size);
+                            let latin_m = self.metrics_for(&frag.style, &para.style);
+                            if latin_m.is_cjk_83_64_font() {
+                                let la = latin_m.word_ascent_pt(fs);
+                                let ld = latin_m.word_descent_pt(fs);
+                                if la > ma { ma = la; }
+                                if ld > md { md = ld; }
+                            }
+                        }
                     }
                 }
-                ma + md
+                // For LayoutMode=0, use the no-grid formula (matches line_height_for_line_inner)
+                let run_base = ma + md;
+                if grid_pitch.is_none() {
+                    let mut no_grid_max: f32 = 0.0;
+                    for frag in &first_line.fragments {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                        let h = m.word_line_height_no_grid(fs);
+                        if h > no_grid_max { no_grid_max = h; }
+                    }
+                    if has_latin {
+                        if let Some(frag) = first_line.fragments.first() {
+                            let fs = frag.style.font_size.unwrap_or(para_font_size);
+                            let latin_m = self.metrics_for(&frag.style, &para.style);
+                            if latin_m.is_cjk_83_64_font() {
+                                let h = latin_m.word_line_height_no_grid(fs);
+                                if h > no_grid_max { no_grid_max = h; }
+                            }
+                        }
+                    }
+                    run_base.max(no_grid_max)
+                } else {
+                    run_base
+                }
             };
             base * para.style.line_spacing.unwrap_or(1.0) * 20.0
         } else { 0.0 };
@@ -1545,9 +1586,14 @@ impl LayoutEngine {
                 x += adjusted_width + frag_spacing_after[frag_idx];
             }
 
-            // Multiple spacing: cumulative ceil for non-last lines
+            // Multiple spacing: cumulative ceil for non-last lines when all lines
+            // have the same height. When heights vary (mixed fonts), use per-line height.
+            // COM-confirmed (2026-04-07): variable-height paragraphs (e.g., mixed CJK+Latin
+            // first line, pure CJK subsequent lines) use per-line height, not cumulative.
             let is_last = line_idx == lines.len() - 1;
-            if is_multiple_spacing && raw_spaced_tw > 0.0 && !is_last {
+            let use_cumulative = is_multiple_spacing && raw_spaced_tw > 0.0 && !is_last
+                && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5);
+            if use_cumulative {
                 let j = cumul_line_idx;
                 let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
                 let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
@@ -2168,11 +2214,32 @@ impl LayoutEngine {
                 let metrics = self.metrics_for(&rpr_ref, para_style);
                 no_grid_max = metrics.word_line_height_no_grid(font_size);
             } else {
+                let mut has_latin = false;
                 for frag in &line.fragments {
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
                     let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                     let h = metrics.word_line_height_no_grid(font_size);
                     if h > no_grid_max { no_grid_max = h; }
+                    // Track if this line has Latin text (non-CJK fragments)
+                    if !frag.text.chars().all(|c| kinsoku::is_cjk(c)) {
+                        has_latin = true;
+                    }
+                }
+                // COM-confirmed (2026-04-07): when a line contains Latin text, Word also
+                // considers the ASCII font's CJK 83/64 height for the line height basis.
+                // This accounts for Japanese proportional fonts (游ゴシック, 游明朝, MS明朝)
+                // having larger CJK 83/64 heights than the eastAsia font (ＭＳ 明朝).
+                // Only applies when the ASCII font is a CJK 83/64 font.
+                if has_latin {
+                    // Use the first fragment's ASCII font (resolve via latin path)
+                    if let Some(frag) = line.fragments.first() {
+                        let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                        let latin_metrics = self.metrics_for(&frag.style, para_style);
+                        if latin_metrics.is_cjk_83_64_font() {
+                            let h = latin_metrics.word_line_height_no_grid(font_size);
+                            if h > no_grid_max { no_grid_max = h; }
+                        }
+                    }
                 }
             }
             // Use max of no-grid height and run_base (for mixed-font baseline coverage)
