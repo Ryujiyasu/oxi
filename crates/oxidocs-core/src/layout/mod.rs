@@ -1482,12 +1482,7 @@ impl LayoutEngine {
 
             // Matches Word output: exact/atLeast line spacing places text at BOTTOM of line box.
             // Extra space goes above text (ascent increased, descent unchanged).
-            let text_y_off = if page.doc_grid_no_type {
-                // no-type docGrid: grid snap active but NO text vertical centering
-                0.0
-            } else {
-                self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch)
-            };
+            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch);
 
             // Compute max ascent across all fragments for baseline alignment.
             // All fragments in a line share the same baseline (matches Word output).
