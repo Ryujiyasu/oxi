@@ -711,16 +711,20 @@ fn normalize_family_name(name: &str) -> String {
     match name {
         "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
         "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
+        // "MS Pゴシック" (half-width variant) → GDI resolves via system font.
+        // Word uses 游ゴシック-equivalent metrics. Map to Yu Gothic Regular for
+        // correct line height and proportional Latin widths.
+        "MS Pゴシック" | "MS PGothic" => "Yu Gothic Regular".to_string(),
         "ＭＳ 明朝" | "MS 明朝" | "ＭＳ Mincho" => "MS Mincho".to_string(),
         // "MS明朝" (half-width, no space) maps to Yu Mincho Regular:
         // GDI resolves it to MS PGothic (proportional), and Word uses 游明朝-equivalent
         // line heights. Yu Mincho gives correct CJK 83/64 height and proportional Latin widths.
         "MS明朝" => "Yu Mincho Regular".to_string(),
         "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" | "MSＰ明朝" => "MS PMincho".to_string(),
-        "游ゴシック" | "Yu Gothic UI" => "Yu Gothic Regular".to_string(),
-        "游ゴシック Medium" => "Yu Gothic Regular".to_string(),
-        "游明朝" => "Yu Mincho Regular".to_string(),
-        "游明朝 Demibold" => "Yu Mincho Demibold".to_string(),
+        "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => "Yu Gothic Regular".to_string(),
+        "游ゴシック Medium" | "游ゴシック Bold" => "Yu Gothic Bold".to_string(),
+        "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
+        "游明朝 Demibold" | "游明朝 Bold" => "Yu Mincho Demibold".to_string(),
         "メイリオ" | "Meiryo UI" => "Meiryo".to_string(),
         // Arial Unicode MS is not always installed; fall back to Arial
         "Arial Unicode MS" => "Arial".to_string(),
