@@ -208,11 +208,13 @@ xychart-beta
 | 2026-04-03 | 0.8212 | — | — | CJK 83/64 eighth-pt floor, charGrid pitch, charSpace 1/4096pt, header overflow fix, margin 10tw rounding, field result dedup |
 | 2026-04-04 | 0.8286 | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
 | 2026-04-05 | 0.8305 | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
-| 2026-04-06 | **0.8430** | 168/438 (38%) | — | LayoutMode=0 line height formula (no pixel rounding), docGrid no-type=no grid snap (COM 177-doc batch confirmed) |
+| 2026-04-06 | **0.8430** | 168/438 (38%) | — | LayoutMode=0 line height formula (no pixel rounding), docGrid no-type=no grid snap (COM 177-doc batch confirmed), font alias resolution, eastAsia docDefaults fallback, COM twips width overrides |
+
+**Targeted test suite** (49 documents): avg SSIM **0.9777**, 90% of pages >= 0.95. DML structural match: 33/49 documents with zero paragraph Y deviation.
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
-**DML structural comparison**: 177 documents cached. Paragraph Y, line-break positions, and table row heights compared using `layout_json --structure` and `dml_diff.py`.
+**DML structural comparison**: 177+49 documents cached. Paragraph Y, line-break positions, and table row heights compared using `layout_json --structure` and `dml_diff.py`.
 
 ---
 
