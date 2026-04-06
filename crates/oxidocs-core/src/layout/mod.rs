@@ -1591,12 +1591,21 @@ impl LayoutEngine {
             // COM-confirmed (2026-04-07): variable-height paragraphs (e.g., mixed CJK+Latin
             // first line, pure CJK subsequent lines) use per-line height, not cumulative.
             let is_last = line_idx == lines.len() - 1;
-            let use_cumulative = is_multiple_spacing && raw_spaced_tw > 0.0 && !is_last
-                && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5);
+            // LM=0 cumulative ROUND includes LAST line; LM≥1 cumulative CEIL excludes last.
+            let use_cumulative = is_multiple_spacing && raw_spaced_tw > 0.0
+                && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5)
+                && (grid_pitch.is_none() || !is_last);
             if use_cumulative {
                 let j = cumul_line_idx;
-                let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
-                let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                let (cn, cc) = if grid_pitch.is_none() {
+                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
+                    let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
+                    (cn, cc)
+                } else {
+                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    (cn, cc)
+                };
                 *cursor_y += (cn - cc) as f32 / 20.0;
             } else {
                 *cursor_y += line_height;
