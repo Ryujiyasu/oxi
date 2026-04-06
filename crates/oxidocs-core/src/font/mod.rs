@@ -708,6 +708,13 @@ fn format_size_key(size: f32) -> String {
 
 /// Normalize common font family name aliases used in OOXML.
 fn normalize_family_name(name: &str) -> String {
+    // Comma-separated font lists (e.g. "MS明朝,Times New Roman"): use the first font.
+    // Word picks the first available font; we use the same approach.
+    if let Some(first) = name.split(',').next() {
+        if first != name {
+            return normalize_family_name(first.trim());
+        }
+    }
     match name {
         "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
         "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
