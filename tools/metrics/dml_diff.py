@@ -28,6 +28,7 @@ def get_oxi_structure(docx_path: str) -> dict:
 
     pages = []
     current_page = {"paragraphs": [], "table_rows": []}
+    page_started = False  # True after first PAGE line is seen
 
     current_para = None  # {"index": N, "y": Y, "lines": [...]}
 
@@ -37,8 +38,11 @@ def get_oxi_structure(docx_path: str) -> dict:
             if current_para:
                 current_page["paragraphs"].append(current_para)
                 current_para = None
-            if pages or current_page["paragraphs"] or current_page["table_rows"]:
+            if page_started:
+                # Always append page (even if empty) when transitioning to next.
+                # An empty page is valid (e.g., header/footer-only document).
                 pages.append(current_page)
+            page_started = True
             parts = line.split("\t")
             current_page = {
                 "width": float(parts[2]),
@@ -72,7 +76,7 @@ def get_oxi_structure(docx_path: str) -> dict:
 
     if current_para:
         current_page["paragraphs"].append(current_para)
-    if current_page["paragraphs"] or current_page["table_rows"]:
+    if page_started:
         pages.append(current_page)
 
     return {"pages": pages}
