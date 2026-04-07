@@ -27,7 +27,8 @@ for pi in range(1, min(doc.Paragraphs.Count + 1, 6)):
         try:
             c = chars(ci)
             ch = c.Text
-            if ch in ("\r", "\x07"):
+            # \r=para mark, \x07=cell mark, \x0b=soft line break (<w:br/>)
+            if ch in ("\r", "\x07", "\x0b"):
                 continue
             cy = c.Information(6)
             if prev_y is None or abs(cy - prev_y) > 0.5:
