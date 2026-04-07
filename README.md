@@ -211,8 +211,9 @@ xychart-beta
 | 2026-04-04 | 0.8286 | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
 | 2026-04-05 | 0.8305 | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
 | 2026-04-06 | **0.8430** | 168/438 (38%) | — | LayoutMode=0 line height formula (no pixel rounding), docGrid no-type=no grid snap (COM 177-doc batch confirmed), font alias resolution, eastAsia docDefaults fallback, COM twips width overrides |
+| 2026-04-07 | — | — | — | autoSpaceDE Latin↔CJK ideograph/kana, MS明朝/MS Pゴシック→Yu Mincho/Yu Gothic mapping, LM=0 ROUND multiple spacing, mixed-font line height (ASCII font CJK 83/64), bold-aware metrics lookup, General Punctuation fullwidth refinement |
 
-**Targeted test suite** (49 documents): avg SSIM **0.9777**, 90% of pages >= 0.95. DML structural match: 33/49 documents with zero paragraph Y deviation.
+**Targeted test suite** (49 documents): avg SSIM **0.9788**, 98% of pages >= 0.95. DML structural match: **35/49 perfect** (P|dy|=0, |dch|=0). Average P|dy|=0.02pt, |dch|=0.13.
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
