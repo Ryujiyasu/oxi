@@ -190,7 +190,24 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 ## Layout Accuracy (SSIM Progress)
 
-Oxi's layout engine is measured against Microsoft Word using SSIM (Structural Similarity Index) across 177 real-world .docx documents (438 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
+Oxi's layout engine is measured against Microsoft Word using two complementary metrics:
+
+1. **SSIM (pixel-level)** — across 177 real-world .docx documents (438 pages). Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi).
+2. **DML structural diff** — paragraph Y positions and line-break positions compared via Word COM API.
+
+All specifications are derived from COM API black-box measurements — no DLL disassembly.
+
+### Targeted Test Suite (49 documents)
+
+| Metric | Value |
+|---|---|
+| **Average SSIM** | **0.9788** |
+| Pages ≥ 0.95 | **48/49** (98%) |
+| **DML perfect** (P\|dy\|=0, \|dch\|=0) | **35/49** (71%) |
+| Average paragraph Y deviation | **0.02pt** |
+| Average char-count deviation per line | **0.13** |
+
+### 177-document Baseline Progress
 
 ```mermaid
 xychart-beta
@@ -211,9 +228,22 @@ xychart-beta
 | 2026-04-04 | 0.8286 | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
 | 2026-04-05 | 0.8305 | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
 | 2026-04-06 | **0.8430** | 168/438 (38%) | — | LayoutMode=0 line height formula (no pixel rounding), docGrid no-type=no grid snap (COM 177-doc batch confirmed), font alias resolution, eastAsia docDefaults fallback, COM twips width overrides |
-| 2026-04-07 | — | — | — | autoSpaceDE Latin↔CJK ideograph/kana, MS明朝/MS Pゴシック→Yu Mincho/Yu Gothic mapping, LM=0 ROUND multiple spacing, mixed-font line height (ASCII font CJK 83/64), bold-aware metrics lookup, General Punctuation fullwidth refinement |
+| 2026-04-07 | — | — | — | autoSpaceDE refined (Latin↔CJK ideograph/kana only, NOT punctuation), MS明朝/MS Pゴシック→Yu Mincho/Yu Gothic mapping, LM=0 ROUND multiple spacing, mixed-font line height (ASCII font CJK 83/64), bold-aware metrics lookup, General Punctuation fullwidth refinement, comma-separated font lists |
 
-**Targeted test suite** (49 documents): avg SSIM **0.9788**, 98% of pages >= 0.95. DML structural match: **35/49 perfect** (P|dy|=0, |dch|=0). Average P|dy|=0.02pt, |dch|=0.13.
+### COM-Confirmed Specifications (key examples)
+
+| Specification | Behavior |
+|---|---|
+| **autoSpaceDE** | Adds 2.5pt only between Latin alphanumerics and CJK ideographs/kana. CJK punctuation (（、。) does NOT trigger auto-space |
+| **LayoutMode=0 multiple spacing** | Uses ROUND to 0.5pt (not CEIL); cumulative includes last line |
+| **LayoutMode≥1 multiple spacing** | Uses CEIL to 0.5pt; cumulative excludes last line |
+| **CJK 83/64 line height** | `(winAsc + winDes) × fontSize × 83/64`, no 1/8pt floor; round at final step |
+| **Half-width Japanese font names** | "MS明朝" → Yu Mincho metrics, "MS Pゴシック" → Yu Gothic (GDI fallback equivalent) |
+| **Theme ea="" resolution** | Falls back to docDefaults eastAsia, then to system default CJK font |
+| **Mixed-font line height** | When line has Latin text in a CJK 83/64 ascii font, that font's CJK height is included in max |
+| **General Punctuation fullwidth** | Specific chars only: ‐ ― ' † ‡ ‥ … ‰ ′ ″ ※ (NOT — ' " " • ⁂ ⁄) |
+| **Font name normalization** | Comma-separated lists ("MS明朝,Times New Roman") use first segment |
+| **Bold-aware metrics** | When run is bold, lookup `{family} Bold` or `{family} Demibold` variant |
 
 **Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
 
