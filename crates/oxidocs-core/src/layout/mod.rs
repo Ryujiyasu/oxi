@@ -270,10 +270,11 @@ impl LayoutEngine {
         self.resolve_font_family(run_style, para_style)
     }
 
-    /// Get font metrics for a run (uses registry with font-family resolution)
+    /// Get font metrics for a run (uses registry with font-family resolution).
+    /// Considers bold to look up Bold variant when applicable.
     fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         match self.resolve_font_family(run_style, para_style) {
-            Some(family) => self.registry.get(family),
+            Some(family) => self.registry.get_with_bold(family, self.resolve_bold(run_style, para_style)),
             None => self.registry.default_metrics(),
         }
     }
@@ -281,7 +282,7 @@ impl LayoutEngine {
     /// Get font metrics considering East Asian font for CJK text.
     fn metrics_for_text(&self, text: &str, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         match self.resolve_font_family_for_text(text, run_style, para_style) {
-            Some(family) => self.registry.get(family),
+            Some(family) => self.registry.get_with_bold(family, self.resolve_bold(run_style, para_style)),
             None => self.registry.default_metrics(),
         }
     }

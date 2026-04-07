@@ -482,6 +482,37 @@ impl FontMetricsRegistry {
             .or_else(|| size_data.get("no_grid").copied())
     }
 
+    /// Get metrics for a font family, considering bold to look up Bold variant.
+    /// When bold is true and a "{family} Bold" or "{family} Demibold" variant exists,
+    /// return that variant's metrics; otherwise fall back to the regular variant.
+    pub fn get_with_bold(&self, family: &str, bold: bool) -> &FontMetrics {
+        if bold {
+            // Try Bold variant first
+            let normalized = normalize_family_name(family);
+            // Map "Yu Gothic Regular" → "Yu Gothic Bold"
+            let bold_name = if normalized.ends_with(" Regular") {
+                format!("{} Bold", &normalized[..normalized.len() - 8])
+            } else if !normalized.contains("Bold") && !normalized.contains("Demibold") {
+                format!("{} Bold", normalized)
+            } else {
+                normalized.clone()
+            };
+            if let Some(m) = self.fonts.get(&bold_name) {
+                return m;
+            }
+            // Try Demibold for Mincho fonts
+            let demi_name = if normalized.ends_with(" Regular") {
+                format!("{} Demibold", &normalized[..normalized.len() - 8])
+            } else {
+                format!("{} Demibold", normalized)
+            };
+            if let Some(m) = self.fonts.get(&demi_name) {
+                return m;
+            }
+        }
+        self.get(family)
+    }
+
     /// Get metrics for a font family. Falls back to default (Calibri) if not found.
     pub fn get(&self, family: &str) -> &FontMetrics {
         // Try exact match first
