@@ -4,7 +4,9 @@ import re
 from pathlib import Path
 
 values = {}
-for d in sorted(Path("pipeline_data/docx").glob("*.docx")):
+import sys
+target_dir = sys.argv[1] if len(sys.argv) > 1 else "pipeline_data/docx"
+for d in sorted(Path(target_dir).glob("*.docx")):
     if d.name.startswith("~$"):
         continue
     try:
