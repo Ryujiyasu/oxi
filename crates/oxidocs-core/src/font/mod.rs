@@ -752,6 +752,8 @@ fn is_halfwidth_katakana(ch: char) -> bool {
 
 fn is_fullwidth(ch: char) -> bool {
     matches!(ch as u32,
+        // General Punctuation (※, †, ‡, •, …, etc.) — Word renders as fullwidth in CJK fonts
+        0x2010..=0x205F |
         0x2500..=0x257F |  // Box Drawing
         0x2580..=0x259F |  // Block Elements
         0x25A0..=0x25FF |  // Geometric Shapes (□, ◎, ○, ● etc.)
