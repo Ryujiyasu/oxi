@@ -121,6 +121,10 @@ pub struct LayoutEngine {
     default_tab_stop: f32,
     /// Compatibility mode: 14=Word 2010 (table cells no grid snap), 15=Word 2013+ (grid snap)
     compat_mode: u32,
+    /// w:characterSpacingControl: enable yakumono (CJK punctuation) compression
+    /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
+    /// False (default) when "doNotCompress" or absent.
+    compress_punctuation: bool,
 }
 
 /// Word's default heading font sizes (in points)
@@ -168,6 +172,7 @@ impl LayoutEngine {
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
             compat_mode: 15,
+            compress_punctuation: false,
         }
     }
 
@@ -191,6 +196,7 @@ impl LayoutEngine {
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
+            compress_punctuation: doc.compress_punctuation,
         }
     }
 
@@ -1755,7 +1761,32 @@ impl LayoutEngine {
             let latin_gdi_map = self.registry.get_gdi_char_widths(&latin_metrics.family, font_size);
             let cjk_gdi_map = cjk_metrics.map(|m| self.registry.get_gdi_char_widths(&m.family, font_size)).flatten();
 
-            for ch in text.chars() {
+            // Yakumono compression flags (約物詰め): COM-confirmed (2026-04-08).
+            // Only applied when document setting w:characterSpacingControl is
+            // "compressPunctuation" or "compressPunctuationAndJapaneseKana".
+            // Most modern docs use "doNotCompress" → no compression.
+            let chars_vec: Vec<char> = text.chars().collect();
+            let yakumono_compressed: Vec<bool> = if self.compress_punctuation {
+                let n = chars_vec.len();
+                let mut v = vec![false; n];
+                for i in 0..n {
+                    let c = chars_vec[i];
+                    if kinsoku::is_yakumono_closing(c) {
+                        if i + 1 < n && kinsoku::is_yakumono_trigger(chars_vec[i + 1]) {
+                            v[i] = true;
+                        }
+                    } else if kinsoku::is_yakumono_opening(c) {
+                        if i > 0 && kinsoku::is_yakumono_trigger(chars_vec[i - 1]) && !v[i - 1] {
+                            v[i] = true;
+                        }
+                    }
+                }
+                v
+            } else {
+                vec![false; chars_vec.len()]
+            };
+
+            for (char_index, ch) in chars_vec.iter().copied().enumerate() {
                 let (char_metrics, gdi_map) = if kinsoku::is_cjk(ch) {
                     if let Some(cjk_m) = cjk_metrics {
                         (cjk_m, cjk_gdi_map)
@@ -1766,6 +1797,9 @@ impl LayoutEngine {
                     (latin_metrics, latin_gdi_map)
                 };
                 let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map) + cs;
+                if yakumono_compressed[char_index] {
+                    char_width *= 0.5;
+                }
                 // charGrid: each character occupies 1 grid cell for wrapping.
                 // For line-break, effective width = max(char_width, pitch).
                 // When char_width > pitch, char overflows into next cell visually
