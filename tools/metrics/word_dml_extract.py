@@ -75,7 +75,8 @@ def extract_dml(docx_path: str) -> dict:
             try:
                 c = chars(ci)
                 ch = c.Text
-                if ch == '\r' or ch == '\x07':
+                # Filter: \r=para mark, \x07=cell mark, \x0b=soft line break (<w:br/>)
+                if ch == '\r' or ch == '\x07' or ch == '\x0b':
                     continue
                 cy = c.Information(6)
                 cx = c.Information(5)
