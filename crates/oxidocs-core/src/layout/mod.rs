@@ -1810,6 +1810,17 @@ impl LayoutEngine {
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
                 }
+                // CJK-adjacent space (COM-confirmed in non-stretched short docs):
+                // - "L SP CJK"  → SP = 5.0pt (10.5pt) / 5.5pt (11pt)  ≈ round(font_size)/2 - 0.25 → use 5.0 at 10.5pt
+                // - "CJK SP L"  → SP = 5.5pt (covered by autoSpaceDE elsewhere; skip here)
+                // We only override the "next is CJK ideo/kana" case to avoid double-padding.
+                if ch == ' '
+                    && char_index + 1 < chars_vec.len()
+                    && kinsoku::is_cjk_ideograph_or_kana(chars_vec[char_index + 1])
+                {
+                    // Use floor of half-em (5.0 at 10.5pt, 5.0 at 11pt, 6.0 at 12pt).
+                    char_width = (font_size * 0.5).floor().max(2.0) + cs;
+                }
                 // charGrid: each character occupies 1 grid cell for wrapping.
                 // For line-break, effective width = max(char_width, pitch).
                 // When char_width > pitch, char overflows into next cell visually
