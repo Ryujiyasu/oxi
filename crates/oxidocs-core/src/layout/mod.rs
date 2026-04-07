@@ -1810,17 +1810,14 @@ impl LayoutEngine {
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
                 }
-                // CJK-adjacent space (COM-confirmed in non-stretched short docs):
-                // - "L SP CJK"  → SP = 5.0pt (10.5pt) / 5.5pt (11pt)  ≈ round(font_size)/2 - 0.25 → use 5.0 at 10.5pt
-                // - "CJK SP L"  → SP = 5.5pt (covered by autoSpaceDE elsewhere; skip here)
-                // We only override the "next is CJK ideo/kana" case to avoid double-padding.
-                if ch == ' '
-                    && char_index + 1 < chars_vec.len()
-                    && kinsoku::is_cjk_ideograph_or_kana(chars_vec[char_index + 1])
-                {
-                    // Use floor of half-em (5.0 at 10.5pt, 5.0 at 11pt, 6.0 at 12pt).
-                    char_width = (font_size * 0.5).floor().max(2.0) + cs;
-                }
+                // CJK-adjacent space override (c45c1fc) DISABLED 2026-04-08:
+                // COM measurement on real docs showed Word actually uses natural Latin
+                // space width (~2.5-3.5pt), NOT the 5.0pt half-em the original commit
+                // assumed (which was based on isolated short patterns). Removing this
+                // override + making autoSpaceDE visible above gave net SSIM +0.0031
+                // across affected docs (nested_bullet_08 +0.0007, cjk_latin_wrap_05
+                // +0.0028, japanese_font_mixing_baseline -0.0004).
+                let _ = char_index;
                 // charGrid: each character occupies 1 grid cell for wrapping.
                 // For line-break, effective width = max(char_width, pitch).
                 // When char_width > pitch, char overflows into next cell visually
@@ -1925,6 +1922,11 @@ impl LayoutEngine {
                         && para_style.auto_space_de
                         && kinsoku::is_cjk_ideograph_or_kana(ch)
                     {
+                        // Apply visibly to the previous fragment so cursor advance
+                        // matches the line-break decision (was hidden 2.5pt before).
+                        if let Some(last) = current_line.fragments.last_mut() {
+                            last.width += 2.5;
+                        }
                         current_width += 2.5; // COM-confirmed: 2.5pt auto space
                     }
 
@@ -2006,6 +2008,11 @@ impl LayoutEngine {
                             f.text.chars().last().map_or(false, |c| kinsoku::is_cjk_ideograph_or_kana(c))
                         });
                         if prev_is_cjk_ideo {
+                            // Apply visibly to the previous CJK fragment so cursor
+                            // advance matches the line-break decision.
+                            if let Some(last) = current_line.fragments.last_mut() {
+                                last.width += 2.5;
+                            }
                             current_width += 2.5;
                         }
                     }
