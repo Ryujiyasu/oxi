@@ -1,7 +1,9 @@
 # Oxi
 
-Open-source document processing suite built with Rust + WebAssembly
-View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — no server required
+**Oxi = Opensource Xplatform Interoperability**
+
+A document processing suite built with Rust + WebAssembly.
+View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — no server required.
 
 [Live Demo](https://ryujiyasu.gitlab.io/oxi/) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
