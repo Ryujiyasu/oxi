@@ -4,20 +4,21 @@
 /// start or end of a line.
 
 /// Characters prohibited at the start of a line (行頭禁則文字)
-/// Closing brackets, punctuation, small kana, etc.
+/// Word's default (Standard Microsoft) kinsoku — verified via COM (2026-04-08).
+/// Word allows small kana ぁぃっゃゅょ etc, prolonged sound mark ー, and 〜
+/// at line start despite strict JIS X 4051 prohibition. Only the chars
+/// below are actually blocked by Word's default kinsoku.
 const LINE_START_PROHIBITED: &[char] = &[
     // Closing brackets
     '）', '〕', '］', '｝', '〉', '》', '」', '』', '】', '〙', '〗',
     ')', ']', '}',
     // Punctuation that shouldn't start a line
     '、', '。', '，', '．', '：', '；', '？', '！',
-    '・', 'ー', '～',
-    // Small kana
-    'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ', 'ゎ',
-    'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ', 'ャ', 'ュ', 'ョ', 'ヮ',
-    // Prolonged sound mark
+    // Mid-dot
+    '・',
+    // Repetition marks
     'ヽ', 'ヾ', 'ゝ', 'ゞ',
-    // Period and comma variants
+    // Period/comma variants
     '‥', '…',
 ];
 
