@@ -62,6 +62,59 @@ pub fn is_cjk_compressible(ch: char) -> bool {
     CJK_COMPRESSIBLE_PUNCTUATION.contains(&ch)
 }
 
+// =====================================================================
+// Yakumono compression (約物詰め) - COM-confirmed (2026-04-08)
+// See memory/yakumono_compression_spec.md for full ruleset.
+//
+// Word applies these rules during normal layout (NOT just justify).
+// Two adjacent CJK punctuation chars: ONE of them is compressed to 50%.
+//   - Closing-side punct: compressed when NEXT char is a trigger
+//   - Opening-side punct: compressed when PREV char is a trigger
+//                         (and the prev char is not itself compressed)
+// =====================================================================
+
+/// Closing-side punctuation that compresses (50%) when followed by a trigger.
+/// These have built-in right-side spacing in the glyph that gets removed.
+const YAKUMONO_CLOSING: &[char] = &[
+    '）', '」', '』', '〕', '】', '》', '〙', '〗', '｝', '］',
+    '、', '。', '，', '．',
+];
+
+/// Opening-side punctuation that compresses (50%) when preceded by a trigger.
+/// These have built-in left-side spacing that gets removed.
+const YAKUMONO_OPENING: &[char] = &[
+    '（', '「', '『', '〔', '【', '《', '〘', '〖', '｛', '［',
+];
+
+/// Trigger chars: presence triggers compression of an adjacent closing/opening punct.
+/// Includes all closing/opening punct PLUS special triggers (・：；) that are
+/// triggers but NOT compressible themselves.
+const YAKUMONO_TRIGGER: &[char] = &[
+    // openers
+    '（', '「', '『', '〔', '【', '《', '〘', '〖', '｛', '［',
+    // closers
+    '）', '」', '』', '〕', '】', '》', '〙', '〗', '｝', '］',
+    // commas/periods
+    '、', '。', '，', '．',
+    // special triggers (themselves uncompressed): middle dot, colon, semicolon
+    '・', '：', '；',
+];
+
+/// Check if a char is a closing-side compressible punct.
+pub fn is_yakumono_closing(ch: char) -> bool {
+    YAKUMONO_CLOSING.contains(&ch)
+}
+
+/// Check if a char is an opening-side compressible punct.
+pub fn is_yakumono_opening(ch: char) -> bool {
+    YAKUMONO_OPENING.contains(&ch)
+}
+
+/// Check if a char triggers yakumono compression on adjacent puncts.
+pub fn is_yakumono_trigger(ch: char) -> bool {
+    YAKUMONO_TRIGGER.contains(&ch)
+}
+
 /// Check if a character is CJK (Chinese, Japanese, Korean)
 /// These characters can have line breaks between any two adjacent characters
 /// (subject to kinsoku rules)
