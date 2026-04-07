@@ -21,6 +21,11 @@ pub struct Document {
     /// 14=Word 2010, 15=Word 2013+. Affects table cell grid snap behavior.
     #[serde(default)]
     pub compat_mode: u32,
+    /// w:characterSpacingControl from settings.xml.
+    /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana"
+    /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.
+    #[serde(default)]
+    pub compress_punctuation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -61,6 +61,7 @@ impl OoxmlParser {
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
         let default_tab_stop = self.parse_default_tab_stop();
         let compat_mode = self.parse_compat_mode();
+        let compress_punctuation = self.parse_compress_punctuation();
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
@@ -216,6 +217,7 @@ impl OoxmlParser {
             adjust_line_height_in_table,
             default_tab_stop,
             compat_mode,
+            compress_punctuation,
         })
     }
 
@@ -409,6 +411,36 @@ impl OoxmlParser {
             }
         }
         15
+    }
+
+    /// Parse word/settings.xml for w:characterSpacingControl value.
+    /// Returns true if value is "compressPunctuation" or "compressPunctuationAndJapaneseKana"
+    /// (enables yakumono compression). False for "doNotCompress" or absent.
+    fn parse_compress_punctuation(&mut self) -> bool {
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        let mut reader = Reader::from_str(&xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) => {
+                    if local_name(e.name().as_ref()) == "characterSpacingControl" {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                return val == "compressPunctuation"
+                                    || val == "compressPunctuationAndJapaneseKana";
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Parse word/settings.xml for defaultTabStop value.
