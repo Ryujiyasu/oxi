@@ -2416,6 +2416,14 @@ impl LayoutEngine {
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                 // exact/atLeast: text at bottom of line box (extra space above).
+                //
+                // CAVEAT: Word's COM Range.Information(6) reports line BOX top
+                // (= cursor_y), NOT the rendered text glyph top. The actual
+                // GDI rendering places the text at (line_box_top + line_height - natural).
+                // Verified empirically 2026-04-08: setting offset=0 (matching COM) caused
+                // SSIM regression on index-19 p1 (0.8516→0.8175). The d20983e6 commit
+                // ("PIXEL PERFECT") was correct about pixel position. dml_diff |dy| is
+                // a reporting artifact and is NOT a reliable signal for text_y_offset.
                 let mut max_ascent: f32 = 0.0;
                 let mut max_descent: f32 = 0.0;
                 if line.fragments.is_empty() {
