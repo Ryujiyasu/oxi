@@ -1855,15 +1855,20 @@ impl LayoutEngine {
                     flush_word!(style);
                 } else if kinsoku::is_cjk(ch) {
                     // CJK characters can break at any point
-                    // autoSpaceDE: add 2.5pt gap between Latin and CJK
+                    // autoSpaceDE: add 2.5pt gap between Latin and CJK ideograph/kana.
+                    // COM-confirmed (2026-04-07): only ideographs/kana trigger auto-space,
+                    // not CJK punctuation (which gets no extra spacing from Latin).
                     let prev_is_latin = !word.is_empty() && word.chars().last().map_or(false, |c| c.is_ascii_alphanumeric());
                     let prev_frag_is_latin = if word.is_empty() {
                         current_line.fragments.last().map_or(false, |f| {
-                            f.text.chars().last().map_or(false, |c| c.is_ascii_alphanumeric() || c.is_ascii_punctuation())
+                            f.text.chars().last().map_or(false, |c| c.is_ascii_alphanumeric())
                         })
                     } else { false };
                     flush_word!(style);
-                    if (prev_is_latin || prev_frag_is_latin) && para_style.auto_space_de {
+                    if (prev_is_latin || prev_frag_is_latin)
+                        && para_style.auto_space_de
+                        && kinsoku::is_cjk_ideograph_or_kana(ch)
+                    {
                         current_width += 2.5; // COM-confirmed: 2.5pt auto space
                     }
 
@@ -1915,6 +1920,17 @@ impl LayoutEngine {
                     current_width += char_width; current_grid_extra += char_grid_extra;
                 } else {
                     // Regular word character — accumulate
+                    // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
+                    // COM-confirmed (2026-04-07): Word only adds auto-space between Latin and
+                    // CJK ideographs/kana, NOT between Latin and CJK punctuation.
+                    if word_style.is_none() && para_style.auto_space_de && ch.is_ascii_alphanumeric() {
+                        let prev_is_cjk_ideo = current_line.fragments.last().map_or(false, |f| {
+                            f.text.chars().last().map_or(false, |c| kinsoku::is_cjk_ideograph_or_kana(c))
+                        });
+                        if prev_is_cjk_ideo {
+                            current_width += 2.5;
+                        }
+                    }
                     if word_style.is_none() {
                         word_style = Some(style.clone());
                         word_field_type = frag_field_type;

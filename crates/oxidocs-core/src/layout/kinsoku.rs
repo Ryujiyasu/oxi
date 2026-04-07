@@ -65,6 +65,28 @@ pub fn is_cjk_compressible(ch: char) -> bool {
 /// Check if a character is CJK (Chinese, Japanese, Korean)
 /// These characters can have line breaks between any two adjacent characters
 /// (subject to kinsoku rules)
+/// CJK ideograph or kana (NOT punctuation/symbols).
+/// Used for autoSpaceDE: Word adds 2.5pt only between Latin and CJK ideographs/kana.
+/// Punctuation like （、。は does NOT trigger auto-space.
+pub fn is_cjk_ideograph_or_kana(ch: char) -> bool {
+    matches!(ch as u32,
+        // CJK Unified Ideographs
+        0x4E00..=0x9FFF |
+        // CJK Unified Ideographs Extension A
+        0x3400..=0x4DBF |
+        // CJK Compatibility Ideographs
+        0xF900..=0xFAFF |
+        // Hiragana (excluding 0x3000-0x303F punctuation)
+        0x3041..=0x309F |
+        // Katakana
+        0x30A1..=0x30FF |
+        // Katakana Phonetic Extensions
+        0x31F0..=0x31FF |
+        // CJK Unified Ideographs Extension B
+        0x20000..=0x2A6DF
+    )
+}
+
 pub fn is_cjk(ch: char) -> bool {
     matches!(ch as u32,
         // CJK Unified Ideographs
