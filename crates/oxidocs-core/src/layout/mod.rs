@@ -1908,7 +1908,19 @@ impl LayoutEngine {
                     }
 
                     if pt_to_tw(current_width + current_grid_extra + char_width + char_grid_extra) > available_tw && !current_line.fragments.is_empty() {
-                        if kinsoku::is_line_start_prohibited(ch) && !current_line.fragments.is_empty() {
+                        // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
+                        // See memory/hangable_oikomi_rule.md.
+                        //
+                        // Hang ch on current line (burasagari) only if:
+                        //   1. ch is a hangable CJK punct (、。）」 etc.), AND
+                        //   2. next char (if any) is NOT line-start-prohibited
+                        //      (otherwise hanging would push a still-prohibited char to L2 head).
+                        // Otherwise, apply oikomi shift back.
+                        let next_ch = chars_vec.get(char_index + 1).copied();
+                        let next_is_proh = next_ch.map_or(false, kinsoku::is_line_start_prohibited);
+                        let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh;
+
+                        if can_hang {
                             current_line.fragments.push(LineFragment {
                                 text: char_to_string(ch),
                                 width: char_width,
@@ -1923,23 +1935,33 @@ impl LayoutEngine {
                             current_width = 0.0; current_grid_extra = 0.0;
                             continue;
                         }
+
+                        // Oikomi (押し下げ): pop fragments from end of current line until
+                        // both conditions are satisfied:
+                        //   - first char of next line is NOT line-start-prohibited
+                        //   - last char of current line is NOT line-end-prohibited
+                        let mut popped: Vec<LineFragment> = Vec::new();
+                        loop {
+                            let last_of_curr = current_line.fragments.last()
+                                .and_then(|f| f.text.chars().last());
+                            let next_first = if let Some(p) = popped.last() {
+                                p.text.chars().next().unwrap_or(ch)
+                            } else {
+                                ch
+                            };
+                            let bad = kinsoku::is_line_start_prohibited(next_first)
+                                || last_of_curr.map_or(false, kinsoku::is_line_end_prohibited);
+                            if !bad || current_line.fragments.len() <= 1 { break; }
+                            let f = current_line.fragments.pop().unwrap();
+                            current_width -= f.width;
+                            popped.push(f);
+                        }
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_grid_extra = 0.0;
-                    }
-
-                    if kinsoku::is_line_end_prohibited(ch) {
-                        current_line.fragments.push(LineFragment {
-                            text: char_to_string(ch),
-                            width: char_width,
-                            style: style.clone(),
-                            tab_alignment: None,
-                            tab_position: None,
-                            field_type: frag_field_type,
-                            run_index: frag_run_index,
-                            char_offset: char_pos_in_run,
-                        });
-                        current_width += char_width; current_grid_extra += char_grid_extra;
-                        continue;
+                        for f in popped.into_iter().rev() {
+                            current_width += f.width;
+                            current_line.fragments.push(f);
+                        }
                     }
 
                     current_line.fragments.push(LineFragment {

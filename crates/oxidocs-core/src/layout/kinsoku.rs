@@ -39,6 +39,23 @@ pub fn is_line_end_prohibited(ch: char) -> bool {
     LINE_END_PROHIBITED.contains(&ch)
 }
 
+/// Characters that Word allows to "hang" past the right margin (burasagari).
+/// COM-confirmed (2026-04-08): Word's HangingPunctuation=true (default) hangs
+/// CJK closing brackets and CJK comma/period — but NOT colon/semicolon/?/!.
+/// See memory/hangable_oikomi_rule.md.
+const HANGABLE_PUNCT: &[char] = &[
+    // CJK comma and period (and fullwidth)
+    '、', '。', '，', '．',
+    // CJK closing brackets
+    '）', '〕', '］', '｝', '〉', '》', '」', '』', '】', '〙', '〗',
+];
+
+/// Check if a character is allowed to hang past the right margin
+/// (burasagari / hanging punctuation).
+pub fn is_hangable_punct(ch: char) -> bool {
+    HANGABLE_PUNCT.contains(&ch)
+}
+
 /// CJK punctuation that can be compressed from full-width to half-width (50% compression).
 /// These are full-width punctuation marks where Word compresses the whitespace built into
 /// the glyph for justification purposes.
