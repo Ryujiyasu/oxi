@@ -1295,12 +1295,21 @@ impl LayoutEngine {
 
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
+        // COM-confirmed (2026-04-08, 683ffcab86e2): SINGLE spacing also uses cumulative
+        // round for LayoutMode=0 — see memory/cumulative_line_height.md.
         let is_multiple_spacing = match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
             (Some("exact"), _) | (Some("atLeast"), _) => false,
             (_, Some(f)) if (f - 1.0).abs() > 0.001 => true,
             _ => false,
         };
-        let raw_spaced_tw: f32 = if is_multiple_spacing && !lines.is_empty() {
+        // Single spacing also benefits from cumulative round for LM=0.
+        let is_single_lm0 = !is_multiple_spacing && grid_pitch.is_none()
+            && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
+                (Some("exact"), _) | (Some("atLeast"), _) => false,
+                _ => true,
+            };
+        let use_cumulative_basis = is_multiple_spacing || is_single_lm0;
+        let raw_spaced_tw: f32 = if use_cumulative_basis && !lines.is_empty() {
             let first_line = &lines[0];
             let base = {
                 let mut ma: f32 = 0.0; let mut md: f32 = 0.0;
@@ -1597,9 +1606,10 @@ impl LayoutEngine {
             // have the same height. When heights vary (mixed fonts), use per-line height.
             // COM-confirmed (2026-04-07): variable-height paragraphs (e.g., mixed CJK+Latin
             // first line, pure CJK subsequent lines) use per-line height, not cumulative.
+            // COM-confirmed (2026-04-08): SINGLE spacing also cumulative round in LM=0.
             let is_last = line_idx == lines.len() - 1;
             // LM=0 cumulative ROUND includes LAST line; LM≥1 cumulative CEIL excludes last.
-            let use_cumulative = is_multiple_spacing && raw_spaced_tw > 0.0
+            let use_cumulative = use_cumulative_basis && raw_spaced_tw > 0.0
                 && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5)
                 && (grid_pitch.is_none() || !is_last);
             if use_cumulative {
