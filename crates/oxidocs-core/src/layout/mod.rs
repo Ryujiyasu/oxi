@@ -443,6 +443,29 @@ impl LayoutEngine {
             }
         }
         let content_height = page.size.height - start_y - page.margin.bottom;
+        // Round 29 (2026-04-08): per-page dynamic footnote reservation.
+        // Footnotes are reserved at the bottom of the page where their reference
+        // appears. The amount reserved varies per page based on which footnotes
+        // are referenced. Tracked dynamically as the body layout progresses:
+        // when a paragraph contains a footnoteReference, the corresponding note's
+        // estimated body height is added to the running reservation; on page
+        // break the reservation resets. The body's effective overflow check uses
+        // (content_height - footnote_reserved_current_page).
+        // Helper to estimate one footnote body height by id.
+        let estimate_footnote_h = |id: u32| -> f32 {
+            if let Some(note) = page.footnotes.iter().find(|n| n.number == id) {
+                let cw = page.size.width - page.margin.left - page.margin.right;
+                let mut h: f32 = 0.0;
+                for nb in &note.blocks {
+                    if let Block::Paragraph(p) = nb {
+                        h += self.estimate_para_height(p, cw, page.grid_line_pitch, None);
+                    }
+                }
+                h
+            } else {
+                0.0
+            }
+        };
 
         // Multi-column layout: compute column X positions and widths
         // COM-confirmed: col_x = margin + Σ(prev_width + prev_spacing)
@@ -493,6 +516,12 @@ impl LayoutEngine {
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
         let mut block_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
         let mut current_page_idx: usize = 0;
+        // Round 29: dynamic per-page footnote reservation. Tracks the sum of
+        // estimated heights for footnotes whose references appear on the current
+        // layout page. Resets to 0 each time a new page is pushed. Subtracts from
+        // effective content_height in overflow checks below.
+        let mut footnote_reserve_current: f32 = 0.0;
+        let mut footnote_ids_current_page: Vec<u32> = Vec::new();
 
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
@@ -526,6 +555,48 @@ impl LayoutEngine {
             block_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
+                    // Round 29: compute footnote contribution if this paragraph is
+                    // laid out on the CURRENT page (delta added) vs a NEW page
+                    // (full from-scratch). Used by overflow checks below.
+                    let (delta_if_current, full_if_new): (f32, f32) = if page.footnotes.is_empty() {
+                        (0.0, 0.0)
+                    } else {
+                        let mut delta = 0.0_f32;
+                        let mut full = 0.0_f32;
+                        let mut seen_new: Vec<u32> = Vec::new();
+                        for r in &para.runs {
+                            if let Some(id) = r.footnote_ref {
+                                if !seen_new.contains(&id) {
+                                    seen_new.push(id);
+                                    let h = estimate_footnote_h(id);
+                                    full += h;
+                                    if !footnote_ids_current_page.contains(&id) {
+                                        delta += h;
+                                    }
+                                }
+                            }
+                        }
+                        (delta, full)
+                    };
+                    let effective_content_h = (content_height - (footnote_reserve_current + delta_if_current)).max(0.0);
+                    let effective_content_h_new_page = (content_height - full_if_new).max(0.0);
+                    let _ = effective_content_h_new_page;
+
+                    // Helper closure: commit this paragraph's footnotes to the
+                    // current page's running reservation (called once we've
+                    // decided which page the paragraph lands on).
+                    let commit_para_footnotes = |reserve: &mut f32, ids: &mut Vec<u32>| {
+                        if page.footnotes.is_empty() { return; }
+                        for r in &para.runs {
+                            if let Some(id) = r.footnote_ref {
+                                if !ids.contains(&id) {
+                                    ids.push(id);
+                                    *reserve += estimate_footnote_h(id);
+                                }
+                            }
+                        }
+                    };
+
                     // pageBreakBefore: force a new page (not just next column)
                     if para.style.page_break_before && !elements.is_empty() {
                         pages.push(LayoutPage {
@@ -538,15 +609,25 @@ impl LayoutEngine {
                         start_x = col_x_positions[0];
                         content_width = col_widths[0];
                         current_page_idx += 1;
+                        footnote_reserve_current = 0.0;
+                        footnote_ids_current_page.clear();
+                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
+                    } else {
+                        // Normal case: this paragraph lands on the current page
+                        // unless an overflow check below pushes it. Pre-commit
+                        // its footnote contributions; later, if a page break
+                        // happens (keepLines/keepNext/etc.), we'll reset and
+                        // re-commit on the new page.
+                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
                     }
 
                     // keepLines: if doesn't fit, advance column or page
                     if para.style.keep_lines && !elements.is_empty() {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
-                        let remaining = (start_y + content_height) - cursor_y;
-                        if est_h > remaining && est_h <= content_height {
+                        let remaining = (start_y + effective_content_h) - cursor_y;
+                        if est_h > remaining && est_h <= effective_content_h {
                             if num_columns > 1 && current_column + 1 < num_columns {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
@@ -563,6 +644,11 @@ impl LayoutEngine {
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
                                 current_page_idx += 1;
+                                // Round 29: page push moves this paragraph (and
+                                // its footnote refs) to the new page.
+                                footnote_reserve_current = 0.0;
+                                footnote_ids_current_page.clear();
+                                commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             *block_y_positions.last_mut().unwrap() = cursor_y;
@@ -574,8 +660,8 @@ impl LayoutEngine {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
                             let this_h = self.estimate_para_height(para, content_width, grid_pitch, None);
                             let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None);
-                            let remaining = (start_y + content_height) - cursor_y;
-                            if this_h + next_h > remaining && this_h + next_h <= content_height {
+                            let remaining = (start_y + effective_content_h) - cursor_y;
+                            if this_h + next_h > remaining && this_h + next_h <= effective_content_h {
                                 if num_columns > 1 && current_column + 1 < num_columns {
                                     current_column += 1;
                                     start_x = col_x_positions[current_column];
@@ -592,6 +678,9 @@ impl LayoutEngine {
                                     start_x = col_x_positions[0];
                                     content_width = col_widths[0];
                                     current_page_idx += 1;
+                                    footnote_reserve_current = 0.0;
+                                    footnote_ids_current_page.clear();
+                                    commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
                                 }
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 *block_y_positions.last_mut().unwrap() = cursor_y;
@@ -602,8 +691,8 @@ impl LayoutEngine {
                     // Multi-column pre-check: advance column if paragraph won't fit
                     if num_columns > 1 {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
-                        let remaining = (start_y + content_height) - cursor_y;
-                        if est_h > remaining && est_h <= content_height {
+                        let remaining = (start_y + effective_content_h) - cursor_y;
+                        if est_h > remaining && est_h <= effective_content_h {
                             if current_column + 1 < num_columns {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
@@ -620,6 +709,9 @@ impl LayoutEngine {
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
                                 current_page_idx += 1;
+                                footnote_reserve_current = 0.0;
+                                footnote_ids_current_page.clear();
+                                commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             *block_y_positions.last_mut().unwrap() = cursor_y;
@@ -627,12 +719,17 @@ impl LayoutEngine {
                     }
 
                     let pages_before = pages.len();
+                    // Round 29: pass the per-page effective content height so the
+                    // paragraph's internal line-by-line page-break logic accounts
+                    // for the footnote area below. Multi-page paragraphs with
+                    // footnoteRefs get the same reservation on each spanned page
+                    // (slight under-use on continuation pages, acceptable).
                     let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
                         &mut cursor_y,
                         content_width,
-                        content_height,
+                        effective_content_h,
                         start_y,
                         page,
                         &mut pages,
@@ -666,6 +763,21 @@ impl LayoutEngine {
                             content_width = col_widths[0];
                         }
                         current_page_idx += pages_added;
+                        // Round 29: paragraph spanned page boundaries internally.
+                        // The footnote reservation was for the FIRST page; new pages
+                        // start with this paragraph's footnote refs only.
+                        footnote_reserve_current = 0.0;
+                        footnote_ids_current_page.clear();
+                        if !page.footnotes.is_empty() {
+                            for r in &para.runs {
+                                if let Some(id) = r.footnote_ref {
+                                    if !footnote_ids_current_page.contains(&id) {
+                                        footnote_ids_current_page.push(id);
+                                        footnote_reserve_current += estimate_footnote_h(id);
+                                    }
+                                }
+                            }
+                        }
                     }
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
@@ -847,6 +959,135 @@ impl LayoutEngine {
                             false, 0.0, None,
                         );
                         lp.elements.extend(ftr_elements);
+                    }
+                }
+            }
+
+            // Render footnotes for this layout page (Round 29, 2026-04-08).
+            // Word places footnotes at the bottom of the page where their reference
+            // appears, above the footer (or above the bottom margin if no footer).
+            // We:
+            //   1. Scan blocks belonging to this layout page for footnoteReference runs
+            //      (paragraph runs and recursively into table cells)
+            //   2. Look up each referenced footnote by id in `page.footnotes`
+            //   3. Render a separator + each footnote paragraph at the footnote area top
+            // For now we do NOT shrink body content_height to reserve footnote space —
+            // body fitting drift remains a known limitation handled in a later round.
+            if !page.footnotes.is_empty() {
+                fn collect_footnote_refs(blocks: &[Block], out: &mut Vec<u32>) {
+                    for b in blocks {
+                        match b {
+                            Block::Paragraph(p) => {
+                                for r in &p.runs {
+                                    if let Some(id) = r.footnote_ref {
+                                        if !out.contains(&id) { out.push(id); }
+                                    }
+                                }
+                            }
+                            Block::Table(t) => {
+                                for row in &t.rows {
+                                    for cell in &row.cells {
+                                        collect_footnote_refs(&cell.blocks, out);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Gather paragraphs/tables that landed on this layout page.
+                let mut page_blocks: Vec<&Block> = Vec::new();
+                for (i, b) in page.blocks.iter().enumerate() {
+                    if block_page_indices.get(i).copied().unwrap_or(0) == page_idx {
+                        page_blocks.push(b);
+                    }
+                }
+                let mut referenced_ids: Vec<u32> = Vec::new();
+                collect_footnote_refs(
+                    &page_blocks.iter().map(|&b| b.clone()).collect::<Vec<_>>(),
+                    &mut referenced_ids,
+                );
+
+                if !referenced_ids.is_empty() {
+                    // Resolve referenced footnotes (preserve order, dedup already done).
+                    let notes: Vec<&Footnote> = referenced_ids.iter()
+                        .filter_map(|id| page.footnotes.iter().find(|n| n.number == *id))
+                        .collect();
+
+                    if !notes.is_empty() {
+                        // Footnote area bottom: just above the footer, or at the
+                        // bottom margin if no footer is present.
+                        let footnote_bottom = if !page.footer.is_empty() {
+                            // Recompute footer top here (mirrors lines 832-839 above).
+                            let mut footer_h: f32 = 0.0;
+                            for block in &page.footer {
+                                if let Block::Paragraph(para) = block {
+                                    footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None);
+                                }
+                            }
+                            page.size.height - footer_dist - footer_h - 4.0
+                        } else {
+                            page.size.height - page.margin.bottom
+                        };
+
+                        // Estimate total footnote content height to position the
+                        // footnote area top correctly. Footnotes are typically
+                        // 1-2pt smaller than body but we use estimate_para_height
+                        // which already inherits per-paragraph style.
+                        let mut total_h: f32 = 0.0;
+                        for note in &notes {
+                            for nb in &note.blocks {
+                                if let Block::Paragraph(p) = nb {
+                                    total_h += self.estimate_para_height(p, hdr_width, grid_pitch, None);
+                                }
+                            }
+                        }
+                        // Separator: short horizontal line above the footnotes.
+                        let separator_h: f32 = 2.0;
+                        let separator_pad: f32 = 4.0;
+                        let area_top = footnote_bottom - total_h - separator_pad - separator_h;
+
+                        // Draw the footnote separator line: ~1/3 of content width
+                        // (Word default), 1pt thick, black, anchored at the left margin.
+                        // Word renders this as a 1px line at the top of the footnote area.
+                        let sep_w = hdr_width * 0.33;
+                        lp.elements.push(LayoutElement::new(
+                            hdr_x,
+                            area_top,
+                            sep_w,
+                            1.0,
+                            LayoutContent::BoxRect {
+                                fill: Some("#000000".to_string()),
+                                stroke_color: None,
+                                stroke_width: 0.0,
+                                corner_radius: 0.0,
+                            },
+                        ));
+
+                        // Lay out each footnote's body paragraphs from area_top
+                        // downward. CRITICAL: pass a huge content_height so the
+                        // page-break logic inside layout_paragraph never fires —
+                        // otherwise overflow would push a fake "page" and reset
+                        // cy back to footnote_page_top, causing all footnotes to
+                        // stack at the same Y (visible as overlapping notes).
+                        let mut cy = area_top + separator_h + separator_pad;
+                        let footnote_page_top = cy;
+                        let footnote_page_height_huge = 1e6_f32;
+                        for note in &notes {
+                            for nb in &note.blocks {
+                                if let Block::Paragraph(para) = nb {
+                                    let (note_elements, _) = self.layout_paragraph(
+                                        para, hdr_x, &mut cy, hdr_width, footnote_page_height_huge,
+                                        footnote_page_top, page,
+                                        &mut Vec::new(), &mut Vec::new(),
+                                        grid_pitch, None, false,
+                                        false, 0.0, None,
+                                    );
+                                    lp.elements.extend(note_elements);
+                                }
+                            }
+                        }
                     }
                 }
             }
