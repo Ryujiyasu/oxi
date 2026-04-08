@@ -253,6 +253,11 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.font_family_east_asia.is_none() {
         child.font_family_east_asia = parent.font_family_east_asia.clone();
     }
+    // §4.6.3: explicit eastAsia attribute is inherited (sticky once set anywhere
+    // up the chain). Theme fallback never sets it.
+    if !child.has_explicit_east_asia && parent.has_explicit_east_asia {
+        child.has_explicit_east_asia = true;
+    }
     if child.font_size.is_none() {
         child.font_size = parent.font_size;
     }
@@ -315,6 +320,7 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                         } else if key == "eastAsia" {
                             rs.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
+                            rs.has_explicit_east_asia = true;
                         } else if key == "eastAsiaTheme" {
                             if rs.font_family_east_asia.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -527,6 +533,7 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 } else if key == "eastAsia" {
                     rs.font_family_east_asia =
                         Some(String::from_utf8_lossy(&attr.value).to_string());
+                    rs.has_explicit_east_asia = true;
                 } else if key == "eastAsiaTheme" {
                     if rs.font_family_east_asia.is_none() {
                         let val = String::from_utf8_lossy(&attr.value);
@@ -810,6 +817,7 @@ fn parse_style_definition(
                             } else if key == "eastAsia" {
                                 run_style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
+                                run_style.has_explicit_east_asia = true;
                                 has_run_style = true;
                             } else if key == "eastAsiaTheme" {
                                 if run_style.font_family_east_asia.is_none() {
@@ -959,6 +967,7 @@ fn parse_style_definition(
                                 } else if key == "eastAsia" {
                                     run_style.font_family_east_asia =
                                         Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    run_style.has_explicit_east_asia = true;
                                     has_run_style = true;
                                 } else if key == "eastAsiaTheme" {
                                     if run_style.font_family_east_asia.is_none() {

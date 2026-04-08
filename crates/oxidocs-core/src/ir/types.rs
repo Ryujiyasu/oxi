@@ -180,6 +180,13 @@ pub struct RunStyle {
     /// East Asian font family (w:rFonts eastAsia) for CJK characters
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family_east_asia: Option<String>,
+    /// True iff `<w:rFonts w:eastAsia="..."/>` was set as an EXPLICIT attribute
+    /// somewhere in the inheritance chain (run / style / docDefault), as
+    /// opposed to a theme-fallback `eastAsiaTheme="minorEastAsia"`. Used by
+    /// §4.6.3 Latin-space-adjacent-CJK widening (COM-confirmed jfmb vs
+    /// runtime-saved equivalent: only docs with explicit eastAsia widen).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_explicit_east_asia: bool,
     pub font_size: Option<f32>,
     pub bold: bool,
     pub italic: bool,
@@ -252,6 +259,7 @@ impl Default for RunStyle {
         Self {
             font_family: None,
             font_family_east_asia: None,
+            has_explicit_east_asia: false,
             font_size: None,
             bold: false,
             italic: false,

@@ -1096,6 +1096,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     if para_rs.font_size.is_none() { para_rs.font_size = style_rs.font_size; }
                     if para_rs.font_family.is_none() { para_rs.font_family = style_rs.font_family.clone(); }
                     if para_rs.font_family_east_asia.is_none() { para_rs.font_family_east_asia = style_rs.font_family_east_asia.clone(); }
+                    if !para_rs.has_explicit_east_asia && style_rs.has_explicit_east_asia { para_rs.has_explicit_east_asia = true; }
                     if para_rs.color.is_none() { para_rs.color = style_rs.color.clone(); }
                     if !para_rs.bold { para_rs.bold = style_rs.bold; }
                     if !para_rs.italic { para_rs.italic = style_rs.italic; }
@@ -1149,6 +1150,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if para_rs.font_size.is_none() { para_rs.font_size = doc_rs.font_size; }
             if para_rs.font_family.is_none() { para_rs.font_family = doc_rs.font_family.clone(); }
             if para_rs.font_family_east_asia.is_none() { para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone(); }
+            if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia { para_rs.has_explicit_east_asia = true; }
             if para_rs.color.is_none() { para_rs.color = doc_rs.color.clone(); }
         } else {
             style.default_run_style = styles.doc_default_run_style.clone();
@@ -1310,7 +1312,10 @@ fn parse_paragraph_properties(
                                             let v = String::from_utf8_lossy(&a.value).to_string();
                                             match k.as_str() {
                                                 "ascii" | "hAnsi" => { ppr_rpr.font_family = Some(v); }
-                                                "eastAsia" => { ppr_rpr.font_family_east_asia = Some(v); }
+                                                "eastAsia" => {
+                                                    ppr_rpr.font_family_east_asia = Some(v);
+                                                    ppr_rpr.has_explicit_east_asia = true;
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -3360,6 +3365,7 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
                         } else if key == "eastAsia" {
                             style.font_family_east_asia =
                                 Some(String::from_utf8_lossy(&attr.value).to_string());
+                            style.has_explicit_east_asia = true;
                         } else if key == "asciiTheme" || key == "hAnsiTheme" {
                             if style.font_family.is_none() {
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -3441,6 +3447,7 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
                             } else if key == "eastAsia" {
                                 style.font_family_east_asia =
                                     Some(String::from_utf8_lossy(&attr.value).to_string());
+                                style.has_explicit_east_asia = true;
                             } else if key == "asciiTheme" || key == "hAnsiTheme" {
                                 if style.font_family.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
