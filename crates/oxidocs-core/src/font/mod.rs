@@ -806,7 +806,7 @@ fn is_halfwidth_katakana(ch: char) -> bool {
     matches!(ch as u32, 0xFF65..=0xFF9F)
 }
 
-fn is_fullwidth(ch: char) -> bool {
+pub fn is_fullwidth(ch: char) -> bool {
     matches!(ch as u32,
         // Specific General Punctuation chars rendered as fullwidth in CJK fonts.
         // COM-confirmed (2026-04-07): not all 0x2010-0x205F are fullwidth.

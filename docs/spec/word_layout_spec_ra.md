@@ -1210,6 +1210,64 @@ effective_char_width = ceil(natural_char_width / charPitch) * charPitch
 - ceil(18/10.629) = 2 -> effective = 2 x 10.629 = 21.258pt/char
 - inner_width=371.85pt -> floor(371.85/21.258) = 17 chars
 
+### 11.2.1 Body Paragraph charGrid: Half-Width Chars NOT Snapped (2026-04-08 COM確定)
+
+**Critical correction**: In body paragraphs with `docGrid type="linesAndChars"`, **half-width characters (Latin alphanumeric, half-width punctuation) DO NOT snap to the full grid cell**. They occupy their natural width.
+
+**COM verification (b837808d0555_20240705_resources_data_guideline_02.docx, ＭＳ ゴシック 12pt, linesAndChars charPitch≈12pt):**
+
+Per-char advance from `Information(5)` for paragraph 13 line 1:
+| char | adv (pt) | note |
+|---|---|---|
+| `\u3000` (zenkaku space) | 12.0 | full cell |
+| `「` | 11.0 | yakumono open partial compress |
+| `新` `た` `な` ... `て` | 12.0 | full-width CJK |
+| `」` | **6.0** | yakumono compression (§4.7) |
+| `（` | 10.5 | yakumono open partial compress |
+| `平` | 12.0 | |
+| `成` | **15.0** | autoSpaceDE +3.0 (CJK→Latin, §4.6.2) |
+| `2` | **6.0** | TNR Latin half-width |
+| `7` | **9.0** | TNR Latin 6.0 + autoSpaceDE 3.0 (Latin→CJK) |
+| `年` | 12.0 | |
+| `６` | 12.0 | full-width digit (FF16) |
+| `月` | **15.0** | autoSpaceDE +3.0 |
+| `3` `0` | 6.0, 9.0 | half-width Latin + autoSpace |
+| `日` | 12.0 | |
+| ` ` | **6.0** | TNR space natural width |
+
+Line 1 fits **39 chars in 429.5pt body width** because:
+- ~32 fullwidth CJK chars × 12pt = 384pt
+- ~5 half-width Latin × 6pt = 30pt
+- ~4 autoSpaceDE +3pt boundaries = 12pt
+- Total ≈ 426pt ≤ 429.5pt ✓
+
+**Oxi current bug ([crates/oxidocs-core/src/layout/mod.rs:1847-1854](crates/oxidocs-core/src/layout/mod.rs#L1847-L1854)):**
+
+```rust
+let char_grid_extra = if let Some(pitch) = grid_char_pitch {
+    if pitch > 0.0 && char_width > 0.0 && ch != ' ' && ch != '\t' && ch != '\n' {
+        let effective_cell = pitch;
+        (effective_cell - char_width).max(0.0)  // ← pads ALL non-whitespace to full cell
+    } else { 0.0 }
+} else { 0.0 };
+```
+
+This pads **every** non-whitespace char (including half-width Latin) to a full cell, causing Oxi to fit only 36-37 chars/line where Word fits 70-200+ chars/line.
+
+**Correct rule:**
+- **Full-width chars** (CJK ideographs, kana, full-width punct): occupy 1 grid cell
+- **Half-width chars** (Latin alphanumeric, half-width punct, ASCII space): occupy `natural_char_width` (no snap to cell)
+- **autoSpaceDE boundary spacing** (§4.6.2) is added on top
+- **Yakumono compression** (§4.7) reduces certain CJK punct to half
+
+**Detection rule for "occupies full cell":**
+- char_width >= pitch * 0.75 → snap to 1 full cell
+- Otherwise: use natural width
+
+(threshold needs more measurement; tentative based on the 12pt MS Gothic data where Latin 6pt < 9pt threshold is clearly half-cell)
+
+**Impact:** This is the **largest single bug** in 177-doc set. The worst-SSIM doc (b837808d0555 at 0.5366) is dominated by this. Fix expected to improve many CJK + Latin mixed docs significantly.
+
 ### 11.3 Line Grid
 
 Applied to body paragraphs and inside table cells. Disabled inside TextBoxes when docGrid type="linesAndChars".
