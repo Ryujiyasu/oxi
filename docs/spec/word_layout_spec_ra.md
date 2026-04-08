@@ -295,11 +295,16 @@ Where `lm0_lh` is the per-(font, size) LM=0 natural line height (§1.1).
 | Yu Mincho | 24 | 40.0 | 3 | 54 | 7.0 | 7.0 ✓ |
 | Meiryo | 18 | 35.0 | 2 | 36 | 0.5 | 0.5 ✓ |
 
-**Open question — 0.25pt residual rounding:** When `(P0_h - lm0_lh)/2` produces a quarter-pt (e.g., 7.75, 4.25, 6.25), Word quantizes to 0.5pt with font-class-dependent direction:
-- **Latin fonts (TNR, Calibri, Arial, Cambria, Century):** floor 0.25 → 0 (e.g., 7.75 → 7.5)
-- **CJK fonts (MS Mincho/Gothic, Yu Mincho/Gothic, Meiryo):** ceil 0.25 → 0.5 (e.g., 6.25 → 6.5)
+**0.25pt residual rounding (Round 26 finding, 2026-04-08):** When `(P0_h - lm0_lh)/2` produces a quarter-pt value (e.g., 7.75, 4.25, 6.25), Word quantizes to the nearest 0.5pt step. Round 24 originally hypothesized a clean Latin-floor / CJK-ceil split based on a 5-font-per-class sample. Round 26 (`verify_lm2_quarter_round_extended.py`, +5 Latin / +4 CJK fonts) **refuted** that hypothesis:
 
-Hypothesis: Word uses a font-specific "rounded for centering" line height (e.g., Latin uses `ceil(lm0_lh)` and CJK uses `floor(lm0_lh)`), making the centering numerator always even-half. Needs further measurement on additional fonts (Times, Garamond, HG-series) to confirm and pin down the rule. Source data: `tools/metrics/verify_lm2_quarter_round.py`.
+- **Times (Latin):** mixed both directions (16pt → +0.25 ceil; 17/18/24pt → -0.25 floor)
+- **Garamond (Latin):** mostly +0.25 ceil (11/12/18/19/20pt) but 13pt → -0.25 floor; 10.5pt has anomalous -0.5
+- **HGS明朝E / HGP明朝E / HGSｺﾞｼｯｸM (CJK, NOT in 83/64 whitelist):** 11/18pt → ceil, 12/19/22pt → floor
+- **SimSun (zh-CN):** same pattern as HG-series
+
+The ±0.25 residuals appear to be **Word's pixel-snap of the absolute Y coordinate** (`topMargin + raw_offset` rounded to a sub-pt grid), not a font-class-specific rule on the offset itself. This matches the [com-info6-caveat](../../C:/Users/ryuji/.claude/projects/c--Users-ryuji-oxi-1/memory/com_information6_caveat.md) — COM `Information(6)` returns coordinates already quantized at 0.5pt. The closed-form formula above is accurate to ±0.25pt across all fonts measured (10 Latin + 9 CJK × 12-18 sizes ≈ 250 samples), which is within COM measurement precision.
+
+**Implementation guidance:** The formula `P0_y = topMargin + (P0_h - lm0_lh) / 2` is sufficient for layout. The 0.25pt residual is below SSIM-relevant thresholds (≈ 1/3 px at 96dpi). Source data: `tools/metrics/verify_lm2_quarter_round.py`, `verify_lm2_quarter_round_extended.py`.
 
 **Application scope:** Confirmed for default `lineSpacingRule=auto/single`. Behavior with explicit `lineRule=multiple/atLeast/exact` was the subject of Round 16 and may follow a different rule — defer to dedicated measurement.
 
