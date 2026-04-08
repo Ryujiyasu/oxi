@@ -2,19 +2,6 @@ mod kinsoku;
 
 use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
-use std::cell::Cell;
-
-// Cross-paragraph cumulative drift tracker (COM-confirmed 2026-04-08).
-// Word advances cursor_y by the un-rounded raw line height and only rounds at
-// display time, while Oxi rounded each paragraph independently and lost ~0.156pt
-// per Yu Mincho 10.5pt × 1.15 paragraph (drifts +0.5pt every ~3rd paragraph).
-// We accumulate the per-paragraph (raw - rounded) drift here and bump cursor_y
-// by ±0.5pt when the carry crosses ±0.25pt, replicating Word's cumulative round.
-// Reset at the start of body layout and at every page break (auto and explicit).
-// Single-threaded — layout is sequential.
-thread_local! {
-    static CUM_DRIFT_Y: Cell<f32> = Cell::new(0.0);
-}
 
 /// Pre-allocated single-character strings to avoid heap allocation in hot loops.
 const TAB_STRING: &str = "\t";
@@ -448,9 +435,6 @@ impl LayoutEngine {
         let mut current_column: usize = 0;
         let mut start_x = col_x_positions[0];
         let mut content_width = col_widths[0];
-
-        // Reset cross-paragraph cumulative drift tracker for this page/section.
-        CUM_DRIFT_Y.with(|c| c.set(0.0));
 
         let grid_pitch = page.grid_line_pitch;
         let mut pages: Vec<LayoutPage> = Vec::new();
@@ -1309,48 +1293,6 @@ impl LayoutEngine {
             self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
         }).collect();
 
-        // Cross-paragraph cumulative round: compute the raw (un-snapped) line
-        // height for the first line. The drift between raw and rounded is fed
-        // into CUM_DRIFT_Y after the line advance below.
-        let do_cumul_para_round = grid_pitch.is_none()
-            && !lines.is_empty()
-            && line_heights.len() == 1
-            && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
-                (Some("exact"), _) | (Some("atLeast"), _) => false,
-                _ => true,
-            };
-        let raw_first_line_h: f32 = if do_cumul_para_round {
-            let first = &lines[0];
-            let mut max_no_grid: f32 = 0.0;
-            let mut has_latin = false;
-            if first.fragments.is_empty() {
-                let font_size = para.style.ppr_rpr.as_ref()
-                    .and_then(|r| r.font_size).unwrap_or(para_font_size);
-                let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                let m = self.metrics_for(&rpr_ref, &para.style);
-                max_no_grid = m.word_line_height_no_grid(font_size);
-            } else {
-                for frag in &first.fragments {
-                    let fs = frag.style.font_size.unwrap_or(para_font_size);
-                    let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
-                    let h = m.word_line_height_no_grid(fs);
-                    if h > max_no_grid { max_no_grid = h; }
-                    if !frag.text.chars().all(|c| kinsoku::is_cjk(c)) { has_latin = true; }
-                }
-                if has_latin {
-                    if let Some(frag) = first.fragments.first() {
-                        let fs = frag.style.font_size.unwrap_or(para_font_size);
-                        let lm = self.metrics_for(&frag.style, &para.style);
-                        if lm.is_cjk_83_64_font() {
-                            let h = lm.word_line_height_no_grid(fs);
-                            if h > max_no_grid { max_no_grid = h; }
-                        }
-                    }
-                }
-            }
-            max_no_grid * para.style.line_spacing.unwrap_or(1.0)
-        } else { 0.0 };
-
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
         // COM-confirmed (2026-04-08, 683ffcab86e2): SINGLE spacing also uses cumulative
@@ -1471,7 +1413,6 @@ impl LayoutEngine {
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
-                CUM_DRIFT_Y.with(|c| c.set(0.0));
             } else if needs_page_break {
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
                 // only the overflowing line (and subsequent) go to the next page.
@@ -1482,7 +1423,6 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
                 *cursor_y = page_top;
-                CUM_DRIFT_Y.with(|c| c.set(0.0));
             }
 
             let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
@@ -1689,31 +1629,8 @@ impl LayoutEngine {
             }
             cumul_line_idx += 1;
 
-            // Cross-paragraph cumulative drift correction (single-line case).
-            // Accumulate (raw - rounded) line height per paragraph. Bump cursor_y
-            // by ±0.5pt when carry overflows ±0.25pt. Word does this implicitly
-            // by tracking cursor_y as a float and rounding only at display time.
-            if do_cumul_para_round && lines.len() == 1 {
-                let raw = raw_first_line_h;
-                let drift_this = raw - line_height;
-                let new_cum = CUM_DRIFT_Y.with(|c| {
-                    let v = c.get() + drift_this;
-                    c.set(v);
-                    v
-                });
-                if new_cum >= 0.25 {
-                    *cursor_y += 0.5;
-                    CUM_DRIFT_Y.with(|c| c.set(c.get() - 0.5));
-                } else if new_cum <= -0.25 {
-                    *cursor_y -= 0.5;
-                    CUM_DRIFT_Y.with(|c| c.set(c.get() + 0.5));
-                }
-            }
-
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
-                // Reset cumulative drift on new page
-                CUM_DRIFT_Y.with(|c| c.set(0.0));
                 // Push current page and start a new one
                 pages.push(LayoutPage {
                     width: page.size.width,
