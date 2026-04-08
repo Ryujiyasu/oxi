@@ -412,23 +412,31 @@ impl LayoutEngine {
                         Block::Paragraph(p) => Some(p),
                         _ => None,
                     }) {
-                        let fs = first_para.runs.first()
-                            .and_then(|r| r.style.font_size)
-                            .or(first_para.style.ppr_rpr.as_ref().and_then(|r| r.font_size))
-                            .unwrap_or(self.default_font_size);
-                        let metrics = first_para.runs.first()
-                            .map(|r| self.metrics_for(&r.style, &first_para.style))
-                            .unwrap_or_else(|| self.doc_default_metrics());
-                        // LM0 base line height (Round 9 lookup if available).
-                        let lm0_lh = self.registry
-                            .lm0_lineauto_base(&metrics.family, fs)
-                            .unwrap_or_else(|| metrics.word_line_height_no_grid(fs));
-                        // Strict-greater snap to next pitch multiple.
-                        let cells = (lm0_lh / pitch).floor() + 1.0;
-                        let p0_h = cells * pitch;
-                        let p0_offset = (p0_h - lm0_lh) / 2.0;
-                        if p0_offset > 0.0 {
-                            start_y += p0_offset;
+                        // Round 28 (2026-04-08, COM-confirmed): lineSpacingRule="exact"
+                        // completely DISABLES the LM2 first-paragraph centering. Word
+                        // places P0_y = topMargin exactly regardless of font/size/value.
+                        // Verified across TNR/MS Mincho × 10.5/12/14pt × exact_12/18/24/36
+                        // — all 24 combinations measured P0_y = 72.00.
+                        let rule = first_para.style.line_spacing_rule.as_deref();
+                        if rule != Some("exact") {
+                            let fs = first_para.runs.first()
+                                .and_then(|r| r.style.font_size)
+                                .or(first_para.style.ppr_rpr.as_ref().and_then(|r| r.font_size))
+                                .unwrap_or(self.default_font_size);
+                            let metrics = first_para.runs.first()
+                                .map(|r| self.metrics_for(&r.style, &first_para.style))
+                                .unwrap_or_else(|| self.doc_default_metrics());
+                            // LM0 base line height (Round 9 lookup if available).
+                            let lm0_lh = self.registry
+                                .lm0_lineauto_base(&metrics.family, fs)
+                                .unwrap_or_else(|| metrics.word_line_height_no_grid(fs));
+                            // Strict-greater snap to next pitch multiple.
+                            let cells = (lm0_lh / pitch).floor() + 1.0;
+                            let p0_h = cells * pitch;
+                            let p0_offset = (p0_h - lm0_lh) / 2.0;
+                            if p0_offset > 0.0 {
+                                start_y += p0_offset;
+                            }
                         }
                     }
                 }
