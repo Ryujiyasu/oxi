@@ -1440,16 +1440,15 @@ impl LayoutEngine {
                     });
                     let accept_and_fix_color = |pe: &mut LayoutElement| -> bool {
                         if pe.y + pe.height > clip_bottom { return false; }
-                        // Fix text color contrast in dark-filled TextBoxes:
-                        // Theme colors not resolved → color=None/#000000 on dark background.
-                        // Replace with white for readability.
+                        // Word omits runs that have no explicit color attribute when
+                        // rendered inside a dark-filled shape: these are overflow/invisible
+                        // glyphs that would otherwise be black-on-dark. Verified on 1ec1
+                        // P2 heading box (4472C4 fill, runs 8-9 have no color attribute and
+                        // are not visible in Word's rendering despite line layout including them).
                         if has_dark_fill {
-                            if let LayoutContent::Text { ref mut color, .. } = pe.content {
-                                match color.as_deref() {
-                                    None | Some("#000000") | Some("000000") => {
-                                        *color = Some("#FFFFFF".to_string());
-                                    }
-                                    _ => {}
+                            if let LayoutContent::Text { ref color, .. } = pe.content {
+                                if color.is_none() {
+                                    return false;
                                 }
                             }
                         }
