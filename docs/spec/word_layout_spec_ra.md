@@ -306,7 +306,21 @@ The ±0.25 residuals appear to be **Word's pixel-snap of the absolute Y coordina
 
 **Implementation guidance:** The formula `P0_y = topMargin + (P0_h - lm0_lh) / 2` is sufficient for layout. The 0.25pt residual is below SSIM-relevant thresholds (≈ 1/3 px at 96dpi). Source data: `tools/metrics/verify_lm2_quarter_round.py`, `verify_lm2_quarter_round_extended.py`.
 
-**Application scope:** Confirmed for default `lineSpacingRule=auto/single`. Behavior with explicit `lineRule=multiple/atLeast/exact` was the subject of Round 16 and may follow a different rule — defer to dedicated measurement.
+**Round 27 (2026-04-08) follow-up:** The Round 26 "Garamond 10.5pt -0.5pt anomaly" was retracted after 5-trial repeat measurement (`verify_garamond_anomaly.py`). Garamond 10.5pt actually measures cleanly: LM0_h=12.0, LM2 P0_y=75.0, P0_h=18.0, offset=3.0, delta=0.00. The original -0.5 was a one-shot COM/RPC noise event. Sub-pt sweep (9, 9.5, 10, 10.25, 10.5, 10.75, 11, 11.5, 12 pt) shows the offset moves in 0.5pt plateaus tied to LM0_lh increments, with residual deltas confined to ±0.25pt as expected.
+
+**Application scope by lineRule (Round 28, 2026-04-08, COM-confirmed):**
+
+| lineRule | LM2 first-paragraph behavior |
+|---|---|
+| `auto` / `single` | **Centering applied** as formula above |
+| `1.15` / `1.5` / `double` | Centering applied with rule-effective line height (`single_LH × multiplier`) |
+| `multiple X` | Centering applied with `single_LH × X` |
+| `atLeast V` | When `V > single_LH`: extra `(V - single_LH)` pt added ABOVE the centered line (`P0_y = single_P0_y + (V - single_LH)`). When `V ≤ single_LH`: behaves like `single` (val ignored). |
+| **`exact V`** | **No centering. `P0_y = topMargin` exactly. Line height = V.** Verified TNR/MS Mincho × 10.5/12/14pt × exact_{12,18,24,36} — all 24 combinations measured `P0_y = 72.00`. |
+
+The `exact` case is a hard binary distinction Oxi must implement: skip the LM2 centering branch entirely when the first paragraph's `lineSpacingRule = "exact"`. The `atLeast` case piggybacks on the existing "extra space above" rule from §13.4.
+
+Source: `tools/metrics/verify_lm2_lineRule.py`.
 
 ### 3.4 Y Position of First Paragraph (LM=0)
 
