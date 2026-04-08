@@ -23,7 +23,7 @@ def get_oxi_structure(docx_path: str) -> dict:
     result = subprocess.run(
         ["cargo", "run", "--release", "--example", "layout_json", "--", docx_path, "--structure"],
         capture_output=True, text=True, errors="replace",
-        cwd=OXI_ROOT, timeout=120,
+        cwd=OXI_ROOT, timeout=300,  # bumped from 120s — cold cargo build can exceed
     )
 
     pages = []
