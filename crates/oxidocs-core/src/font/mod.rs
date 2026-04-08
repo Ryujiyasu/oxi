@@ -788,8 +788,13 @@ fn normalize_family_name(name: &str) -> String {
         "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
         "游明朝 Demibold" | "游明朝 Bold" => "Yu Mincho Demibold".to_string(),
         "メイリオ" | "Meiryo UI" => "Meiryo".to_string(),
-        // Arial Unicode MS is not always installed; fall back to Arial
-        "Arial Unicode MS" => "Arial".to_string(),
+        // Arial Unicode MS: COM-confirmed (Round 20 correction, 2026-04-08)
+        // Word substitutes to ＭＳ 明朝 in Japanese locale (NOT Arial), even
+        // though the doc XML specifies Arial Unicode MS. Verified across
+        // P1..P300 of 0e7af1ae8f21 — Font.Name reports ＭＳ 明朝 for every
+        // run. Fallback path mismatch caused |dy|=26.24pt drift; aliasing
+        // to MS Mincho aligns Oxi metrics with Word.
+        "Arial Unicode MS" => "MS Mincho".to_string(),
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),
