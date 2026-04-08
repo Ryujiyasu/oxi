@@ -395,7 +395,45 @@ impl LayoutEngine {
         } else {
             0.0
         };
-        let start_y = page.margin.top.max(header_bottom);
+        let mut start_y = page.margin.top.max(header_bottom);
+
+        // §11.2.2 LM2 unified P0 formula (Round 23, COM-confirmed 2026-04-08).
+        // In linesAndChars (LM2) mode, the FIRST body paragraph is allocated a
+        // grid-snapped cell whose height = strict-greater snap of LM0_lh, and
+        // the line box is vertically centered within that cell:
+        //   P0_h = (floor(LM0_lh / pitch) + 1) * pitch
+        //   P0_y = topMargin + (P0_h - LM0_lh) / 2
+        // Subsequent paragraphs use the regular per-line grid snap.
+        // Only applies when header_bottom <= topMargin (no header pushdown).
+        if header_bottom <= page.margin.top {
+            if let Some(pitch) = page.grid_line_pitch {
+                if pitch > 0.0 {
+                    if let Some(first_para) = page.blocks.iter().find_map(|b| match b {
+                        Block::Paragraph(p) => Some(p),
+                        _ => None,
+                    }) {
+                        let fs = first_para.runs.first()
+                            .and_then(|r| r.style.font_size)
+                            .or(first_para.style.ppr_rpr.as_ref().and_then(|r| r.font_size))
+                            .unwrap_or(self.default_font_size);
+                        let metrics = first_para.runs.first()
+                            .map(|r| self.metrics_for(&r.style, &first_para.style))
+                            .unwrap_or_else(|| self.doc_default_metrics());
+                        // LM0 base line height (Round 9 lookup if available).
+                        let lm0_lh = self.registry
+                            .lm0_lineauto_base(&metrics.family, fs)
+                            .unwrap_or_else(|| metrics.word_line_height_no_grid(fs));
+                        // Strict-greater snap to next pitch multiple.
+                        let cells = (lm0_lh / pitch).floor() + 1.0;
+                        let p0_h = cells * pitch;
+                        let p0_offset = (p0_h - lm0_lh) / 2.0;
+                        if p0_offset > 0.0 {
+                            start_y += p0_offset;
+                        }
+                    }
+                }
+            }
+        }
         let content_height = page.size.height - start_y - page.margin.bottom;
 
         // Multi-column layout: compute column X positions and widths
@@ -1605,6 +1643,38 @@ impl LayoutEngine {
                 x += adjusted_width + frag_spacing_after[frag_idx];
             }
 
+            // Empty-line placeholder (Round 10): for empty paragraphs (no
+            // fragments on this line), emit a zero-width Text element so
+            // the structure dump / hit-testing tools can still see the
+            // paragraph_index. This matters especially for §17.2.2 implicit
+            // empty body paragraphs (header_page_number_01, footer_complex_01).
+            if line.fragments.is_empty() {
+                if let Some(pi) = body_para_index {
+                    let mut el = LayoutElement::new(
+                        line_x,
+                        *cursor_y + text_y_off,
+                        0.0,
+                        line_height,
+                        LayoutContent::Text {
+                            text: String::new(),
+                            font_size: para_font_size,
+                            font_family: None,
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            underline_style: None,
+                            strikethrough: false,
+                            color: None,
+                            highlight: None,
+                            field_type: None,
+                            character_spacing: 0.0,
+                        },
+                    );
+                    el.paragraph_index = Some(pi);
+                    elements.push(el);
+                }
+            }
+
             // Multiple spacing: cumulative ceil for non-last lines when all lines
             // have the same height. When heights vary (mixed fonts), use per-line height.
             // COM-confirmed (2026-04-07): variable-height paragraphs (e.g., mixed CJK+Latin
@@ -2691,17 +2761,19 @@ impl LayoutEngine {
                 }
             }
 
-            // Apply trHeight constraint
-            // rule=exact: fixed height; rule=atLeast: minimum height
-            // COM-confirmed (2026-04-04): when hRule is absent but trHeight val is specified,
-            // Word treats it as atLeast (COM reports HeightRule=1).
-            // Note: actual rendered gap may be smaller than atLeast value when multi-cell
-            // rows have cells with different content heights and spacing interactions.
+            // Apply trHeight constraint.
+            // Round 22 (2026-04-08, COM-confirmed) corrects 2026-04-04:
+            // ECMA-376 default for w:hRule is "auto", NOT "atLeast". When
+            // hRule is absent, the trHeight val is a HINT only and is
+            // ignored at render time — content alone determines row height.
+            // Only explicit hRule="exact" or "atLeast" applies a constraint.
             if let Some(h) = row.height {
                 match row.height_rule.as_deref() {
                     Some("exact") => { row_height = h; }
-                    Some("atLeast") | None => { row_height = row_height.max(h); }
-                    _ => {} // explicit "auto" string: content determines height
+                    Some("atLeast") => { row_height = row_height.max(h); }
+                    // None (= default "auto") or explicit "auto": ignore val,
+                    // use content height only.
+                    _ => {}
                 }
             }
 
