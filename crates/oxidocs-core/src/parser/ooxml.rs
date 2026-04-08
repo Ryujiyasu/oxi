@@ -1158,6 +1158,13 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if ds.page_break_before {
                 style.page_break_before = true;
             }
+            // Inherit snap_to_grid from style (false overrides struct default true).
+            // Round 29: footnote text style "a8" sets snapToGrid=0; without this
+            // inheritance, footnote paragraphs were grid-snapped to body line
+            // pitch, causing wide line spacing in the footnote area.
+            if !ds.snap_to_grid {
+                style.snap_to_grid = false;
+            }
         }
     }
 
