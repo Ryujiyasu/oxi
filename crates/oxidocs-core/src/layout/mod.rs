@@ -1840,16 +1840,22 @@ impl LayoutEngine {
                     }
                 }
                 let _ = char_index;
-                // charGrid: each character occupies 1 grid cell for wrapping.
-                // For line-break, effective width = max(char_width, pitch).
-                // When char_width > pitch, char overflows into next cell visually
-                // but still counts as 1 cell for wrapping purposes.
+                // charGrid: ONLY full-width chars are padded to 1 grid cell.
+                // §11.2.1 (Round 14, COM-confirmed): half-width Latin chars
+                // (ASCII 0-9 / A-Z / etc.), CJK punctuation under yakumono
+                // compression, and other halfwidth glyphs use their NATURAL
+                // advance width — they are NOT snapped to the grid pitch.
+                // Reference: b837808d0555 P13 L1 measurement showed
+                //   '2'=6pt, '」'=6pt (yakumono), 成=15pt (12+autoSpaceDE),
+                //   '7'=9pt (6+autoSpaceDE), ' '=6pt (TNR space natural).
+                // Previous (buggy) behavior padded ALL chars, halving the
+                // chars/line and causing 177-doc max-error of 0.5366 SSIM.
                 let char_grid_extra = if let Some(pitch) = grid_char_pitch {
-                    if pitch > 0.0 && char_width > 0.0 && ch != ' ' && ch != '\t' && ch != '\n' {
-                        // Effective cell width = pitch (1 cell). Extra = pitch - natural width.
-                        // If char is wider than pitch, extra is 0 (char naturally fills the cell).
-                        let effective_cell = pitch;
-                        (effective_cell - char_width).max(0.0)
+                    if pitch > 0.0 && char_width > 0.0
+                        && ch != ' ' && ch != '\t' && ch != '\n'
+                        && crate::font::is_fullwidth(ch)
+                    {
+                        (pitch - char_width).max(0.0)
                     } else { 0.0 }
                 } else { 0.0 };
 
