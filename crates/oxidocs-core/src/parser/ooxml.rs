@@ -731,6 +731,23 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         shapes: current_shapes,
     });
 
+    // §17.2.2 / Round 10 (2026-04-08, COM-confirmed):
+    // Word implicitly creates a single empty body paragraph when the
+    // <w:body> contains only <w:sectPr> with no <w:p> or <w:tbl> elements
+    // (e.g., header_page_number_01, footer_complex_01). Without this,
+    // Oxi produces 0 body paragraphs and any tooling that expects a
+    // body paragraph (dml_diff, layout cursor placement) breaks.
+    if sections.iter().all(|s| s.blocks.is_empty()) {
+        if let Some(sec) = sections.last_mut() {
+            sec.blocks.push(Block::Paragraph(Paragraph {
+                runs: Vec::new(),
+                style: ParagraphStyle::default(),
+                alignment: Alignment::Left,
+                shapes: Vec::new(),
+            }));
+        }
+    }
+
     Ok(sections)
 }
 
