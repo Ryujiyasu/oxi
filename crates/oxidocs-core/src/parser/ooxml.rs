@@ -55,7 +55,7 @@ impl OoxmlParser {
         };
         let styles = self.parse_styles_with_theme(&theme)?;
         let numbering = self.parse_numbering()?;
-        let ctx = self.build_context_with_theme(numbering, theme)?;
+        let ctx = self.build_context_with_theme(numbering, theme, &styles)?;
         let sections = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
@@ -293,7 +293,7 @@ impl OoxmlParser {
         }
     }
 
-    fn build_context_with_theme(&mut self, numbering: NumberingDefinitions, theme: ThemeColors) -> Result<ParseContext, ParseError> {
+    fn build_context_with_theme(&mut self, numbering: NumberingDefinitions, theme: ThemeColors, styles: &StyleSheet) -> Result<ParseContext, ParseError> {
         // Parse relationships
         let rels = match self.read_part("word/_rels/document.xml.rels") {
             Ok(xml) => parse_relationships(&xml)?,
@@ -340,16 +340,19 @@ impl OoxmlParser {
             }
         }
 
-        // Parse footnotes
+        // Parse footnotes (Round 29: pass styles for pStyle inheritance —
+        // footnote text style "a8" sets snapToGrid=0, which without
+        // inheritance leaves footnote paragraphs grid-snapped to body
+        // pitch and causes line wrap to be ~5 chars too narrow.)
         let footnotes = match self.read_part("word/footnotes.xml") {
-            Ok(xml) => parse_notes_xml(&xml)?,
+            Ok(xml) => parse_notes_xml(&xml, styles)?,
             Err(ParseError::MissingPart(_)) => HashMap::new(),
             Err(e) => return Err(e),
         };
 
         // Parse endnotes
         let endnotes = match self.read_part("word/endnotes.xml") {
-            Ok(xml) => parse_notes_xml(&xml)?,
+            Ok(xml) => parse_notes_xml(&xml, styles)?,
             Err(ParseError::MissingPart(_)) => HashMap::new(),
             Err(e) => return Err(e),
         };
@@ -2080,7 +2083,7 @@ fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
 }
 
 /// Parse word/footnotes.xml or word/endnotes.xml into a map of id -> blocks
-fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError> {
+fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec<Block>>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut notes: HashMap<String, Vec<Block>> = HashMap::new();
     let mut current_id: Option<String> = None;
@@ -2101,7 +2104,6 @@ fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError>
         comments: HashMap::new(),
         theme: ThemeColors::default(),
     };
-    let empty_styles = StyleSheet::default();
 
     loop {
         match reader.read_event()? {
@@ -2122,7 +2124,7 @@ fn parse_notes_xml(xml: &str) -> Result<HashMap<String, Vec<Block>>, ParseError>
                         }
                     }
                     "p" if in_note && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, styles)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
