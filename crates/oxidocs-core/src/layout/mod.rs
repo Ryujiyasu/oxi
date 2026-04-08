@@ -1092,9 +1092,20 @@ impl LayoutEngine {
                                     // immutable.
                                     let para_to_render: Paragraph = if first_para {
                                         let mut p = para.clone();
-                                        let prefix = format!("{} ", seq);
+                                        // Round 29: just the seq number, NO trailing space.
+                                        // Word's footnote body has its own leading space run
+                                        // (which renders as the separator between marker and
+                                        // text). Adding another space here yields a double
+                                        // space "1  震災..." which compresses content area.
+                                        let prefix = format!("{}", seq);
                                         if let Some(first_run) = p.runs.first_mut() {
-                                            first_run.text = format!("{}{}", prefix, first_run.text);
+                                            // First run is usually <w:footnoteRef/> with empty
+                                            // text. OVERWRITE it with the seq, don't prepend.
+                                            if first_run.text.is_empty() {
+                                                first_run.text = prefix.clone();
+                                            } else {
+                                                first_run.text = format!("{}{}", prefix, first_run.text);
+                                            }
                                         } else {
                                             // Empty paragraph: insert a run with just the prefix
                                             p.runs.push(Run {
@@ -1117,8 +1128,14 @@ impl LayoutEngine {
                                     } else {
                                         para.clone()
                                     };
+                                    // Round 29: use total_content_width (full
+                                    // body width) explicitly. content_width may
+                                    // have been mutated by the body loop column
+                                    // switching state and the residual value
+                                    // can be smaller than the full body area.
+                                    let footnote_width = page.size.width - page.margin.left - page.margin.right;
                                     let (note_elements, _) = self.layout_paragraph(
-                                        &para_to_render, hdr_x, &mut cy, hdr_width, footnote_page_height_huge,
+                                        &para_to_render, page.margin.left, &mut cy, footnote_width, footnote_page_height_huge,
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
@@ -1524,7 +1541,11 @@ impl LayoutEngine {
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
         // data_guideline: indent=12pt but x0=71 (margin), 38ch/line (=charsLine+1 kinsoku).
-        let effective_char_pitch = if in_textbox { None } else { page.grid_char_pitch };
+        // Round 29: when the para has snap_to_grid=false (e.g., footnote text
+        // with pStyle "footnote text" / a8), DISABLE charGrid for line wrap
+        // even if the page has linesAndChars docGrid. Otherwise the chars get
+        // padded to the body's grid pitch and the line wraps ~5 chars early.
+        let effective_char_pitch = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_pitch };
         let available_width = if effective_char_pitch.is_some() {
             content_width  // charGrid: ignore indents for wrapping
         } else {
