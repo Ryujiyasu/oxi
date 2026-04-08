@@ -265,8 +265,47 @@ fn grid_snap(value, pitch) -> f32:
 
 ### 3.3 Y Position of First Paragraph
 
-- Use margin_top directly (no grid offset)
-- However, since line height itself is grid-snapped, alignment occurs as a result
+**LM=0 (no docGrid type, or docGrid absent):** P0_y = topMargin (use directly).
+
+**LM≥1 (docGrid with type="lines" or "linesAndChars"):**
+First paragraph is **vertically centered within its grid cell allocation**, NOT placed at topMargin. Round 23/24 (2026-04-08, COM-confirmed across 5 Latin × 5 CJK fonts × 18 sizes = ~180 samples).
+
+```
+fn lm_first_para_y(top_margin, grid_pitch, lm0_lh) -> f32:
+    // Number of grid cells the line occupies (strict-greater rule, Round 12)
+    // grid_n = floor(lm0_lh / pitch) + 1   (NOT ceil — equal still rounds up)
+    n = floor(lm0_lh / pitch) + 1
+    p0_h = n * pitch
+    return top_margin + (p0_h - lm0_lh) / 2
+```
+
+Where `lm0_lh` is the per-(font, size) LM=0 natural line height (§1.1).
+
+**Verified examples (grid_pitch = 18pt):**
+
+| Font | Size | LM0 lh | grid_n | P0_h | Predicted offset | Measured |
+|---|---|---|---|---|---|---|
+| TNR | 10.5 | 12.0 | 1 | 18 | 3.0 | 3.0 ✓ |
+| TNR | 12 | 14.0 | 1 | 18 | 2.0 | 2.0 ✓ |
+| TNR | 14 | 16.0 | 1 | 18 | 1.0 | 1.0 ✓ |
+| TNR | 18 | 20.5 | 2 | 36 | 7.75 | 7.5 (-0.25) |
+| TNR | 24 | 27.5 | 2 | 36 | 4.25 | 4.0 (-0.25) |
+| MS Mincho | 14 | 18.0 | 2 | 36 | 9.0 | 9.0 ✓ (strict-greater: 18==pitch → 2 cells) |
+| Yu Mincho | 12 | 20.0 | 2 | 36 | 8.0 | 8.0 ✓ |
+| Yu Mincho | 24 | 40.0 | 3 | 54 | 7.0 | 7.0 ✓ |
+| Meiryo | 18 | 35.0 | 2 | 36 | 0.5 | 0.5 ✓ |
+
+**Open question — 0.25pt residual rounding:** When `(P0_h - lm0_lh)/2` produces a quarter-pt (e.g., 7.75, 4.25, 6.25), Word quantizes to 0.5pt with font-class-dependent direction:
+- **Latin fonts (TNR, Calibri, Arial, Cambria, Century):** floor 0.25 → 0 (e.g., 7.75 → 7.5)
+- **CJK fonts (MS Mincho/Gothic, Yu Mincho/Gothic, Meiryo):** ceil 0.25 → 0.5 (e.g., 6.25 → 6.5)
+
+Hypothesis: Word uses a font-specific "rounded for centering" line height (e.g., Latin uses `ceil(lm0_lh)` and CJK uses `floor(lm0_lh)`), making the centering numerator always even-half. Needs further measurement on additional fonts (Times, Garamond, HG-series) to confirm and pin down the rule. Source data: `tools/metrics/verify_lm2_quarter_round.py`.
+
+**Application scope:** Confirmed for default `lineSpacingRule=auto/single`. Behavior with explicit `lineRule=multiple/atLeast/exact` was the subject of Round 16 and may follow a different rule — defer to dedicated measurement.
+
+### 3.4 Y Position of First Paragraph (LM=0)
+
+P0_y = topMargin. No grid offset since no grid is active.
 
 ---
 
@@ -1110,10 +1149,24 @@ fn cell_line_gap(font, font_size, grid_pitch, compat_mode) -> f32:
 ```
 fn row_height(height_rule, specified, content_height) -> f32:
     match height_rule:
-        "auto":    return content_height  // Fit to content
-        "exact":   return specified       // Use specified value directly
+        "auto":    return content_height  // Fit to content; specified is IGNORED (hint only)
+        "exact":   return specified       // Use specified value directly (content clipped if larger)
         "atLeast": return max(content_height, specified)
 ```
+
+**ECMA-376 default for `w:hRule`** is **`"auto"`**, NOT `"atLeast"`. When `<w:trHeight w:val="..."/>` appears WITHOUT a `w:hRule` attribute, the value is a hint and Word ignores it at render time, using content height only. (Round 22, 2026-04-08, COM-confirmed.)
+
+**COM measurement (Round 22, `verify_trheight_semantics.py`, default font):**
+
+| rule | specified | content (1-line=18pt, 4-line=72pt) | actual row height |
+|------|-----------|-------------------------------------|-------------------|
+| auto | any (10/20/50/100) | 1-line | 18 (specified ignored) |
+| auto | any | 4-line | 72 (specified ignored) |
+| atLeast | 20 | 1-line | 20 |
+| atLeast | 50 | 1-line | 50 |
+| atLeast | 100 | 4-line | 100 (max) |
+| exact | 10 | 4-line | 10 (content clipped) |
+| exact | 100 | 1-line | 100 |
 
 **COM measurement confirmed (2026-03-29):**
 
