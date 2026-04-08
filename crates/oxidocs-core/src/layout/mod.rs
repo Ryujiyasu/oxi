@@ -419,10 +419,13 @@ impl LayoutEngine {
                         // — all 24 combinations measured P0_y = 72.00.
                         let rule = first_para.style.line_spacing_rule.as_deref();
                         if rule != Some("exact") {
-                            let fs = first_para.runs.first()
-                                .and_then(|r| r.style.font_size)
-                                .or(first_para.style.ppr_rpr.as_ref().and_then(|r| r.font_size))
-                                .unwrap_or(self.default_font_size);
+                            // Use full inheritance chain (resolve_font_size) so the
+                                                        // Normal style sz= value (e.g. b837: sz=24=12pt) is picked up
+                                                        // when the run/pPr.rPr have no explicit size. Earlier manual
+                                                        // chain bypassed default_run_style and fell back to 11pt.
+                            let default_run_style = RunStyle::default();
+                            let first_run_style = first_para.runs.first().map(|r| &r.style).unwrap_or(&default_run_style);
+                            let fs = self.resolve_font_size(first_run_style, &first_para.style);
                             let metrics = first_para.runs.first()
                                 .map(|r| self.metrics_for(&r.style, &first_para.style))
                                 .unwrap_or_else(|| self.doc_default_metrics());
