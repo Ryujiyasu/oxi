@@ -292,6 +292,11 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if !child.strikethrough && parent.strikethrough {
         child.strikethrough = true;
     }
+    // Round 29: vertical_align inheritance (footnote reference style "aa"
+    // sets vertAlign=superscript via the character style chain)
+    if child.vertical_align.is_none() && parent.vertical_align.is_some() {
+        child.vertical_align = parent.vertical_align;
+    }
 }
 
 /// Parse a run properties block (<w:rPr>...</w:rPr>) and return RunStyle
@@ -615,6 +620,23 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                         rs.vert_in_horz = val.as_ref() != "0" && val.as_ref() != "false";
                     }
                     _ => {}
+                }
+            }
+        }
+        // Round 29 (2026-04-08): vertAlign for character styles. The
+        // "footnote reference" character style (id "aa" in many docs) sets
+        // <w:vertAlign w:val="superscript"/> — without this parser branch,
+        // the rStyle inheritance never picks it up and footnote markers
+        // render at body baseline/size instead of small superscript.
+        "vertAlign" => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.vertical_align = match val.as_ref() {
+                        "superscript" => Some(crate::ir::VerticalAlign::Superscript),
+                        "subscript" => Some(crate::ir::VerticalAlign::Subscript),
+                        _ => None,
+                    };
                 }
             }
         }
@@ -1038,6 +1060,27 @@ fn parse_style_definition(
                                     let val = String::from_utf8_lossy(&attr.value);
                                     run_style.kern = val.parse::<f32>().ok().map(|v| v / 2.0);
                                     has_run_style = true;
+                                }
+                            }
+                        }
+                        // Round 29: vertAlign for character styles. The
+                        // "footnote reference" character style sets
+                        // <w:vertAlign w:val="superscript"/>. Without this
+                        // branch, the inline rPr parser inside
+                        // parse_style_definition would silently drop it,
+                        // even though apply_run_property_empty handles it.
+                        "vertAlign" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.vertical_align = match val.as_ref() {
+                                        "superscript" => Some(crate::ir::VerticalAlign::Superscript),
+                                        "subscript" => Some(crate::ir::VerticalAlign::Subscript),
+                                        _ => None,
+                                    };
+                                    if run_style.vertical_align.is_some() {
+                                        has_run_style = true;
+                                    }
                                 }
                             }
                         }

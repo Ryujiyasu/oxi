@@ -68,7 +68,7 @@ impl OoxmlParser {
         // OOXML: sections without explicit header/footer inherit from previous section
         let mut prev_header_refs: Vec<HdrFtrRef> = Vec::new();
         let mut prev_footer_refs: Vec<HdrFtrRef> = Vec::new();
-        for section in sections {
+        for mut section in sections {
             let effective_header_refs = if section.properties.header_refs.is_empty() {
                 &prev_header_refs
             } else {
@@ -120,6 +120,22 @@ impl OoxmlParser {
             collect_note_refs(&section.blocks, &ctx, &mut footnotes_list, &mut endnotes_list);
             footnotes_list.sort_by_key(|f| f.number);
             endnotes_list.sort_by_key(|f| f.number);
+
+            // Round 29 (2026-04-08): renumber footnote/endnote references
+            // sequentially per section. The OOXML <w:footnoteReference w:id="N"/>
+            // values are NOT necessarily 1,2,3... — they can start from 2 (id=1
+            // is reserved for the separator) and have arbitrary gaps. Word
+            // displays them as 1,2,3..., so we need to remap. The parser had
+            // set Run.text = "[id]" which is wrong; rewrite it here to "[seq]".
+            let mut fn_id_to_seq: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+            for (i, f) in footnotes_list.iter().enumerate() {
+                fn_id_to_seq.insert(f.number, (i as u32) + 1);
+            }
+            let mut en_id_to_seq: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+            for (i, f) in endnotes_list.iter().enumerate() {
+                en_id_to_seq.insert(f.number, (i as u32) + 1);
+            }
+            renumber_note_refs(&mut section.blocks, &fn_id_to_seq, &en_id_to_seq);
 
             // Continuous section: merge into previous page instead of creating a new one
             if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty() {
@@ -1953,7 +1969,10 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                                 if let Ok(id) = val.parse::<u32>() {
                                     if id > 0 { // Skip separator/continuation notes (id=0)
                                         footnote_ref = Some(id);
-                                        text = format!("[{}]", id);
+                                        // Word renders just the number (e.g. "1"),
+                                        // not "[1]". renumber_note_refs in parse_body
+                                        // will rewrite this to the section-local seq.
+                                        text = format!("{}", id);
                                     }
                                 }
                             }
@@ -4803,6 +4822,44 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
     }
 
     Ok(blocks)
+}
+
+/// Round 29: Rewrite footnoteReference / endnoteReference run text from
+/// the OOXML id ("[2]") to the section-local sequential number ("[1]"),
+/// using the supplied id→seq maps. Walks paragraphs and recursively into
+/// table cells. Run.footnote_ref / Run.endnote_ref still hold the original
+/// OOXML id so the rendering loop can look up the body by id.
+fn renumber_note_refs(
+    blocks: &mut Vec<Block>,
+    fn_map: &std::collections::HashMap<u32, u32>,
+    en_map: &std::collections::HashMap<u32, u32>,
+) {
+    for block in blocks.iter_mut() {
+        match block {
+            Block::Paragraph(para) => {
+                for run in para.runs.iter_mut() {
+                    if let Some(id) = run.footnote_ref {
+                        if let Some(seq) = fn_map.get(&id) {
+                            run.text = format!("{}", seq);
+                        }
+                    }
+                    if let Some(id) = run.endnote_ref {
+                        if let Some(seq) = en_map.get(&id) {
+                            run.text = format!("{}", seq);
+                        }
+                    }
+                }
+            }
+            Block::Table(table) => {
+                for row in table.rows.iter_mut() {
+                    for cell in row.cells.iter_mut() {
+                        renumber_note_refs(&mut cell.blocks, fn_map, en_map);
+                    }
+                }
+            }
+            Block::Image(_) | Block::UnsupportedElement(_) => {}
+        }
+    }
 }
 
 /// Recursively collect footnote/endnote references from blocks
