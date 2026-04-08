@@ -4541,7 +4541,11 @@ fn parse_section_properties(
                     "docGrid" => {
                         let mut grid_type = String::new();
                         let mut line_pitch = 0u32;
-                        let mut char_space: Option<u32> = None;
+                        // §17.6.5 (Round 15, COM-confirmed): w:charSpace is a SIGNED
+                        // integer (can be negative for compressed grid). u32 silently
+                        // dropped negative values to 0, causing wrong pitch on docs
+                        // with charSpace<0.
+                        let mut char_space: Option<i32> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
