@@ -1800,13 +1800,25 @@ impl LayoutEngine {
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
                 }
-                // CJK-adjacent space override (c45c1fc) DISABLED 2026-04-08:
-                // COM measurement on real docs showed Word actually uses natural Latin
-                // space width (~2.5-3.5pt), NOT the 5.0pt half-em the original commit
-                // assumed (which was based on isolated short patterns). Removing this
-                // override + making autoSpaceDE visible above gave net SSIM +0.0031
-                // across affected docs (nested_bullet_08 +0.0007, cjk_latin_wrap_05
-                // +0.0028, japanese_font_mixing_baseline -0.0004).
+                // §4.6.3 CJK-adjacent space widening — COM-confirmed 2026-04-08.
+                // The Latin space (' ') is widened to ≈ font_size/2 (half-em) when:
+                //   1. The run's <w:rFonts> has an EXPLICIT w:eastAsia attribute
+                //      (theme fallback eastAsiaTheme="..." does NOT count), AND
+                //   2. The space is adjacent to a CJK ideograph or kana on
+                //      either side.
+                // Verified via jfmb (no explicit eastAsia, space=natural ~3.5pt) vs
+                // runtime-saved equivalent (explicit eastAsia, space=6.0pt at 12pt).
+                if ch == ' ' && style.has_explicit_east_asia {
+                    let prev_is_cjk = chars_vec.get(char_index.wrapping_sub(1))
+                        .copied()
+                        .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
+                    let next_is_cjk = chars_vec.get(char_index + 1)
+                        .copied()
+                        .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
+                    if prev_is_cjk || next_is_cjk {
+                        char_width = font_size / 2.0;
+                    }
+                }
                 let _ = char_index;
                 // charGrid: each character occupies 1 grid cell for wrapping.
                 // For line-break, effective width = max(char_width, pitch).
@@ -1912,12 +1924,14 @@ impl LayoutEngine {
                         && para_style.auto_space_de
                         && kinsoku::is_cjk_ideograph_or_kana(ch)
                     {
-                        // Apply visibly to the previous fragment so cursor advance
-                        // matches the line-break decision (was hidden 2.5pt before).
+                        // §4.6.2 autoSpaceDE per-fontSize formula — COM-confirmed 2026-04-08.
+                        //   9-10.5pt → 2.5pt, 11-12pt → 3.0pt, 14pt → 3.5pt,
+                        //   16pt → 4.0pt, 18pt → 4.5pt (8 sizes verified, both directions).
+                        let extra = ((font_size / 2.0) + 0.5).floor() * 0.5;
                         if let Some(last) = current_line.fragments.last_mut() {
-                            last.width += 2.5;
+                            last.width += extra;
                         }
-                        current_width += 2.5; // COM-confirmed: 2.5pt auto space
+                        current_width += extra;
                     }
 
                     if pt_to_tw(current_width + current_grid_extra + char_width + char_grid_extra) > available_tw && !current_line.fragments.is_empty() {
@@ -1998,12 +2012,14 @@ impl LayoutEngine {
                             f.text.chars().last().map_or(false, |c| kinsoku::is_cjk_ideograph_or_kana(c))
                         });
                         if prev_is_cjk_ideo {
-                            // Apply visibly to the previous CJK fragment so cursor
-                            // advance matches the line-break decision.
+                            // §4.6.2 autoSpaceDE per-fontSize formula — COM-confirmed 2026-04-08.
+                            //   9-10.5pt → 2.5pt, 11-12pt → 3.0pt, 14pt → 3.5pt,
+                            //   16pt → 4.0pt, 18pt → 4.5pt (8 sizes verified, both directions).
+                            let extra = ((font_size / 2.0) + 0.5).floor() * 0.5;
                             if let Some(last) = current_line.fragments.last_mut() {
-                                last.width += 2.5;
+                                last.width += extra;
                             }
-                            current_width += 2.5;
+                            current_width += extra;
                         }
                     }
                     if word_style.is_none() {

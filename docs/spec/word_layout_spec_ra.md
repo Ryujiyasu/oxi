@@ -317,6 +317,35 @@ fn needs_line_break(accumulated_width_px, content_width_px) -> bool:
   - string_width == sum(char_widths) (same in Word)
 - Mixed text: line 1 gdi_w=459.75pt > content(451.3pt) -> correctly wraps
 
+#### 4.6.1 Multi-Char Kinsoku Retreat (行頭禁則の多段後退, 2026-04-08 COM確定)
+
+When the natural line-break point would place a forbidden line-start character at the start of the next line, Word **retreats** the current line by 1 char and re-evaluates. Repeat until the next-line first char is not a forbidden line-start char.
+
+**Reference measurement: `ruby_text_lineheight_11.docx`**
+- Font: ＭＳ 明朝 10.5pt (NOT 11pt as previously assumed)
+- Body width: 432pt → max 41 chars at full width
+- Setting: `<w:characterSpacingControl w:val="doNotCompress"/>` → no yakumono compression
+- Text positions 40-43 (L1 break region): `し`, `ん`, `）`, `」`
+- Word actual: L1=40 chars, L2 starts with `ん`
+- Why: trial 41 chars on L1 → L2 starts with `）` (forbidden) → retreat. Trial 40 chars on L1 → L2 starts with `ん` (OK) → accept.
+- Each char advance verified at exactly 10.5pt via `Information(5)` — confirmed no compression in doNotCompress mode
+
+**Algorithm:**
+```
+fn break_with_kinsoku_retreat(chars, content_width):
+    n = natural_break_index(chars, content_width)  // overflow point
+    // Multi-char retreat for line-start kinsoku
+    while n > 0 && is_line_start_forbidden(chars[n]):
+        n -= 1
+    return n
+```
+
+**Distinction from line-end kinsoku:** This is the *line-start* lookahead, separate from the line-end "trailing yakumono can hang on current line" rule. Both must coexist:
+1. Line-end kinsoku: pull trailing forbidden-end chars onto current line (forward extend, oikomi)
+2. Line-start kinsoku: retreat current line so next line doesn't start with forbidden char (backward retreat)
+
+**Effect on Oxi:** ruby_text_lineheight_11 |dch|=1.20 — Oxi computes L1=42 (overflow point), missing the retreat to 40. Multi-char retreat algorithm needed.
+
 ### 4.2 Font Fallback
 
 **When a Latin font is specified for CJK characters, GDI automatically falls back.**
@@ -400,6 +429,161 @@ MS PGothic, MS PMincho: **proportional** (character widths vary per character vi
 - MS Gothic/Mincho: ceil_even ALL MATCH (ppem 5-29)
 - Yu Gothic/Mincho/Meiryo: CJK fullwidth = ppem (all sizes match)
 - MS PGothic/PMincho: proportional ("あ" != ppem, individual GDI width calculation required)
+
+### 4.6.2 autoSpaceDE Boundary Width (CJK→Latin境界スペース, 2026-04-08 COM確定)
+
+When a CJK kana/ideograph is immediately followed by a Latin alphanumeric character, Word adds extra spacing to the boundary. The extra is added to the **CJK char's** advance (not the Latin char). Active by default; disabled when `<w:autoSpaceDE w:val="0"/>` is set.
+
+**Per-fontSize measurement (ＭＳ 明朝 + Times New Roman, multi-name list, settings has no autoSpaceDE override):**
+
+| fontSize | natural CJK | measured `は` adv | extra | fontSize/4 raw |
+|---|---|---|---|---|
+| 9pt | 9 | 11.5 | +2.5 | 2.25 |
+| 10pt | 10 | 12.5 | +2.5 | 2.50 |
+| 10.5pt | 10.5 | 13.0 | +2.5 | 2.625 |
+| **11pt** | 11 | **14.0** | **+3.0** | 2.75 |
+| 12pt | 12 | 15.0 | +3.0 | 3.00 |
+| 14pt | 14 | 17.5 | +3.5 | 3.50 |
+| 16pt | 16 | 20.0 | +4.0 | 4.00 |
+| 18pt | 18 | 22.5 | +4.5 | 4.50 |
+
+**Formula:**
+```
+extra_pt = round_half_up_to_nearest(font_size / 4.0, step=0.5)
+        = floor(font_size / 2.0 + 0.5) * 0.5
+```
+One-quarter em rounded to nearest 0.5pt, half rounded up.
+
+**Verification trace (each row computes both):**
+- 9 → floor(4.5+0.5)*0.5 = 2.5 ✓
+- 11 → floor(5.5+0.5)*0.5 = 3.0 ✓
+- 14 → floor(7.0+0.5)*0.5 = 3.5 ✓
+- 18 → floor(9.0+0.5)*0.5 = 4.5 ✓
+
+**Trigger scope (verified via `japanese_font_mixing_baseline.docx` per-char measurement):**
+- ✓ kana → Latin (`は→M` at pos 2-3 = 12+3 = 15.0pt)
+- ✗ CJK punctuation → Latin (`。→T` at pos 17-18 = 12.0pt, no extra)
+- ✓ Latin → CJK is **symmetric** (verified 2026-04-08 sweep below)
+
+**Symmetric Latin→CJK measurement (`Mは` and `testは`, same fonts):**
+
+| fontSize | M_natural | `Mは` M_adv | extra | matches CJK→Latin formula? |
+|---|---|---|---|---|
+| 9pt | 4.5 | 7.0 | +2.5 | ✓ |
+| 10pt | 5.0 | 7.5 | +2.5 | ✓ |
+| 10.5pt | 5.5 | 8.0 | +2.5 | ✓ |
+| 11pt | 5.5 | 8.5 | +3.0 | ✓ |
+| 12pt | 6.0 | 9.0 | +3.0 | ✓ |
+| 14pt | 7.0 | 10.5 | +3.5 | ✓ |
+| 16pt | 8.0 | 12.0 | +4.0 | ✓ |
+| 18pt | 9.0 | 13.5 | +4.5 | ✓ |
+
+`testは` test confirms the extra is on the **last Latin char of the word** (the one immediately before the CJK):
+- 11pt: t,e,s = 5.5pt each; final t = 8.5pt (= 5.5 + 3.0)
+- 12pt: t,e,s = 6.0pt each; final t = 9.0pt (= 6.0 + 3.0)
+
+**Universal rule:**
+> The extra is added to the advance of the **left-side char** of the boundary, regardless of which side is CJK or Latin. Equivalently: extra is added to the FIRST char of the (CJK,Latin) or (Latin,CJK) adjacent pair.
+
+**Oxi current implementation:** [crates/oxidocs-core/src/layout/mod.rs:2016](crates/oxidocs-core/src/layout/mod.rs#L2016) hardcodes `last.width += 2.5;`. This is correct for fontSize ≤ 10.5pt but under-estimates by 0.5pt at 11-13pt and progressively more at larger sizes. Replace with the formula above.
+
+**Impact on 49-doc set:** `japanese_font_mixing_baseline.docx` (12pt, single CJK→Latin boundary) — Oxi's L1 has 0.5pt extra room → fits 1 extra char (W=54, O=55, |dch|=1.0). This is the **last residual** in the 49-doc bottleneck list as of 2026-04-08.
+
+### 4.6.3 CJK-Adjacent Space Width — eastAsia attribute dependent (2026-04-08 COM確定)
+
+The Latin space (U+0020) widening when adjacent to CJK characters (the "5.0/5.5pt half-em" rule from `cjk_space_width_spec.md` memory) is **NOT universally applied**. It depends on whether the run's `<w:rFonts>` element has an explicit `w:eastAsia` attribute.
+
+**Verified via `japanese_font_mixing_baseline.docx` vs runtime-saved equivalent (same text, fonts, page setup, all chars langFE=1033):**
+
+| Doc | rPr w:rFonts | eastAsia source | `' '→日` adv | `は→M` extra |
+|---|---|---|---|---|
+| jfmb (on-disk) | `ascii="..." hAnsi="..."` (no eastAsia) | theme (`minorEastAsia` → ＭＳ 明朝) | **3.5pt** (natural TNR) | +3.0pt ✓ |
+| runtime saved | `ascii="..." eastAsia="..." hAnsi="..."` | run-explicit | **6.0pt** (half-em) | +3.0pt ✓ |
+
+**Two independent autoSpaceDE mechanisms confirmed:**
+
+1. **kana/ideo ↔ Latin alnum boundary spacing** (covered in §4.6.2):
+   - Always applied regardless of rPr structure
+   - extra = `floor(font_size/2 + 0.5) * 0.5` on the left-side char
+   - Trigger: kana or ideograph immediately adjacent to Latin alphanumeric
+
+2. **CJK-adjacent space widening** (this section):
+   - Applied **only when the run's `<w:rFonts>` has an explicit `w:eastAsia` attribute**
+   - When the space's adjacent CJK char is rendered via theme-fallback eastAsia font, NO widening
+   - When applied: space width → ≈ font_size / 2 (per-font, the 5.0/5.5/6.0 values from memory cjk_space_width_spec.md table)
+
+**Implication for Oxi:** The c45c1fc fix unconditionally widens space-before-CJK, which over-applies for docs with theme-fallback eastAsia. For jfmb and similar, the space should remain at natural Latin width.
+
+**Detection in OOXML parser:**
+- Parse `<w:rFonts>` for explicit `w:eastAsia` attribute
+- Track per-run `has_explicit_east_asia: bool`
+- Apply space-widening only when this flag is true
+- Theme-fallback `eastAsiaTheme="..."` does NOT count (verified in jfmb which has `eastAsiaTheme="minorEastAsia"` in docDefaults)
+- `w:hint="eastAsia"` attribute behavior: untested
+
+**Open questions (defer to next sweep):**
+- Does the rule depend on multi-name list vs single-name eastAsia?
+- Does `w:hint="eastAsia"` substitute for missing eastAsia attribute?
+- Test corpus needed for combinations of eastAsia/eastAsiaTheme/hint
+
+### 4.7 Yakumono Adjacency Compression (約物連続詰め)
+
+**STATUS: rules below are PROVISIONAL — original "11pt" measurement was misread
+(actual font was ＭＳ 明朝 10.5pt with NO compression; uniform 10.5pt advance verified
+2026-04-08 via `Information(5)`).** The `ruby_text_lineheight_11.docx` line-break
+discrepancy was NOT caused by yakumono compression — root cause is multi-step
+line-start kinsoku retreat (see §4.6.1).
+
+The Type-A/B/C taxonomy below is still believed correct for documents with
+`w:characterSpacingControl="compressPunctuation"` but **awaits re-measurement on
+a doc with that setting explicitly enabled**. With `doNotCompress` (the default
+in many real documents) Word performs **no** yakumono compression.
+
+When CJK punctuation ("yakumono") characters appear adjacent to specific neighbors,
+certain ones compress to **half-width** (advance = fontSize/2). Compression is
+computed during **line-break calculation**, before justify.
+
+#### FINAL RULE (実測ベース、JIS X 4051整合)
+
+| Type | Chars | Compress trigger |
+|---|---|---|
+| **A** 開き (open) | `（ 「 『 【 〔 ｛ 〈 《 ［ " '` | **preceded by** a Type-A char (only) |
+| **B** 閉じ・句読・終り引用 (close/punct/close-quote) | `） 」 』 】 〕 ｝ 〉 》 ］ 、 。 ， ． " ' —` | **followed by** a Type-A or Type-B char |
+| **C** 詰めない (non-compressing) | `・ ： ； ！ ？ ー ― ／ ＼` | 圧縮なし、トリガにもならない |
+
+Codepoints:
+```
+A: （U+FF08  「U+300C  『U+300E  【U+3010  〔U+3014
+   ｛U+FF5B  〈U+3008  《U+300A  ［U+FF3B  "U+201C  'U+2018
+B: ）U+FF09  」U+300D  』U+300F  】U+3011  〕U+3015
+   ｝U+FF5D  〉U+3009  》U+300B  ］U+FF3D
+   、U+3001  。U+3002  ，U+FF0C  ．U+FF0E
+   "U+201D  'U+2019  —U+2014
+C: ・U+30FB  ：U+FF1A  ；U+FF1B  ！U+FF01  ？U+FF1F
+   ーU+30FC  ―U+2015  ／U+FF0F  ＼U+FF3C
+```
+
+#### 検証 (`ＭＳ 明朝 11pt`)
+
+| Test | Measured advances | Explanation |
+|---|---|---|
+| `漢」（漢` | 」=**5.5**, （=11 | 」(B) followed by （(A) → compress; （(A) preceded by 」(B) → no compress |
+| `漢「」漢` | 「=11, 」=11 | both adjacent to CJK only |
+| `漢、！漢` | 、=11 | 、(B) followed by ！(C) → no compress |
+| `漢）。漢` | ）=**5.5**, 。=11 | ）(B)→。(B) compress; 。(B)→漢(CJK) no compress |
+| `漢、（漢` | 、=**5.5**, （=11 | 、(B)→（(A) compress; （(A) preceded by B → no |
+| `漢」、漢` | 」=**5.5**, 、=11 | 」(B)→、(B) compress; 、(B)→CJK no |
+| `漢、。漢` | 、=**5.5**, 。=11 | 、(B)→。(B) compress; 。(B)→CJK no |
+| `（（（（` | 11, **5.5**, **5.5**, **5.5** | only 2nd+ Type-A preceded by Type-A compress |
+| `））））` | **5.5**, **5.5**, **5.5**, 11 | each ） followed by ） compresses; last followed by nothing → full |
+
+**Notes:**
+- Compression amount: full → fontSize/2 (e.g., 11pt → 5.5pt). No fractional intermediate.
+- Em-dash `—` (U+2014, Type B) compresses; horizontal bar `―` (U+2015, Type C) does not.
+- Full-width `！？` are intentionally NOT compressed by Word (Type C).
+- Single yakumono between CJK ideographs is never compressed (CJK is neither Type A nor B).
+- Source data: `tools/metrics/output/yakumono_sweep.json`,
+  `pipeline_data/ra_manual_measurements.json`
 
 ---
 
@@ -651,18 +835,54 @@ fn header_y() -> f32:
 
 **COM measurement confirmed (2026-03-29):** headerDistance=18 -> y=18, 36 -> 36, 54 -> 54 (exact match)
 
-### 8.2 Body Start Position
+### 8.2 Body Start Position (revised 2026-04-08, COM確定 Ra2)
 
 ```
-fn body_start_y(top_margin, header_bottom) -> f32:
-    // Normal: topMargin + approx. 2.5pt offset
-    // If header exceeds topMargin: header_bottom + gap
-    return max(top_margin, header_bottom + gap) + ~2.5pt
+fn body_first_line_y(top_margin, grid_pitch, natural_lh) -> f32:
+    // Returns COM Information(6) value (line-box top) of first paragraph on page
+    if grid_pitch == 0:
+        // noGrid (docGrid type absent or LayoutMode=Default)
+        return top_margin                           // delta = 0 exactly
+    else:
+        // grid present (LayoutMode=LineGrid / docGrid type=lines or linesAndChars)
+        inner_box = ceil(natural_lh)                // ceil to integer pt
+        delta = max(0, (grid_pitch - inner_box) / 2)
+        return top_margin + delta
 ```
 
-**COM measurement confirmed:**
-- Normal (header < topMargin): body_y = topMargin + 2.5pt
-- Tall header (3 lines 14pt, topMargin=72): header_bottom approx. 87 -> body_y=90pt (pushdown)
+**COM measurement confirmed (2026-04-08, ra2_body_start_offset.py + ra2_body_start_grid_sweep.py):**
+
+**Phase A — noGrid sweep (75 records):**
+- topMargin ∈ {36, 72, 108} × font ∈ {Calibri, MS Gothic, MS Mincho, Yu Mincho, TNR} × size ∈ {8, 10.5, 11, 14, 18}
+- **All 75 records: P1_y = topMargin exactly (delta = 0.000)**
+- headerDistance ∈ {6, 18, 36, 54} also has zero effect when header_bottom < topMargin
+
+**Phase B — grid pitch sweep (LayoutMode=LineGrid, topMargin=72):**
+
+| font / size | nat_lh (noGrid p2-p1) | inner = ceil(nat_lh) | Verified pitches → delta |
+|---|---|---|---|
+| Calibri 11pt | 18.5pt | **19** | pitch 20→0.5, 22→1.5, 26→3.5, 28→4.5 |
+| Calibri 14pt | 23.5pt | **24** | pitch 26→1, 28→2 |
+| MS Gothic 10.5pt | 13.5pt | **14** | pitch 16→1, 18→2, 20→3, 22→4, 24→5, 26→6, 28→7 |
+| MS Gothic 14pt | 18.0pt | **18** | pitch 20→1, 22→2, 24→3, 26→4, 28→5 |
+| MS Mincho 10.5pt | 13.5pt | **14** | identical to MS Gothic 10.5 |
+| Yu Mincho 10.5pt | 17.5pt | **18** | pitch 18→0, 20→1, 22→2, 24→3, 26→4, 28→5 |
+| Times New Roman 11pt | 18.5pt | **19** | pitch 20→0.5, 22→1.5, 26→3.5, 28→4.5 |
+
+All 35 in-regime data points fit `delta = (pitch - ceil(nat_lh)) / 2` exactly (0 error).
+
+**Multi-line snap regime (pitch < natural_lh):** When the grid pitch is smaller than
+the natural line height, Word snaps the line to **2× pitch** (or higher multiple) and
+the first-line offset behaves correspondingly. Out of scope for §8.2; covered by §1.4.
+
+**Tall-header pushdown (still TBD):** When header content overflows headerDistance and
+crosses topMargin, body Y is pushed down. Earlier note ("3-line 14pt header → body_y=90pt
+when topMargin=72") was measured for noGrid; the formula has not been re-verified under
+the corrected spec and remains a candidate for follow-up Ra2 measurement.
+
+**Old "+~2.5pt" offset claim is RETRACTED.** It was either misread or specific to a
+single document with grid/font combo accidentally producing ~2.5pt; sweep above shows
+delta varies smoothly from 0 to >5 with grid pitch and is **0 in noGrid**.
 
 ### 8.3 Footer Position
 
