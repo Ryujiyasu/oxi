@@ -779,6 +779,32 @@ impl LayoutEngine {
                             }
                         }
                     }
+                    // Round 30: render shapes attached to this paragraph (e.g.
+                    // bracketPair preset frame around the date block in
+                    // b837808d0555). The shape's anchor reference uses the
+                    // paragraph's start Y position; pos.y is the offset from
+                    // the paragraph start in points.
+                    let para_anchor_y = block_y_positions
+                        .get(block_idx)
+                        .copied()
+                        .unwrap_or(start_y);
+                    for shape in &para.shapes {
+                        if let Some(ref pos) = shape.position {
+                            // h_relative=column: x = margin_left + offset
+                            // v_relative=paragraph: y = anchor_y + offset
+                            let sx = page.margin.left + pos.x;
+                            let sy = para_anchor_y + pos.y;
+                            elements.push(LayoutElement::new(
+                                sx, sy, shape.width, shape.height,
+                                LayoutContent::PresetShape {
+                                    shape_type: shape.shape_type.clone(),
+                                    stroke_color: shape.stroke_color.clone(),
+                                    stroke_width: shape.stroke_width.unwrap_or(0.75),
+                                },
+                            ));
+                        }
+                    }
+
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
                 }
