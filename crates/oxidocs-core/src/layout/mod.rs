@@ -1075,10 +1075,50 @@ impl LayoutEngine {
                         let footnote_page_top = cy;
                         let footnote_page_height_huge = 1e6_f32;
                         for note in &notes {
+                            // Round 29: section-local sequential number (Word
+                            // displays footnotes as 1,2,3... regardless of OOXML
+                            // ids). page.footnotes is sorted by id; the seq is
+                            // the index + 1.
+                            let seq = page.footnotes.iter()
+                                .position(|n| n.number == note.number)
+                                .map(|p| (p as u32) + 1)
+                                .unwrap_or(note.number);
+                            let mut first_para = true;
                             for nb in &note.blocks {
                                 if let Block::Paragraph(para) = nb {
+                                    // Prefix the FIRST paragraph of each note
+                                    // with the seq number to identify it
+                                    // visually. Use a clone to keep the IR
+                                    // immutable.
+                                    let para_to_render: Paragraph = if first_para {
+                                        let mut p = para.clone();
+                                        let prefix = format!("{} ", seq);
+                                        if let Some(first_run) = p.runs.first_mut() {
+                                            first_run.text = format!("{}{}", prefix, first_run.text);
+                                        } else {
+                                            // Empty paragraph: insert a run with just the prefix
+                                            p.runs.push(Run {
+                                                text: prefix,
+                                                style: RunStyle::default(),
+                                                url: None,
+                                                footnote_ref: None,
+                                                endnote_ref: None,
+                                                comment_range_start: Vec::new(),
+                                                comment_range_end: Vec::new(),
+                                                tracked_change: None,
+                                                ruby: None,
+                                                bookmark_name: None,
+                                                is_math: false,
+                                                field_type: None,
+                                            });
+                                        }
+                                        first_para = false;
+                                        p
+                                    } else {
+                                        para.clone()
+                                    };
                                     let (note_elements, _) = self.layout_paragraph(
-                                        para, hdr_x, &mut cy, hdr_width, footnote_page_height_huge,
+                                        &para_to_render, hdr_x, &mut cy, hdr_width, footnote_page_height_huge,
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
@@ -1858,7 +1898,25 @@ impl LayoutEngine {
             };
 
             for (frag_idx, frag) in line.fragments.iter().enumerate() {
-                let resolved_font_size = frag.style.font_size.unwrap_or(para_font_size);
+                let base_font_size = frag.style.font_size.unwrap_or(para_font_size);
+                // Round 29: superscript/subscript rendering. Word default for
+                // <w:vertAlign w:val="superscript"/> and "subscript":
+                //   - font size = base * 0.583... (≈58%)
+                //   - vertical offset = +/- (base_size * 0.333) from baseline
+                //     (negative = up for superscript, positive = down for subscript)
+                let (resolved_font_size, vert_offset) = match frag.style.vertical_align {
+                    Some(VerticalAlign::Superscript) => {
+                        let fs = base_font_size * 0.583;
+                        // Raise the glyph: smaller font's baseline shifts up
+                        // by ~1/3 of the original font size.
+                        (fs, -(base_font_size * 0.333))
+                    }
+                    Some(VerticalAlign::Subscript) => {
+                        let fs = base_font_size * 0.583;
+                        (fs, base_font_size * 0.083)
+                    }
+                    _ => (base_font_size, 0.0),
+                };
                 let resolved_bold = self.resolve_bold(&frag.style, &para.style);
                 let adjusted_width = frag.width + frag_width_adjustments[frag_idx];
 
@@ -1868,7 +1926,7 @@ impl LayoutEngine {
                 let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
                 let baseline_adjust = line_max_ascent - frag_ascent;
 
-                let mut el = LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust, adjusted_width, line_height, LayoutContent::Text {
+                let mut el = LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust + vert_offset, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
