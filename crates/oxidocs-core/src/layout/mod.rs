@@ -1295,12 +1295,24 @@ impl LayoutEngine {
 
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
+        // COM-confirmed (2026-04-08, 683ffcab86e2): SINGLE spacing also benefits from
+        // cumulative round in LM=0, but ONLY when raw > per-line round (i.e., cumulative
+        // gives MORE advance than per-line), which preserves page-break decisions.
+        // When raw < per-line round (e.g., Meiryo 10.5pt: raw=20.43 vs round=20.5),
+        // cumulative would tighten content and shift page breaks (LOD_Handbook lost a
+        // page in bdd9321 → reverted in cb35baa). Gating by sign keeps both gains.
         let is_multiple_spacing = match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
             (Some("exact"), _) | (Some("atLeast"), _) => false,
             (_, Some(f)) if (f - 1.0).abs() > 0.001 => true,
             _ => false,
         };
-        let raw_spaced_tw: f32 = if is_multiple_spacing && !lines.is_empty() {
+        let is_single_lm0 = !is_multiple_spacing && grid_pitch.is_none()
+            && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
+                (Some("exact"), _) | (Some("atLeast"), _) => false,
+                _ => true,
+            };
+        let use_cumulative_basis = is_multiple_spacing || is_single_lm0;
+        let raw_spaced_tw: f32 = if use_cumulative_basis && !lines.is_empty() {
             let first_line = &lines[0];
             let base = {
                 let mut ma: f32 = 0.0; let mut md: f32 = 0.0;
@@ -1597,9 +1609,17 @@ impl LayoutEngine {
             // have the same height. When heights vary (mixed fonts), use per-line height.
             // COM-confirmed (2026-04-07): variable-height paragraphs (e.g., mixed CJK+Latin
             // first line, pure CJK subsequent lines) use per-line height, not cumulative.
+            // COM-confirmed (2026-04-08): SINGLE spacing also cumulative round in LM=0
+            // but only when raw_per_line > rounded_per_line (preserves page breaks).
             let is_last = line_idx == lines.len() - 1;
+            // For single LM=0, gate by direction: only when raw advances MORE than rounded.
+            let single_lm0_safe = if is_single_lm0 && raw_spaced_tw > 0.0 {
+                let raw_pt = raw_spaced_tw / 20.0;
+                let rounded_pt = (raw_pt * 2.0).round() / 2.0;
+                raw_pt > rounded_pt
+            } else { false };
             // LM=0 cumulative ROUND includes LAST line; LM≥1 cumulative CEIL excludes last.
-            let use_cumulative = is_multiple_spacing && raw_spaced_tw > 0.0
+            let use_cumulative = (is_multiple_spacing || single_lm0_safe) && raw_spaced_tw > 0.0
                 && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5)
                 && (grid_pitch.is_none() || !is_last);
             if use_cumulative {
@@ -2320,7 +2340,14 @@ impl LayoutEngine {
         // without GDI pixel rounding. The ascent+descent formula uses pixel_round which
         // overshoots by 0.5pt (e.g. Calibri 11pt: 13.5 vs actual 13.0).
         let base = if grid_pitch.is_none() && !in_table_cell {
-            // LayoutMode=0: use no-grid formula for each fragment
+            // LayoutMode=0: use no-grid formula for each fragment.
+            // Round 9 (2026-04-08): per-(font,size) lookup table from
+            // `lm0_lineauto.json` overrides the formula when present
+            // (COM-confirmed sweep across MS Mincho/Gothic, Yu Mincho/Gothic,
+            // Calibri, TNR, Meiryo at sizes 7-25pt).
+            let lookup_no_grid = |family: &str, font_size: f32, fallback: f32| -> f32 {
+                self.registry.lm0_lineauto_base(family, font_size).unwrap_or(fallback)
+            };
             let mut no_grid_max: f32 = 0.0;
             if line.fragments.is_empty() {
                 let font_size = para_style.ppr_rpr.as_ref()
@@ -2328,13 +2355,15 @@ impl LayoutEngine {
                     .unwrap_or(para_font_size);
                 let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                 let metrics = self.metrics_for(&rpr_ref, para_style);
-                no_grid_max = metrics.word_line_height_no_grid(font_size);
+                let formula = metrics.word_line_height_no_grid(font_size);
+                no_grid_max = lookup_no_grid(&metrics.family, font_size, formula);
             } else {
                 let mut has_latin = false;
                 for frag in &line.fragments {
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
                     let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                    let h = metrics.word_line_height_no_grid(font_size);
+                    let formula = metrics.word_line_height_no_grid(font_size);
+                    let h = lookup_no_grid(&metrics.family, font_size, formula);
                     if h > no_grid_max { no_grid_max = h; }
                     // Track if this line has Latin text (non-CJK fragments)
                     if !frag.text.chars().all(|c| kinsoku::is_cjk(c)) {
@@ -2352,7 +2381,8 @@ impl LayoutEngine {
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
                         let latin_metrics = self.metrics_for(&frag.style, para_style);
                         if latin_metrics.is_cjk_83_64_font() {
-                            let h = latin_metrics.word_line_height_no_grid(font_size);
+                            let formula = latin_metrics.word_line_height_no_grid(font_size);
+                            let h = lookup_no_grid(&latin_metrics.family, font_size, formula);
                             if h > no_grid_max { no_grid_max = h; }
                         }
                     }

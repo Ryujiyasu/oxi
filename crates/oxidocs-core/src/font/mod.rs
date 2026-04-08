@@ -268,6 +268,12 @@ pub struct FontMetricsRegistry {
     /// Higher precision than GDI pixel overrides. Used where the standard twips formula
     /// (round(advance*fontSize*20/UPM)) doesn't match Word's actual character placement.
     com_twips_widths: HashMap<String, HashMap<String, HashMap<u32, f32>>>,
+    /// LM0 + lineRule=auto base line height: font → size_str → height_pt
+    /// COM-confirmed Round 9 (2026-04-08, lm0_lineauto sweep). The single-spacing
+    /// (line=240 twips) value used as the base for `word_line_height_no_grid` in
+    /// LayoutMode=0 (no docGrid type). The downstream `* line_spacing_factor`
+    /// multiplication and round-to-0.5pt logic handles 1.15× / 1.5× / etc.
+    lm0_lineauto_base: HashMap<String, HashMap<String, f32>>,
 }
 
 impl FontMetricsRegistry {
@@ -431,6 +437,12 @@ impl FontMetricsRegistry {
             result
         };
 
+        // Load LM0 + lineRule=auto base line heights (Round 9 sweep, 2026-04-08).
+        let lm0_lineauto_base: HashMap<String, HashMap<String, f32>> = {
+            let lm0_json = include_str!("data/lm0_lineauto.json");
+            serde_json::from_str(lm0_json).unwrap_or_default()
+        };
+
         Self {
             fonts,
             default_family: "Calibri".to_string(),
@@ -438,7 +450,20 @@ impl FontMetricsRegistry {
             gdi_widths,
             gdi_heights,
             com_twips_widths,
+            lm0_lineauto_base,
         }
+    }
+
+    /// Look up the LM0 + lineRule=auto base line height for a font and size.
+    /// Returns the COM-measured value at line=240 (single spacing) if present;
+    /// the caller multiplies by `line_spacing_factor` and rounds to 0.5pt.
+    /// Falls back to None for fonts/sizes not in the table.
+    pub fn lm0_lineauto_base(&self, family: &str, font_size: f32) -> Option<f32> {
+        let normalized = normalize_family_name(family);
+        let font_data = self.lm0_lineauto_base.get(family)
+            .or_else(|| self.lm0_lineauto_base.get(&normalized))?;
+        let key = format!("{:.1}", font_size);
+        font_data.get(&key).copied()
     }
 
     /// Look up COM-measured line height for a font, size, and grid pitch.
