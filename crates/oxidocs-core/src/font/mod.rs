@@ -579,8 +579,10 @@ impl FontMetricsRegistry {
     /// GDI substitutes MS UI Gothic. This method mimics that behavior.
     /// For Latin fonts, GDI hinting overrides are applied when available.
     pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
-        // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly
-        if metrics.units_per_em == 256 {
+        // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly.
+        // EXCEPTION: MS PGothic / MS PMincho are proportional (see char_width_pt_with_gdi_map).
+        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
+        if metrics.units_per_em == 256 && !is_pgothic_family {
             if is_fullwidth(c) { return font_size; }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 { return font_size / 2.0; }
@@ -643,7 +645,11 @@ impl FontMetricsRegistry {
     ) -> f32 {
         // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly,
         // NOT GDI table (GDI returns ceil_even which is wrong for Word layout).
-        if metrics.units_per_em == 256 {
+        // EXCEPTION: MS PGothic / MS PMincho are proportional CJK fonts —
+        // they share UPM=256 with MS Gothic/Mincho but use per-char GDI widths.
+        // COM-confirmed (c7b9 P9 MS PGothic 10.5pt): 48-49 ch/line, not 43.
+        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
+        if metrics.units_per_em == 256 && !is_pgothic_family {
             if is_fullwidth(c) {
                 return font_size;
             }
