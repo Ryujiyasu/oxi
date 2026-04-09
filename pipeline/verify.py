@@ -82,25 +82,38 @@ def verify(docx_dir: str, limit: int = 0) -> bool:
         for reg in sorted(regressions, key=lambda x: x["diff"]):
             print(f"  {reg['doc_id']} p.{reg['page']}: {reg['old']:.4f} -> {reg['new']:.4f} ({reg['diff']:.4f})")
 
-    # Net improvement rule: total improvement must exceed total regression
+    # Informational net (no longer the merge gate)
     total_gain = sum(imp["diff"] for imp in improvements)
     total_loss = sum(abs(reg["diff"]) for reg in regressions)
     net = total_gain - total_loss
-    print(f"\nNet: gain={total_gain:.4f}, loss={total_loss:.4f}, net={net:+.4f}")
+    print(f"\nNet (informational only): gain={total_gain:.4f}, loss={total_loss:.4f}, net={net:+.4f}")
 
-    if net <= 0:
-        print("[NG] Net improvement is zero or negative. Rejected.")
+    # Zero-regression merge gate (Ra loop tightening 2026-04-09).
+    # Replaces the old net-positive rule. See feedback_ra_loop_tightening.md.
+    # ANY regressed page = reject, even if average improves. Net averages hide
+    # structural bugs and let local optima accumulate.
+    allow_regression = os.environ.get("OXI_ALLOW_REGRESSION") == "1"
+
+    if regressions:
+        print(f"\n[NG] {len(regressions)} page(s) regressed. Zero-regression rule violated.")
+        print("     Investigate each regression before merging. Do not average them away.")
+        if allow_regression:
+            print("     OXI_ALLOW_REGRESSION=1 set — proceeding anyway (baseline NOT updated).")
+            return True
         return False
 
-    print(f"[OK] Net positive improvement ({net:+.4f}). Safe to commit.")
+    if not improvements:
+        print("\n[--] No improvements and no regressions. Nothing to commit.")
+        return False
 
-    # Update baseline with improvements
-    if improvements:
-        for imp in improvements:
-            baseline[imp["doc_id"]][str(imp["page"])] = imp["new"]
-        with open(BASELINE_PATH, "w", encoding="utf-8") as f:
-            json.dump(baseline, f, indent=2)
-        print(f"Baseline updated with {len(improvements)} improvements.")
+    print(f"\n[OK] {len(improvements)} improvement(s), 0 regression(s). Safe to commit.")
+
+    # Update baseline with improvements (only when zero regressions)
+    for imp in improvements:
+        baseline[imp["doc_id"]][str(imp["page"])] = imp["new"]
+    with open(BASELINE_PATH, "w", encoding="utf-8") as f:
+        json.dump(baseline, f, indent=2)
+    print(f"Baseline updated with {len(improvements)} improvements.")
 
     return True
 

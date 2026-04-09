@@ -1,0 +1,5 @@
+{
+  "$schema_version": 1,
+  "description": "Index of minimal repro fixtures. See README.md for schema and lifecycle.",
+  "specs": []
+}
