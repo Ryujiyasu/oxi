@@ -3114,6 +3114,10 @@ impl LayoutEngine {
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+                // Round 30: implicit border padding (matches second pass)
+                if pad_t == 0.0 && table.style.border {
+                    pad_t = table.style.border_width.unwrap_or(0.4);
+                }
                 // COM-confirmed (2026-04-09, 10 minimal repros + 3 real docs):
                 // Each row's height includes its BOTTOM-EDGE border:
                 //   - Non-last rows: bottom edge = insideH width (0 if no insideH)
@@ -3264,9 +3268,15 @@ impl LayoutEngine {
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
 
-                // COM-confirmed (2026-04-02): border padding does NOT affect text positioning.
-                // insideH overhead only affects row height (handled in first pass via border_overhead).
-                // Text position within cell is determined by cell margins only.
+                // Round 30 (2026-04-09): When cell top/bottom padding is 0 and
+                // the table has borders, add the border width as implicit padding.
+                // Word positions text below the top border line, not at the border.
+                // COM-confirmed minimal repro: Table Grid with tcMar=0 all sides,
+                // MS Mincho 12pt → text_y = topMargin + 0.5pt (= border width).
+                if pad_t == 0.0 && table.style.border {
+                    let bw = table.style.border_width.unwrap_or(0.4);
+                    pad_t = bw;
+                }
 
                 // Emit cell shading (background fill) before cell content
                 if let Some(ref shading_color) = cell.shading {
