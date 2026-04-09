@@ -3118,18 +3118,18 @@ impl LayoutEngine {
             }
 
             // Apply trHeight constraint.
-            // Round 22 (2026-04-08, COM-confirmed) corrects 2026-04-04:
-            // ECMA-376 default for w:hRule is "auto", NOT "atLeast". When
-            // hRule is absent, the trHeight val is a HINT only and is
-            // ignored at render time — content alone determines row height.
-            // Only explicit hRule="exact" or "atLeast" applies a constraint.
+            // 2026-04-09 (COM re-verified, 0e7a contract sample table 1):
+            //   <w:trHeight w:val="830"/> with NO w:hRule attribute →
+            //   Word reports HeightRule = atLeast (1) and renders the row
+            //   at exactly val (41.5pt = 830tw), not at content height.
+            //   The earlier "Round 22" claim that ECMA default = auto and
+            //   val is a HINT was wrong for at least this document.
+            //   Treat missing hRule as atLeast to match Word behavior.
             if let Some(h) = row.height {
                 match row.height_rule.as_deref() {
                     Some("exact") => { row_height = h; }
-                    Some("atLeast") => { row_height = row_height.max(h); }
-                    // None (= default "auto") or explicit "auto": ignore val,
-                    // use content height only.
-                    _ => {}
+                    // Default (None) or explicit "atLeast": atLeast semantics.
+                    _ => { row_height = row_height.max(h); }
                 }
             }
 
