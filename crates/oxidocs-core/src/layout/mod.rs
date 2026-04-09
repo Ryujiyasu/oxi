@@ -744,6 +744,7 @@ impl LayoutEngine {
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
+
                     // Track page/column breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
                     if pages_added > 0 {
@@ -1390,6 +1391,10 @@ impl LayoutEngine {
         let inner_x = abs_x + inset_l;
         let inner_width = (text_box.width - inset_l - inset_r).max(0.0);
         let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
+        // v-text-anchor: middle/bottom shifts content within textbox.
+        // Initial cursor at top; for middle/bottom, compute content height first,
+        // then offset all elements after layout.
+        let v_anchor = text_box.v_text_anchor.as_deref().unwrap_or("t");
         let mut cursor_y = abs_y + inset_t;
 
         // We layout content inside the text box without page-breaking.
@@ -1492,6 +1497,40 @@ impl LayoutEngine {
         // Use specified height (no autoFit by default in Word).
         // Only shrink if content is smaller AND autoFit is explicitly enabled.
         let actual_height = text_box.height;
+
+        // v-text-anchor: shift content elements vertically for middle/bottom alignment.
+        // "ctr" (DrawingML) or "middle" (VML) = vertically centered within textbox.
+        // Use actual element bounding box for content height (cursor_y includes spacing
+        // that overshoots the textbox, but actual rendered text may be smaller).
+        let content_h = {
+            let mut min_y = f32::MAX;
+            let mut max_y = f32::MIN;
+            for el in &elements {
+                match &el.content {
+                    LayoutContent::BoxRect { .. } | LayoutContent::ClipStart | LayoutContent::ClipEnd => {}
+                    _ => {
+                        if el.y < min_y { min_y = el.y; }
+                        let bottom = el.y + el.height;
+                        if bottom > max_y { max_y = bottom; }
+                    }
+                }
+            }
+            if min_y < max_y { max_y - min_y } else { cursor_y - (abs_y + inset_t) }
+        };
+        let v_shift = match v_anchor {
+            "ctr" | "middle" | "middle-center" => ((inner_height - content_h) / 2.0).max(0.0),
+            "b" | "bottom" | "bottom-center" => (inner_height - content_h).max(0.0),
+            _ => 0.0, // "t" | "top" = default, no shift
+        };
+        if v_shift > 0.0 {
+            // Shift all text/content elements (skip BoxRect and ClipStart at indices 0/1)
+            for el in elements.iter_mut() {
+                match &el.content {
+                    LayoutContent::BoxRect { .. } | LayoutContent::ClipStart => {}
+                    _ => { el.y += v_shift; }
+                }
+            }
+        }
 
         // Patch background fill and clip elements with actual height
         for el in elements.iter_mut() {

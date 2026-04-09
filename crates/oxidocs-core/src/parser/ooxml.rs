@@ -2328,6 +2328,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut text_inset_right: Option<f32> = None;
     let mut text_inset_top: Option<f32> = None;
     let mut text_inset_bottom: Option<f32> = None;
+    let mut text_body_anchor: Option<String> = None;
 
     loop {
         match reader.read_event()? {
@@ -2596,6 +2597,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "rIns" => { text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "tIns" => { text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
+                                "anchor" => { text_body_anchor = Some(val.to_string()); }
                                 _ => {}
                             }
                         }
@@ -2825,6 +2827,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "rIns" => { text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "tIns" => { text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
+                                "anchor" => { text_body_anchor = Some(val.to_string()); }
                                 _ => {}
                             }
                         }
@@ -2909,6 +2912,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             gradient_stops: gradient_stops.clone(),
             gradient_angle,
             anchor_block_index: 0,
+            v_text_anchor: None,
         })
     } else {
         None
@@ -2942,6 +2946,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             inset_top: text_inset_top,
             inset_bottom: text_inset_bottom,
             wrap_type,
+            v_text_anchor: text_body_anchor,
         })
     } else {
         None
@@ -2961,6 +2966,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut no_stroke = false;
     let mut rel_id: Option<String> = None;
     let mut text_blocks: Vec<Block> = Vec::new();
+    let mut v_text_anchor: Option<String> = None;
     let mut depth = 0;
 
     loop {
@@ -3011,6 +3017,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                             width = parse_css_length(w.trim());
                                         } else if let Some(h) = part.strip_prefix("height:") {
                                             height = parse_css_length(h.trim());
+                                        } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
+                                            v_text_anchor = Some(anchor.trim().to_string());
                                         }
                                     }
                                 }
@@ -3104,6 +3112,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         gradient_stops: Vec::new(),
         gradient_angle: None,
         anchor_block_index: 0,
+        v_text_anchor,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })
