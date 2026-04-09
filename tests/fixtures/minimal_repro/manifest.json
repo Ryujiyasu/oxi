@@ -45,8 +45,39 @@
         "Spec 2 (row content drift) must ship together OR find ≥2 more real 1-row docs with content short enough that Spec 2 drift snap-rounds to 0",
         "Implementing Spec 1 alone would regress kyodoken10 by +0.5pt — zero-regression rule says no"
       ],
-      "spec_2_proposed": "table_row_height_drift (R_true ≈ 25.65pt for 10.5pt MS Mincho, snapped to 0.5pt grid; per-row drift accumulates and snaps up roughly every 3-4 rows). Validated across N = 2,3,5,10,20.",
+      "spec_2_proposed": "table_row_height_drift — first attempt REFUTED 2026-04-09 (see that spec entry). Need to re-author with snapToGrid=false matching kyodoken10.",
       "notes": "Discovery under the new Ra discipline: 1-row formula looked clean (10/10 variants + 2/2 real tables in 683f) but real-doc cross-check on kyodoken10 revealed entanglement with row content drift. Old net-positive rule would have shipped this and silently regressed kyodoken10."
+    },
+    {
+      "spec_id": "table_row_height_drift",
+      "status": "refuted",
+      "owner_memo": "memory/spec_table_row_height_drift_refuted.md",
+      "directory": "table_row_height_drift/",
+      "intent": "Reproduce the per-paragraph drift believed to entangle with table_border_overhead in kyodoken10 (-0.5pt over 28-paragraph cell)",
+      "variants": [
+        "1cell_1line_mincho10p5.docx",
+        "1cell_2line_mincho10p5.docx",
+        "1cell_3line_mincho10p5.docx",
+        "1cell_5line_mincho10p5.docx",
+        "1cell_10line_mincho10p5.docx",
+        "1cell_20line_mincho10p5.docx",
+        "1cell_50line_mincho10p5.docx",
+        "1cell_10line_mincho10.docx",
+        "1cell_10line_mincho11.docx",
+        "1cell_10line_mincho12.docx",
+        "1cell_10line_calibri11.docx",
+        "1cell_10line_yumin10p5.docx"
+      ],
+      "measure_script": "table_row_height_drift/measure.py",
+      "generate_script": "table_row_height_drift/generate.py",
+      "last_measured": "2026-04-09",
+      "refuted_reason": "Repro tests a different code path than kyodoken10. (1) v1 used <w:br/> soft breaks which Oxi doesn't parse — separate gap. (2) v2 used separate <w:p> but inherits python-docx-injected pPrDefault spacing line=276 after=200, while kyodoken10 has empty pPrDefault and snapToGrid=false on every cell paragraph. The two paths in Oxi diverge entirely. The 12.16pt/para gap our repro shows is not the same as the 0.018pt/para gap in kyodoken10.",
+      "side_findings": [
+        "<w:br/> soft line break not parsed by Oxi — separate parser gap (parser_gap_w_br_soft_break)",
+        "docDefaults pPr/spacing/line and /after possibly not inherited into table cell paragraphs — needs verification (could be python-docx artifact)"
+      ],
+      "next_attempt_required": "Re-author with empty pPrDefault, snapToGrid=false, 25-30 paragraphs per cell, sz=4 outer borders. Match kyodoken10 structure exactly.",
+      "discipline_note": "Caught a non-equivalent minimal repro before any code was changed. Old loop would have measured the wrong thing and 'fixed' a phantom bug. New 3-doc + repro rule is doing its job."
     }
   ]
 }
