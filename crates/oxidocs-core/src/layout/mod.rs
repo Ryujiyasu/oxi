@@ -3463,14 +3463,23 @@ impl LayoutEngine {
                                             }
                                         }
                                     } else {
-                                        // No word spaces: distribute between CJK fragments
+                                        // No word spaces: distribute between ALL CJK character gaps
+                                        // (same as body paragraph justify: total_chars - 1 gaps)
                                         let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
                                         if has_cjk {
-                                            let gap_count = line.len() - 1;
-                                            if gap_count > 0 {
-                                                let per_gap = slack / gap_count as f32;
-                                                for fi in 0..gap_count {
-                                                    frag_spacing[fi] += per_gap;
+                                            let total_chars: usize = line.iter()
+                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
+                                                .sum();
+                                            if total_chars > 1 {
+                                                let per_char_gap = slack / (total_chars - 1) as f32;
+                                                for (fi, (text, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                                    let n = text.chars().count();
+                                                    if n > 1 {
+                                                        frag_width_adj[fi] += per_char_gap * (n - 1) as f32;
+                                                    }
+                                                    if fi < line.len() - 1 && n > 0 {
+                                                        frag_spacing[fi] += per_char_gap;
+                                                    }
                                                 }
                                             }
                                         }
