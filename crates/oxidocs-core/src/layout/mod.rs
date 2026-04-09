@@ -3051,11 +3051,17 @@ impl LayoutEngine {
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
-                // COM-confirmed (2026-04-02): only insideH border adds row height overhead.
-                // Outer borders (top/bottom/left/right) do NOT affect row height.
-                // The overhead equals the insideH border width, applied once per row (not per edge).
-                let border_overhead = if table.style.has_inside_h {
-                    table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 })
+                // COM-confirmed (2026-04-09, 10 minimal repros + 3 real docs):
+                // Each row's height includes its BOTTOM-EDGE border:
+                //   - Non-last rows: bottom edge = insideH width (0 if no insideH)
+                //   - Last row: bottom edge = outer bottom border (0 if none)
+                // Top/side borders do NOT add to row height.
+                let bw = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
+                let is_last = row_idx + 1 == num_rows;
+                let border_overhead = if is_last {
+                    if table.style.border { bw } else { 0.0 }
+                } else if table.style.has_inside_h {
+                    bw
                 } else {
                     0.0
                 };
