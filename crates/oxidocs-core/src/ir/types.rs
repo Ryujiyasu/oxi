@@ -492,6 +492,10 @@ pub struct TextBox {
     /// Wrap type for text wrapping around this text box
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrap_type: Option<WrapType>,
+    /// Vertical text anchor: "top" (default), "middle", "bottom"
+    /// From VML v-text-anchor or DrawingML bodyPr anchor attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_text_anchor: Option<String>,
 }
 
 /// A geometric shape (DrawingML or VML)
@@ -530,6 +534,9 @@ pub struct Shape {
     /// Index of the anchor paragraph block (for positioning)
     #[serde(default)]
     pub anchor_block_index: usize,
+    /// Vertical text anchor: "top" (default), "middle", "bottom"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_text_anchor: Option<String>,
 }
 
 /// A gradient color stop
