@@ -3032,6 +3032,14 @@ impl LayoutEngine {
             grid_pitch
         };
 
+        // COM-confirmed (2026-04-09): top border displaces table content downward
+        // by the border width. cell_top_y = table_start_y + top_border_width.
+        // Measured: 1row_outer4 marker_y=72.0, cell_y=97.5 → offset=0.5pt=top_bw.
+        if table.style.border {
+            let top_bw = table.style.border_width.unwrap_or(0.4);
+            *cursor_y += top_bw;
+        }
+
         let num_rows = table.rows.len();
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
