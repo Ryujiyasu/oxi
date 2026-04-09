@@ -26,10 +26,15 @@
       ],
       "measure_script": "table_border_overhead/measure.py",
       "generate_script": "table_border_overhead/generate.py",
-      "last_measured": null,
+      "last_measured": "2026-04-09",
       "implementation_site": "crates/oxidocs-core/src/layout/mod.rs:3054-3061",
       "demoted_from_confirmed": "2026-04-02 confirmation contradicted by 683f data (-1.0pt)",
-      "notes": "Re-derive row_height = f(content, padding, top, bot, ih, num_rows, sz). EXCEPTION stacking forbidden — fix the spec, not per-doc."
+      "partial_formula": "overhead_pt = top + bot + (rows-1)*ih  (fits 9/10 variants; multi-row+ih has unexplained +0.5pt residual)",
+      "blocked_on": [
+        "Resolve multi-row insideH +0.5pt residual via more variants (5/10/20 rows, varied ih widths)",
+        "≥3 real-doc cross-check (683f counted, need 2 more)"
+      ],
+      "notes": "Re-derive row_height = f(content, padding, top, bot, ih, num_rows, sz). EXCEPTION stacking forbidden — fix the spec, not per-doc. 1-row case is clean and explains the 683f -1.0pt gap exactly, but partial implementation forbidden until multi-row resolved."
     }
   ]
 }
