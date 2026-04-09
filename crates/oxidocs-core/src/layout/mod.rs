@@ -1722,14 +1722,24 @@ impl LayoutEngine {
                     }
                 }
                 // For LayoutMode=0, use the no-grid formula (matches line_height_for_line_inner)
+                // For Multiple spacing cumulative round, use RAW win_sum*fontSize (no floor)
+                // so that cumulative ceil(j*raw_tw/10)*10 matches Word's sub-twip precision.
+                // COM-confirmed (2026-04-09, test_widow Cambria 11pt 1.15x):
+                //   raw = win_sum/upm * fontSize = 12.896pt, NOT floor'd 12.5pt
+                //   raw * 1.15 = 14.830pt = 296.6tw
+                //   cumulative ceil gives 15.0, 15.0, 14.5... matching Word exactly.
                 let run_base = ma + md;
                 if grid_pitch.is_none() {
                     let mut no_grid_max: f32 = 0.0;
+                    let mut no_grid_raw_max: f32 = 0.0;
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         let h = m.word_line_height_no_grid(fs);
                         if h > no_grid_max { no_grid_max = h; }
+                        // Raw (un-floored) height for Multiple spacing cumulative base
+                        let raw = (m.win_ascent + m.win_descent) * fs;
+                        if raw > no_grid_raw_max { no_grid_raw_max = raw; }
                     }
                     if has_latin {
                         if let Some(frag) = first_line.fragments.first() {
@@ -1738,10 +1748,16 @@ impl LayoutEngine {
                             if latin_m.is_cjk_83_64_font() {
                                 let h = latin_m.word_line_height_no_grid(fs);
                                 if h > no_grid_max { no_grid_max = h; }
+                                let raw = (latin_m.win_ascent + latin_m.win_descent) * fs;
+                                if raw > no_grid_raw_max { no_grid_raw_max = raw; }
                             }
                         }
                     }
-                    run_base.max(no_grid_max)
+                    if is_multiple_spacing && no_grid_raw_max > 0.0 {
+                        run_base.max(no_grid_raw_max)
+                    } else {
+                        run_base.max(no_grid_max)
+                    }
                 } else {
                     run_base
                 }
