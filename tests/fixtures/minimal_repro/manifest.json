@@ -1,5 +1,35 @@
 {
   "$schema_version": 1,
   "description": "Index of minimal repro fixtures. See README.md for schema and lifecycle.",
-  "specs": []
+  "specs": [
+    {
+      "spec_id": "table_border_overhead",
+      "status": "hypothesis",
+      "owner_memo": "memory/session_040109_table_border_unresolved.md",
+      "directory": "table_border_overhead/",
+      "variants": [
+        "1row_none.docx",
+        "1row_outer4.docx",
+        "1row_outer8.docx",
+        "1row_outer16.docx",
+        "2row_outer4.docx",
+        "2row_outer4_ih4.docx",
+        "3row_outer4_ih4.docx",
+        "1row_top4_only.docx",
+        "1row_bot4_only.docx",
+        "1row_topbot8.docx"
+      ],
+      "real_docs_agreeing": [],
+      "real_docs_required": 3,
+      "candidate_real_docs": [
+        "tools/golden-test/documents/docx/683ffcab86e2_20230331_resources_open_data_contract_addon_00.docx"
+      ],
+      "measure_script": "table_border_overhead/measure.py",
+      "generate_script": "table_border_overhead/generate.py",
+      "last_measured": null,
+      "implementation_site": "crates/oxidocs-core/src/layout/mod.rs:3054-3061",
+      "demoted_from_confirmed": "2026-04-02 confirmation contradicted by 683f data (-1.0pt)",
+      "notes": "Re-derive row_height = f(content, padding, top, bot, ih, num_rows, sz). EXCEPTION stacking forbidden — fix the spec, not per-doc."
+    }
+  ]
 }
