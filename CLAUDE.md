@@ -58,16 +58,27 @@ At the start of each session, check the current state and continue autonomous sp
 - Measurement data: `pipeline_data/ra_manual_measurements.json`
 - SSIM baseline: `pipeline_data/ssim_baseline.json`
 
-### Autonomous Loop Procedure
+### Autonomous Loop Procedure (Tightened 2026-04-09)
 1. Read `docs/spec/word_layout_spec_ra.md`, identify unresolved questions
 2. Select the highest-impact unresolved question
 3. Create Python COM measurement script in `tools/metrics/`
-4. Execute and append results to `pipeline_data/ra_manual_measurements.json`
-5. Analyze results and update specification
+4. Execute on **≥3 distinct documents** + **a minimal repro doc you author yourself**
+   that isolates only the spec under test. Append all results to
+   `pipeline_data/ra_manual_measurements.json`
+5. Analyze. Spec moves to **"hypothesis"** until 3+ docs + minimal repro all agree.
+   Only then promote to **"confirmed"**. Single-doc observations are NEVER confirmed
 6. Implement confirmed specifications in Rust
-7. Run `python -m pipeline.verify` for SSIM regression check
-8. If net positive → commit; if negative → revert
-9. Return to step 1
+7. **Rebuild caches**: `wasm-pack build` + copy to web/ + delete `pipeline_data/oxi_png/`
+   (and DML cache if structure changed). Stale caches = fake SSIM (see baseline-drift)
+8. **Primary verification**: Word EMF vs Oxi GDI pixel diff via `pipeline.verify`
+   on the full baseline. DML diff is **secondary only** (Information(6) is line-box
+   top, not glyph top — see com-info6-caveat)
+9. **Zero-regression rule**: merge ONLY if `regressed_docs == 0 AND improved_docs > 0`.
+   "Net positive but some docs worse" = revert. Net averages hide real bugs
+10. If an EXCEPTION must be carved out for a doc → the original spec is **wrong**,
+    not incomplete. Re-derive it from a richer input space (PANOSE, proportional
+    flag, etc.) before re-implementing. Do not stack exceptions
+11. Return to step 1
 
 ### Domain Status (2026-03-28)
 - **char_width**: Fallback implemented (MS UI Gothic). No effect on current test documents
@@ -92,30 +103,46 @@ gap = y2 - y1  # = line_height + spacing
 ```
 `Format.LineSpacing` returns the setting value only, not the actual rendered height.
 
-### DML-Driven Improvement Loop
+### Pixel-Driven Improvement Loop (Revised 2026-04-09)
 
-DML (layout structure) match is a **prerequisite** for pixel match.
-Pixel comparison (SSIM) is only for final verification. The improvement driver is DML comparison.
+**Word EMF vs Oxi GDI pixel diff** is the primary improvement signal.
+DML diff was the primary signal previously, but COM `Information(6)` returns
+line-box top (not glyph top), so DML |dy| does not validate `text_y_offset` and
+can mask real pixel regressions. DML diff is now **secondary** — useful for
+narrowing down *which block* differs, not for confirming a fix.
 
 **Tools:**
-- `tools/metrics/word_dml_extract.py` — Extract Word COM positions → JSON cache (`pipeline_data/word_dml/`)
-- `tools/metrics/dml_diff.py` — Structural diff: Oxi layout_json vs Word DML cache
-- `tools/oxi-gdi-renderer/` — GDI renderer for pixel-level SSIM verification
+- `tools/oxi-gdi-renderer/` — GDI renderer (TextOutW) for Oxi side
+- Word EMF path: CopyAsPicture → PlayEnhMetaFile (see ssim_progress)
+- `pipeline.verify` — full-baseline pixel diff
+- `tools/metrics/dml_diff.py` — secondary, block-level diagnosis only
+- `tools/metrics/word_dml_extract.py` — Word COM position cache
+  (regenerate whenever layout shape changes)
 
 **Loop:**
-1. `word_dml_extract.py` to cache Word positions (once)
-2. Code fix
-3. `dml_diff.py` for structural diff (1 min, no rendering needed)
-4. When diff improves → next issue
-5. After batch of fixes → `pipeline.verify` for full SSIM check
-
-**Rationale:** Pixel loop (GDI render → SSIM) takes 10 min/cycle. DML diff takes 1 min/cycle = 10x faster.
-DML diff also gives precise, actionable feedback ("table row 3 Y off by 0.25pt") vs SSIM ("something looks different").
+1. Pick a single document where Oxi vs Word EMF differs
+2. Author a **minimal repro** that isolates the suspected spec
+3. COM-measure the repro on ≥3 variants → spec hypothesis
+4. Implement
+5. Rebuild WASM + clear `pipeline_data/oxi_png/`
+6. Pixel diff the repro: must match Word EMF exactly. If not, spec is wrong
+7. Run `pipeline.verify` on full baseline
+8. **Zero-regression check**: any doc that got worse = revert and re-derive
+9. Commit only when regression count == 0
 
 ### Critical Rules
 - No DLL disassembly. Black-box measurement via COM API only
 - Never implement from speculation. Always confirm values via COM measurement first
-- Revert any change that decreases SSIM (net positive rule)
+- **Zero-regression rule** (replaces net-positive rule): revert if ANY document
+  regresses, even if the average improves. Net averages hide structural bugs
+- **3-doc + minimal-repro rule**: a spec is "hypothesis" until 3 distinct real
+  docs AND a self-authored minimal repro all agree. Single-doc → never confirmed
+- **No EXCEPTION stacking**: if a confirmed spec needs a per-font / per-doc
+  carve-out, the spec itself is wrong. Re-derive from a richer input space
+- **Cache hygiene**: rebuild WASM + delete `pipeline_data/oxi_png/` (and DML
+  cache when shapes change) before every verify run. Stale caches = fake SSIM
+- **Information(6) is not glyph top**: do not use DML |dy| as the merge gate.
+  Pixel diff (Word EMF vs Oxi GDI) is the only ground truth
 
 ### No Excuses by Design
 Ra is built on the premise that there are no valid excuses for layout differences.
