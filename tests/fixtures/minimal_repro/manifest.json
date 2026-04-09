@@ -19,22 +19,34 @@
         "1row_bot4_only.docx",
         "1row_topbot8.docx"
       ],
-      "real_docs_agreeing": [],
-      "real_docs_required": 3,
-      "candidate_real_docs": [
-        "tools/golden-test/documents/docx/683ffcab86e2_20230331_resources_open_data_contract_addon_00.docx"
+      "real_docs_agreeing": [
+        "tools/golden-test/documents/docx/683ffcab86e2_20230331_resources_open_data_contract_addon_00.docx (table 1: -1.0pt = top+bot)",
+        "tools/golden-test/documents/docx/683ffcab86e2_20230331_resources_open_data_contract_addon_00.docx (table 2: -1.0pt = top+bot)"
       ],
+      "real_docs_blocked": [
+        {
+          "doc": "tools/golden-test/documents/docx/4a36b62555f2_kyodokenkyuyoushiki10.docx",
+          "blocker": "Spec 2 entanglement: Word=609.5 Oxi=609.0 gap=-0.5 (not -1.0). Multi-line cell drift cancels half the border overhead. Spec 1 alone would regress this doc by +0.5pt."
+        },
+        {
+          "doc": "tools/golden-test/documents/docx/e201249db062_tokumei_08_05.docx",
+          "blocker": "Orthogonal short-cell bug: Word=15.0 Oxi=20.5 gap=+5.5 in wrong direction. Not a border-overhead failure."
+        }
+      ],
+      "real_docs_required": 3,
       "measure_script": "table_border_overhead/measure.py",
       "generate_script": "table_border_overhead/generate.py",
-      "last_measured": "2026-04-09",
+      "real_world_measure_script": "tools/metrics/measure_3doc_table_borders.py",
+      "last_measured": "2026-04-09 (round 2: 17 variants)",
       "implementation_site": "crates/oxidocs-core/src/layout/mod.rs:3054-3061",
       "demoted_from_confirmed": "2026-04-02 confirmation contradicted by 683f data (-1.0pt)",
-      "partial_formula": "overhead_pt = top + bot + (rows-1)*ih  (fits 9/10 variants; multi-row+ih has unexplained +0.5pt residual)",
+      "formula": "overhead_pt = top + bot + (num_rows - 1) * insideH    (left/right unused). Layout uses declared OOXML sz value, not COM Border.LineWidth (which snaps to wdLineWidth enum quanta).",
       "blocked_on": [
-        "Resolve multi-row insideH +0.5pt residual via more variants (5/10/20 rows, varied ih widths)",
-        "≥3 real-doc cross-check (683f counted, need 2 more)"
+        "Spec 2 (row content drift) must ship together OR find ≥2 more real 1-row docs with content short enough that Spec 2 drift snap-rounds to 0",
+        "Implementing Spec 1 alone would regress kyodoken10 by +0.5pt — zero-regression rule says no"
       ],
-      "notes": "Re-derive row_height = f(content, padding, top, bot, ih, num_rows, sz). EXCEPTION stacking forbidden — fix the spec, not per-doc. 1-row case is clean and explains the 683f -1.0pt gap exactly, but partial implementation forbidden until multi-row resolved."
+      "spec_2_proposed": "table_row_height_drift (R_true ≈ 25.65pt for 10.5pt MS Mincho, snapped to 0.5pt grid; per-row drift accumulates and snaps up roughly every 3-4 rows). Validated across N = 2,3,5,10,20.",
+      "notes": "Discovery under the new Ra discipline: 1-row formula looked clean (10/10 variants + 2/2 real tables in 683f) but real-doc cross-check on kyodoken10 revealed entanglement with row content drift. Old net-positive rule would have shipped this and silently regressed kyodoken10."
     }
   ]
 }

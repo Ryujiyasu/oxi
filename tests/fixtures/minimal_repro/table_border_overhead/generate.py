@@ -27,6 +27,7 @@ HERE = Path(__file__).resolve().parent
 # (variant_name, num_rows, top_sz, bot_sz, left_sz, right_sz, insideH_sz)
 # sz units: 1/8 pt. sz=4 → 0.5pt, sz=8 → 1.0pt, sz=16 → 2.0pt. None → no border.
 VARIANTS: list[tuple[str, int, int | None, int | None, int | None, int | None, int | None]] = [
+    # --- Original 10 (commit d4dd7d1) ---
     ("1row_none",          1, None, None, None, None, None),
     ("1row_outer4",        1, 4,    4,    4,    4,    None),
     ("1row_outer8",        1, 8,    8,    8,    8,    None),
@@ -37,6 +38,19 @@ VARIANTS: list[tuple[str, int, int | None, int | None, int | None, int | None, i
     ("1row_top4_only",     1, 4,    None, None, None, None),
     ("1row_bot4_only",     1, None, 4,    None, None, None),
     ("1row_topbot8",       1, 8,    8,    None, None, None),
+    # --- Round 2: disambiguate the +0.5pt multi-row+ih residual ---
+    # (a) Does residual scale with N? (constant or per-row?)
+    ("5row_outer4_ih4",    5, 4,    4,    4,    4,    4),
+    ("10row_outer4_ih4",  10, 4,    4,    4,    4,    4),
+    ("20row_outer4_ih4",  20, 4,    4,    4,    4,    4),
+    # (b) Does residual scale with insideH width?
+    ("2row_outer4_ih8",    2, 4,    4,    4,    4,    8),
+    ("2row_outer4_ih16",   2, 4,    4,    4,    4,    16),
+    ("3row_outer4_ih16",   3, 4,    4,    4,    4,    16),
+    # (c) Are left/right involved at all in multi-row+ih?
+    ("3row_topbot4_ih4",   3, 4,    4,    None, None, 4),
+    # (d) Insulate content height — bigger font for residual sensitivity
+    # (variant generated separately because font size differs from baseline)
 ]
 
 
