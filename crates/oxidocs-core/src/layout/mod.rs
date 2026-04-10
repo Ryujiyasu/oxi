@@ -1622,18 +1622,16 @@ impl LayoutEngine {
 
         *cursor_y += effective_spacing;
 
-        // COM-confirmed: *Chars indent multiplier = 10.5pt always (default CJK half-width)
-        let indent_left = para.style.indent_left_chars
-            .map(|c| c / 100.0 * 10.5)
-            .or(para.style.indent_left)
+        // When both twip and *Chars values exist, twip is authoritative (pre-computed by Word).
+        // Fall back to *Chars × 10.5pt only when twip value is absent.
+        let indent_left = para.style.indent_left
+            .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
             .unwrap_or(0.0);
-        let indent_right = para.style.indent_right_chars
-            .map(|c| c / 100.0 * 10.5)
-            .or(para.style.indent_right)
+        let indent_right = para.style.indent_right
+            .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
             .unwrap_or(0.0);
-        let first_line_indent = para.style.indent_first_line_chars
-            .map(|c| c / 100.0 * 10.5)
-            .or(para.style.indent_first_line)
+        let first_line_indent = para.style.indent_first_line
+            .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
             .unwrap_or(0.0);
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
@@ -3429,17 +3427,16 @@ impl LayoutEngine {
                     {
                         // Paragraph indentation within cell (relative to cell content area)
                         // COM-confirmed: *Chars multiplier = 10.5pt always
-                        let p_indent_left = para.style.indent_left_chars
-                            .map(|c| c / 100.0 * 10.5)
-                            .or(para.style.indent_left)
+                        let p_indent_left = para.style.indent_left
+                            .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
                             .unwrap_or(0.0);
-                        let p_indent_right = para.style.indent_right_chars
-                            .map(|c| c / 100.0 * 10.5)
-                            .or(para.style.indent_right)
+                        let p_indent_right = para.style.indent_right
+                            .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
                             .unwrap_or(0.0);
-                        let p_first_line_indent = para.style.indent_first_line_chars
-                            .map(|c| c / 100.0 * 10.5)
-                            .or(para.style.indent_first_line)
+                        // When both firstLine (twip) and firstLineChars exist,
+                        // twip value is authoritative (pre-computed by Word).
+                        let p_first_line_indent = para.style.indent_first_line
+                            .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
                             .unwrap_or(0.0);
                         let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
                         // Hanging indent (firstLineIndent < 0): first line starts further LEFT,
@@ -3545,13 +3542,16 @@ impl LayoutEngine {
                             let should_justify = (para.alignment == Alignment::Justify && !is_last_line)
                                 || para.alignment == Alignment::Distribute;
 
-                            // Apply paragraph alignment within cell (wrap_w = available after indent)
+                            // Alignment within cell content area (cell_w - padding).
+                            // Wrapping uses cell_w (text can overflow into padding), but
+                            // center/right align relative to the padded content area.
+                            let align_avail = (effective_wrap - pad_l - pad_r).max(0.0);
                             let align_offset = if should_justify {
                                 0.0
                             } else {
                                 match para.alignment {
-                                    Alignment::Center => (effective_wrap - line_total_w).max(0.0) / 2.0,
-                                    Alignment::Right => (effective_wrap - line_total_w).max(0.0),
+                                    Alignment::Center => (align_avail - line_total_w).max(0.0) / 2.0,
+                                    Alignment::Right => (align_avail - line_total_w).max(0.0),
                                     _ => 0.0,
                                 }
                             };
@@ -4098,18 +4098,15 @@ impl LayoutEngine {
                 &para.style,
             );
             // Use break_into_lines for accurate line count (handles kinsoku, word break, etc.)
-            // COM-confirmed: *Chars multiplier = 10.5pt always
-            let indent_l = para.style.indent_left_chars
-                .map(|c| c / 100.0 * 10.5)
-                .or(para.style.indent_left)
+            // Twip values are authoritative when present; *Chars × 10.5 is fallback.
+            let indent_l = para.style.indent_left
+                .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
                 .unwrap_or(0.0);
-            let indent_r = para.style.indent_right_chars
-                .map(|c| c / 100.0 * 10.5)
-                .or(para.style.indent_right)
+            let indent_r = para.style.indent_right
+                .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
                 .unwrap_or(0.0);
-            let first_indent = para.style.indent_first_line_chars
-                .map(|c| c / 100.0 * 10.5)
-                .or(para.style.indent_first_line)
+            let first_indent = para.style.indent_first_line
+                .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
                 .unwrap_or(0.0);
             let effective_width = (available_width - indent_l - indent_r).max(1.0);
 

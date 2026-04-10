@@ -2959,8 +2959,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         None
     };
 
-    // Build text box if we have text content in a shape
-    let text_box = if !shape_text_blocks.is_empty() {
+    // Build text box if we have text content OR visual appearance (fill/border) in a shape
+    let has_visual = !has_no_fill || !has_no_stroke;
+    let text_box = if !shape_text_blocks.is_empty() || has_visual {
         Some(TextBox {
             blocks: shape_text_blocks,
             width,
@@ -2998,6 +2999,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut rel_id: Option<String> = None;
     let mut text_blocks: Vec<Block> = Vec::new();
     let mut v_text_anchor: Option<String> = None;
+    let mut vml_inset: Option<String> = None;
     let mut depth = 0;
 
     loop {
@@ -3006,6 +3008,14 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                 let local = local_name(e.name().as_ref());
                 depth += 1;
                 match local.as_str() {
+                    // VML textbox — parse inset attribute before consuming content
+                    "textbox" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "inset" {
+                                vml_inset = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     // VML text box content — consume all paragraphs inside
                     "txbxContent" => {
                         loop {
@@ -3130,23 +3140,73 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         None
     };
 
+    // Parse VML inset="L,T,R,B" (e.g. "1mm,0,1mm,0" or ",0,,0")
+    // Empty values use Word defaults (L/R=7.2pt, T/B=3.6pt)
+    let (vml_inset_l, vml_inset_t, vml_inset_r, vml_inset_b) = if let Some(ref inset_str) = vml_inset {
+        let parts: Vec<&str> = inset_str.split(',').collect();
+        let parse_inset_part = |s: &str| -> Option<f32> {
+            let s = s.trim();
+            if s.is_empty() { return None; }
+            Some(parse_css_length(s))
+        };
+        (
+            parts.first().and_then(|s| parse_inset_part(s)),
+            parts.get(1).and_then(|s| parse_inset_part(s)),
+            parts.get(2).and_then(|s| parse_inset_part(s)),
+            parts.get(3).and_then(|s| parse_inset_part(s)),
+        )
+    } else {
+        (None, None, None, None)
+    };
+
+    let has_text = !text_blocks.is_empty();
+
     let shape = shape_type.as_ref().map(|st| Shape {
         shape_type: st.clone(),
         width,
         height,
         position: None,
         fill: fill_color.clone(),
-        stroke_color: if no_stroke { None } else { stroke_color_val },
+        stroke_color: if no_stroke { None } else { stroke_color_val.clone() },
         stroke_width: if no_stroke { None } else { stroke_width_val },
-        text_blocks,
+        text_blocks: if has_text { Vec::new() } else { Vec::new() },
         rotation: None,
         gradient_stops: Vec::new(),
         gradient_angle: None,
         anchor_block_index: 0,
-        v_text_anchor,
+        v_text_anchor: v_text_anchor.clone(),
     });
 
-    Ok(DrawingResult { image, shape, text_box: None })
+    let corner_radius = if shape_type.as_deref() == Some("roundRect") {
+        Some(width.min(height) * 16667.0 / 100000.0)
+    } else {
+        None
+    };
+
+    let text_box = if has_text || shape_type.is_some() {
+        Some(TextBox {
+            blocks: text_blocks,
+            width,
+            height,
+            position: None,
+            border: !no_stroke,
+            stroke_color: if no_stroke { None } else { stroke_color_val },
+            stroke_width: if no_stroke { None } else { stroke_width_val },
+            fill: fill_color,
+            anchor_block_index: 0,
+            corner_radius,
+            inset_left: vml_inset_l,
+            inset_right: vml_inset_r,
+            inset_top: vml_inset_t,
+            inset_bottom: vml_inset_b,
+            wrap_type: None,
+            v_text_anchor,
+        })
+    } else {
+        None
+    };
+
+    Ok(DrawingResult { image, shape, text_box })
 }
 
 /// Parse CSS-like length value (e.g. "200pt", "2in", "100.5px")

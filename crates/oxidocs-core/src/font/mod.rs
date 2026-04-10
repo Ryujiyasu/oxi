@@ -834,6 +834,11 @@ pub fn is_fullwidth(ch: char) -> bool {
         0x2032 |  // ′ PRIME
         0x2033 |  // ″ DOUBLE PRIME
         0x203B |  // ※ REFERENCE MARK
+        0x2100..=0x214F |  // Letterlike Symbols (℃ ℉ etc.)
+        0x2190..=0x21FF |  // Arrows (→ ← ↑ ↓ etc.)
+        0x2200..=0x22FF |  // Mathematical Operators (∀ ∂ ∃ etc.)
+        0x2300..=0x23FF |  // Miscellaneous Technical
+        0x2460..=0x24FF |  // Enclosed Alphanumerics (① ② etc.)
         0x2500..=0x257F |  // Box Drawing
         0x2580..=0x259F |  // Block Elements
         0x25A0..=0x25FF |  // Geometric Shapes (□, ◎, ○, ● etc.)
@@ -844,6 +849,8 @@ pub fn is_fullwidth(ch: char) -> bool {
         0x30A0..=0x30FF |  // Katakana (full-width)
         0x3400..=0x4DBF |  // CJK Unified Ideographs Extension A
         0x4E00..=0x9FFF |  // CJK Unified Ideographs
+        0x3200..=0x32FF |  // Enclosed CJK Letters and Months (㊤ ㊥ etc.)
+        0x3300..=0x33FF |  // CJK Compatibility (㎜ ㎝ ㎞ ㎡ etc.)
         0xF900..=0xFAFF |  // CJK Compatibility Ideographs
         0xFF01..=0xFF60 |  // Fullwidth Latin / symbols
         0xFFE0..=0xFFE6 |  // Fullwidth currency/symbols
