@@ -1592,9 +1592,16 @@ fn parse_paragraph_properties(
                                 _ => {}
                             }
                         }
-                        // *Chars attributes: store raw values; resolved at layout time
+                        // *Chars attributes: store raw values; resolved at layout time.
+                        // When hanging coexists with leftChars, the twip `left` value
+                        // already includes hanging and is the correct body-text indent.
+                        // leftChars*10.5 gives only the first-line position, NOT the body.
+                        // Skip leftChars override to use the authoritative twip value.
                         if let Some(lc) = left_chars {
-                            style.indent_left_chars = Some(lc);
+                            let has_hanging = style.indent_first_line.map_or(false, |f| f < 0.0);
+                            if !has_hanging {
+                                style.indent_left_chars = Some(lc);
+                            }
                         }
                         if let Some(rc) = right_chars {
                             style.indent_right_chars = Some(rc);
