@@ -2216,6 +2216,15 @@ impl LayoutEngine {
                         color: format!("#{}", color),
                 }));
             }
+            // Between border (horizontal line between consecutive bordered paragraphs)
+            if let Some(ref between) = borders.between {
+                let bw = between.width;
+                let color = between.color.clone().unwrap_or_else(|| "000000".to_string());
+                let border_y = para_bottom + between.space;
+                elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
+                        color: format!("#{}", color),
+                }));
+            }
             // Left border
             if let Some(ref left) = borders.left {
                 let bw = left.width;
