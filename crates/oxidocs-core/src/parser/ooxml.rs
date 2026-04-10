@@ -1557,6 +1557,7 @@ fn parse_paragraph_properties(
                         let mut left_chars: Option<f32> = None;
                         let mut right_chars: Option<f32> = None;
                         let mut first_line_chars: Option<f32> = None;
+                        let mut hanging_chars: Option<f32> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -1589,6 +1590,10 @@ fn parse_paragraph_properties(
                                     style.indent_first_line =
                                         val.parse::<f32>().ok().map(|v| -(v / 20.0));
                                 }
+                                "hangingChars" => {
+                                    // Hanging indent in character units (hundredths)
+                                    hanging_chars = val.parse::<f32>().ok();
+                                }
                                 _ => {}
                             }
                         }
@@ -1597,8 +1602,9 @@ fn parse_paragraph_properties(
                         // already includes hanging and is the correct body-text indent.
                         // leftChars*10.5 gives only the first-line position, NOT the body.
                         // Skip leftChars override to use the authoritative twip value.
+                        let has_hanging = style.indent_first_line.map_or(false, |f| f < 0.0)
+                            || hanging_chars.is_some();
                         if let Some(lc) = left_chars {
-                            let has_hanging = style.indent_first_line.map_or(false, |f| f < 0.0);
                             if !has_hanging {
                                 style.indent_left_chars = Some(lc);
                             }
@@ -1606,7 +1612,10 @@ fn parse_paragraph_properties(
                         if let Some(rc) = right_chars {
                             style.indent_right_chars = Some(rc);
                         }
-                        if let Some(fc) = first_line_chars {
+                        // hangingChars overrides firstLineChars (negative = hanging)
+                        if let Some(hc) = hanging_chars {
+                            style.indent_first_line_chars = Some(-hc);
+                        } else if let Some(fc) = first_line_chars {
                             style.indent_first_line_chars = Some(fc);
                         }
                     }
@@ -4561,11 +4570,10 @@ fn parse_section_properties(
                         }
                     }
                     "pgMar" => {
-                        // COM-confirmed (2026-04-03): Word rounds page margins
-                        // to nearest 0.5pt (10 twips). round(twips/10)*0.5
-                        let round_10tw = |tw: f32| -> f32 {
-                            (tw / 10.0).round() * 0.5
-                        };
+                        // Margins stored as exact twip values (twips / 20.0 → points).
+                        // COM-confirmed (0e7a): LeftMargin=53.85pt = 1077tw/20 (no rounding).
+                        // Previous round_10tw caused 0.15pt/margin error → line break mismatch.
+                        let to_pt = |tw: f32| -> f32 { tw / 20.0 };
                         let mut gutter = 0.0f32;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -4573,37 +4581,37 @@ fn parse_section_properties(
                             match key.as_str() {
                                 "top" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.top = round_10tw(v);
+                                        margin.top = to_pt(v);
                                     }
                                 }
                                 "bottom" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.bottom = round_10tw(v);
+                                        margin.bottom = to_pt(v);
                                     }
                                 }
                                 "left" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.left = round_10tw(v);
+                                        margin.left = to_pt(v);
                                     }
                                 }
                                 "right" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.right = round_10tw(v);
+                                        margin.right = to_pt(v);
                                     }
                                 }
                                 "gutter" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        gutter = round_10tw(v);
+                                        gutter = to_pt(v);
                                     }
                                 }
                                 "header" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        header_distance = Some(round_10tw(v));
+                                        header_distance = Some(to_pt(v));
                                     }
                                 }
                                 "footer" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        footer_distance = Some(round_10tw(v));
+                                        footer_distance = Some(to_pt(v));
                                     }
                                 }
                                 _ => {}
