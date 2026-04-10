@@ -293,6 +293,16 @@ impl LayoutEngine {
         }
     }
 
+    /// Get font metrics for the paragraph mark (¶) / empty paragraph.
+    /// COM-confirmed: Word uses the East Asian font for empty paragraph line height
+    /// in CJK documents (0e7a: MS 明朝 13.5pt, not Calibri 15.5pt).
+    fn metrics_for_para_mark(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
+            return m;
+        }
+        self.metrics_for(run_style, para_style)
+    }
+
     /// Get font metrics for a single character, using East Asian font for CJK.
     fn metrics_for_char(&self, ch: char, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         if kinsoku::is_cjk(ch) {
@@ -2012,8 +2022,8 @@ impl LayoutEngine {
             // Compute max ascent across all fragments for baseline alignment.
             // All fragments in a line share the same baseline (matches Word output).
             let line_max_ascent: f32 = if line.fragments.is_empty() {
-                // COM-confirmed: empty lines use paragraph font, not document default
-                self.metrics_for(&RunStyle::default(), &para.style).word_ascent_pt(para_font_size)
+                // COM-confirmed: empty lines use paragraph font (East Asian in CJK docs)
+                self.metrics_for_para_mark(&RunStyle::default(), &para.style).word_ascent_pt(para_font_size)
             } else {
                 line.fragments.iter().map(|f| {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
@@ -2839,7 +2849,7 @@ impl LayoutEngine {
                 .and_then(|r| r.font_size)
                 .unwrap_or(para_font_size);
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-            let metrics = self.metrics_for(&rpr_ref, para_style);
+            let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -2884,7 +2894,7 @@ impl LayoutEngine {
                     .and_then(|r| r.font_size)
                     .unwrap_or(para_font_size);
                 let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                let metrics = self.metrics_for(&rpr_ref, para_style);
+                let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
                 let formula = metrics.word_line_height_no_grid(font_size);
                 no_grid_max = lookup_no_grid(&metrics.family, font_size, formula);
             } else {
@@ -4075,7 +4085,7 @@ impl LayoutEngine {
                 .and_then(|r| r.font_size)
                 .unwrap_or(self.resolve_font_size(&RunStyle::default(), &para.style));
             let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-            let metrics = self.metrics_for(&rpr_ref, &para.style);
+            let metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             if is_single_empty {
                 height += metrics.word_line_height_table_cell(empty_fs);
