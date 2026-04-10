@@ -124,8 +124,25 @@ impl NumberingDefinitions {
         let marker = if level.lvl_text.is_empty() {
             format!("{}.", formatted_num)
         } else {
-            let placeholder = format!("%{}", ilvl + 1);
-            level.lvl_text.replace(&placeholder, &formatted_num)
+            // Replace all level placeholders (%1, %2, ..., %9)
+            let mut text = level.lvl_text.clone();
+            for lvl_i in 0u8..9 {
+                let placeholder = format!("%{}", lvl_i + 1);
+                if !text.contains(&placeholder) {
+                    continue;
+                }
+                if lvl_i == ilvl {
+                    text = text.replace(&placeholder, &formatted_num);
+                } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
+                    if let Some(other_level) = abstract_num.levels.get(&lvl_i) {
+                        let other_key = (num_id.to_string(), lvl_i);
+                        let other_count = counters.get(&other_key).copied().unwrap_or(0);
+                        let other_fmt = format_number(other_count, &other_level.num_fmt);
+                        text = text.replace(&placeholder, &other_fmt);
+                    }
+                }
+            }
+            text
         };
 
         ResolvedMarker { text: marker, hanging, suff, tab_stop }
@@ -160,6 +177,53 @@ fn map_symbol_bullets(text: &str) -> String {
 fn format_number(n: u32, fmt: &str) -> String {
     match fmt {
         "decimal" => n.to_string(),
+        "decimalFullWidth" => {
+            // １, ２, ３, ... (U+FF10 = fullwidth '0')
+            n.to_string()
+                .chars()
+                .map(|c| char::from_u32(c as u32 - '0' as u32 + 0xFF10).unwrap_or(c))
+                .collect()
+        }
+        "decimalEnclosedCircle" => {
+            // ①②③...⑳ (U+2460-U+2473), fallback to decimal beyond 20
+            if n >= 1 && n <= 20 {
+                char::from_u32(0x2460 + n - 1).unwrap().to_string()
+            } else {
+                n.to_string()
+            }
+        }
+        "aiueoFullWidth" | "aiueo" => {
+            // あ, い, う, え, お, か, き, く, け, こ, さ, し, す, せ, そ,
+            // た, ち, つ, て, と, な, に, ぬ, ね, の, は, ひ, ふ, へ, ほ,
+            // ま, み, む, め, も, や, ゆ, よ, ら, り, る, れ, ろ, わ, を, ん
+            const AIUEO: &[char] = &[
+                'あ','い','う','え','お','か','き','く','け','こ',
+                'さ','し','す','せ','そ','た','ち','つ','て','と',
+                'な','に','ぬ','ね','の','は','ひ','ふ','へ','ほ',
+                'ま','み','む','め','も','や','ゆ','よ',
+                'ら','り','る','れ','ろ','わ','を','ん',
+            ];
+            if n >= 1 && (n as usize) <= AIUEO.len() {
+                AIUEO[(n - 1) as usize].to_string()
+            } else {
+                n.to_string()
+            }
+        }
+        "irohaFullWidth" | "iroha" => {
+            // い, ろ, は, に, ほ, へ, と, ち, り, ぬ, る, を, ...
+            const IROHA: &[char] = &[
+                'い','ろ','は','に','ほ','へ','と','ち','り','ぬ',
+                'る','を','わ','か','よ','た','れ','そ','つ','ね',
+                'な','ら','む','う','ゐ','の','お','く','や','ま',
+                'け','ふ','こ','え','て','あ','さ','き','ゆ','め',
+                'み','し','ゑ','ひ','も','せ','す',
+            ];
+            if n >= 1 && (n as usize) <= IROHA.len() {
+                IROHA[(n - 1) as usize].to_string()
+            } else {
+                n.to_string()
+            }
+        }
         "lowerLetter" => {
             if n >= 1 && n <= 26 {
                 ((b'a' + (n - 1) as u8) as char).to_string()
