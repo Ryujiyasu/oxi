@@ -93,7 +93,9 @@ At the start of each session, check the current state and continue autonomous sp
 - **GDI renderer**: Pipeline switched to oxi-gdi-renderer (TextOutW) for pixel-accurate comparison
 - **DML diff tools**: word_dml_extract.py + dml_diff.py for structural layout comparison
 - **margin fix (2026-04-10)**: Exact twip margins (removed round_10tw), empty para CJK font, hangingChars parse
-- **Remaining improvements**: table cell floating shapes, table row x-alignment, 1ec overflow
+- **is_fullwidth fix (2026-04-10)**: Added 7 Unicode blocks (Arrows, Math Operators, Letterlike Symbols, etc.) to CJK fullwidth table. Fixes → overlap
+- **twip-priority indent (2026-04-10)**: When both twip and *Chars indent values exist, twip takes priority (pre-computed by Word)
+- **Remaining improvements**: table cell floating shapes, table row x-alignment, textbox charGrid, 1ec overflow
 
 ### Measurement Template
 Correct method for measuring line height is "Y coordinate difference between 2 paragraphs":
