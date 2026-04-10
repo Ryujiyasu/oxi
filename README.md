@@ -192,7 +192,7 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 Oxi's layout engine is measured against Microsoft Word using two complementary metrics:
 
-1. **SSIM (pixel-level)** — across 176 real-world .docx documents (344 pages). Word GDI EMF (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi).
+1. **SSIM (pixel-level)** — across 177 real-world .docx documents (352 pages). Word GDI EMF (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi).
 2. **DML structural diff** — paragraph Y positions and line-break positions compared via Word COM API.
 
 All specifications are derived from COM API black-box measurements — no DLL disassembly.
@@ -212,9 +212,9 @@ All specifications are derived from COM API black-box measurements — no DLL di
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word"
-  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05", "04-06", "04-09", "04-10"]
+  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05", "04-06", "04-09", "04-10", "04-10b"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286, 0.8430, 0.8292, 0.8518]
+  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286, 0.8430, 0.8292, 0.8518, 0.8520]
 ```
 
 | Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
@@ -230,7 +230,8 @@ xychart-beta
 | 2026-04-06 | **0.8430** | 168/438 (38%) | — | LayoutMode=0 line height formula (no pixel rounding), docGrid no-type=no grid snap (COM 177-doc batch confirmed), font alias resolution, eastAsia docDefaults fallback, COM twips width overrides |
 | 2026-04-07 | — | — | — | autoSpaceDE refined (Latin↔CJK ideograph/kana only, NOT punctuation), MS明朝/MS Pゴシック→Yu Mincho/Yu Gothic mapping, LM=0 ROUND multiple spacing, mixed-font line height (ASCII font CJK 83/64), bold-aware metrics lookup, General Punctuation fullwidth refinement, comma-separated font lists |
 | 2026-04-09 | 0.8292 | — | — | linesAndChars pitch-based cumulative round, v-text-anchor for textbox vertical centering, implicit top padding for bordered table cells |
-| 2026-04-10 | **0.8518** | — | — | leftChars+hanging indent fix (COM-confirmed 10.5pt multiplier), font unification (17 docs: Arial Unicode MS/HG*/Georgia → supported fonts) |
+| 2026-04-10 | 0.8518 | — | — | leftChars+hanging indent fix (COM-confirmed 10.5pt multiplier), font unification (17 docs: Arial Unicode MS/HG*/Georgia → supported fonts) |
+| 2026-04-10b | **0.8520** | — | — | Fullwidth symbol fix (7 Unicode blocks: Arrows →, Math Operators ≠≦, Letterlike ℃, Enclosed ① ㊤ ㎜), twip-priority indent |
 
 ### COM-Confirmed Specifications (key examples)
 
