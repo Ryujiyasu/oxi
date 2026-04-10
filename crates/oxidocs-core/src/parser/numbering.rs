@@ -14,6 +14,8 @@ pub struct NumberingLevel {
     pub num_fmt: String,
     /// Level text pattern, e.g., "%1." or a literal bullet character
     pub lvl_text: String,
+    /// Start value for numbering (from w:start w:val, default 1)
+    pub start: u32,
     /// Left indent in points (from w:ind w:left, converted from twips)
     pub indent_left: Option<f32>,
     /// Hanging indent in points (from w:ind w:hanging, converted from twips)
@@ -109,12 +111,14 @@ impl NumberingDefinitions {
         // Numbered list: increment counter
         let key = (num_id.to_string(), ilvl);
         let count = counters.entry(key).or_insert_with(|| {
+            // startOverride takes priority over abstractNum start
             if let Some(overrides) = self.level_overrides.get(num_id) {
-                if let Some(&start) = overrides.get(&ilvl) {
-                    return start - 1;
+                if let Some(&ov_start) = overrides.get(&ilvl) {
+                    return ov_start - 1;
                 }
             }
-            0
+            // Use w:start from the level definition (default 1)
+            level.start - 1
         });
         *count += 1;
         let current = *count;
@@ -376,6 +380,7 @@ fn parse_numbering_level(
 ) -> Result<NumberingLevel, ParseError> {
     let mut num_fmt = String::new();
     let mut lvl_text = String::new();
+    let mut start: u32 = 1;
     let mut indent_left = None;
     let mut indent_hanging = None;
     let mut suff = "tab".to_string();
@@ -396,6 +401,14 @@ fn parse_numbering_level(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "start" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                start = val.parse().unwrap_or(1);
+                            }
+                        }
+                    }
                     "numFmt" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
@@ -467,6 +480,7 @@ fn parse_numbering_level(
         ilvl,
         num_fmt,
         lvl_text,
+        start,
         indent_left,
         indent_hanging,
         suff,
