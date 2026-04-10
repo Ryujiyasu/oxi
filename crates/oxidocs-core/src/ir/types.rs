@@ -682,6 +682,16 @@ pub struct ParagraphStyle {
     pub indent_left: Option<f32>,
     pub indent_right: Option<f32>,
     pub indent_first_line: Option<f32>,
+    /// Raw leftChars/startChars value (hundredths of a character width).
+    /// Resolved to indent_left at layout time using grid_char_pitch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_left_chars: Option<f32>,
+    /// Raw rightChars/endChars value (hundredths of a character width).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_right_chars: Option<f32>,
+    /// Raw firstLineChars value (hundredths of a character width).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_first_line_chars: Option<f32>,
     /// Default run style from style definition (font size, bold, etc.)
     pub default_run_style: Option<RunStyle>,
     /// Pre-resolved list marker text (e.g., "•", "1.", "a)")
@@ -793,6 +803,9 @@ impl Default for ParagraphStyle {
             indent_left: None,
             indent_right: None,
             indent_first_line: None,
+            indent_left_chars: None,
+            indent_right_chars: None,
+            indent_first_line_chars: None,
             default_run_style: None,
             list_marker: None,
             list_indent: None,
