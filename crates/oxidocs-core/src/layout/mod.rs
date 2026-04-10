@@ -512,6 +512,7 @@ impl LayoutEngine {
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut cursor_y = start_y;
+        let mut lm2_cells: usize = 0;
         let mut prev_para_style_id: Option<String> = None;
         let mut prev_contextual_spacing: bool = false;
         let mut prev_space_after: f32 = 0.0;
@@ -727,6 +728,9 @@ impl LayoutEngine {
                     // for the footnote area below. Multi-page paragraphs with
                     // footnoteRefs get the same reservation on each spanned page
                     // (slight under-use on continuation pages, acceptable).
+                    let lm2_param = if page.grid_char_pitch.is_some() {
+                        Some(&mut lm2_cells)
+                    } else { None };
                     let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
@@ -741,6 +745,7 @@ impl LayoutEngine {
                         prev_para_style_id.as_deref(), prev_contextual_spacing, false,
                         prev_space_after,
                         Some(block_idx),
+                        lm2_param,
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -964,7 +969,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0, None,
+                            false, 0.0, None, None,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -986,7 +991,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0, None,
+                            false, 0.0, None, None,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -1169,7 +1174,7 @@ impl LayoutEngine {
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
-                                        false, 0.0, None,
+                                        false, 0.0, None, None,
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -1425,7 +1430,7 @@ impl LayoutEngine {
                         if page.grid_char_pitch.is_some() { None } else { page.grid_line_pitch },
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
-                        0.0, None,
+                        0.0, None, None,
                     );
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
@@ -1563,6 +1568,7 @@ impl LayoutEngine {
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
         body_para_index: Option<usize>,
+        mut lm2_grid_cells: Option<&mut usize>,
     ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
@@ -1803,7 +1809,7 @@ impl LayoutEngine {
             };
             base * para.style.line_spacing.unwrap_or(1.0) * 20.0
         } else { 0.0 };
-        let mut cumul_line_idx: usize = 0;
+        let mut cumul_line_idx: usize = lm2_grid_cells.as_deref().copied().unwrap_or(0);
 
         for (line_idx, line) in lines.iter().enumerate() {
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
@@ -2093,6 +2099,24 @@ impl LayoutEngine {
             // COM-confirmed (2026-04-08): SINGLE spacing also cumulative round in LM=0
             // but only when raw_per_line > rounded_per_line (preserves page breaks).
             let is_last = line_idx == lines.len() - 1;
+            // Round 30: linesAndChars Single spacing uses pitch-based cumulative round.
+            let is_lm2_single = lm2_grid_cells.is_some()
+                && page.grid_char_pitch.is_some()
+                && grid_pitch.map_or(false, |p| p > 0.0)
+                && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
+                    (Some("exact"), _) | (Some("atLeast"), _) => false,
+                    (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
+                    _ => true,
+                };
+            if is_lm2_single {
+                let pitch_tw = grid_pitch.unwrap() * 20.0;
+                let cells = (line_height * 20.0 / pitch_tw).round().max(1.0) as usize;
+                let j = cumul_line_idx;
+                let cn = (((j + cells) as f32 * pitch_tw / 10.0).round() * 10.0) as i32;
+                let cc = ((j as f32 * pitch_tw / 10.0).round() * 10.0) as i32;
+                *cursor_y += (cn - cc) as f32 / 20.0;
+                cumul_line_idx += cells;
+            } else {
             // For single LM=0, gate by direction: only when raw advances MORE than rounded.
             let single_lm0_safe = if is_single_lm0 && raw_spaced_tw > 0.0 {
                 let raw_pt = raw_spaced_tw / 20.0;
@@ -2119,6 +2143,7 @@ impl LayoutEngine {
                 *cursor_y += line_height;
             }
             cumul_line_idx += 1;
+            } // end else (non-LM2 single)
 
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
@@ -2187,6 +2212,10 @@ impl LayoutEngine {
                         color: format!("#{}", color),
                 }));
             }
+        }
+
+        if let Some(ref mut cells) = lm2_grid_cells {
+            **cells = cumul_line_idx;
         }
 
         (elements, space_after)
