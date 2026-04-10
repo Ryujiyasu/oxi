@@ -87,12 +87,13 @@ At the start of each session, check the current state and continue autonomous sp
 - **line_height**: Table cell reset implemented. net +0.66
 - **grid_snap**: Implemented
 - **justify**: docDefaults jc=both inheritance fixed. Justify enabled for all documents
-- **SSIM: 0.7496 → 0.8083 (+0.059)** Baseline: 147 documents, 399 pages
+- **SSIM: 0.7496 → 0.8519** Baseline: 177 documents, 352 pages
 - **char_width (2026-03-30)**: Twips-based width calculation (round(advance*fontSize*20/UPM)/20). Matches Word line breaks
 - **GDI width overrides**: 9 fonts with complete GDI width tables (1055KB)
 - **GDI renderer**: Pipeline switched to oxi-gdi-renderer (TextOutW) for pixel-accurate comparison
 - **DML diff tools**: word_dml_extract.py + dml_diff.py for structural layout comparison
-- **Remaining improvements**: table row height (0.25pt border overhead), 1ec overflow, heading line height
+- **margin fix (2026-04-10)**: Exact twip margins (removed round_10tw), empty para CJK font, hangingChars parse
+- **Remaining improvements**: table cell floating shapes, table row x-alignment, 1ec overflow
 
 ### Measurement Template
 Correct method for measuring line height is "Y coordinate difference between 2 paragraphs":
