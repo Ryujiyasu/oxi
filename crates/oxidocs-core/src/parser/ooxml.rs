@@ -2676,6 +2676,90 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             }
                         }
                     }
+                    // wps:style — parse fillRef/lnRef properly.
+                    // fillRef idx="0" means NO fill (ignore child color).
+                    // lnRef idx="0" means NO stroke (ignore child color).
+                    // idx > 0 means use the child color as fill/stroke.
+                    "style" => {
+                        let mut style_depth = 1u32;
+                        let mut in_fill_ref = false;
+                        let mut fill_ref_idx: i32 = -1;
+                        let mut in_ln_ref = false;
+                        let mut ln_ref_idx: i32 = -1;
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    style_depth += 1;
+                                    match sl.as_str() {
+                                        "fillRef" => {
+                                            in_fill_ref = true;
+                                            for attr in se.attributes().flatten() {
+                                                if local_name(attr.key.as_ref()) == "idx" {
+                                                    fill_ref_idx = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
+                                                }
+                                            }
+                                        }
+                                        "lnRef" => {
+                                            in_ln_ref = true;
+                                            for attr in se.attributes().flatten() {
+                                                if local_name(attr.key.as_ref()) == "idx" {
+                                                    ln_ref_idx = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
+                                                }
+                                            }
+                                        }
+                                        "schemeClr" => {
+                                            for attr in se.attributes().flatten() {
+                                                if local_name(attr.key.as_ref()) == "val" {
+                                                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                                                    if let Some(resolved) = ctx.theme.resolve(&val) {
+                                                        let color = parse_color_modifiers(reader, resolved, "schemeClr");
+                                                        if in_fill_ref && fill_ref_idx > 0 && shape_fill.is_none() {
+                                                            shape_fill = Some(color.clone());
+                                                        }
+                                                        if in_ln_ref && ln_ref_idx > 0 && stroke_color.is_none() {
+                                                            stroke_color = Some(color);
+                                                        }
+                                                    }
+                                                    style_depth -= 1;
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                Ok(Event::Empty(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "schemeClr" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "val" {
+                                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                                if let Some(resolved) = ctx.theme.resolve(&val) {
+                                                    if in_fill_ref && fill_ref_idx > 0 && shape_fill.is_none() {
+                                                        shape_fill = Some(resolved.clone());
+                                                    }
+                                                    if in_ln_ref && ln_ref_idx > 0 && stroke_color.is_none() {
+                                                        stroke_color = Some(resolved.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(_)) => {
+                                    style_depth -= 1;
+                                    if style_depth == 1 {
+                                        in_fill_ref = false;
+                                        in_ln_ref = false;
+                                    }
+                                    if style_depth == 0 { break; }
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => {}
+                            }
+                        }
+                        depth -= 1; // consumed the style end tag
+                    }
                     _ => {}
                 }
             }
@@ -2959,9 +3043,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         None
     };
 
-    // Build text box if we have text content OR visual appearance (fill/border) in a shape
+    // Build text box if we have text content OR visual appearance (fill/border) in a shape.
+    // Preset shapes without text content (e.g. bracketPair outlines) should NOT generate
+    // a TextBox — they are rendered via PresetShape only. A TextBox with white fill would
+    // cover the underlying body text that Word renders behind/through the shape.
+    let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty();
     let has_visual = !has_no_fill || !has_no_stroke;
-    let text_box = if !shape_text_blocks.is_empty() || has_visual {
+    let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
             blocks: shape_text_blocks,
             width,
