@@ -702,9 +702,18 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                 style.line_spacing_rule = doc_para.line_spacing_rule.clone();
                                 style.line_spacing_from_doc_defaults = true;
                             }
-                            if style.indent_left.is_none() { style.indent_left = doc_para.indent_left; }
-                            if style.indent_right.is_none() { style.indent_right = doc_para.indent_right; }
-                            if style.indent_first_line.is_none() { style.indent_first_line = doc_para.indent_first_line; }
+                            if style.indent_left.is_none() && style.indent_left_chars.is_none() {
+                                style.indent_left = doc_para.indent_left;
+                                style.indent_left_chars = doc_para.indent_left_chars;
+                            }
+                            if style.indent_right.is_none() && style.indent_right_chars.is_none() {
+                                style.indent_right = doc_para.indent_right;
+                                style.indent_right_chars = doc_para.indent_right_chars;
+                            }
+                            if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
+                                style.indent_first_line = doc_para.indent_first_line;
+                                style.indent_first_line_chars = doc_para.indent_first_line_chars;
+                            }
                             // Empty paragraphs never have explicit widowControl
                             style.widow_control = doc_para.widow_control;
                         }
@@ -1160,14 +1169,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 style.borders = ds.borders.clone();
             }
             // Inherit indents from style
-            if style.indent_left.is_none() {
+            if style.indent_left.is_none() && style.indent_left_chars.is_none() {
                 style.indent_left = ds.indent_left;
+                style.indent_left_chars = ds.indent_left_chars;
             }
-            if style.indent_right.is_none() {
+            if style.indent_right.is_none() && style.indent_right_chars.is_none() {
                 style.indent_right = ds.indent_right;
+                style.indent_right_chars = ds.indent_right_chars;
             }
-            if style.indent_first_line.is_none() {
+            if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
                 style.indent_first_line = ds.indent_first_line;
+                style.indent_first_line_chars = ds.indent_first_line_chars;
             }
             // Inherit shading from style
             if style.shading.is_none() {
@@ -1217,14 +1229,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             style.line_spacing_rule = doc_para.line_spacing_rule.clone();
             style.line_spacing_from_doc_defaults = true;
         }
-        if style.indent_left.is_none() {
+        if style.indent_left.is_none() && style.indent_left_chars.is_none() {
             style.indent_left = doc_para.indent_left;
+            style.indent_left_chars = doc_para.indent_left_chars;
         }
-        if style.indent_right.is_none() {
+        if style.indent_right.is_none() && style.indent_right_chars.is_none() {
             style.indent_right = doc_para.indent_right;
+            style.indent_right_chars = doc_para.indent_right_chars;
         }
-        if style.indent_first_line.is_none() {
+        if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
             style.indent_first_line = doc_para.indent_first_line;
+            style.indent_first_line_chars = doc_para.indent_first_line_chars;
         }
         // COM-confirmed: pPrDefault widowControl=false must override the struct default (true)
         if !style.has_explicit_widow_control {
@@ -1577,15 +1592,15 @@ fn parse_paragraph_properties(
                                 _ => {}
                             }
                         }
-                        // *Chars attributes override twip values regardless of XML attr order
+                        // *Chars attributes: store raw values; resolved at layout time
                         if let Some(lc) = left_chars {
-                            style.indent_left = Some(lc / 100.0 * 10.5);
+                            style.indent_left_chars = Some(lc);
                         }
                         if let Some(rc) = right_chars {
-                            style.indent_right = Some(rc / 100.0 * 10.5);
+                            style.indent_right_chars = Some(rc);
                         }
                         if let Some(fc) = first_line_chars {
-                            style.indent_first_line = Some(fc / 100.0 * 10.5);
+                            style.indent_first_line_chars = Some(fc);
                         }
                     }
                     "shd" => {

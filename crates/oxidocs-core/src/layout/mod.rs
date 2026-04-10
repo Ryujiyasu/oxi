@@ -1608,9 +1608,19 @@ impl LayoutEngine {
 
         *cursor_y += effective_spacing;
 
-        let indent_left = para.style.indent_left.unwrap_or(0.0);
-        let indent_right = para.style.indent_right.unwrap_or(0.0);
-        let first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
+        // COM-confirmed: *Chars indent multiplier = 10.5pt always (default CJK half-width)
+        let indent_left = para.style.indent_left_chars
+            .map(|c| c / 100.0 * 10.5)
+            .or(para.style.indent_left)
+            .unwrap_or(0.0);
+        let indent_right = para.style.indent_right_chars
+            .map(|c| c / 100.0 * 10.5)
+            .or(para.style.indent_right)
+            .unwrap_or(0.0);
+        let first_line_indent = para.style.indent_first_line_chars
+            .map(|c| c / 100.0 * 10.5)
+            .or(para.style.indent_first_line)
+            .unwrap_or(0.0);
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
         // data_guideline: indent=12pt but x0=71 (margin), 38ch/line (=charsLine+1 kinsoku).
@@ -3404,9 +3414,19 @@ impl LayoutEngine {
                     let para_content_start_h = content_h;
                     {
                         // Paragraph indentation within cell (relative to cell content area)
-                        let p_indent_left = para.style.indent_left.unwrap_or(0.0);
-                        let p_indent_right = para.style.indent_right.unwrap_or(0.0);
-                        let p_first_line_indent = para.style.indent_first_line.unwrap_or(0.0);
+                        // COM-confirmed: *Chars multiplier = 10.5pt always
+                        let p_indent_left = para.style.indent_left_chars
+                            .map(|c| c / 100.0 * 10.5)
+                            .or(para.style.indent_left)
+                            .unwrap_or(0.0);
+                        let p_indent_right = para.style.indent_right_chars
+                            .map(|c| c / 100.0 * 10.5)
+                            .or(para.style.indent_right)
+                            .unwrap_or(0.0);
+                        let p_first_line_indent = para.style.indent_first_line_chars
+                            .map(|c| c / 100.0 * 10.5)
+                            .or(para.style.indent_first_line)
+                            .unwrap_or(0.0);
                         let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
                         // Hanging indent (firstLineIndent < 0): first line starts further LEFT,
                         // so it has MORE available width, not less.
@@ -4064,9 +4084,19 @@ impl LayoutEngine {
                 &para.style,
             );
             // Use break_into_lines for accurate line count (handles kinsoku, word break, etc.)
-            let indent_l = para.style.indent_left.unwrap_or(0.0);
-            let indent_r = para.style.indent_right.unwrap_or(0.0);
-            let first_indent = para.style.indent_first_line.unwrap_or(0.0);
+            // COM-confirmed: *Chars multiplier = 10.5pt always
+            let indent_l = para.style.indent_left_chars
+                .map(|c| c / 100.0 * 10.5)
+                .or(para.style.indent_left)
+                .unwrap_or(0.0);
+            let indent_r = para.style.indent_right_chars
+                .map(|c| c / 100.0 * 10.5)
+                .or(para.style.indent_right)
+                .unwrap_or(0.0);
+            let first_indent = para.style.indent_first_line_chars
+                .map(|c| c / 100.0 * 10.5)
+                .or(para.style.indent_first_line)
+                .unwrap_or(0.0);
             let effective_width = (available_width - indent_l - indent_r).max(1.0);
 
             let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
