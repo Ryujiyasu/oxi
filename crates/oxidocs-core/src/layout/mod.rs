@@ -659,13 +659,17 @@ impl LayoutEngine {
                         }
                     }
 
-                    // keepNext: advance column or page if pair doesn't fit
+                    // keepNext: advance column or page if pair doesn't fit.
+                    // Word behavior: keepNext is best-effort. If the heading itself fits
+                    // on the current page but heading+next doesn't, Word keeps the heading
+                    // and sends the next paragraph to the next page. Only advance page when
+                    // the heading itself doesn't fit.
                     if para.style.keep_next && !elements.is_empty() {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
                             let this_h = self.estimate_para_height(para, content_width, grid_pitch, None);
                             let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None);
                             let remaining = (start_y + effective_content_h) - cursor_y;
-                            if this_h + next_h > remaining && this_h + next_h <= effective_content_h {
+                            if this_h + next_h > remaining && this_h > remaining && this_h + next_h <= effective_content_h {
                                 if num_columns > 1 && current_column + 1 < num_columns {
                                     current_column += 1;
                                     start_x = col_x_positions[current_column];
