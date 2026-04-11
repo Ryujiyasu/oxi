@@ -3183,7 +3183,8 @@ impl LayoutEngine {
                 //   - Non-last rows: bottom edge = insideH width (0 if no insideH)
                 //   - Last row: bottom edge = outer bottom border (0 if none)
                 // Top/side borders do NOT add to row height.
-                let bw = table.style.border_width.unwrap_or(if table.style.border { 0.4 } else { 0.0 });
+                // OOXML default single border sz=4 = 0.5pt (4/8).
+                let bw = table.style.border_width.unwrap_or(if table.style.border { 0.5 } else { 0.0 });
                 let is_last = row_idx + 1 == num_rows;
                 let border_overhead = if is_last {
                     if table.style.border { bw } else { 0.0 }
