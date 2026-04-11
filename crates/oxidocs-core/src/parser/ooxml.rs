@@ -1277,7 +1277,18 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             style.list_suff = Some(resolved.suff);
             style.list_tab_stop = resolved.tab_stop;
             if let Some(ind) = resolved.hanging {
-                style.list_indent = Some(ind);
+                // Paragraph's explicit hanging indent overrides numbering level's hanging.
+                // COM-confirmed (LOD_Handbook P3: XML hanging=426tw=21.3pt overrides
+                // numbering hanging=720tw=36pt).
+                if let Some(first) = style.indent_first_line {
+                    if first < 0.0 {
+                        style.list_indent = Some(-first);
+                    } else {
+                        style.list_indent = Some(ind);
+                    }
+                } else {
+                    style.list_indent = Some(ind);
+                }
                 if style.indent_left.is_none() {
                     if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
                         style.indent_left = Some(left);
