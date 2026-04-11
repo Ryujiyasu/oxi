@@ -585,7 +585,13 @@ impl FontMetricsRegistry {
         if metrics.units_per_em == 256 && !is_pgothic_family {
             if is_fullwidth(c) { return font_size; }
             let advance_em = metrics.char_width_em(c);
-            if is_halfwidth_katakana(c) || advance_em <= 0.51 { return font_size / 2.0; }
+            if is_halfwidth_katakana(c) || advance_em <= 0.51 {
+                // COM-confirmed (2026-04-11): UPM=256 half-width uses 10-twip rounded half.
+                // MS Mincho 10.5pt: floor(210/2/10)*10/20 = 5.0pt (not 5.25pt).
+                // Only matters at non-integer fontSize (10.5pt). Integer sizes equal fontSize/2.
+                let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
+                return half_tw / 20.0;
+            }
         }
 
         // Twips-based width: round(advance * fontSize * 20 / UPM) / 20.0
@@ -655,7 +661,9 @@ impl FontMetricsRegistry {
             }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
-                return font_size / 2.0;
+                // COM-confirmed (2026-04-11): 10-twip rounded half (see char_width_pt_with_fallback)
+                let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
+                return half_tw / 20.0;
             }
         }
 
