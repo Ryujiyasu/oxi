@@ -435,10 +435,15 @@ impl LayoutEngine {
                                                         // chain bypassed default_run_style and fell back to 11pt.
                             let default_run_style = RunStyle::default();
                             let first_run_style = first_para.runs.first().map(|r| &r.style).unwrap_or(&default_run_style);
-                            let fs = self.resolve_font_size(first_run_style, &first_para.style);
+                            let fs = first_para.style.ppr_rpr.as_ref()
+                                .and_then(|r| r.font_size)
+                                .unwrap_or_else(|| self.resolve_font_size(first_run_style, &first_para.style));
                             let metrics = first_para.runs.first()
                                 .map(|r| self.metrics_for(&r.style, &first_para.style))
-                                .unwrap_or_else(|| self.doc_default_metrics());
+                                .unwrap_or_else(|| {
+                                    let rpr_ref = first_para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                    self.metrics_for_para_mark(&rpr_ref, &first_para.style)
+                                });
                             // LM0 base line height (Round 9 lookup if available).
                             let lm0_lh = self.registry
                                 .lm0_lineauto_base(&metrics.family, fs)
@@ -3017,9 +3022,13 @@ impl LayoutEngine {
                 let mut max_ascent: f32 = 0.0;
                 let mut max_descent: f32 = 0.0;
                 if line.fragments.is_empty() {
-                    let metrics = self.registry.default_metrics();
-                    max_ascent = metrics.word_ascent_pt(para_font_size);
-                    max_descent = metrics.word_descent_pt(para_font_size);
+                    let font_size = para_style.ppr_rpr.as_ref()
+                        .and_then(|r| r.font_size)
+                        .unwrap_or(para_font_size);
+                    let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                    let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+                    max_ascent = metrics.word_ascent_pt(font_size);
+                    max_descent = metrics.word_descent_pt(font_size);
                 } else {
                     for frag in &line.fragments {
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
@@ -3040,9 +3049,13 @@ impl LayoutEngine {
                 let mut max_ascent: f32 = 0.0;
                 let mut max_descent: f32 = 0.0;
                 if line.fragments.is_empty() {
-                    let metrics = self.doc_default_metrics();
-                    max_ascent = metrics.word_ascent_pt(para_font_size);
-                    max_descent = metrics.word_descent_pt(para_font_size);
+                    let font_size = para_style.ppr_rpr.as_ref()
+                        .and_then(|r| r.font_size)
+                        .unwrap_or(para_font_size);
+                    let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                    let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+                    max_ascent = metrics.word_ascent_pt(font_size);
+                    max_descent = metrics.word_descent_pt(font_size);
                 } else {
                     for frag in &line.fragments {
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
