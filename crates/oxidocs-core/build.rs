@@ -5,5 +5,6 @@ fn main() {
     if metrics_path.exists() {
         println!("cargo:rustc-cfg=has_local_font_metrics");
     }
-    println!("cargo:rerun-if-changed=src/font/data/font_metrics_compact.json");
+    // Rebuild when ANY font data file changes (all are embedded via include_str!)
+    println!("cargo:rerun-if-changed=src/font/data/");
 }
