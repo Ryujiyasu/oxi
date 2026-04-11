@@ -4670,10 +4670,12 @@ fn parse_section_properties(
                         }
                     }
                     "pgMar" => {
-                        // Margins stored as exact twip values (twips / 20.0 → points).
-                        // COM-confirmed (0e7a): LeftMargin=53.85pt = 1077tw/20 (no rounding).
-                        // Previous round_10tw caused 0.15pt/margin error → line break mismatch.
+                        // Top/bottom margins: round to 10tw (0.5pt).
+                        // COM-confirmed (0e7a P208 y=56.50 = round_10tw(1134)=1130tw).
+                        // Left/right margins: exact twips (no rounding).
+                        // COM-confirmed (0e7a LeftMargin=53.85pt = 1077tw/20).
                         let to_pt = |tw: f32| -> f32 { tw / 20.0 };
+                        let to_pt_round10 = |tw: f32| -> f32 { (tw / 10.0).round() * 10.0 / 20.0 };
                         let mut gutter = 0.0f32;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -4681,12 +4683,12 @@ fn parse_section_properties(
                             match key.as_str() {
                                 "top" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.top = to_pt(v);
+                                        margin.top = to_pt_round10(v);
                                     }
                                 }
                                 "bottom" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.bottom = to_pt(v);
+                                        margin.bottom = to_pt_round10(v);
                                     }
                                 }
                                 "left" => {
