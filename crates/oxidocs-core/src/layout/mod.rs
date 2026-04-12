@@ -747,9 +747,9 @@ impl LayoutEngine {
                     // for the footnote area below. Multi-page paragraphs with
                     // footnoteRefs get the same reservation on each spanned page
                     // (slight under-use on continuation pages, acceptable).
-                    let lm2_param = if page.grid_char_pitch.is_some() {
-                        Some(&mut lm2_cells)
-                    } else { None };
+                    // Always pass lm2_cells: LM2 uses it for grid tracking,
+                    // LM0 single-spacing uses it for cross-paragraph cumulative round.
+                    let lm2_param = Some(&mut lm2_cells);
                     let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
@@ -1836,7 +1836,15 @@ impl LayoutEngine {
             };
             base * para.style.line_spacing.unwrap_or(1.0) * 20.0
         } else { 0.0 };
-        let mut cumul_line_idx: usize = lm2_grid_cells.as_deref().copied().unwrap_or(0);
+        // LM2 (charGrid) and LM0 single spacing: carry cumul_line_idx across paragraphs.
+        // COM-confirmed (2026-04-12, 0e7a p2): Word maintains cumulative line index
+        // across paragraph boundaries for LM0 single spacing, producing continuous
+        // 11.5/11.5/12.0 round pattern instead of resetting at each paragraph.
+        // Multiple spacing (1.15x etc): reset per paragraph (cumul uses raw base).
+        let carry_cumul = is_single_lm0 || grid_pitch.is_some();
+        let mut cumul_line_idx: usize = if carry_cumul {
+            lm2_grid_cells.as_deref().copied().unwrap_or(0)
+        } else { 0 };
 
         for (line_idx, line) in lines.iter().enumerate() {
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
