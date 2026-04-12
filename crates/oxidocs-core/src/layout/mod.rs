@@ -2177,7 +2177,12 @@ impl LayoutEngine {
             } else {
                 *cursor_y += line_height;
             }
-            cumul_line_idx += 1;
+            // Only advance cumul index when cumulative round is active.
+            // COM-confirmed (683f): paragraphs with non-uniform line heights
+            // (use_cumulative=false) do NOT advance the cross-paragraph index.
+            if use_cumulative {
+                cumul_line_idx += 1;
+            }
             } // end else (non-LM2 single)
 
             // Handle explicit page/column breaks after this line
