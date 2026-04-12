@@ -627,7 +627,8 @@ impl LayoutEngine {
                         current_column = 0;
                         start_x = col_x_positions[0];
                         content_width = col_widths[0];
-                        current_page_idx += 1;
+                        lm2_cells = 0; current_page_idx += 1;
+                        lm2_cells = 0; // Reset cumul line index for new page
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
                         commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
@@ -662,7 +663,7 @@ impl LayoutEngine {
                                 current_column = 0;
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
-                                current_page_idx += 1;
+                                lm2_cells = 0; current_page_idx += 1;
                                 // Round 29: page push moves this paragraph (and
                                 // its footnote refs) to the new page.
                                 footnote_reserve_current = 0.0;
@@ -700,7 +701,7 @@ impl LayoutEngine {
                                     current_column = 0;
                                     start_x = col_x_positions[0];
                                     content_width = col_widths[0];
-                                    current_page_idx += 1;
+                                    lm2_cells = 0; current_page_idx += 1;
                                     footnote_reserve_current = 0.0;
                                     footnote_ids_current_page.clear();
                                     commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
@@ -731,7 +732,7 @@ impl LayoutEngine {
                                 current_column = 0;
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
-                                current_page_idx += 1;
+                                lm2_cells = 0; current_page_idx += 1;
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
                                 commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
@@ -905,7 +906,7 @@ impl LayoutEngine {
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
-                            current_page_idx += 1;
+                            lm2_cells = 0; current_page_idx += 1;
                         }
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
