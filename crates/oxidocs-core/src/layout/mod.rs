@@ -1647,8 +1647,12 @@ impl LayoutEngine {
         // even if the page has linesAndChars docGrid. Otherwise the chars get
         // padded to the body's grid pitch and the line wraps ~5 chars early.
         let effective_char_pitch = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_pitch };
-        let available_width = if effective_char_pitch.is_some() {
-            content_width  // charGrid: ignore indents for wrapping
+        // COM-confirmed (2026-04-13, db9c/c7b9/d77a/ed025cb): grid=lines without
+        // charGrid ignores paragraph indents for line-break purposes.
+        let grid_ignores_indent = effective_char_pitch.is_some()
+            || (page.grid_line_pitch.is_some() && page.grid_char_pitch.is_none());
+        let available_width = if grid_ignores_indent {
+            content_width
         } else {
             content_width - indent_left - indent_right
         };
