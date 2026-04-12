@@ -2165,7 +2165,14 @@ impl LayoutEngine {
                 && (grid_pitch.is_none() || !is_last);
             if use_cumulative {
                 let j = cumul_line_idx;
-                let (cn, cc) = if grid_pitch.is_none() {
+                let (cn, cc) = if grid_pitch.is_none() && is_single_lm0 {
+                    // COM-confirmed (2026-04-12, 0e7a p2): LM0 single spacing
+                    // uses CEIL for cumulative line position.
+                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    (cn, cc)
+                } else if grid_pitch.is_none() {
+                    // LM0 multiple spacing: ROUND
                     let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
