@@ -661,9 +661,21 @@ impl FontMetricsRegistry {
             }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
-                // COM-confirmed (2026-04-11): 10-twip rounded half (see char_width_pt_with_fallback)
                 let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
                 return half_tw / 20.0;
+            }
+        }
+
+        // COM-measured twips override: highest precision for line break accuracy.
+        {
+            let size_key = format_size_key(font_size);
+            if let Some(size_map) = self.com_twips_widths
+                .get(&metrics.family)
+                .and_then(|fm| fm.get(&size_key))
+            {
+                if let Some(&tw) = size_map.get(&(c as u32)) {
+                    return tw / 20.0;
+                }
             }
         }
 
