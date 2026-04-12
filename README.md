@@ -212,9 +212,9 @@ All specifications are derived from COM API black-box measurements — no DLL di
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word"
-  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05", "04-06", "04-09", "04-10", "04-10b"]
+  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05", "04-06", "04-09", "04-10", "04-10b", "04-12"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286, 0.8430, 0.8292, 0.8518, 0.8520]
+  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286, 0.8430, 0.8292, 0.8518, 0.8520, 0.8528]
 ```
 
 | Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
