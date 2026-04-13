@@ -4721,7 +4721,11 @@ fn parse_section_properties(
                                 }
                                 "bottom" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.bottom = to_pt_round10(v);
+                                        // Bottom margin: exact twips (no 10tw rounding).
+                                        // Word rounds top margin to 10tw for content start Y,
+                                        // but uses exact bottom margin for page break limit.
+                                        // COM-confirmed (0e7a): bottom=1134tw=56.7pt, limit=785.2pt
+                                        margin.bottom = to_pt(v);
                                     }
                                 }
                                 "left" => {
