@@ -3095,9 +3095,13 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut stroke_color_val: Option<String> = None;
     let mut stroke_width_val: Option<f32> = None;
     let mut no_stroke = false;
+    let mut no_fill = false;
     let mut rel_id: Option<String> = None;
     let mut text_blocks: Vec<Block> = Vec::new();
     let mut v_text_anchor: Option<String> = None;
+    let mut margin_left: f32 = 0.0;
+    let mut margin_top: f32 = 0.0;
+    let mut is_absolute = false;
     let mut depth = 0;
 
     loop {
@@ -3130,8 +3134,18 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                     }
                     // VML shape types
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
+                        // Check VML type attribute for preset shape identification
+                        let vml_type_attr = e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "type")
+                            .map(|a| String::from_utf8_lossy(&a.value).to_string());
                         shape_type = Some(match local.as_str() {
-                            "shape" => "rect", // generic shape defaults to rect
+                            "shape" => {
+                                // Map VML shapetype IDs to OOXML preset names
+                                match vml_type_attr.as_deref() {
+                                    Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
+                                    _ => "rect",
+                                }
+                            }
                             "roundrect" => "roundRect",
                             other => other,
                         }.to_string());
@@ -3141,7 +3155,6 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "style" => {
-                                    // Parse CSS-like style: "width:200pt;height:100pt"
                                     for part in val.split(';') {
                                         let part = part.trim();
                                         if let Some(w) = part.strip_prefix("width:") {
@@ -3150,9 +3163,16 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                             height = parse_css_length(h.trim());
                                         } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
                                             v_text_anchor = Some(anchor.trim().to_string());
+                                        } else if let Some(ml) = part.strip_prefix("margin-left:") {
+                                            margin_left = parse_css_length(ml.trim());
+                                        } else if let Some(mt) = part.strip_prefix("margin-top:") {
+                                            margin_top = parse_css_length(mt.trim());
+                                        } else if part.starts_with("position:absolute") {
+                                            is_absolute = true;
                                         }
                                     }
                                 }
+                                "filled" => { if val == "f" || val == "false" { no_fill = true; } }
                                 "fillcolor" => fill_color = Some(val.trim_start_matches('#').to_string()),
                                 "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
@@ -3230,14 +3250,27 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         None
     };
 
+    // VML absolute-positioned shapes get a FloatingPosition
+    let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
+        Some(FloatingPosition {
+            x: margin_left,
+            y: margin_top,
+            h_relative: Some("text".to_string()),
+            v_relative: Some("text".to_string()),
+            h_align: None,
+            v_align: None,
+        })
+    } else {
+        None
+    };
     let shape = shape_type.as_ref().map(|st| Shape {
         shape_type: st.clone(),
         width,
         height,
-        position: None,
-        fill: fill_color.clone(),
+        position: vml_position,
+        fill: if no_fill { None } else { fill_color.clone() },
         stroke_color: if no_stroke { None } else { stroke_color_val },
-        stroke_width: if no_stroke { None } else { stroke_width_val },
+        stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
         text_blocks,
         rotation: None,
         gradient_stops: Vec::new(),
