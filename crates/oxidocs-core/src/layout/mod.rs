@@ -3164,10 +3164,23 @@ impl LayoutEngine {
                 }
             }
         } else {
+            // COM-confirmed (2026-04-13, gen2_052): Word positions the table border
+            // at margin - padding - border/2. The cell text then starts at
+            // border_x + padding = margin - border/2, matching Word's COM output.
+            // COM-confirmed (2026-04-13, gen2_052): Word positions the left-aligned
+            // table border at margin - padding - border/2. Only apply when no
+            // explicit indent is set (indent=0 means default positioning).
+            let pad_l_default = table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(4.95);
+            let border_w = table.style.border_width.unwrap_or(0.5);
+            let border_offset = if table.style.indent.unwrap_or(0.0).abs() < 0.01 {
+                pad_l_default + border_w / 2.0
+            } else {
+                0.0
+            };
             match table.style.alignment.as_deref() {
                 Some("center") => start_x + (content_width - table_width) / 2.0,
                 Some("right") => start_x + content_width - table_width,
-                _ => start_x + table.style.indent.unwrap_or(0.0),
+                _ => start_x + table.style.indent.unwrap_or(0.0) - border_offset,
             }
         };
 
@@ -3274,7 +3287,11 @@ impl LayoutEngine {
                     }
                 }
                 cell_content_h += pad_b;
-                cell_content_h += border_overhead;
+                // COM-confirmed (2026-04-13, gen2_052): Word does NOT include
+                // inside-H border width in the row height calculation. The border
+                // is drawn at the boundary between rows (overlapping). Including
+                // border_overhead caused 0.5pt/row cumulative drift (6 rows = 3pt).
+                // cell_content_h += border_overhead;  // removed
 
                 row_height = row_height.max(cell_content_h);
                 grid_idx += span;
@@ -4454,34 +4471,24 @@ mod tests {
     #[test]
     #[ignore]
     fn debug_fded_positions() {
-        let data = std::fs::read("../../tools/golden-test/documents/docx/fded6867fcbc_index-15.docx")
+        let data = std::fs::read("../../tools/golden-test/documents/docx/gen2_052_Privacy_Policy.docx")
             .expect("read docx");
         let doc = crate::parse_docx(&data).expect("parse");
 
-        // Check first paragraph properties
-        if let Some(page) = doc.pages.first() {
-            for (bi, block) in page.blocks.iter().enumerate().take(5) {
-                if let crate::ir::Block::Paragraph(p) = block {
-                    let ls = p.style.line_spacing;
-                    let lr = p.style.line_spacing_rule.as_deref().unwrap_or("?");
-                    let font = p.runs.first().map(|r| r.style.font_family.as_deref().unwrap_or("?")).unwrap_or("?");
-                    let fsz = p.runs.first().map(|r| r.style.font_size.unwrap_or(0.0)).unwrap_or(0.0);
-                    let snap = p.style.snap_to_grid;
-                    let text: String = p.runs.iter().flat_map(|r| r.text.chars()).take(30).collect();
-                    println!("B{}: ls={:?} lr={} snap={} font={}@{:.1} \"{}\"", bi, ls, lr, snap, font, fsz, text);
-                }
-            }
-        }
-
         let engine = LayoutEngine::for_document(&doc);
         let result = engine.layout(&doc);
-        println!("\nPages: {}", result.pages.len());
+        println!("Pages: {}", result.pages.len());
 
+        // Show elements in table area, grouped by Y
+        let mut prev_y: f32 = -100.0;
         for el in &result.pages[0].elements {
             match &el.content {
-                LayoutContent::Text { ref text, font_size, .. } => {
-                    let snippet: String = text.chars().take(40).collect();
-                    println!("  y={:.1} x={:.1} h={:.1} fs={:.1} \"{}\"", el.y, el.x, el.height, font_size, snippet);
+                LayoutContent::Text { ref text, .. } => {
+                    if (el.y - prev_y).abs() > 0.5 {
+                        let s: String = text.chars().take(20).collect();
+                        println!("  y={:.1} x={:.1} w={:.1} h={:.1} \"{}\"", el.y, el.x, el.width, el.height, s);
+                        prev_y = el.y;
+                    }
                 }
                 _ => {}
             }
