@@ -2196,16 +2196,16 @@ impl LayoutEngine {
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
                     (cn, cc)
                 } else if grid_pitch.is_none() {
-                    // COM-confirmed (2026-04-13, 0e7a P1): LM0 multiple spacing
-                    // also uses CEIL (not ROUND). MS Mincho 10.5pt × 1.15:
-                    // raw_tw=310.5, ceil(31.05)*10=320 → 16.0pt (Word matches).
-                    // ROUND gave 310 → 15.5pt (0.5pt short).
-                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
-                    let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    // COM-confirmed (2026-04-14, minimal repro LM=0): LM0 multiple
+                    // spacing uses ROUND for cumulative positions. Verified across
+                    // 6 font/size combinations (MS Mincho 11/10.5, MS Gothic 14/13/11, Calibri 11).
+                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
+                    let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
                 } else {
-                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
-                    let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    // LM≥1 with Multiple spacing: also ROUND
+                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
+                    let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
                 };
                 *cursor_y += (cn - cc) as f32 / 20.0;
