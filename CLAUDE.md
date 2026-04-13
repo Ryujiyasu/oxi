@@ -87,7 +87,7 @@ At the start of each session, check the current state and continue autonomous sp
 - **line_height**: Table cell reset implemented. net +0.66
 - **grid_snap**: Implemented
 - **justify**: docDefaults jc=both inheritance fixed. Justify enabled for all documents
-- **SSIM: 0.7496 → 0.8567** Baseline: 177 documents, 352 pages (GDI)
+- **SSIM: 0.7496 → 0.8583** Baseline: 177 documents, 352 pages (GDI)
 - **char_width (2026-03-30)**: Twips-based width calculation (round(advance*fontSize*20/UPM)/20). Matches Word line breaks
 - **GDI width overrides**: 9 fonts with complete GDI width tables (1055KB)
 - **GDI renderer**: Pipeline switched to oxi-gdi-renderer (TextOutW) for pixel-accurate comparison
@@ -98,7 +98,9 @@ At the start of each session, check the current state and continue autonomous sp
 - **LM2 offset fix (2026-04-13)**: Removed centering offset from cursor_y start (cursor starts at topMargin, centering via text_y_offset)
 - **VML bracket (2026-04-13)**: VML shape type 185 (double bracket 〔〕) parsed and rendered
 - **table x/border (2026-04-13)**: Table border x = margin-padding-border/2. Row height excludes inside-H border overhead
-- **Remaining improvements**: charGrid文字詰め, table cell floating shapes, textbox charGrid, 1ec overflow
+- **bottom margin fix (2026-04-13)**: Exact bottom margin (no 10tw round). Top margin rounds for content Y, bottom stays exact for page break limit
+- **Multiple spacing CEIL (2026-04-13)**: LM0 multiple spacing cumulative round uses CEIL not ROUND (MS Mincho 10.5pt×1.15: 310.5tw→320→16.0pt)
+- **Remaining improvements**: 空段落raw_tw(doc_default vs para_mark), charGrid文字詰め, table cell floating shapes, textbox charGrid, 1ec overflow
 
 ### Measurement Template
 Correct method for measuring line height is "Y coordinate difference between 2 paragraphs":
