@@ -451,10 +451,15 @@ impl LayoutEngine {
                             // Strict-greater snap to next pitch multiple.
                             let cells = (lm0_lh / pitch).floor() + 1.0;
                             let p0_h = cells * pitch;
-                            let p0_offset = (p0_h - lm0_lh) / 2.0;
-                            if p0_offset > 0.0 {
-                                start_y += p0_offset;
-                            }
+                            // COM-confirmed (2026-04-13, db9c): Word does NOT add
+                            // the centering offset to cursor_y. The cursor starts
+                            // at topMargin; centering is achieved via text_y_offset
+                            // (= (pitch - natural) / 2) in text_y_offset_for_line().
+                            // Adding p0_offset to start_y caused 2+pt cursor drift
+                            // that accumulated over the entire page (38 lines × 2pt
+                            // drift in db9c = different page count).
+                            let _p0_offset = (p0_h - lm0_lh) / 2.0;
+                            // Previously: start_y += p0_offset;
                         }
                     }
                 }
@@ -1862,6 +1867,8 @@ impl LayoutEngine {
             // entire paragraph to the next page.
             let widow_orphan_break = if !in_textbox && para.style.widow_control && lines.len() >= 2 {
                 if line_idx == 0 && !needs_page_break {
+                    // Orphan: check if the next line would overflow — that would leave
+                    // only 1 line on this page. Push entire paragraph to next page.
                     // Orphan: check if the next line would overflow — that would leave
                     // only 1 line on this page. Push entire paragraph to next page.
                     let next_h = line_heights.get(1).copied().unwrap_or(0.0);
@@ -4440,6 +4447,86 @@ mod tests {
                     }
                     _ => {}
                 }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn debug_fded_positions() {
+        let data = std::fs::read("../../tools/golden-test/documents/docx/fded6867fcbc_index-15.docx")
+            .expect("read docx");
+        let doc = crate::parse_docx(&data).expect("parse");
+
+        // Check first paragraph properties
+        if let Some(page) = doc.pages.first() {
+            for (bi, block) in page.blocks.iter().enumerate().take(5) {
+                if let crate::ir::Block::Paragraph(p) = block {
+                    let ls = p.style.line_spacing;
+                    let lr = p.style.line_spacing_rule.as_deref().unwrap_or("?");
+                    let font = p.runs.first().map(|r| r.style.font_family.as_deref().unwrap_or("?")).unwrap_or("?");
+                    let fsz = p.runs.first().map(|r| r.style.font_size.unwrap_or(0.0)).unwrap_or(0.0);
+                    let snap = p.style.snap_to_grid;
+                    let text: String = p.runs.iter().flat_map(|r| r.text.chars()).take(30).collect();
+                    println!("B{}: ls={:?} lr={} snap={} font={}@{:.1} \"{}\"", bi, ls, lr, snap, font, fsz, text);
+                }
+            }
+        }
+
+        let engine = LayoutEngine::for_document(&doc);
+        let result = engine.layout(&doc);
+        println!("\nPages: {}", result.pages.len());
+
+        for el in &result.pages[0].elements {
+            match &el.content {
+                LayoutContent::Text { ref text, font_size, .. } => {
+                    let snippet: String = text.chars().take(40).collect();
+                    println!("  y={:.1} x={:.1} h={:.1} fs={:.1} \"{}\"", el.y, el.x, el.height, font_size, snippet);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn debug_db9c_line_breaks() {
+        let data = std::fs::read("../../tools/golden-test/documents/docx/db9ca18368cd_20241122_resource_open_data_01.docx")
+            .expect("read docx");
+        let doc = crate::parse_docx(&data).expect("parse");
+
+        let engine = LayoutEngine::for_document(&doc);
+        let result = engine.layout(&doc);
+        println!("\nPages: {}", result.pages.len());
+
+        for (pi, lpage) in result.pages.iter().enumerate() {
+            println!("--- Page {} ---", pi + 1);
+            let mut prev_y: f32 = -100.0;
+            let mut line_text = String::new();
+            let mut line_x = 0.0_f32;
+            for el in &lpage.elements {
+                match &el.content {
+                    LayoutContent::Text { ref text, .. } => {
+                        if (el.y - prev_y).abs() > 0.5 {
+                            if !line_text.is_empty() {
+                                let chars: usize = line_text.chars().count();
+                                let snippet: String = line_text.chars().take(120).collect();
+                                println!("  y={:.1} x={:.1} [{}c] \"{}\"", prev_y, line_x, chars, snippet);
+                            }
+                            line_text = text.clone();
+                            line_x = el.x;
+                            prev_y = el.y;
+                        } else {
+                            line_text.push_str(text);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !line_text.is_empty() {
+                let chars: usize = line_text.chars().count();
+                let snippet: String = line_text.chars().take(80).collect();
+                println!("  y={:.1} x={:.1} [{}c] \"{}\"", prev_y, line_x, chars, snippet);
             }
         }
     }
