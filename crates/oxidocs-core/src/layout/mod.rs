@@ -1772,8 +1772,14 @@ impl LayoutEngine {
                 let mut ma: f32 = 0.0; let mut md: f32 = 0.0;
                 let mut has_latin = false;
                 if first_line.fragments.is_empty() {
-                    let m = self.doc_default_metrics();
-                    ma = m.word_ascent_pt(para_font_size); md = m.word_descent_pt(para_font_size);
+                    // Match line_height_for_line_inner: empty paragraphs use
+                    // pPr/rPr font + para_mark metrics (not doc_default).
+                    let font_size = para.style.ppr_rpr.as_ref()
+                        .and_then(|r| r.font_size)
+                        .unwrap_or(para_font_size);
+                    let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                    let m = self.metrics_for_para_mark(&rpr_ref, &para.style);
+                    ma = m.word_ascent_pt(font_size); md = m.word_descent_pt(font_size);
                 } else {
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
@@ -1810,6 +1816,17 @@ impl LayoutEngine {
                 if grid_pitch.is_none() {
                     let mut no_grid_max: f32 = 0.0;
                     let mut no_grid_raw_max: f32 = 0.0;
+                    // Empty paragraphs: compute no_grid from para mark font
+                    // (matching line_height_for_line_inner's empty-para logic).
+                    if first_line.fragments.is_empty() {
+                        let font_size = para.style.ppr_rpr.as_ref()
+                            .and_then(|r| r.font_size)
+                            .unwrap_or(para_font_size);
+                        let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let m = self.metrics_for_para_mark(&rpr_ref, &para.style);
+                        no_grid_max = m.word_line_height_no_grid(font_size);
+                        no_grid_raw_max = (m.win_ascent + m.win_descent) * font_size;
+                    }
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
