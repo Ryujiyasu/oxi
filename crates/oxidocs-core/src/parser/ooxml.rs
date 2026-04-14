@@ -1843,9 +1843,8 @@ fn parse_paragraph_properties(
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                if let Ok(level) = val.parse::<u8>() {
-                                    style.heading_level = Some(level + 1);
-                                }
+                                // outlineLvl is for TOC, not layout font size
+                                style.outline_level = val.parse::<u8>().ok();
                             }
                         }
                     }

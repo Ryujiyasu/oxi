@@ -677,6 +677,9 @@ impl Default for Alignment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyle {
     pub heading_level: Option<u8>,
+    /// Outline level from w:outlineLvl (0-8, for TOC generation, NOT for layout)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_level: Option<u8>,
     /// Line spacing value. Interpretation depends on line_spacing_rule:
     /// - "auto": multiplier (w:line / 240, e.g. 1.15 for w:line="276")
     /// - "exact": fixed height in points (w:line / 20)
@@ -828,6 +831,7 @@ impl Default for ParagraphStyle {
     fn default() -> Self {
         Self {
             heading_level: None,
+            outline_level: None,
             line_spacing: None,
             line_spacing_rule: None,
             space_before: None,
