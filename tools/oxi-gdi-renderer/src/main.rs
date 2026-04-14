@@ -354,12 +354,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         }
                     }
                     oxidocs_core::layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width } => {
-                        // Round 30: render DrawingML preset shapes via GDI lines.
-                        // For now, only "bracketPair" (= 〔 〕 paired bracket frame
-                        // around a content area) is implemented. Other shapes
-                        // remain unsupported.
                         if shape_type == "bracketPair" {
-                            // Stroke pen
                             let (sr, sg, sb) = if let Some(ref sc) = stroke_color {
                                 let c = sc.strip_prefix('#').unwrap_or(sc);
                                 if c.len() == 6 {
@@ -373,23 +368,44 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             let sw = (*stroke_width as f64 * scale).round().max(1.0) as i32;
                             let pen = CreatePen(PS_SOLID, sw, COLORREF((sr as u32) | ((sg as u32) << 8) | ((sb as u32) << 16)));
                             let old_pen = SelectObject(mem_dc, pen);
-                            // Bracket arm length: ~10% of width per side (roughly
-                            // matches OOXML default adj=8387/21600 ≈ 38.8%
-                            // converted via the bracketPair geometry formula).
-                            let arm = (((ew as f64) * 0.10).round() as i32).max(2);
-                            // Left bracket: 〔 — three line segments forming a [
-                            // top arm: from (x+arm, y) to (x, y)
-                            // left side: from (x, y) to (x, y+eh)
-                            // bottom arm: from (x, y+eh) to (x+arm, y+eh)
-                            MoveToEx(mem_dc, x + arm, y, None);
-                            LineTo(mem_dc, x, y);
-                            LineTo(mem_dc, x, y + eh);
-                            LineTo(mem_dc, x + arm, y + eh);
-                            // Right bracket: 〕 — three line segments forming a ]
-                            MoveToEx(mem_dc, x + ew - arm, y, None);
-                            LineTo(mem_dc, x + ew, y);
-                            LineTo(mem_dc, x + ew, y + eh);
-                            LineTo(mem_dc, x + ew - arm, y + eh);
+                            let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                            // OOXML bracketPair: corner radius = 8.387% of min(w,h)
+                            let r = ((ew.min(eh) as f64) * 0.08387).round().max(2.0) as i32;
+                            let k = 0.5522847;
+                            let kr = (r as f64 * k).round() as i32;
+                            // Left bracket
+                            {
+                                let pts = [
+                                    POINT { x: x + r, y },
+                                    POINT { x: x + r - kr, y },
+                                    POINT { x: x, y: y + r - kr },
+                                    POINT { x: x, y: y + r },
+                                    POINT { x: x, y: y + eh - r },
+                                    POINT { x: x, y: y + eh - r },
+                                    POINT { x: x, y: y + eh - r },
+                                    POINT { x: x, y: y + eh - r + kr },
+                                    POINT { x: x + r - kr, y: y + eh },
+                                    POINT { x: x + r, y: y + eh },
+                                ];
+                                PolyBezier(mem_dc, &pts);
+                            }
+                            // Right bracket
+                            {
+                                let pts = [
+                                    POINT { x: x + ew - r, y },
+                                    POINT { x: x + ew - r + kr, y },
+                                    POINT { x: x + ew, y: y + r - kr },
+                                    POINT { x: x + ew, y: y + r },
+                                    POINT { x: x + ew, y: y + eh - r },
+                                    POINT { x: x + ew, y: y + eh - r },
+                                    POINT { x: x + ew, y: y + eh - r },
+                                    POINT { x: x + ew, y: y + eh - r + kr },
+                                    POINT { x: x + ew - r + kr, y: y + eh },
+                                    POINT { x: x + ew - r, y: y + eh },
+                                ];
+                                PolyBezier(mem_dc, &pts);
+                            }
+                            SelectObject(mem_dc, old_brush);
                             SelectObject(mem_dc, old_pen);
                             let _ = DeleteObject(pen);
                         }
