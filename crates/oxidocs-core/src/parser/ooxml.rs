@@ -1493,6 +1493,30 @@ fn parse_paragraph_properties(
                             }
                         }
                     }
+                    "framePr" => {
+                        let mut fp = crate::ir::FrameProperties::default();
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "dropCap" => fp.drop_cap = Some(val.to_string()),
+                                "lines" => fp.lines = val.parse().unwrap_or(1),
+                                "w" => fp.width = val.parse::<f32>().ok().map(|v| v / 20.0),
+                                "h" => fp.height = val.parse::<f32>().ok().map(|v| v / 20.0),
+                                "hAnchor" => fp.h_anchor = Some(val.to_string()),
+                                "vAnchor" => fp.v_anchor = Some(val.to_string()),
+                                "x" => fp.x = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "y" => fp.y = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "hSpace" => fp.h_space = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "vSpace" => fp.v_space = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "wrap" => fp.wrap = Some(val.to_string()),
+                                "xAlign" => fp.x_align = Some(val.to_string()),
+                                "yAlign" => fp.y_align = Some(val.to_string()),
+                                _ => {}
+                            }
+                        }
+                        style.frame_pr = Some(fp);
+                    }
                     "snapToGrid" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
