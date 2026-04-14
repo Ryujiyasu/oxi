@@ -1553,7 +1553,6 @@ fn parse_tbl_style_pr_contents(reader: &mut Reader<&[u8]>) -> Result<TableCondit
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 if in_tc_borders {
-                    // Parse border elements inside tcBorders
                     match local.as_str() {
                         "top" | "bottom" | "left" | "right" | "start" | "end" => {
                             let bdef = parse_border_def_from_attrs(&e);
@@ -1580,8 +1579,8 @@ fn parse_tbl_style_pr_contents(reader: &mut Reader<&[u8]>) -> Result<TableCondit
                             }
                         }
                     }
-                } else if depth == 0 {
-                    // Top-level empty elements inside tblStylePr
+                } else {
+                    // Elements inside tblStylePr (at any depth, including rPr)
                     match local.as_str() {
                         "b" | "bCs" => {
                             // <w:b/> means bold=true, <w:b w:val="0"/> means bold=false
