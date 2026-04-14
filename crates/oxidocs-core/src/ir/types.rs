@@ -325,6 +325,9 @@ pub struct TableRow {
     /// Number of grid columns to skip at start of row (w:gridBefore)
     #[serde(default)]
     pub grid_before: u32,
+    /// Row-level cell margin override from w:tblPrEx/w:tblCellMar
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_margins_override: Option<CellMargins>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

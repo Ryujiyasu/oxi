@@ -4367,6 +4367,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut header = false;
     let mut cant_split = false;
     let mut grid_before: u32 = 0;
+    let mut cell_margins_override: Option<CellMargins> = None;
     let mut depth = 0;
 
     loop {
@@ -4377,6 +4378,54 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     "tc" if depth == 0 => {
                         let cell = parse_table_cell(reader, ctx, styles)?;
                         cells.push(cell);
+                    }
+                    "tblPrEx" if depth == 0 => {
+                        // Row-level table property exceptions — parse tblCellMar override
+                        let mut ex_depth = 0u32;
+                        loop {
+                            match reader.read_event()? {
+                                Event::Start(se) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "tblCellMar" && ex_depth == 0 {
+                                        let mut margins = CellMargins { top: None, bottom: None, left: None, right: None };
+                                        loop {
+                                            match reader.read_event() {
+                                                Ok(Event::Empty(me)) => {
+                                                    let ml = local_name(me.name().as_ref());
+                                                    let mut w_val: Option<f32> = None;
+                                                    for attr in me.attributes().flatten() {
+                                                        if local_name(attr.key.as_ref()) == "w" {
+                                                            w_val = String::from_utf8_lossy(&attr.value).parse::<f32>().ok().map(|v| v / 20.0);
+                                                        }
+                                                    }
+                                                    match ml.as_str() {
+                                                        "top" => margins.top = w_val,
+                                                        "bottom" => margins.bottom = w_val,
+                                                        "left" | "start" => margins.left = w_val,
+                                                        "right" | "end" => margins.right = w_val,
+                                                        _ => {}
+                                                    }
+                                                }
+                                                Ok(Event::End(ee)) => {
+                                                    if local_name(ee.name().as_ref()) == "tblCellMar" { break; }
+                                                }
+                                                Ok(Event::Eof) => break,
+                                                _ => {}
+                                            }
+                                        }
+                                        cell_margins_override = Some(margins);
+                                        continue;
+                                    }
+                                    ex_depth += 1;
+                                }
+                                Event::End(se) => {
+                                    if local_name(se.name().as_ref()) == "tblPrEx" && ex_depth == 0 { break; }
+                                    if ex_depth > 0 { ex_depth -= 1; }
+                                }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
                     }
                     _ => {
                         depth += 1;
@@ -4424,7 +4473,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    Ok(TableRow { cells, height, height_rule, header, cant_split, grid_before })
+    Ok(TableRow { cells, height, height_rule, header, cant_split, grid_before, cell_margins_override })
 }
 
 /// Parse a w:tc element (table cell)
