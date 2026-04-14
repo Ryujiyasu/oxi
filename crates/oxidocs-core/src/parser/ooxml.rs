@@ -53,7 +53,8 @@ impl OoxmlParser {
             Ok(xml) => parse_theme(&xml),
             Err(_) => ThemeColors::default(),
         };
-        let styles = self.parse_styles_with_theme(&theme)?;
+        let mut styles = self.parse_styles_with_theme(&theme)?;
+        self.parse_font_table(&mut styles);
         let numbering = self.parse_numbering()?;
         let ctx = self.build_context_with_theme(numbering, theme, &styles)?;
         let sections = self.parse_document_xml(&ctx, &styles)?;
@@ -386,6 +387,77 @@ impl OoxmlParser {
             Ok(xml) => parse_styles(&xml, theme),
             Err(ParseError::MissingPart(_)) => Ok(StyleSheet::default()),
             Err(e) => Err(e),
+        }
+    }
+
+    /// Parse word/fontTable.xml — extract font info (panose1, charset, family, pitch).
+    fn parse_font_table(&mut self, styles: &mut StyleSheet) {
+        let xml = match self.read_part("word/fontTable.xml") {
+            Ok(x) => x,
+            Err(_) => return,
+        };
+        let mut reader = Reader::from_str(&xml);
+        let mut current_font: Option<String> = None;
+        let mut current_info = crate::ir::FontInfo::default();
+
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    if local == "font" {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "name" {
+                                current_font = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                current_info = crate::ir::FontInfo::default();
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    match local.as_str() {
+                        "panose1" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    current_info.panose1 = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
+                        "charset" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    current_info.charset = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
+                        "family" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    current_info.family = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
+                        "pitch" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    current_info.pitch = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    if local_name(e.name().as_ref()) == "font" {
+                        if let Some(name) = current_font.take() {
+                            styles.font_table.insert(name, std::mem::take(&mut current_info));
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
         }
     }
 
