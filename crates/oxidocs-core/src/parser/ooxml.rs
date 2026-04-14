@@ -3931,7 +3931,88 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
         }
     }
 
+    // Apply tblStylePr conditional formatting to cells
+    if let Some(ref style_id) = style.style_id {
+        if let Some(cond_fmts) = styles.table_conditional_formats.get(style_id) {
+            let look = style.tbl_look.unwrap_or_default();
+            let num_rows = rows.len();
+            for (row_idx, row) in rows.iter_mut().enumerate() {
+                let num_cols = row.cells.len();
+                for (col_idx, cell) in row.cells.iter_mut().enumerate() {
+                    // Determine which conditional format applies (priority: corner > row/col > band)
+                    let cond_key = resolve_conditional_type(
+                        row_idx, col_idx, num_rows, num_cols, &look,
+                    );
+                    if let Some(key) = cond_key {
+                        if let Some(fmt) = cond_fmts.get(key) {
+                            // Apply shading if cell doesn't have explicit shading
+                            if cell.shading.is_none() {
+                                cell.shading = fmt.shading.clone();
+                            }
+                            // Apply borders if cell doesn't have explicit borders
+                            if cell.borders.is_none() {
+                                cell.borders = fmt.borders.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Table { rows, style, grid_columns })
+}
+
+/// Determine which tblStylePr condition type applies to a cell.
+/// Returns the highest-priority condition key (corners > first/last row/col > bands).
+fn resolve_conditional_type(
+    row_idx: usize, col_idx: usize,
+    num_rows: usize, num_cols: usize,
+    look: &crate::ir::TableLook,
+) -> Option<&'static str> {
+    let is_first_row = row_idx == 0 && look.first_row;
+    let is_last_row = row_idx == num_rows - 1 && look.last_row;
+    let is_first_col = col_idx == 0 && look.first_column;
+    let is_last_col = col_idx == num_cols - 1 && look.last_column;
+
+    // Corner cells (highest priority)
+    if is_first_row && is_last_col { return Some("neCell"); }
+    if is_first_row && is_first_col { return Some("nwCell"); }
+    if is_last_row && is_last_col { return Some("seCell"); }
+    if is_last_row && is_first_col { return Some("swCell"); }
+
+    // First/last row (higher than column)
+    if is_first_row { return Some("firstRow"); }
+    if is_last_row { return Some("lastRow"); }
+
+    // First/last column
+    if is_first_col { return Some("firstCol"); }
+    if is_last_col { return Some("lastCol"); }
+
+    // Banded rows/columns
+    if look.banded_rows {
+        let band_size = look.row_band_size.max(1) as usize;
+        // Adjust row index: skip header row for banding count
+        let banding_row = if look.first_row { row_idx.saturating_sub(1) } else { row_idx };
+        let band_index = banding_row / band_size;
+        if band_index % 2 == 0 {
+            return Some("band1Horz");
+        } else {
+            return Some("band2Horz");
+        }
+    }
+    if look.banded_columns {
+        let band_size = look.col_band_size.max(1) as usize;
+        let banding_col = if look.first_column { col_idx.saturating_sub(1) } else { col_idx };
+        let band_index = banding_col / band_size;
+        if band_index % 2 == 0 {
+            return Some("band1Vert");
+        } else {
+            return Some("band2Vert");
+        }
+    }
+
+    None
 }
 
 /// Parse w:tblGrid element — extract gridCol widths (twips → points)

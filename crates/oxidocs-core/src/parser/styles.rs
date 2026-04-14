@@ -3,7 +3,7 @@ use quick_xml::reader::Reader;
 
 use super::ParseError;
 use super::theme::ThemeColors;
-use crate::ir::{Alignment, ParagraphStyle, RunStyle, StyleDefinition, StyleSheet, TableStyle};
+use crate::ir::{Alignment, ParagraphStyle, RunStyle, StyleDefinition, StyleSheet, TableStyle, TableConditionalFormat, CellBorders, BorderDef};
 
 /// Resolve a theme font reference (e.g. "majorHAnsi", "minorEastAsia") to the actual font name.
 /// OOXML theme values: majorHAnsi/minorHAnsi → Latin font, majorEastAsia/minorEastAsia → EA font.
@@ -95,7 +95,10 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                                     },
                                 );
                             } else if typ == "table" {
-                                let tbl_style = parse_table_style_definition(&mut reader)?;
+                                let (tbl_style, cond_fmts) = parse_table_style_definition(&mut reader)?;
+                                if !cond_fmts.is_empty() {
+                                    styles.table_conditional_formats.insert(id.clone(), cond_fmts);
+                                }
                                 styles.table_styles.insert(id, tbl_style);
                             }
                         }
@@ -1299,9 +1302,11 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
 }
 
 /// Parse a table style definition (type="table") from styles.xml.
-/// Extracts tblBorders and tblCellMar into a TableStyle, plus basedOn for inheritance.
-fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<TableStyle, ParseError> {
+/// Extracts tblBorders, tblCellMar, and tblStylePr conditional formats.
+/// Returns (TableStyle, conditional_formats_map).
+fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyle, std::collections::HashMap<String, TableConditionalFormat>), ParseError> {
     let mut style = TableStyle::default();
+    let mut conditional_formats: std::collections::HashMap<String, TableConditionalFormat> = std::collections::HashMap::new();
     let mut depth = 0u32;
     let mut in_tbl_pr = false;
     let mut in_borders = false;
@@ -1373,7 +1378,6 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<TableStyle
                                         }
                                         "ind" => {
                                             // Table style indent: overridden by paragraph's own ind (element-level replacement)
-                                            // Currently not applied — paragraph's direct ind always takes priority
                                         }
                                         _ => {}
                                     }
@@ -1421,6 +1425,23 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<TableStyle
                             }
                         }
                         style.default_cell_margins = Some(margins);
+                        continue;
+                    }
+                    "tblStylePr" if depth == 0 => {
+                        // Parse conditional table style: w:tblStylePr w:type="firstRow" etc.
+                        let mut cond_type = String::new();
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                cond_type = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                        if !cond_type.is_empty() {
+                            let fmt = parse_tbl_style_pr_contents(reader)?;
+                            conditional_formats.insert(cond_type, fmt);
+                        } else {
+                            // Skip unknown tblStylePr
+                            depth += 1;
+                        }
                         continue;
                     }
                     _ => {}
@@ -1479,11 +1500,152 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<TableStyle
         }
     }
 
-    // Inherit from basedOn (e.g., "a7" Table Grid basedOn "a1" Normal Table)
-    // The basedOn is stored but inheritance is resolved after all styles are parsed
     style.style_id = based_on;
+    Ok((style, conditional_formats))
+}
 
-    Ok(style)
+/// Parse the contents of a w:tblStylePr element.
+/// Extracts tcPr (shading, borders), pPr (alignment), rPr (bold, color).
+fn parse_tbl_style_pr_contents(reader: &mut Reader<&[u8]>) -> Result<TableConditionalFormat, ParseError> {
+    let mut fmt = TableConditionalFormat::default();
+    let mut depth = 0u32;
+    let mut in_tc_pr = false;
+    let mut in_tc_borders = false;
+    let mut borders = CellBorders {
+        top: None, bottom: None, left: None, right: None,
+    };
+    let mut has_borders = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    "tcPr" if depth == 0 => { in_tc_pr = true; }
+                    "tcBorders" if in_tc_pr => { in_tc_borders = true; }
+                    _ => {}
+                }
+                depth += 1;
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                if in_tc_borders {
+                    // Parse border elements inside tcBorders
+                    match local.as_str() {
+                        "top" | "bottom" | "left" | "right" | "start" | "end" => {
+                            let bdef = parse_border_def_from_attrs(&e);
+                            if bdef.is_some() { has_borders = true; }
+                            match local.as_str() {
+                                "top" => borders.top = bdef,
+                                "bottom" => borders.bottom = bdef,
+                                "left" | "start" => borders.left = bdef,
+                                "right" | "end" => borders.right = bdef,
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if in_tc_pr {
+                    if local == "shd" {
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            if key == "fill" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if val != "auto" {
+                                    fmt.shading = Some(val);
+                                }
+                            }
+                        }
+                    }
+                } else if depth == 0 {
+                    // Top-level empty elements inside tblStylePr
+                    match local.as_str() {
+                        "b" | "bCs" => {
+                            // <w:b/> means bold=true, <w:b w:val="0"/> means bold=false
+                            let mut val = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let v = String::from_utf8_lossy(&attr.value);
+                                    if v == "0" || v == "false" { val = false; }
+                                }
+                            }
+                            fmt.bold = Some(val);
+                        }
+                        "color" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                                    if v != "auto" { fmt.color = Some(v); }
+                                }
+                            }
+                        }
+                        "jc" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    fmt.alignment = Some(match val.as_ref() {
+                                        "left" | "start" => Alignment::Left,
+                                        "center" => Alignment::Center,
+                                        "right" | "end" => Alignment::Right,
+                                        "both" => Alignment::Justify,
+                                        "distribute" => Alignment::Distribute,
+                                        _ => Alignment::Left,
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::End(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "tcBorders" { in_tc_borders = false; }
+                if local == "tcPr" { in_tc_pr = false; }
+                if local == "tblStylePr" && depth <= 1 { break; }
+                if depth > 0 { depth -= 1; }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    if has_borders {
+        fmt.borders = Some(borders);
+    }
+    Ok(fmt)
+}
+
+/// Parse a single border element's attributes into a BorderDef.
+fn parse_border_def_from_attrs(e: &quick_xml::events::BytesStart) -> Option<BorderDef> {
+    let mut is_none = false;
+    let mut color = None;
+    let mut width = None;
+    let mut style = None;
+    for attr in e.attributes().flatten() {
+        let key = local_name(attr.key.as_ref());
+        let val = String::from_utf8_lossy(&attr.value);
+        match key.as_str() {
+            "val" => {
+                if val == "none" || val == "nil" { is_none = true; }
+                style = Some(val.to_string());
+            }
+            "color" => {
+                color = Some(if val == "auto" { "000000".to_string() } else { val.to_string() });
+            }
+            "sz" => {
+                width = val.parse::<f32>().ok().map(|v| v / 8.0);
+            }
+            _ => {}
+        }
+    }
+    if is_none { return None; }
+    Some(BorderDef {
+        color,
+        width: width.unwrap_or(0.5),
+        style: style.unwrap_or_else(|| "single".to_string()),
+        space: 0.0,
+    })
 }
 
 fn local_name(name: &[u8]) -> String {
