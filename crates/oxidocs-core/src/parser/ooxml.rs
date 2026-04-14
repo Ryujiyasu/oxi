@@ -1670,6 +1670,16 @@ fn parse_paragraph_properties(
                         }
                         style.bidi = enabled;
                     }
+                    "wordWrap" => {
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        style.word_wrap = enabled;
+                    }
                     "autoSpaceDE" => {
                         let mut enabled = true;
                         for attr in e.attributes().flatten() {

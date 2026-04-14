@@ -1974,7 +1974,16 @@ impl LayoutEngine {
                 && ((para.alignment == Alignment::Justify && !is_last_line)
                     || para.alignment == Alignment::Distribute);
             if should_justify && line.fragments.len() > 1 {
-                let mut slack = available_width - extra_indent - line_text_width;
+                // charGrid: subtract grid extra from slack. Grid extra widens chars
+                // for positioning but is NOT distributable justify space.
+                let grid_extra_on_line = if let Some(pitch) = effective_char_pitch {
+                    line.fragments.iter().map(|f| {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        f.text.chars().filter(|&c| crate::font::is_fullwidth(c) && fs < pitch)
+                            .count() as f32 * (pitch - fs)
+                    }).sum::<f32>()
+                } else { 0.0 };
+                let mut slack = available_width - extra_indent - line_text_width - grid_extra_on_line;
 
                 // Phase 1: CJK punctuation compression (full-width -> half-width)
                 // Only compress when the line overflows (slack < 0).
@@ -2339,7 +2348,11 @@ impl LayoutEngine {
                 if !word.is_empty() {
                     let ws = word_style.take().unwrap_or_else(|| $style.clone());
                     let wft = word_field_type.take();
-                    if pt_to_tw(current_width + current_grid_extra + word_width + word_grid_extra) > available_tw && !current_line.fragments.is_empty() {
+                    // COM-confirmed (2026-04-14): charGrid extra does NOT affect line
+                    // break. Word wraps based on natural char widths (fontSize for
+                    // fullwidth, smaller for halfwidth). Grid extra only affects
+                    // character positioning within the line, not line break count.
+                    if pt_to_tw(current_width + word_width) > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_grid_extra = 0.0;
                         current_grid_extra = 0.0;
@@ -2529,8 +2542,8 @@ impl LayoutEngine {
                     word.push(ch);
                     word_width += char_width; word_grid_extra += char_grid_extra;
                     flush_word!(style);
-                } else if kinsoku::is_cjk(ch) {
-                    // CJK characters can break at any point
+                } else if kinsoku::is_cjk(ch) && para_style.word_wrap {
+                    // CJK characters can break at any point (when wordWrap=true, the default)
                     // autoSpaceDE: add 2.5pt gap between Latin and CJK ideograph/kana.
                     // COM-confirmed (2026-04-07): only ideographs/kana trigger auto-space,
                     // not CJK punctuation (which gets no extra spacing from Latin).
@@ -2555,7 +2568,7 @@ impl LayoutEngine {
                         current_width += extra;
                     }
 
-                    if pt_to_tw(current_width + current_grid_extra + char_width + char_grid_extra) > available_tw && !current_line.fragments.is_empty() {
+                    if pt_to_tw(current_width + char_width) > available_tw && !current_line.fragments.is_empty() {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
