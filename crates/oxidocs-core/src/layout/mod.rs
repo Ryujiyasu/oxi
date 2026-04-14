@@ -2448,6 +2448,7 @@ impl LayoutEngine {
                     if pitch > 0.0 && char_width > 0.0
                         && ch != ' ' && ch != '\t' && ch != '\n'
                         && crate::font::is_fullwidth(ch)
+                        && !yakumono_compressed[char_index]
                     {
                         (pitch - char_width).max(0.0)
                     } else { 0.0 }
