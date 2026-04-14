@@ -4150,6 +4150,23 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
                             if cell.borders.is_none() {
                                 cell.borders = fmt.borders.clone();
                             }
+                            // Apply run-level properties (bold, color) to cell paragraphs
+                            if fmt.bold.is_some() || fmt.color.is_some() {
+                                for block in &mut cell.blocks {
+                                    if let Block::Paragraph(para) = block {
+                                        for run in &mut para.runs {
+                                            if let Some(b) = fmt.bold {
+                                                if !run.style.bold { run.style.bold = b; }
+                                            }
+                                            if let Some(ref c) = fmt.color {
+                                                if run.style.color.is_none() {
+                                                    run.style.color = Some(c.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
