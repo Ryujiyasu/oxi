@@ -98,9 +98,8 @@ impl FontMetrics {
             return font_size / 2.0;
         }
 
-        // COM-confirmed (2026-04-14, 13 font/size combos, 181 chars):
-        // Word rounds char widths to 10tw (0.5pt), not 1tw.
-        let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
+        // Twips-based width: round(advance_em * fontSize * 20) / 20.0
+        let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
         width_tw / 20.0
     }
 
@@ -595,10 +594,12 @@ impl FontMetricsRegistry {
             }
         }
 
-        // COM-confirmed (2026-04-14): Word rounds char widths to 10tw (0.5pt).
+        // Twips-based width: round(advance * fontSize * 20 / UPM) / 20.0
+        // COM-confirmed: matches Word character placement (510tw vs GDI ABC 540tw for "Hello ")
+        // Word uses twips-based widths, NOT GDI ABC pixel widths.
         if metrics.char_widths.contains_key(&c) {
             let advance_em = metrics.char_width_em(c);
-            let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
+            let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
             return width_tw / 20.0;
         }
 
@@ -693,12 +694,13 @@ impl FontMetricsRegistry {
         }
 
         // Word uses twips-based character width: MulDiv(advance, fontSize_tw, UPM)
-        // COM-confirmed (2026-04-14, 13 font/size, 181 chars): Word rounds
-        // char widths to 10tw (0.5pt). Verified: Cambria, TNR, Arial, Calibri,
-        // Century, MS Mincho, MS Gothic at multiple sizes. 100% 10tw match.
+        // = round(advance_em * fontSize * 20) / 20.0
+        // COM-confirmed 2026-03-30: twips method gives correct line break positions
+        // for Cambria 11pt (85 chars/line matching Word, GDI pixel method gives 92)
+        // Only use twips method when we have measured advance widths for this char.
         if metrics.char_widths.contains_key(&c) {
             let advance_em = metrics.char_width_em(c);
-            let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
+            let width_tw = (advance_em * font_size * 20.0 + 0.5).floor();
             return width_tw / 20.0;
         }
 
