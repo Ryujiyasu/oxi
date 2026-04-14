@@ -125,6 +125,8 @@ pub struct LayoutEngine {
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
     compress_punctuation: bool,
+    /// w:doNotExpandShiftReturn: don't justify lines ending with soft break (Shift+Enter)
+    do_not_expand_shift_return: bool,
 }
 
 /// Word's default heading font sizes (in points)
@@ -173,6 +175,7 @@ impl LayoutEngine {
             default_tab_stop: 36.0,
             compat_mode: 15,
             compress_punctuation: false,
+            do_not_expand_shift_return: false,
         }
     }
 
@@ -197,6 +200,7 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compress_punctuation: doc.compress_punctuation,
+            do_not_expand_shift_return: doc.do_not_expand_shift_return,
         }
     }
 
@@ -1970,7 +1974,10 @@ impl LayoutEngine {
             let mut frag_spacing_after: Vec<f32> = vec![0.0; line.fragments.len()];
             let mut justify_char_spacing: f32 = 0.0;
 
+            let is_soft_break_line = self.do_not_expand_shift_return
+                && line.break_type == LineBreakType::SoftBreak;
             let should_justify = !in_textbox
+                && !is_soft_break_line
                 && ((para.alignment == Alignment::Justify && !is_last_line)
                     || para.alignment == Alignment::Distribute);
             if should_justify && line.fragments.len() > 1 {
@@ -2423,7 +2430,13 @@ impl LayoutEngine {
                 } else {
                     (latin_metrics, latin_gdi_map)
                 };
-                let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map) + cs;
+                let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map);
+                if let Some(scale) = style.text_scale {
+                    if (scale - 100.0).abs() > 0.01 {
+                        char_width *= scale / 100.0;
+                    }
+                }
+                char_width += cs;
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
                 }
@@ -2476,6 +2489,7 @@ impl LayoutEngine {
                         let break_type = match ch {
                             '\x0C' => LineBreakType::PageBreak,
                             '\x0B' => LineBreakType::ColumnBreak,
+                            '\n' => LineBreakType::SoftBreak,
                             _ => LineBreakType::Normal,
                         };
                         current_line.break_type = break_type;
@@ -3570,7 +3584,13 @@ impl LayoutEngine {
                             let mut buf_w: f32 = 0.0;
                             for ch in run.text.chars() {
                                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
-                                let cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm) + cs;
+                                let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                                if let Some(scale) = run.style.text_scale {
+                                    if (scale - 100.0).abs() > 0.01 {
+                                        cw *= scale / 100.0;
+                                    }
+                                }
+                                let cw = cw + cs;
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
                                 let is_space = ch == ' ' || ch == '\u{3000}';
@@ -4291,6 +4311,7 @@ struct LineFragment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineBreakType {
     Normal,
+    SoftBreak,   // \n (Shift+Enter) — explicit line break within paragraph
     PageBreak,   // \x0C
     ColumnBreak, // \x0B
 }

@@ -62,6 +62,7 @@ impl OoxmlParser {
         let default_tab_stop = self.parse_default_tab_stop();
         let compat_mode = self.parse_compat_mode();
         let compress_punctuation = self.parse_compress_punctuation();
+        let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
@@ -234,6 +235,7 @@ impl OoxmlParser {
             default_tab_stop,
             compat_mode,
             compress_punctuation,
+            do_not_expand_shift_return,
         })
     }
 
@@ -452,6 +454,37 @@ impl OoxmlParser {
                                     || val == "compressPunctuationAndJapaneseKana";
                             }
                         }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Parse a boolean compat flag from word/settings.xml.
+    /// Looks for <w:flagName/> or <w:flagName w:val="..."/> inside <w:compat>.
+    /// Present with no val or val="1"/"true" → true; val="0"/"false" → false; absent → false.
+    fn parse_compat_bool_flag(&mut self, flag_name: &str) -> bool {
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        let mut reader = Reader::from_str(&xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) => {
+                    if local_name(e.name().as_ref()) == flag_name {
+                        // Present → default true unless val="0"
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                return val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                        }
+                        return true; // self-closing with no val = enabled
                     }
                 }
                 Ok(Event::Eof) => break,
