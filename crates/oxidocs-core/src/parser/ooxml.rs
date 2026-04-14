@@ -1710,6 +1710,16 @@ fn parse_paragraph_properties(
                         }
                         style.auto_space_dn = enabled;
                     }
+                    "outlineLvl" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if let Ok(level) = val.parse::<u8>() {
+                                    style.heading_level = Some(level + 1);
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

@@ -1243,6 +1243,17 @@ fn parse_style_definition(
                             }
                             style.bidi = enabled;
                         }
+                        "outlineLvl" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    // outlineLvl val="0" = Heading 1, val="1" = Heading 2, etc.
+                                    if let Ok(level) = val.parse::<u8>() {
+                                        style.heading_level = Some(level + 1);
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
