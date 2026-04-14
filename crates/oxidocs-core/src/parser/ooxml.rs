@@ -471,7 +471,11 @@ impl OoxmlParser {
     /// 151 documents tested across compatibilityMode 14 and 15.
     /// Therefore: always return false (= table cells snap to grid like normal paragraphs).
     fn parse_adjust_line_height_in_table(&mut self) -> bool {
-        false
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        xml.contains("adjustLineHeightInTable")
     }
 
     /// Parse word/settings.xml for compatibilityMode.
