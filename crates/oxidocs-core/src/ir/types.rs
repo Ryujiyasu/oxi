@@ -1107,6 +1107,9 @@ pub struct StyleSheet {
     /// Default paragraph style ID (w:type="paragraph" w:default="1")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_paragraph_style_id: Option<String>,
+    /// Font table from word/fontTable.xml: font_name -> FontInfo
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub font_table: HashMap<String, FontInfo>,
 }
 
 /// A named style definition with inheritance
@@ -1132,6 +1135,23 @@ pub struct DocumentMetadata {
     pub title: Option<String>,
     pub author: Option<String>,
     pub description: Option<String>,
+}
+
+/// Font information from fontTable.xml
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FontInfo {
+    /// PANOSE-1 classification (10 bytes as hex string, e.g. "020B0604020202020204")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panose1: Option<String>,
+    /// Character set: "00" (ANSI), "80" (ShiftJIS), "02" (Symbol), etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charset: Option<String>,
+    /// Font family: "roman", "swiss", "modern", "decorative", "script", "auto"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Pitch: "fixed", "variable", "default"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<String>,
 }
 
 /// A footnote or endnote
