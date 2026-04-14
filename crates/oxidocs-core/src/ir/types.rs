@@ -744,6 +744,9 @@ pub struct ParagraphStyle {
     /// When false, lines break only at spaces (no CJK inter-character break)
     #[serde(default = "default_true")]
     pub word_wrap: bool,
+    /// Automatically adjust right indent for CJK grid (w:adjustRightInd, default true)
+    #[serde(default = "default_true")]
+    pub adjust_right_ind: bool,
     /// Auto space between East Asian and Western text (w:autoSpaceDE, default true)
     #[serde(default = "default_true")]
     pub auto_space_de: bool,
@@ -828,6 +831,7 @@ impl Default for ParagraphStyle {
             widow_control: true,
             has_explicit_widow_control: false,
             word_wrap: true,
+            adjust_right_ind: true,
             auto_space_de: true,
             auto_space_dn: true,
             bidi: false,
