@@ -533,6 +533,7 @@ impl LayoutEngine {
         let mut content_width = col_widths[0];
 
         let grid_pitch = page.grid_line_pitch;
+        let mut mult_cumul_raw: f32 = 0.0;
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut cursor_y = start_y;
@@ -775,6 +776,7 @@ impl LayoutEngine {
                         prev_space_after,
                         Some(block_idx),
                         lm2_param,
+                        Some(&mut mult_cumul_raw),
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -998,7 +1000,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0, None, None,
+                            false, 0.0, None, None, None,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -1020,7 +1022,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0, None, None,
+                            false, 0.0, None, None, None,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -1203,7 +1205,7 @@ impl LayoutEngine {
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
-                                        false, 0.0, None, None,
+                                        false, 0.0, None, None, None,
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -1459,7 +1461,7 @@ impl LayoutEngine {
                         if page.grid_char_pitch.is_some() { None } else { page.grid_line_pitch },
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
-                        0.0, None, None,
+                        0.0, None, None, None,
                     );
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
@@ -1598,6 +1600,7 @@ impl LayoutEngine {
         prev_space_after: f32,
         body_para_index: Option<usize>,
         mut lm2_grid_cells: Option<&mut usize>,
+        mut mult_cumul_raw: Option<&mut f32>,
     ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
@@ -1879,8 +1882,15 @@ impl LayoutEngine {
 
             // Page break check with widow/orphan control
             // TextBox content: no page breaks, no widow/orphan. Overflow is clipped.
+            let effective_lh = if is_multiple_spacing && raw_spaced_tw > 0.0 {
+                let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
+                let new_pos = old_pos + raw_spaced_tw;
+                let cn = (new_pos / 10.0).round() as i32 * 10;
+                let cc = (old_pos / 10.0).round() as i32 * 10;
+                (cn - cc) as f32 / 20.0
+            } else { line_height };
             let needs_page_break = if in_textbox { false } else {
-                *cursor_y + line_height > page_top + content_height
+                *cursor_y + effective_lh > page_top + content_height
             };
 
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
@@ -2110,7 +2120,12 @@ impl LayoutEngine {
                 // so all share the same baseline (y + frag_ascent = cursor_y + text_y_off + line_max_ascent)
                 let frag_metrics = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                 let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
-                let baseline_adjust = line_max_ascent - frag_ascent;
+                // COM-confirmed (2026-04-14, gen2_001): Word does NOT apply
+                // per-fragment baseline adjustment. All fragments on the same line
+                // share the same Y coordinate. GDI TextOutW aligns from font cell top.
+                let baseline_adjust = 0.0;
+                let _ = line_max_ascent;
+                let _ = frag_ascent;
 
                 let mut el = LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust + vert_offset, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
@@ -2185,13 +2200,19 @@ impl LayoutEngine {
                     _ => true,
                 };
             if is_lm2_single {
-                let pitch_tw = grid_pitch.unwrap() * 20.0;
-                let cells = (line_height * 20.0 / pitch_tw).round().max(1.0) as usize;
-                let j = cumul_line_idx;
-                let cn = (((j + cells) as f32 * pitch_tw / 10.0).round() * 10.0) as i32;
-                let cc = ((j as f32 * pitch_tw / 10.0).round() * 10.0) as i32;
-                *cursor_y += (cn - cc) as f32 / 20.0;
-                cumul_line_idx += cells;
+                // COM-confirmed (2026-04-14, 1ec1 24/24 match): linesAndChars grid lines
+                // are anchored to topMargin. grid_line(n) = ((margin_tw + n*pitch_tw) / 10 + 1) * 10
+                // (always ceil to next 10tw boundary). cursor advances to grid_line(K + cells)
+                // where K = (cursor_tw - margin_tw) / pitch_tw (integer division).
+                let pitch_tw_i = (grid_pitch.unwrap() * 20.0).round() as i32;
+                let margin_tw = (page.margin.top * 20.0).round() as i32;
+                let cells = (line_height * 20.0 / pitch_tw_i as f32).round().max(1.0) as i32;
+                let cur_tw = (*cursor_y * 20.0).round() as i32;
+                let k = ((cur_tw - margin_tw).max(0)) / pitch_tw_i;
+                let target_n = k + cells;
+                let target_tw = ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10;
+                *cursor_y = target_tw as f32 / 20.0;
+                cumul_line_idx += cells as usize;
             } else {
             // For single LM=0, gate by direction: only when raw advances MORE than rounded.
             let single_lm0_safe = if is_single_lm0 && raw_spaced_tw > 0.0 {
@@ -2211,20 +2232,27 @@ impl LayoutEngine {
                     let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
                     (cn, cc)
-                } else if grid_pitch.is_none() {
-                    // COM-confirmed (2026-04-14, minimal repro LM=0): LM0 multiple
-                    // spacing uses ROUND for cumulative positions. Verified across
-                    // 6 font/size combinations (MS Mincho 11/10.5, MS Gothic 14/13/11, Calibri 11).
-                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
-                    let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
+                } else if is_multiple_spacing {
+                    // COM-confirmed (2026-04-14, mixed font repro): Multiple spacing
+                    // uses cumulative raw position model with ROUND. Each paragraph
+                    // adds its raw_tw to a shared running total.
+                    let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
+                    let new_pos = old_pos + raw_spaced_tw;
+                    let cn = (new_pos / 10.0).round() as i32 * 10;
+                    let cc = (old_pos / 10.0).round() as i32 * 10;
                     (cn, cc)
                 } else {
-                    // LM≥1 with Multiple spacing: also ROUND
                     let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
                 };
                 *cursor_y += (cn - cc) as f32 / 20.0;
+                // Update cumulative raw position for Multiple spacing
+                if is_multiple_spacing {
+                    if let Some(ref mut cr) = mult_cumul_raw {
+                        **cr += raw_spaced_tw;
+                    }
+                }
             } else {
                 *cursor_y += line_height;
             }
