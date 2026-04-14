@@ -2201,17 +2201,17 @@ impl LayoutEngine {
                 };
             if is_lm2_single {
                 // COM-confirmed (2026-04-14, 1ec1 24/24 match): linesAndChars grid lines
-                // are anchored to topMargin. grid_line(n) = ((margin_tw + n*pitch_tw) / 10 + 1) * 10.
-                // Advance = target - cursor (additive, preserves space_before/exact spacing).
-                // K = (cursor_tw - margin_tw) / pitch_tw gives current grid cell index.
+                // are anchored to topMargin. grid_line(n) = ((margin_tw + n*pitch_tw) / 10 + 1) * 10
+                // (always ceil to next 10tw boundary). cursor advances to grid_line(K + cells)
+                // where K = (cursor_tw - margin_tw) / pitch_tw (integer division).
                 let pitch_tw_i = (grid_pitch.unwrap() * 20.0).round() as i32;
                 let margin_tw = (page.margin.top * 20.0).round() as i32;
                 let cells = (line_height * 20.0 / pitch_tw_i as f32).round().max(1.0) as i32;
                 let cur_tw = (*cursor_y * 20.0).round() as i32;
                 let k = ((cur_tw - margin_tw).max(0)) / pitch_tw_i;
-                let target_tw = ((margin_tw + (k + cells) * pitch_tw_i) / 10 + 1) * 10;
-                let advance_tw = target_tw - cur_tw;
-                *cursor_y += advance_tw as f32 / 20.0;
+                let target_n = k + cells;
+                let target_tw = ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10;
+                *cursor_y = target_tw as f32 / 20.0;
                 cumul_line_idx += cells as usize;
             } else {
             // For single LM=0, gate by direction: only when raw advances MORE than rounded.
