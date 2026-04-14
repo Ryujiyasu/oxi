@@ -1744,6 +1744,13 @@ fn parse_paragraph_properties(
                             }
                         }
                     }
+                    "textAlignment" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                style.text_alignment = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -3882,6 +3889,26 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
                             }
                         }
                     }
+                    "position" => {
+                        // Vertical position offset in half-points
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.position = val.parse::<f32>().ok().map(|v| v / 2.0);
+                            }
+                        }
+                    }
+                    "em" => {
+                        // Emphasis mark / 圏点 (w:em)
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if val != "none" {
+                                    style.emphasis_mark = Some(val);
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -4526,6 +4553,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
         v_align: cell_props.v_align,
         borders: cell_props.borders,
         margins: cell_props.margins,
+        text_direction: cell_props.text_direction,
     })
 }
 
@@ -4538,6 +4566,7 @@ struct CellProperties {
     v_align: Option<String>,
     borders: Option<CellBorders>,
     margins: Option<CellMargins>,
+    text_direction: Option<String>,
 }
 
 /// Parse w:tcPr (table cell properties)
@@ -4613,6 +4642,13 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 props.v_align = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    "textDirection" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                props.text_direction = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }

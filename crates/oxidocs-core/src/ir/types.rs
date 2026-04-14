@@ -252,6 +252,13 @@ pub struct RunStyle {
     /// East Asian layout: vertical-in-horizontal (tate-chu-yoko)
     #[serde(default)]
     pub vert_in_horz: bool,
+    /// Vertical position offset in points (w:position, half-points / 2)
+    /// Positive = raised, negative = lowered
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<f32>,
+    /// Emphasis mark / 圏点 (w:em): "dot", "comma", "circle", "underDot"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emphasis_mark: Option<String>,
 }
 
 impl Default for RunStyle {
@@ -287,6 +294,8 @@ impl Default for RunStyle {
             fit_text: None,
             combine: false,
             vert_in_horz: false,
+            position: None,
+            emphasis_mark: None,
         }
     }
 }
@@ -352,6 +361,9 @@ pub struct TableCell {
     /// Cell margins/padding in points
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub margins: Option<CellMargins>,
+    /// Text direction within cell (w:textDirection): "btLr" (bottom-to-top LR), "tbRl" (top-bottom RL), etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<String>,
 }
 
 /// Cell border definitions
@@ -756,6 +768,9 @@ pub struct ParagraphStyle {
     /// Auto space between East Asian and numbers (w:autoSpaceDN, default true)
     #[serde(default = "default_true")]
     pub auto_space_dn: bool,
+    /// Text alignment within line (w:textAlignment): "top", "center", "baseline", "bottom", "auto"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_alignment: Option<String>,
     /// Frame paragraph properties (w:framePr) — for drop caps and positioned paragraphs
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_pr: Option<FrameProperties>,
@@ -838,6 +853,7 @@ impl Default for ParagraphStyle {
             has_explicit_widow_control: false,
             word_wrap: true,
             adjust_right_ind: true,
+            text_alignment: None,
             auto_space_de: true,
             auto_space_dn: true,
             frame_pr: None,
