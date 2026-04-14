@@ -740,6 +740,10 @@ pub struct ParagraphStyle {
     /// Whether widowControl was explicitly set in XML (for docDefaults inheritance)
     #[serde(default, skip_serializing)]
     pub has_explicit_widow_control: bool,
+    /// Word wrap at CJK character boundaries (w:wordWrap, default true)
+    /// When false, lines break only at spaces (no CJK inter-character break)
+    #[serde(default = "default_true")]
+    pub word_wrap: bool,
     /// Auto space between East Asian and Western text (w:autoSpaceDE, default true)
     #[serde(default = "default_true")]
     pub auto_space_de: bool,
@@ -823,6 +827,7 @@ impl Default for ParagraphStyle {
             keep_lines: false,
             widow_control: true,
             has_explicit_widow_control: false,
+            word_wrap: true,
             auto_space_de: true,
             auto_space_dn: true,
             bidi: false,
