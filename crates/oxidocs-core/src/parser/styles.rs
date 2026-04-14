@@ -282,6 +282,9 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.kern.is_none() {
         child.kern = parent.kern;
     }
+    if child.text_scale.is_none() {
+        child.text_scale = parent.text_scale;
+    }
     // Boolean properties: inherit from parent if child doesn't explicitly set them
     if !child.bold && parent.bold {
         child.bold = true;
@@ -607,6 +610,14 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 if local_name(attr.key.as_ref()) == "val" {
                     let val = String::from_utf8_lossy(&attr.value);
                     rs.fit_text = val.parse::<f32>().ok().map(|v| v / 20.0);
+                }
+            }
+        }
+        "w" => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.text_scale = val.parse::<f32>().ok();
                 }
             }
         }

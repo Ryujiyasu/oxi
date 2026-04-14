@@ -3801,6 +3801,14 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
                             }
                         }
                     }
+                    "w" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.text_scale = val.parse::<f32>().ok();
+                            }
+                        }
+                    }
                     "smallCaps" => {
                         style.small_caps = true;
                     }
