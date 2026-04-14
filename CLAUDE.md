@@ -88,6 +88,9 @@ At the start of each session, check the current state and continue autonomous sp
 - **grid_snap**: Implemented
 - **justify**: docDefaults jc=both inheritance fixed. Justify enabled for all documents
 - **SSIM: 0.7496 → 0.8586** Baseline: 177 documents, 352 pages (GDI)
+- **w:w text scale (2026-04-14)**: Parse + layout support for character width percentage (w:w val="80" = 80% width)
+- **fontTable.xml (2026-04-14)**: Parse PANOSE, charset, family, pitch for font substitution strategy
+- **bracketPair Bézier (2026-04-14)**: Curved bracket rendering with κ=0.5523 quarter-circle approximation
 - **char_width (2026-03-30)**: Twips-based width calculation (round(advance*fontSize*20/UPM)/20). Matches Word line breaks
 - **GDI width overrides**: 9 fonts with complete GDI width tables (1055KB)
 - **GDI renderer**: Pipeline switched to oxi-gdi-renderer (TextOutW) for pixel-accurate comparison
