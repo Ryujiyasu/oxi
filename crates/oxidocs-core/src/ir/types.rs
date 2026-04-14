@@ -753,6 +753,9 @@ pub struct ParagraphStyle {
     /// Auto space between East Asian and numbers (w:autoSpaceDN, default true)
     #[serde(default = "default_true")]
     pub auto_space_dn: bool,
+    /// Frame paragraph properties (w:framePr) — for drop caps and positioned paragraphs
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_pr: Option<FrameProperties>,
     /// Bidirectional text / RTL paragraph (w:bidi)
     #[serde(default)]
     pub bidi: bool,
@@ -834,6 +837,7 @@ impl Default for ParagraphStyle {
             adjust_right_ind: true,
             auto_space_de: true,
             auto_space_dn: true,
+            frame_pr: None,
             bidi: false,
             num_id: None,
             num_ilvl: 0,
@@ -950,6 +954,50 @@ pub struct TableLook {
     /// Column band size (number of columns per band, default 1)
     #[serde(default = "default_one")]
     pub col_band_size: u32,
+}
+
+/// Frame paragraph properties (w:framePr) — for drop caps and positioned text frames
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FrameProperties {
+    /// Drop cap type: "drop" (dropped into text), "margin" (in margin)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_cap: Option<String>,
+    /// Number of lines to drop (w:lines, default 1)
+    #[serde(default)]
+    pub lines: u32,
+    /// Frame width in points (w:w)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
+    /// Frame height in points (w:h)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
+    /// Horizontal anchor: "text", "margin", "page" (w:hAnchor)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_anchor: Option<String>,
+    /// Vertical anchor: "text", "margin", "page" (w:vAnchor)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_anchor: Option<String>,
+    /// Horizontal position in points (w:x)
+    #[serde(default)]
+    pub x: f32,
+    /// Vertical position in points (w:y)
+    #[serde(default)]
+    pub y: f32,
+    /// Horizontal space from text in points (w:hSpace)
+    #[serde(default)]
+    pub h_space: f32,
+    /// Vertical space from text in points (w:vSpace)
+    #[serde(default)]
+    pub v_space: f32,
+    /// Text wrapping: "auto", "around", "none", "notBeside", "through", "tight"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<String>,
+    /// Horizontal alignment: "left", "center", "right" (w:xAlign)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_align: Option<String>,
+    /// Vertical alignment: "top", "center", "bottom" (w:yAlign)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_align: Option<String>,
 }
 
 /// Conditional formatting properties from w:tblStylePr
