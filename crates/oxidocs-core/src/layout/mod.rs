@@ -2364,6 +2364,9 @@ impl LayoutEngine {
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
         let mut current_width = first_line_indent;
+        // Integer twips accumulator for line break decisions.
+        // Avoids f32 rounding drift that causes ±0.1pt error over 40+ characters.
+        let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
         let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
 
         // Word buffer spans across fragment boundaries so that a single word
@@ -2387,9 +2390,10 @@ impl LayoutEngine {
                     // break. Word wraps based on natural char widths (fontSize for
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
-                    if pt_to_tw(current_width + word_width) > available_tw && !current_line.fragments.is_empty() {
+                    let word_width_tw = pt_to_tw(word_width);
+                    if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
                         current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
@@ -2403,6 +2407,7 @@ impl LayoutEngine {
                         char_offset: word_char_offset,
                     });
                     current_width += word_width;
+                    current_width_tw += word_width_tw;
                     current_grid_extra += word_grid_extra;
                     word_width = 0.0;
                     word_grid_extra = 0.0;
@@ -2522,7 +2527,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -2569,7 +2574,7 @@ impl LayoutEngine {
                                 run_index: frag_run_index,
                                 char_offset: char_pos_in_run,
                             });
-                            current_width += char_width; current_grid_extra += char_grid_extra;
+                            current_width += char_width; current_width_tw += pt_to_tw(char_width); current_grid_extra += char_grid_extra;
                         }
                     }
                 } else if is_break_after(ch) {
@@ -2610,7 +2615,7 @@ impl LayoutEngine {
                         current_width += extra;
                     }
 
-                    if pt_to_tw(current_width + char_width) > available_tw && !current_line.fragments.is_empty() {
+                    if current_width_tw + pt_to_tw(char_width) > available_tw && !current_line.fragments.is_empty() {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
@@ -2635,7 +2640,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_grid_extra = 0.0;
+                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
                             continue;
                         }
 
@@ -2660,7 +2665,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_line.fragments.push(f);
@@ -2718,9 +2723,9 @@ impl LayoutEngine {
                 fragments.last().map(|f| f.1.clone()).unwrap_or_default()
             });
             let wft = word_field_type.take();
-            if pt_to_tw(current_width + word_width) > available_tw && !current_line.fragments.is_empty() {
+            if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_grid_extra = 0.0;
+                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
