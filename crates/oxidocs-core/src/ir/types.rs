@@ -943,6 +943,30 @@ pub struct TableLook {
     pub col_band_size: u32,
 }
 
+/// Conditional formatting properties from w:tblStylePr
+/// Applied to cells based on their position in the table (firstRow, band1Horz, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TableConditionalFormat {
+    /// Cell shading/background color (hex)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shading: Option<String>,
+    /// Cell borders
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borders: Option<CellBorders>,
+    /// Bold override for runs
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    /// Text color override (hex)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Paragraph alignment override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<Alignment>,
+    /// Cell margins override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_margins: Option<CellMargins>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PageSize {
     pub width: f32,
@@ -992,6 +1016,10 @@ pub struct StyleSheet {
     /// Table style borders: style_id -> TableStyle (with border info from tblBorders)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub table_styles: HashMap<String, TableStyle>,
+    /// Table conditional formats: (style_id, condition_type) -> conditional properties
+    /// condition_type: "firstRow", "lastRow", "firstCol", "lastCol", "band1Horz", "band2Horz", etc.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub table_conditional_formats: HashMap<String, HashMap<String, TableConditionalFormat>>,
     /// Default paragraph style ID (w:type="paragraph" w:default="1")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_paragraph_style_id: Option<String>,
