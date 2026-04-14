@@ -26,6 +26,10 @@ pub struct Document {
     /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.
     #[serde(default)]
     pub compress_punctuation: bool,
+    /// w:doNotExpandShiftReturn compat setting.
+    /// When true, Shift+Enter (soft break) lines are NOT justified even in jc=both paragraphs.
+    #[serde(default)]
+    pub do_not_expand_shift_return: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
