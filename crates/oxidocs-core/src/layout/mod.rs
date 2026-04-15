@@ -1798,10 +1798,22 @@ impl LayoutEngine {
         // even if the page has linesAndChars docGrid. Otherwise the chars get
         // padded to the body's grid pitch and the line wraps ~5 chars early.
         let effective_char_pitch = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_pitch };
-        // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
-        // for line-break purposes. Text starts at margin and charsLine determines wrapping.
-        let available_width = if effective_char_pitch.is_some() {
-            content_width  // charGrid: ignore indents for wrapping
+        // charGrid: standard 1-cell indent uses full content width (COM-confirmed).
+        // Larger indents (2+ cells) reduce available cells by the excess.
+        let available_width = if let Some(pitch) = effective_char_pitch {
+            let indent_total = indent_left + indent_right;
+            let indent_cells = (indent_total / pitch).round() as usize;
+            if indent_cells > 1 {
+                let total_cells = (content_width / pitch).floor() as usize;
+                let reduce = indent_cells - 1;
+                if reduce < total_cells {
+                    (total_cells - reduce) as f32 * pitch
+                } else {
+                    content_width
+                }
+            } else {
+                content_width
+            }
         } else {
             content_width - indent_left - indent_right
         };
@@ -2092,7 +2104,10 @@ impl LayoutEngine {
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
             let is_last_line = line_idx == lines.len() - 1;
-            // For alignment/justify, use indent-adjusted width
+            // For alignment/justify, use indent-adjusted width.
+            // Justify/alignment uses indent-adjusted width. In charGrid mode,
+            // break_into_lines may put more chars than fit in the indented area;
+            // negative slack triggers punctuation compression to fit.
             let render_width = content_width - indent_left - indent_right;
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
