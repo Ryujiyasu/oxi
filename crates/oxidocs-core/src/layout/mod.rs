@@ -1925,7 +1925,8 @@ impl LayoutEngine {
             &para.style,
         );
 
-        // Line-break the text
+        // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
+        // NOT shift start position. Text starts at margin, line is shorter.
         let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
         let lines = self.break_into_lines(&fragments, available_width, effective_first_indent, &para.style, effective_char_pitch);
 
@@ -2553,6 +2554,7 @@ impl LayoutEngine {
         // Integer twips accumulator for line break decisions.
         // Avoids f32 rounding drift that causes ±0.1pt error over 40+ characters.
         let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
+        let mut compress_used = false; // true after compression-based overflow absorption
         let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
 
         // Word buffer spans across fragment boundaries so that a single word
@@ -2579,7 +2581,7 @@ impl LayoutEngine {
                     let word_width_tw = pt_to_tw(word_width);
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
@@ -2624,6 +2626,7 @@ impl LayoutEngine {
             // "compressPunctuation" or "compressPunctuationAndJapaneseKana".
             // Most modern docs use "doNotCompress" → no compression.
             let chars_vec: Vec<char> = text.chars().collect();
+            // Yakumono pair compression for line break width calculation.
             let yakumono_compressed: Vec<bool> = if self.compress_punctuation {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
@@ -2661,9 +2664,8 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
-                if yakumono_compressed[char_index] {
-                    char_width *= 0.5;
-                }
+                // Don't pre-compress yakumono in char_width. Instead, track
+                // compressible punct count and use at overflow check time.
                 // §4.6.3 CJK-adjacent space widening — COM-confirmed 2026-04-08.
                 // The Latin space (' ') is widened to ≈ font_size/2 (half-em) when:
                 //   1. The run's <w:rFonts> has an EXPLICIT w:eastAsia attribute
@@ -2718,7 +2720,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -2807,7 +2809,29 @@ impl LayoutEngine {
                         current_width_tw += pt_to_tw(extra);
                     }
 
-                    if current_width_tw + pt_to_tw(char_width) > available_tw && !current_line.fragments.is_empty() {
+                    let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
+                    // Two-phase overflow handling:
+                    // Phase 1: first small overflow absorbed by justify (no compression needed)
+                    // Phase 2: second overflow needs compression check
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 60 && !compress_used {
+                        // Small overflow (≤ 3pt): justify can absorb without compression
+                        true
+                    } else if overflow_tw > 0 && self.compress_punctuation {
+                        let count = current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars())
+                            .filter(|&c| kinsoku::is_cjk_compressible(c))
+                            .count();
+                        let savings_tw = count as i32 * pt_to_tw(font_size * 0.5);
+                        // Allow if compression can absorb AND ratio is reasonable (≤50%)
+                        if savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62 {
+                            true
+                        } else { false }
+                    } else { false };
+                    // Set compress_used after Phase 2 absorption (not Phase 1)
+                    if absorb && overflow_tw > 60 {
+                        compress_used = true;
+                    }
+                    if overflow_tw > 0 && !absorb && !current_line.fragments.is_empty() {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
@@ -2832,7 +2856,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                             continue;
                         }
 
@@ -2857,7 +2881,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_line.fragments.push(f);
@@ -2918,7 +2942,7 @@ impl LayoutEngine {
             let wft = word_field_type.take();
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
