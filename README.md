@@ -190,67 +190,24 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 ## Layout Accuracy (SSIM Progress)
 
-Oxi's layout engine is measured against Microsoft Word using two complementary metrics:
-
-1. **SSIM (pixel-level)** — across 177 real-world .docx documents (352 pages). Word GDI EMF (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi).
-2. **DML structural diff** — paragraph Y positions and line-break positions compared via Word COM API.
-
-All specifications are derived from COM API black-box measurements — no DLL disassembly.
-
-### Targeted Test Suite (49 documents)
-
-| Metric | Value |
-|---|---|
-| **Average SSIM** | **0.9788** |
-| Pages ≥ 0.95 | **48/49** (98%) |
-| **DML perfect** (P\|dy\|=0, \|dch\|=0) | **35/49** (71%) |
-| Average paragraph Y deviation | **0.02pt** |
-| Average char-count deviation per line | **0.13** |
-
-### 177-document Baseline Progress
+Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM across 177 real-world .docx documents (352 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
 
 ```mermaid
 xychart-beta
-  title "Average SSIM vs Microsoft Word"
-  x-axis ["03-28", "03-30", "03-31", "04-01", "04-02", "04-03", "04-05", "04-06", "04-09", "04-10", "04-10b", "04-12"]
+  title "Average SSIM vs Microsoft Word (177 docs, 352 pages)"
+  x-axis ["03-28", "04-01", "04-06", "04-10", "04-13", "04-14"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8083, 0.8152, 0.8191, 0.8194, 0.8212, 0.8286, 0.8430, 0.8292, 0.8518, 0.8520, 0.8528]
+  line [0.7884, 0.8191, 0.8430, 0.8520, 0.8567, 0.8584]
 ```
 
-| Date | avg SSIM | Pages >= 0.90 | Pixel Perfect | Key Changes |
-|------|----------|---------------|---------------|-------------|
-| 2026-03-28 | 0.7884 | — | — | Baseline: 147 docs, grid snap, spacing collapse, justify, twips char width, GDI height ppem round |
-| 2026-03-30 | 0.8083 | — | — | DML-driven improvement loop, GDI renderer pipeline |
-| 2026-03-31 | 0.8152 | 79/157 (50%) | — | ceil_10tw line height, text_y_offset, table cell lineSpacing |
-| 2026-04-01 | 0.8191 | 121/415 (29%) | — | pPr/rPr empty paragraph font, tab_stops, linesAndChars table row snap |
-| 2026-04-02 | 0.8194 | 133/424 (31%) | 11/24 (45%) | Table border overhead fix, pixel perfect proof (GDI TextOutW), GDI width tables ppem 7-50 |
-| 2026-04-03 | 0.8212 | — | — | CJK 83/64 eighth-pt floor, charGrid pitch, charSpace 1/4096pt, header overflow fix, margin 10tw rounding, field result dedup |
-| 2026-04-04 | 0.8286 | 150/437 (34%) | — | pBdr border overhead bw/2, bullet marker size fix, docDefaults lineSpacing table cell reset, DML diff accuracy improvements |
-| 2026-04-05 | 0.8305 | 155/437 (35%) | — | Multiple spacing cumulative ceil, beforeLines/afterLines grid snap fix, COM line height table correction, GDI character_spacing |
-| 2026-04-06 | **0.8430** | 168/438 (38%) | — | LayoutMode=0 line height formula (no pixel rounding), docGrid no-type=no grid snap (COM 177-doc batch confirmed), font alias resolution, eastAsia docDefaults fallback, COM twips width overrides |
-| 2026-04-07 | — | — | — | autoSpaceDE refined (Latin↔CJK ideograph/kana only, NOT punctuation), MS明朝/MS Pゴシック→Yu Mincho/Yu Gothic mapping, LM=0 ROUND multiple spacing, mixed-font line height (ASCII font CJK 83/64), bold-aware metrics lookup, General Punctuation fullwidth refinement, comma-separated font lists |
-| 2026-04-09 | 0.8292 | — | — | linesAndChars pitch-based cumulative round, v-text-anchor for textbox vertical centering, implicit top padding for bordered table cells |
-| 2026-04-10 | 0.8518 | — | — | leftChars+hanging indent fix (COM-confirmed 10.5pt multiplier), font unification (17 docs: Arial Unicode MS/HG*/Georgia → supported fonts) |
-| 2026-04-10b | **0.8520** | — | — | Fullwidth symbol fix (7 Unicode blocks: Arrows →, Math Operators ≠≦, Letterlike ℃, Enclosed ① ㊤ ㎜), twip-priority indent |
+| Date | avg SSIM | Key Changes |
+|------|----------|-------------|
+| 2026-03-28 | 0.7884 | Baseline: grid snap, spacing collapse, justify, GDI metrics |
+| 2026-04-06 | **0.8430** | LM0 line height, docGrid no-type, font alias, eastAsia fallback |
+| 2026-04-10 | **0.8520** | leftChars indent, fullwidth symbols, font unification |
+| 2026-04-14 | **0.8584** | 12 new OOXML elements, 10tw char width, cumulative raw model |
 
-### COM-Confirmed Specifications (key examples)
-
-| Specification | Behavior |
-|---|---|
-| **autoSpaceDE** | Adds 2.5pt only between Latin alphanumerics and CJK ideographs/kana. CJK punctuation (（、。) does NOT trigger auto-space |
-| **LayoutMode=0 multiple spacing** | Uses ROUND to 0.5pt (not CEIL); cumulative includes last line |
-| **LayoutMode≥1 multiple spacing** | Uses CEIL to 0.5pt; cumulative excludes last line |
-| **CJK 83/64 line height** | `(winAsc + winDes) × fontSize × 83/64`, no 1/8pt floor; round at final step |
-| **Half-width Japanese font names** | "MS明朝" → Yu Mincho metrics, "MS Pゴシック" → Yu Gothic (GDI fallback equivalent) |
-| **Theme ea="" resolution** | Falls back to docDefaults eastAsia, then to system default CJK font |
-| **Mixed-font line height** | When line has Latin text in a CJK 83/64 ascii font, that font's CJK height is included in max |
-| **General Punctuation fullwidth** | Specific chars only: ‐ ― ' † ‡ ‥ … ‰ ′ ″ ※ (NOT — ' " " • ⁂ ⁄) |
-| **Font name normalization** | Comma-separated lists ("MS明朝,Times New Roman") use first segment |
-| **Bold-aware metrics** | When run is bold, lookup `{family} Bold` or `{family} Demibold` variant |
-
-**Method**: Word PDF export (150dpi) vs Oxi GDI renderer (TextOutW, 150dpi). COM-confirmed specifications only — no speculation.
-
-**DML structural comparison**: 177+49 documents cached. Paragraph Y, line-break positions, and table row heights compared using `layout_json --structure` and `dml_diff.py`.
+For detailed daily progress, COM-confirmed specifications, and DML structural comparison results, see [docs/layout_accuracy.md](docs/layout_accuracy.md).
 
 ---
 
