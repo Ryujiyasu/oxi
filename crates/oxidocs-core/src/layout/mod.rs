@@ -719,7 +719,7 @@ impl LayoutEngine {
                         let mut delta = 0.0_f32;
                         let mut full = 0.0_f32;
                         let mut seen_new: Vec<u32> = Vec::new();
-                        let separator_overhead: f32 = 0.0;
+                        let separator_overhead: f32 = 0.0; // now handled in commit_para_footnotes
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !seen_new.contains(&id) {
@@ -730,8 +730,6 @@ impl LayoutEngine {
                                         full += separator_overhead;
                                         delta += separator_overhead;
                                     }
-                                    #[cfg(debug_assertions)]
-                                    eprintln!("[FN-RSV] id={} h={:.1} total_reserve={:.1}", id, h, footnote_reserve_current + delta);
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
                                         delta += h;
