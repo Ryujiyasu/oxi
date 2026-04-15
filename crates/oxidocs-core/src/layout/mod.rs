@@ -205,9 +205,15 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        // Pre-pass: resolve fitText runs using actual font metrics
+        let mut doc_resolved = doc.clone();
+        for page in &mut doc_resolved.pages {
+            self.resolve_fit_text_page(page);
+        }
+
         let mut pages = Vec::new();
 
-        for page in &doc.pages {
+        for page in &doc_resolved.pages {
             let laid_out = self.layout_page(page);
             pages.extend(laid_out);
         }
@@ -380,6 +386,89 @@ impl LayoutEngine {
         match self.default_font_family.as_deref() {
             Some(ff) => self.registry.get(ff),
             None => self.registry.default_metrics(),
+        }
+    }
+
+    /// Resolve fitText runs: calculate actual character widths using font metrics,
+    /// then set character_spacing (expand) or text_scale (compress) to match target.
+    fn resolve_fit_text_page(&self, page: &mut Page) {
+        self.resolve_fit_text_blocks(&mut page.blocks);
+        for note in &mut page.footnotes {
+            self.resolve_fit_text_blocks(&mut note.blocks);
+        }
+        self.resolve_fit_text_blocks(&mut page.header);
+        self.resolve_fit_text_blocks(&mut page.footer);
+    }
+
+    fn resolve_fit_text_blocks(&self, blocks: &mut [Block]) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(para) => {
+                    self.resolve_fit_text_runs(&mut para.runs, &para.style);
+                }
+                Block::Table(table) => {
+                    for row in table.rows.iter_mut() {
+                        for cell in row.cells.iter_mut() {
+                            self.resolve_fit_text_blocks(&mut cell.blocks);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_fit_text_runs(&self, runs: &mut [Run], para_style: &ParagraphStyle) {
+        let mut i = 0;
+        while i < runs.len() {
+            if let (Some(target_w), Some(group_id)) = (runs[i].style.fit_text, runs[i].style.fit_text_id) {
+                let start = i;
+                while i < runs.len() && runs[i].style.fit_text_id == Some(group_id) {
+                    i += 1;
+                }
+                let char_count: usize = runs[start..i].iter()
+                    .map(|r| r.text.chars().count()).sum();
+                if char_count == 0 { continue; }
+
+                // Get ACTUAL natural width by calling break_into_lines with cs=0.
+                // This accounts for autoSpaceDE, yakumono, etc.
+                let saved_cs: Vec<Option<f32>> = runs[start..i].iter()
+                    .map(|r| r.style.character_spacing).collect();
+                for run in &mut runs[start..i] {
+                    run.style.character_spacing = Some(0.0);
+                }
+                let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> =
+                    runs[start..i].iter().enumerate()
+                    .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
+                    .collect();
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None);
+                let natural_w: f32 = lines.iter()
+                    .flat_map(|l| l.fragments.iter())
+                    .map(|f| f.width)
+                    .sum();
+
+                // Restore original cs before overriding
+                for (idx, run) in runs[start..i].iter_mut().enumerate() {
+                    run.style.character_spacing = saved_cs[idx];
+                }
+
+                if natural_w > 0.01 {
+                    if natural_w <= target_w {
+                        let raw_extra = (target_w - natural_w) / char_count as f32;
+                        for run in &mut runs[start..i] {
+                            run.style.character_spacing = Some(raw_extra);
+                        }
+                    } else {
+                        let scale = target_w / natural_w * 100.0;
+                        for run in &mut runs[start..i] {
+                            run.style.text_scale = Some(scale);
+                            run.style.character_spacing = Some(0.0);
+                        }
+                    }
+                }
+            } else {
+                i += 1;
+            }
         }
     }
 
@@ -2140,7 +2229,11 @@ impl LayoutEngine {
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
-                        character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing,
+                        character_spacing: if frag.style.fit_text.is_some() {
+                            frag.style.character_spacing.unwrap_or(0.0) + justify_char_spacing
+                        } else {
+                            snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing
+                        },
                 });
                 if let Some(pi) = body_para_index {
                     el.paragraph_index = Some(pi);
@@ -2419,7 +2512,12 @@ impl LayoutEngine {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
 
-            let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
+            // fitText runs: skip GDI snap to preserve exact target width
+            let cs = if style.fit_text.is_some() {
+                style.character_spacing.unwrap_or(0.0)
+            } else {
+                snap_character_spacing(style.character_spacing.unwrap_or(0.0))
+            };
 
             // Pre-resolve font metrics and GDI width maps for this fragment.
             // Avoids repeated font family resolution and HashMap lookups per character.
@@ -2682,7 +2780,7 @@ impl LayoutEngine {
                         run_index: frag_run_index,
                         char_offset: char_pos_in_run,
                     });
-                    current_width += char_width; current_grid_extra += char_grid_extra;
+                    current_width += char_width; current_width_tw += pt_to_tw(char_width); current_grid_extra += char_grid_extra;
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -3612,7 +3710,11 @@ impl LayoutEngine {
                                 .map(|s| s.to_string());
 
                             // Split text character by character for wrapping
-                            let cs = snap_character_spacing(run.style.character_spacing.unwrap_or(0.0));
+                            let cs = if run.style.fit_text.is_some() {
+                                run.style.character_spacing.unwrap_or(0.0)
+                            } else {
+                                snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
+                            };
                             let mut buf = String::new();
                             let mut buf_w: f32 = 0.0;
                             for ch in run.text.chars() {
