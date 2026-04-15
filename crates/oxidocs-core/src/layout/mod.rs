@@ -2120,10 +2120,13 @@ impl LayoutEngine {
             }
 
             let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
-            // COM-confirmed (d77a): firstLine indent reduces available width but
-            // does NOT shift line_x. Text starts at margin+indent_left regardless.
-            // The first line is simply shorter (justify compresses or right side truncates).
-            let line_x = start_x + indent_left;
+            // For right-aligned text, firstLine indent reduces available width but
+            // doesn't shift line_x (text is pushed from the right edge).
+            let line_x = if para.alignment == Alignment::Right {
+                start_x + indent_left
+            } else {
+                start_x + indent_left + extra_indent
+            };
 
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
