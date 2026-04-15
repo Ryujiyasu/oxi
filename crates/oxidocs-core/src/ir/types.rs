@@ -250,6 +250,9 @@ pub struct RunStyle {
     /// Fit text width in points (w:fitText, twips / 20)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_text: Option<f32>,
+    /// Fit text group ID (w:fitText w:id)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_text_id: Option<i64>,
     /// Character width scale percentage (w:w, default 100)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_scale: Option<f32>,
@@ -299,6 +302,7 @@ impl Default for RunStyle {
             italic_cs: false,
             kern: None,
             fit_text: None,
+            fit_text_id: None,
             text_scale: None,
             combine: false,
             vert_in_horz: false,
