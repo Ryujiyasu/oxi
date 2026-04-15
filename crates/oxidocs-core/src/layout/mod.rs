@@ -236,18 +236,29 @@ impl LayoutEngine {
 
     /// Resolve font size for a run, considering paragraph style defaults and heading level
     fn resolve_font_size(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> f32 {
-        if let Some(fs) = run_style.font_size {
-            return fs;
-        }
-        if let Some(ref drs) = para_style.default_run_style {
+        let base = if let Some(fs) = run_style.font_size {
+            fs
+        } else if let Some(ref drs) = para_style.default_run_style {
             if let Some(fs) = drs.font_size {
-                return fs;
+                fs
+            } else if let Some(level) = para_style.heading_level {
+                heading_default_font_size(level)
+            } else {
+                self.default_font_size
+            }
+        } else if let Some(level) = para_style.heading_level {
+            heading_default_font_size(level)
+        } else {
+            self.default_font_size
+        };
+        // Word auto-shrinks superscript/subscript to 2/3 of base size
+        // when no explicit font_size is set on the run.
+        if run_style.font_size.is_none() {
+            if matches!(run_style.vertical_align, Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)) {
+                return (base * 2.0 / 3.0 * 2.0).round() / 2.0; // round to 0.5pt
             }
         }
-        if let Some(level) = para_style.heading_level {
-            return heading_default_font_size(level);
-        }
-        self.default_font_size
+        base
     }
 
     /// Resolve font family for a run.
