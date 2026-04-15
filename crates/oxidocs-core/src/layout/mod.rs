@@ -751,7 +751,14 @@ impl LayoutEngine {
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !ids.contains(&id) {
+                                    // First footnote: separator line (2pt + 4pt padding)
+                                    if ids.is_empty() {
+                                        *reserve += 6.0;
+                                    }
                                     ids.push(id);
+                                    // estimate + per-note rendering overhead
+                                    // (superscript marker consumes ~10pt extra Y space
+                                    // not captured by estimate_para_height)
                                     *reserve += estimate_footnote_h(id);
                                 }
                             }
