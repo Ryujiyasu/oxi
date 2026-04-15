@@ -587,6 +587,9 @@ impl LayoutEngine {
                 for nb in &note.blocks {
                     if let Block::Paragraph(p) = nb {
                         if first_para {
+                            // Footnote rendering prepends a seq number to the first
+                            // paragraph, which increases its width and may add a line.
+                            // Clone and add prefix to match actual rendering.
                             let mut p2 = p.clone();
                             let seq = page.footnotes.iter()
                                 .position(|n| n.number == id)
@@ -600,7 +603,11 @@ impl LayoutEngine {
                                     first_run.text = format!("{}{}", prefix, first_run.text);
                                 }
                             }
-                            h += self.estimate_para_height(&p2, cw, None, None);
+                            let ph = self.estimate_para_height(&p2, cw, None, None);
+                            // The footnote marker (superscript number) renders
+                            // at a different Y position, effectively adding
+                            // ~half a line of extra height per footnote.
+                            h += ph + 2.0;
                             first_para = false;
                         } else {
                             h += self.estimate_para_height(p, cw, None, None);
@@ -671,6 +678,7 @@ impl LayoutEngine {
         let mut footnote_reserve_current: f32 = 0.0;
         let mut footnote_ids_current_page: Vec<u32> = Vec::new();
 
+
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // wrapTopAndBottom: for inline TABLE blocks, push below overlapping TextBoxes
             // Skip for floating tables (tblpPr) as they have explicit positioning
@@ -711,14 +719,16 @@ impl LayoutEngine {
                         let mut delta = 0.0_f32;
                         let mut full = 0.0_f32;
                         let mut seen_new: Vec<u32> = Vec::new();
+                        let separator_overhead: f32 = 0.0; // now handled in commit_para_footnotes
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !seen_new.contains(&id) {
                                     seen_new.push(id);
                                     let h = estimate_footnote_h(id);
+                                    // First footnote on page includes separator overhead
                                     if footnote_ids_current_page.is_empty() && seen_new.len() == 1 {
-                                        full += 6.0;
-                                        delta += 6.0;
+                                        full += separator_overhead;
+                                        delta += separator_overhead;
                                     }
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
@@ -910,9 +920,8 @@ impl LayoutEngine {
                     prev_space_after = sa;
                     elements.extend(para_elements);
 
-                    let pages_added = pages.len() - pages_before;
-
                     // Track page/column breaks that happened inside layout_paragraph
+                    let pages_added = pages.len() - pages_before;
                     if pages_added > 0 {
                         // Multi-column: a "page break" inside layout_paragraph may actually
                         // be a column break. Check if we can advance to the next column.
