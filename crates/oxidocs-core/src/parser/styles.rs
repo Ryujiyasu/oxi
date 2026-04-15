@@ -784,6 +784,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.widow_control = enabled;
+            style.has_explicit_widow_control = true;
         }
         "bidi" => {
             let mut enabled = true;
@@ -1235,6 +1236,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.widow_control = enabled;
+                            style.has_explicit_widow_control = true;
                         }
                         "jc" => {
                             for attr in e.attributes().flatten() {
