@@ -607,7 +607,7 @@ impl LayoutEngine {
                             // The footnote marker (superscript number) renders
                             // at a different Y position, effectively adding
                             // ~half a line of extra height per footnote.
-                            h += ph;
+                            h += ph + 2.0;
                             first_para = false;
                         } else {
                             h += self.estimate_para_height(p, cw, None, None);
