@@ -2092,15 +2092,17 @@ impl LayoutEngine {
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
             let is_last_line = line_idx == lines.len() - 1;
+            // For alignment/justify, use indent-adjusted width
+            let render_width = content_width - indent_left - indent_right;
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
                 Alignment::Center => {
                     // Word GDI: integer pixel division at 96dpi for center alignment
-                    let slack_tw = ((available_width - extra_indent - line_text_width) * 20.0).round() as i32;
+                    let slack_tw = ((render_width - extra_indent - line_text_width) * 20.0).round() as i32;
                     let center_tw = slack_tw / 2; // integer division (truncate)
                     center_tw as f32 / 20.0
                 },
-                Alignment::Right => available_width - extra_indent - line_text_width,
+                Alignment::Right => render_width - extra_indent - line_text_width,
                 Alignment::Justify => 0.0,
                 // Distribute: when justification applies (multi-fragment lines), offset is 0
                 // because slack is distributed across fragments. When justification can't
@@ -2109,7 +2111,7 @@ impl LayoutEngine {
                     if line.fragments.len() > 1 {
                         0.0
                     } else {
-                        let slack = available_width - extra_indent - line_text_width;
+                        let slack = render_width - extra_indent - line_text_width;
                         if slack > 0.0 { slack / 2.0 } else { 0.0 }
                     }
                 }
@@ -2141,7 +2143,7 @@ impl LayoutEngine {
                             .count() as f32 * (pitch - fs)
                     }).sum::<f32>()
                 } else { 0.0 };
-                let mut slack = available_width - extra_indent - line_text_width - grid_extra_on_line;
+                let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
 
                 // Phase 1: CJK punctuation compression (full-width -> half-width)
                 // Only compress when the line overflows (slack < 0).
