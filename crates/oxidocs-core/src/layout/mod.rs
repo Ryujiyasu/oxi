@@ -677,7 +677,8 @@ impl LayoutEngine {
         // effective content_height in overflow checks below.
         let mut footnote_reserve_current: f32 = 0.0;
         let mut footnote_ids_current_page: Vec<u32> = Vec::new();
-
+        // Track which footnote refs land on which layout page (for rendering)
+        let mut footnote_ref_pages: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // wrapTopAndBottom: for inline TABLE blocks, push below overlapping TextBoxes
@@ -719,16 +720,14 @@ impl LayoutEngine {
                         let mut delta = 0.0_f32;
                         let mut full = 0.0_f32;
                         let mut seen_new: Vec<u32> = Vec::new();
-                        let separator_overhead: f32 = 0.0; // now handled in commit_para_footnotes
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !seen_new.contains(&id) {
                                     seen_new.push(id);
                                     let h = estimate_footnote_h(id);
-                                    // First footnote on page includes separator overhead
                                     if footnote_ids_current_page.is_empty() && seen_new.len() == 1 {
-                                        full += separator_overhead;
-                                        delta += separator_overhead;
+                                        full += 6.0;
+                                        delta += 6.0;
                                     }
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
@@ -920,8 +919,31 @@ impl LayoutEngine {
                     prev_space_after = sa;
                     elements.extend(para_elements);
 
-                    // Track page/column breaks that happened inside layout_paragraph
+                    // Record footnote refs on the page where the paragraph STARTED.
+                    // If mid-paragraph split happened, refs before the split are on the
+                    // start page; refs after are on the final page.
+                    // Simple approach: assign all refs to start page (block_page_idx).
+                    // Override: if page split happened AND a ref wasn't in the
+                    // pre-split footnote_ids_current_page, assign to final page.
                     let pages_added = pages.len() - pages_before;
+                    if !page.footnotes.is_empty() {
+                        let start_page = current_page_idx;
+                        let final_page = current_page_idx + pages_added;
+                        for r in &para.runs {
+                            if let Some(id) = r.footnote_ref {
+                                if !footnote_ref_pages.contains_key(&id) {
+                                    if pages_added > 0 && !footnote_ids_current_page.contains(&id) {
+                                        // This ref wasn't committed pre-split → it's on the new page
+                                        footnote_ref_pages.insert(id, final_page);
+                                    } else {
+                                        footnote_ref_pages.insert(id, start_page);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Track page/column breaks that happened inside layout_paragraph
                     if pages_added > 0 {
                         // Multi-column: a "page break" inside layout_paragraph may actually
                         // be a column break. Check if we can advance to the next column.
@@ -1201,18 +1223,14 @@ impl LayoutEngine {
                     }
                 }
 
-                // Gather paragraphs/tables that landed on this layout page.
-                let mut page_blocks: Vec<&Block> = Vec::new();
-                for (i, b) in page.blocks.iter().enumerate() {
-                    if block_page_indices.get(i).copied().unwrap_or(0) == page_idx {
-                        page_blocks.push(b);
+                // Use footnote_ref_pages map for accurate per-page assignment
+                let mut referenced_ids: Vec<u32> = Vec::new();
+                for (&fn_id, &fn_page) in &footnote_ref_pages {
+                    if fn_page == page_idx && !referenced_ids.contains(&fn_id) {
+                        referenced_ids.push(fn_id);
                     }
                 }
-                let mut referenced_ids: Vec<u32> = Vec::new();
-                collect_footnote_refs(
-                    &page_blocks.iter().map(|&b| b.clone()).collect::<Vec<_>>(),
-                    &mut referenced_ids,
-                );
+                referenced_ids.sort();
 
                 if !referenced_ids.is_empty() {
                     // Resolve referenced footnotes (preserve order, dedup already done).
