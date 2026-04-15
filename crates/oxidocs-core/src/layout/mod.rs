@@ -607,7 +607,7 @@ impl LayoutEngine {
                             // The footnote marker (superscript number) renders
                             // at a different Y position, effectively adding
                             // ~half a line of extra height per footnote.
-                            h += ph + 7.0; // marker line overhead
+                            h += ph;
                             first_para = false;
                         } else {
                             h += self.estimate_para_height(p, cw, None, None);
@@ -719,8 +719,7 @@ impl LayoutEngine {
                         let mut delta = 0.0_f32;
                         let mut full = 0.0_f32;
                         let mut seen_new: Vec<u32> = Vec::new();
-                        // Separator line overhead (2pt line + 4pt padding)
-                        let separator_overhead: f32 = 6.0;
+                        let separator_overhead: f32 = 0.0;
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !seen_new.contains(&id) {
