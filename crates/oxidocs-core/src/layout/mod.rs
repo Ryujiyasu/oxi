@@ -719,7 +719,6 @@ impl LayoutEngine {
                         let mut delta = 0.0_f32;
                         let mut full = 0.0_f32;
                         let mut seen_new: Vec<u32> = Vec::new();
-                        let separator_overhead: f32 = 0.0; // now handled in commit_para_footnotes
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !seen_new.contains(&id) {
@@ -727,8 +726,8 @@ impl LayoutEngine {
                                     let h = estimate_footnote_h(id);
                                     // First footnote on page includes separator overhead
                                     if footnote_ids_current_page.is_empty() && seen_new.len() == 1 {
-                                        full += separator_overhead;
-                                        delta += separator_overhead;
+                                        full += 6.0;
+                                        delta += 6.0;
                                     }
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
@@ -759,6 +758,8 @@ impl LayoutEngine {
                                     // estimate + per-note rendering overhead
                                     // (superscript marker consumes ~10pt extra Y space
                                     // not captured by estimate_para_height)
+                                    // Per-note overhead accounts for superscript marker
+                                    // vertical space in actual rendering vs estimate
                                     *reserve += estimate_footnote_h(id);
                                 }
                             }
@@ -1236,18 +1237,40 @@ impl LayoutEngine {
                             page.size.height - page.margin.bottom
                         };
 
-                        // Estimate total footnote content height to position the
-                        // footnote area top correctly. Footnotes are typically
-                        // 1-2pt smaller than body but we use estimate_para_height
-                        // which already inherits per-paragraph style.
-                        let mut total_h: f32 = 0.0;
+                        // Find the last body element Y on this page to avoid overlap
+                        let body_bottom_y = lp.elements.iter()
+                            .map(|e| e.y + e.height)
+                            .fold(0.0_f32, f32::max);
+
+                        // Calculate footnote heights and only include notes that fit
+                        // above the body content. Notes that don't fit are deferred.
+                        let mut note_heights: Vec<f32> = Vec::new();
                         for note in &notes {
+                            let mut nh: f32 = 0.0;
                             for nb in &note.blocks {
                                 if let Block::Paragraph(p) = nb {
-                                    total_h += self.estimate_para_height(p, hdr_width, grid_pitch, None);
+                                    nh += self.estimate_para_height(p, hdr_width, grid_pitch, None);
                                 }
                             }
+                            note_heights.push(nh);
                         }
+                        let separator_h_pre: f32 = 2.0;
+                        let separator_pad_pre: f32 = 4.0;
+                        // Determine how many notes fit: add notes one by one from the
+                        // bottom; stop when area_top would overlap body content.
+                        let mut total_h: f32 = 0.0;
+                        let mut fit_count = notes.len();
+                        for i in 0..notes.len() {
+                            let candidate = total_h + note_heights[i] + separator_h_pre + separator_pad_pre;
+                            let candidate_top = footnote_bottom - candidate;
+                            if candidate_top < body_bottom_y + 2.0 {
+                                // This note doesn't fit; truncate here
+                                fit_count = i;
+                                break;
+                            }
+                            total_h += note_heights[i];
+                        }
+                        let notes: Vec<&Footnote> = notes[..fit_count].to_vec();
                         // Separator: short horizontal line above the footnotes.
                         let separator_h: f32 = 2.0;
                         let separator_pad: f32 = 4.0;
