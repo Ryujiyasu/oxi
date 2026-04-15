@@ -583,9 +583,35 @@ impl LayoutEngine {
             if let Some(note) = page.footnotes.iter().find(|n| n.number == id) {
                 let cw = page.size.width - page.margin.left - page.margin.right;
                 let mut h: f32 = 0.0;
+                let mut first_para = true;
                 for nb in &note.blocks {
                     if let Block::Paragraph(p) = nb {
-                        h += self.estimate_para_height(p, cw, page.grid_line_pitch, None);
+                        if first_para {
+                            // Footnote rendering prepends a seq number to the first
+                            // paragraph, which increases its width and may add a line.
+                            // Clone and add prefix to match actual rendering.
+                            let mut p2 = p.clone();
+                            let seq = page.footnotes.iter()
+                                .position(|n| n.number == id)
+                                .map(|pos| (pos as u32) + 1)
+                                .unwrap_or(id);
+                            let prefix = format!("{}", seq);
+                            if let Some(first_run) = p2.runs.first_mut() {
+                                if first_run.text.is_empty() {
+                                    first_run.text = prefix;
+                                } else {
+                                    first_run.text = format!("{}{}", prefix, first_run.text);
+                                }
+                            }
+                            let ph = self.estimate_para_height(&p2, cw, None, None);
+                            // The footnote marker (superscript number) renders
+                            // at a different Y position, effectively adding
+                            // ~half a line of extra height per footnote.
+                            h += ph + 7.0; // marker line overhead
+                            first_para = false;
+                        } else {
+                            h += self.estimate_para_height(p, cw, None, None);
+                        }
                     }
                 }
                 h
@@ -693,11 +719,20 @@ impl LayoutEngine {
                         let mut delta = 0.0_f32;
                         let mut full = 0.0_f32;
                         let mut seen_new: Vec<u32> = Vec::new();
+                        // Separator line overhead (2pt line + 4pt padding)
+                        let separator_overhead: f32 = 6.0;
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !seen_new.contains(&id) {
                                     seen_new.push(id);
                                     let h = estimate_footnote_h(id);
+                                    // First footnote on page includes separator overhead
+                                    if footnote_ids_current_page.is_empty() && seen_new.len() == 1 {
+                                        full += separator_overhead;
+                                        delta += separator_overhead;
+                                    }
+                                    #[cfg(debug_assertions)]
+                                    eprintln!("[FN-RSV] id={} h={:.1} total_reserve={:.1}", id, h, footnote_reserve_current + delta);
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
                                         delta += h;
