@@ -2711,6 +2711,7 @@ impl LayoutEngine {
                             last.width += extra;
                         }
                         current_width += extra;
+                        current_width_tw += pt_to_tw(extra);
                     }
 
                     if current_width_tw + pt_to_tw(char_width) > available_tw && !current_line.fragments.is_empty() {
@@ -2799,6 +2800,7 @@ impl LayoutEngine {
                                 last.width += extra;
                             }
                             current_width += extra;
+                            current_width_tw += pt_to_tw(extra);
                         }
                     }
                     if word_style.is_none() {
