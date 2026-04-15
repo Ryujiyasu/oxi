@@ -943,6 +943,10 @@ impl LayoutEngine {
                             content_width = col_widths[0];
                         }
                         current_page_idx += pages_added;
+                        // Update block_page_index: if the paragraph moved entirely
+                        // to the new page (no elements left on the old page), update
+                        // the index so footnote rendering assigns to the correct page.
+                        *block_page_indices.last_mut().unwrap() = current_page_idx;
                         // Round 29: paragraph spanned page boundaries internally.
                         // The footnote reservation was for the FIRST page; new pages
                         // start with this paragraph's footnote refs only.
