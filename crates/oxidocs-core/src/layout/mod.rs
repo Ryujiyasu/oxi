@@ -2664,8 +2664,13 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
-                // Don't pre-compress yakumono in char_width. Instead, track
-                // compressible punct count and use at overflow check time.
+                // Physical yakumono pair compression: when two adjacent CJK
+                // puncts form a pair, Word compresses ONE of them to half width.
+                // Applying physically here (not just grid_extra) makes line
+                // break width match Word's actual layout behavior.
+                if yakumono_compressed[char_index] {
+                    char_width *= 0.5;
+                }
                 // §4.6.3 CJK-adjacent space widening — COM-confirmed 2026-04-08.
                 // The Latin space (' ') is widened to ≈ font_size/2 (half-em) when:
                 //   1. The run's <w:rFonts> has an EXPLICIT w:eastAsia attribute
