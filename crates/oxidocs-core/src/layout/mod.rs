@@ -1019,21 +1019,10 @@ impl LayoutEngine {
                         // to the new page (no elements left on the old page), update
                         // the index so footnote rendering assigns to the correct page.
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
-                        // Round 29: paragraph spanned page boundaries internally.
-                        // The footnote reservation was for the FIRST page; new pages
-                        // start with this paragraph's footnote refs only.
+                        // Refs were committed pre-layout to the OLD page's reserve;
+                        // don't re-add to NEW page or they double-count.
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
-                        if !page.footnotes.is_empty() {
-                            for r in &para.runs {
-                                if let Some(id) = r.footnote_ref {
-                                    if !footnote_ids_current_page.contains(&id) {
-                                        footnote_ids_current_page.push(id);
-                                        footnote_reserve_current += estimate_footnote_h(id);
-                                    }
-                                }
-                            }
-                        }
                     }
                     // Round 30: render shapes attached to this paragraph (e.g.
                     // bracketPair preset frame around the date block in
