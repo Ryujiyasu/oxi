@@ -2810,30 +2810,25 @@ impl LayoutEngine {
                     }
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
-                    // Once-per-line overflow absorption:
-                    //   Phase 1: small overflow ≤ 3pt absorbed by justify micro-adjustment
-                    //            (Word applies semi-yakumono compression: (→11.5pt, etc.)
-                    //   Phase 2: larger overflow absorbed by pair-yakumono compression
-                    //            (Word pair-compresses 、「 → 6pt each, saving half font size)
-                    // After ANY absorption, no further absorb is allowed on this line
-                    // (compress_used latches to true, forcing next overflow to line-break).
-                    let absorb = if overflow_tw > 0 && !compress_used {
-                        if overflow_tw <= 60 {
+                    // Two-phase overflow handling:
+                    // Phase 1: first small overflow absorbed by justify (no compression needed)
+                    // Phase 2: second overflow needs compression check
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 60 && !compress_used {
+                        // Small overflow (≤ 3pt): justify can absorb without compression
+                        true
+                    } else if overflow_tw > 0 && self.compress_punctuation {
+                        let count = current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars())
+                            .filter(|&c| kinsoku::is_cjk_compressible(c))
+                            .count();
+                        let savings_tw = count as i32 * pt_to_tw(font_size * 0.5);
+                        // Allow if compression can absorb AND ratio is reasonable (≤50%)
+                        if savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62 {
                             true
-                        } else if self.compress_punctuation {
-                            let count = current_line.fragments.iter()
-                                .flat_map(|f| f.text.chars())
-                                .filter(|&c| kinsoku::is_cjk_compressible(c))
-                                .count();
-                            let savings_tw = count as i32 * pt_to_tw(font_size * 0.5);
-                            savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if absorb {
+                        } else { false }
+                    } else { false };
+                    // Set compress_used after Phase 2 absorption (not Phase 1)
+                    if absorb && overflow_tw > 60 {
                         compress_used = true;
                     }
                     if overflow_tw > 0 && !absorb && !current_line.fragments.is_empty() {
