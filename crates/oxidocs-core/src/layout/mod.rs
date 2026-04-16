@@ -4175,14 +4175,14 @@ impl LayoutEngine {
                 } // for block
                 } // if !is_vmerge_continue
 
-                // Track actual cell height for row_height correction
-                // Use max(y + height) from cell_elements as true content bottom,
-                // since content_h may undercount due to spacing interactions
+                // Track actual cell height for row_height correction.
+                // content_h is the sum of per-paragraph layout heights; elements may
+                // be positioned with a text_y_offset (vertical centering inside the
+                // line box), which makes their bottom extend past content_h. Using
+                // max(content_h, elem_bottom) double-counts this offset and inflates
+                // row height. Trust content_h as the authoritative sum.
                 if !is_vmerge_continue && !is_exact_row {
-                    let max_elem_bottom = cell_elements.iter()
-                        .map(|e| e.y + e.height)
-                        .fold(0.0_f32, f32::max);
-                    let actual = pad_t + max_elem_bottom.max(content_h) + pad_b;
+                    let actual = pad_t + content_h + pad_b;
                     if actual > max_actual_cell_h {
                         max_actual_cell_h = actual;
                     }
