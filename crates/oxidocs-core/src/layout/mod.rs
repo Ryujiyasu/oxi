@@ -2414,10 +2414,15 @@ impl LayoutEngine {
             if use_cumulative {
                 let j = cumul_line_idx;
                 let (cn, cc) = if grid_pitch.is_none() && is_single_lm0 {
-                    // COM-confirmed (2026-04-12, 0e7a p2): LM0 single spacing
-                    // uses CEIL for cumulative line position.
-                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
-                    let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    // COM-confirmed (2026-04-16, 0e7a): LM0 single spacing should use
+                    // position-based cumul, not index × raw. When paragraphs have
+                    // different raws (9pt body in 10.5pt doc), per-paragraph raw
+                    // applied over a shared index underestimates positions.
+                    // Use mult_cumul_raw (shared position accumulator) with CEIL.
+                    let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
+                    let new_pos = old_pos + raw_spaced_tw;
+                    let cn = (new_pos / 10.0).ceil() as i32 * 10;
+                    let cc = (old_pos / 10.0).ceil() as i32 * 10;
                     (cn, cc)
                 } else if is_multiple_spacing {
                     // COM-confirmed (2026-04-14, mixed font repro): Multiple spacing
@@ -2434,8 +2439,8 @@ impl LayoutEngine {
                     (cn, cc)
                 };
                 *cursor_y += (cn - cc) as f32 / 20.0;
-                // Update cumulative raw position for Multiple spacing
-                if is_multiple_spacing {
+                // Update cumulative raw position for Multiple spacing AND LM0 single.
+                if is_multiple_spacing || (grid_pitch.is_none() && is_single_lm0) {
                     if let Some(ref mut cr) = mult_cumul_raw {
                         **cr += raw_spaced_tw;
                     }
