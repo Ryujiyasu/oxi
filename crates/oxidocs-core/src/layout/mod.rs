@@ -761,6 +761,28 @@ impl LayoutEngine {
                     // Always pass lm2_cells: LM2 uses it for grid tracking,
                     // LM0 single-spacing uses it for cross-paragraph cumulative round.
                     let lm2_param = Some(&mut lm2_cells);
+
+                    // COM-confirmed (2026-04-16, 683f p2 + minimal repro):
+                    // content paragraph gets +0.5pt extra advance when adjacent to a RUN
+                    // of ≥2 consecutive empty paragraphs, provided the paragraph on the
+                    // far side of the empty run is a content paragraph (NOT a Table).
+                    // 683f p1 exception: empty run after a table (P11 table → P12/P13 empty
+                    // → P14 content) — Word does NOT +0.5 here.
+                    let is_empty_p = |blk: &Block| matches!(blk, Block::Paragraph(p) if p.runs.iter().all(|r| r.text.is_empty()));
+                    let is_content_para = |blk: &Block| matches!(blk, Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.is_empty()));
+                    let this_empty = para.runs.iter().all(|r| r.text.is_empty());
+                    // prev_2_empty: the 2 blocks immediately before are empty AND block_idx-3 is content paragraph
+                    let prev_2_empty = block_idx >= 3
+                        && is_empty_p(&page.blocks[block_idx - 1])
+                        && is_empty_p(&page.blocks[block_idx - 2])
+                        && is_content_para(&page.blocks[block_idx - 3]);
+                    // next_2_empty: the 2 blocks immediately after are empty AND block_idx+3 is content paragraph
+                    let next_2_empty = block_idx + 3 < page.blocks.len()
+                        && is_empty_p(&page.blocks[block_idx + 1])
+                        && is_empty_p(&page.blocks[block_idx + 2])
+                        && is_content_para(&page.blocks[block_idx + 3]);
+                    let adjacent_to_empty_run = !this_empty && (prev_2_empty || next_2_empty);
+
                     let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
@@ -777,6 +799,7 @@ impl LayoutEngine {
                         Some(block_idx),
                         lm2_param,
                         Some(&mut mult_cumul_raw),
+                        adjacent_to_empty_run,
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -1001,6 +1024,7 @@ impl LayoutEngine {
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
+                            false,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -1023,6 +1047,7 @@ impl LayoutEngine {
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
+                            false,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -1206,6 +1231,7 @@ impl LayoutEngine {
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
                                         false, 0.0, None, None, None,
+                                        false,
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -1462,6 +1488,7 @@ impl LayoutEngine {
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
                         0.0, None, None, None,
+                        false,
                     );
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
@@ -1601,6 +1628,7 @@ impl LayoutEngine {
         body_para_index: Option<usize>,
         mut lm2_grid_cells: Option<&mut usize>,
         mut mult_cumul_raw: Option<&mut f32>,
+        adjacent_to_empty_run: bool,
     ) -> (Vec<LayoutElement>, f32) {
         let mut elements = Vec::new();
 
@@ -2276,6 +2304,14 @@ impl LayoutEngine {
                 elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
             }
+        }
+
+        // COM-confirmed (2026-04-16, 683f p2 + minimal repro): content paragraphs
+        // adjacent to a RUN of ≥2 consecutive empty paragraphs get +0.5pt extra advance.
+        // Only applies to LM0 no-grid single spacing. Skip if paragraph caused page break.
+        if adjacent_to_empty_run && is_single_lm0 && grid_pitch.is_none()
+            && (*cursor_y - page_top).abs() > 0.1 {
+            *cursor_y += 0.5;
         }
 
         let space_after = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
