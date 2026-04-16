@@ -2668,6 +2668,7 @@ impl LayoutEngine {
                         current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
+                            current_width_tw += pt_to_tw(f.width);
                             current_line.fragments.push(f);
                         }
                     }
@@ -2682,7 +2683,9 @@ impl LayoutEngine {
                         run_index: frag_run_index,
                         char_offset: char_pos_in_run,
                     });
-                    current_width += char_width; current_grid_extra += char_grid_extra;
+                    current_width += char_width;
+                    current_width_tw += pt_to_tw(char_width);
+                    current_grid_extra += char_grid_extra;
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -3120,36 +3123,21 @@ impl LayoutEngine {
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                 // exact/atLeast: text at bottom of line box (extra space above).
-                //
-                // CAVEAT: Word's COM Range.Information(6) reports line BOX top
-                // (= cursor_y), NOT the rendered text glyph top. The actual
-                // GDI rendering places the text at (line_box_top + line_height - natural).
-                // Verified empirically 2026-04-08: setting offset=0 (matching COM) caused
-                // SSIM regression on index-19 p1 (0.8516→0.8175). The d20983e6 commit
-                // ("PIXEL PERFECT") was correct about pixel position. dml_diff |dy| is
-                // a reporting artifact and is NOT a reliable signal for text_y_offset.
-                let mut max_ascent: f32 = 0.0;
-                let mut max_descent: f32 = 0.0;
+                // Per spec §13.4 note: "GDI TextOutW character cell = fontSize".
+                // offset = line_height - max_font_size. COM-confirmed on 1ec1 p1
+                // Shape 4 exact=22pt fontSize=14pt → 8pt offset (not 3.85pt).
+                let mut max_font_size: f32 = 0.0;
                 if line.fragments.is_empty() {
-                    let font_size = para_style.ppr_rpr.as_ref()
+                    max_font_size = para_style.ppr_rpr.as_ref()
                         .and_then(|r| r.font_size)
                         .unwrap_or(para_font_size);
-                    let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                    let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
-                    max_ascent = metrics.word_ascent_pt(font_size);
-                    max_descent = metrics.word_descent_pt(font_size);
                 } else {
                     for frag in &line.fragments {
-                        let font_size = frag.style.font_size.unwrap_or(para_font_size);
-                        let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                        let asc = metrics.word_ascent_pt(font_size);
-                        let des = metrics.word_descent_pt(font_size);
-                        if asc > max_ascent { max_ascent = asc; }
-                        if des > max_descent { max_descent = des; }
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        if fs > max_font_size { max_font_size = fs; }
                     }
                 }
-                let natural = max_ascent + max_descent;
-                (line_height - natural).max(0.0)
+                (line_height - max_font_size).max(0.0)
             }
             _ => {
                 // Grid-snapped lines: text is vertically centered within the grid cell.
@@ -3180,19 +3168,36 @@ impl LayoutEngine {
                 // COM-confirmed: test_line_height.docx all fonts show y = cursor_y (no offset).
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
-                    // COM-confirmed (2026-04-04): text is vertically centered within the
-                    // grid cell. The offset places text in the middle of the pitch.
-                    // Measured: MS Gothic 12pt pitch=18 → offset=1.0 ≈ (18-16)/2 (via GDI)
-                    //           Century 10.5pt pitch=18 → offset=2.5 ≈ (18-13)/2 (via GDI)
-                    // Best approximation: (pitch - GDI_height_pt) / 2, floor to 0.5pt.
-                    // Fallback when GDI table unavailable: (pitch - fontSize) / 2.
+                    // COM-confirmed (2026-04-04/16): text is vertically centered within
+                    // its grid-cell allocation. For single-cell lines (fontSize ≤ pitch),
+                    // line_height == pitch so offset = (pitch - natural)/2. For multi-cell
+                    // lines where line is snapped to n*pitch (fontSize > pitch, e.g.
+                    // 20pt title in 17.85pt pitch = 2 cells = 35.7pt), centering uses the
+                    // full line_height: offset = (line_height - natural)/2, which
+                    // reduces to the single-cell case when n=1. Round to 0.5pt.
+                    //
+                    // COM-measured 2026-04-16 (verify_lm2_multicell_firstline.py, 35 samples):
+                    //   MS Mincho 14pt (2 cells=36, pitch=18): offset=8.80 ≈ (36-18.15)/2
+                    //   MS Mincho 18pt (2 cells=36):          offset=6.30 ≈ (36-23.34)/2
+                    //   MS Mincho 24pt (2 cells=36):          offset=2.30 ≈ (36-31.12)/2
+                    //   Yu Mincho 20pt (2 cells=36):          offset=1.30 ≈ (36-33.4)/2
+                    //   Meiryo 20pt (3 cells=54):             offset=7.30 ≈ (54-25.9)/2
+                    // Centering offset for grid-snapped line: center the GDI character
+                    // cell (= fontSize) within the allocated line_height per spec §13.4.
+                    // For single-cell lines (line_height == pitch, fontSize ≤ pitch):
+                    //   offset = (pitch - fontSize)/2
+                    // For multi-cell lines (line_height = n*pitch when fontSize > pitch):
+                    //   offset = (line_height - fontSize)/2
+                    // Both reduce to (line_height - fontSize)/2 because line_height = pitch
+                    // in the single-cell case.
                     let font_size = if !line.fragments.is_empty() {
-                        line.fragments[0].style.font_size.unwrap_or(para_font_size)
+                        line.fragments.iter()
+                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .fold(0.0_f32, f32::max)
                     } else { para_font_size };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let natural = max_ascent + max_descent;
-                        let raw = (pitch - natural).max(0.0) / 2.0;
+                        let raw = (line_height - font_size).max(0.0) / 2.0;
                         // Round to 0.5pt (10 twips) — COM-confirmed best fit
                         (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
@@ -3395,8 +3400,6 @@ impl LayoutEngine {
             //   <w:trHeight w:val="830"/> with NO w:hRule attribute →
             //   Word reports HeightRule = atLeast (1) and renders the row
             //   at exactly val (41.5pt = 830tw), not at content height.
-            //   The earlier "Round 22" claim that ECMA default = auto and
-            //   val is a HINT was wrong for at least this document.
             //   Treat missing hRule as atLeast to match Word behavior.
             if let Some(h) = row.height {
                 match row.height_rule.as_deref() {
@@ -3770,10 +3773,27 @@ impl LayoutEngine {
                                 }
                             }
 
+                            // Apply text_y_offset to center/bottom-align text within line_height
+                            // per spec §13.4 note "GDI TextOutW character cell = fontSize".
+                            // For grid-snapped cell lines (line_height = n*pitch), this centers
+                            // the character cell; for exact spacing, bottom-aligns.
+                            let cell_max_fs: f32 = line.iter()
+                                .map(|(_, fs, _, _, _, _, _, _, _, _, _, _)| *fs)
+                                .fold(0.0_f32, f32::max);
+                            let cell_text_y_off = match (effective_line_rule, effective_line_spacing) {
+                                (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
+                                    (lh - cell_max_fs).max(0.0)
+                                }
+                                _ => {
+                                    // Single/auto grid-snapped: center fontSize within lh.
+                                    let raw = (lh - cell_max_fs).max(0.0) / 2.0;
+                                    (raw * 2.0 + 0.5).floor() / 2.0
+                                }
+                            };
                             let mut rx = 0.0_f32;
                             for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
-                                cell_elements.push(LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h, adj_w, lh, LayoutContent::Text {
+                                cell_elements.push(LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h + cell_text_y_off, adj_w, lh, LayoutContent::Text {
                                         text: text.clone(),
                                         font_size: *fs,
                                         font_family: font_family.clone(),

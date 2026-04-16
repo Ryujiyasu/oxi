@@ -1402,9 +1402,34 @@ Justify (jc=both) is also **disabled** inside TextBoxes. Text is left-aligned.
 
 - exact/atLeast spacing: extra space is placed **above** the text (text at bottom)
   - `text_y_offset = (line_spacing - natural_height).max(0)`
-- single spacing (grid snap): fontSize is **centered** within the grid cell
-  - `text_y_offset = (grid_snapped_height - fontSize) / 2`
-  - Note: uses fontSize, NOT CJK_natural (GDI TextOutW character cell = fontSize)
+- single spacing (grid snap): natural height is **centered** within the allocated line_height
+  - `text_y_offset = (line_height - natural_height) / 2`, round to 0.5pt
+  - `line_height = n × pitch` where n = grid cells occupied
+  - For single-cell lines (fontSize ≤ pitch): n=1, so formula reduces to `(pitch - natural)/2`
+  - **Multi-cell lines (fontSize > pitch)**: n≥2, using `line_height` (not `pitch`) is essential
+
+**COM-confirmed (2026-04-16, verify_lm2_multicell_firstline.py, pitch=18pt, 35 samples):**
+
+| font | size | cells | line_height | natural | measured offset | (lh - nat)/2 |
+|---|---|---|---|---|---|---|
+| MS Mincho | 10.5 | 1 | 18 | 13.62 | 1.80 | 2.19 |
+| MS Mincho | 12 | 1 | 18 | 15.56 | 0.80 | 1.22 |
+| MS Mincho | 14 | 2 | 36 | 18.16 | 8.80 | 8.92 |
+| MS Mincho | 18 | 2 | 36 | 23.34 | 6.30 | 6.33 |
+| MS Mincho | 24 | 2 | 36 | 31.12 | 2.30 | 2.44 |
+| Meiryo | 10.5 | 2 | 36 | ≈20.4 | 7.80 | 7.80 |
+| Meiryo | 20 | 3 | 54 | ≈25.9 | 7.30 | 14.05 (±) |
+| Yu Gothic Light | 12 | 2 | 36 | ≈20.4 | 7.80 | 7.80 |
+| Yu Gothic Light | 20 | 2 | 36 | ≈33.4 | 1.30 | 1.30 |
+
+**Previous bug**: Oxi's `text_y_offset_for_line` used `pitch` instead of `line_height`, clipping
+offset to 0 for all multi-cell cases. Affected any grid-snapped doc with fontSize > pitch (common
+for 14-20pt titles in a pitch=18pt grid). E.g., 1ec1091177b1_006 title renders ~7.7pt higher
+than Word. Fix: change `(pitch - natural)` to `(line_height - natural)` in the centering formula.
+Code: crates/oxidocs-core/src/layout/mod.rs:3195.
+
+- Note: `line_height` already equals `n × pitch` after grid snap (see §1.4). Using it keeps
+  single-cell behavior identical while correctly extending to multi-cell lines.
 
 ### 13.5 Shape Stroke
 
