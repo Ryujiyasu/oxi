@@ -73,8 +73,12 @@ At the start of each session, check the current state and continue autonomous sp
 8. **Primary verification**: Word EMF vs Oxi GDI pixel diff via `pipeline.verify`
    on the full baseline. DML diff is **secondary only** (Information(6) is line-box
    top, not glyph top — see com-info6-caveat)
-9. **Zero-regression rule**: merge ONLY if `regressed_docs == 0 AND improved_docs > 0`.
-   "Net positive but some docs worse" = revert. Net averages hide real bugs
+9. **Bottom-N floor rule** (2026-04-16 FINAL, phase-based):
+   - Compute `pre_b3 = sum of 3 lowest min(SSIM) per doc` from pre-fix baseline
+   - Phase 1 (`pre_b3 ≤ 1.5`): N=3. Merge if post-fix bottom-3 sum > pre_b3
+   - Phase 2 (`pre_b3 > 1.5`): N=5. Merge if post-fix bottom-5 sum > pre-fix bottom-5 sum
+   - Phase切替は不可逆。rank ≥(N+1) は無視。Averages and net Δ are NOT the gate
+   - Phase 2 への自動拡大は whack-a-mole nesting（rank 4-5 の隠れregressionが後で噴出）を抑える
 10. If an EXCEPTION must be carved out for a doc → the original spec is **wrong**,
     not incomplete. Re-derive it from a richer input space (PANOSE, proportional
     flag, etc.) before re-implementing. Do not stack exceptions
@@ -142,14 +146,19 @@ narrowing down *which block* differs, not for confirming a fix.
 5. Rebuild WASM + clear `pipeline_data/oxi_png/`
 6. Pixel diff the repro: must match Word EMF exactly. If not, spec is wrong
 7. Run `pipeline.verify` on full baseline
-8. **Zero-regression check**: any doc that got worse = revert and re-derive
-9. Commit only when regression count == 0
+8. **Bottom-N floor check**: per-doc min(page SSIMs), sort ascending.
+   N=3 if pre-fix bottom-3 sum ≤ 1.5 else N=5. Merge if post-fix bottom-N sum
+   > pre-fix bottom-N sum. Rank ≥(N+1) docs irrelevant
+9. Commit when bottom-N sum rises; revert only if it falls or stays equal
 
 ### Critical Rules
 - No DLL disassembly. Black-box measurement via COM API only
 - Never implement from speculation. Always confirm values via COM measurement first
-- **Zero-regression rule** (replaces net-positive rule): revert if ANY document
-  regresses, even if the average improves. Net averages hide structural bugs
+- **Bottom-N floor rule** (2026-04-16 FINAL, phase-based):
+  N=3 in Phase 1 (pre-fix bottom-3 sum ≤ 1.5), N=5 in Phase 2 (>1.5).
+  Merge if bottom-N sum strictly increases. Rank ≥(N+1) docs outside the gate.
+  Phase 2 expansion to bottom-5 prevents whack-a-mole: rank 4-5 regressions
+  no longer go silent and re-emerge as future bottom-3 targets
 - **3-doc + minimal-repro rule**: a spec is "hypothesis" until 3 distinct real
   docs AND a self-authored minimal repro all agree. Single-doc → never confirmed
 - **No EXCEPTION stacking**: if a confirmed spec needs a per-font / per-doc
