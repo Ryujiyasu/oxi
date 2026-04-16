@@ -18,7 +18,10 @@ fn main() {
 
     // Parse --exclude flag and --supersample=N flag from any argument
     let mut exclude: Vec<String> = Vec::new();
-    let mut supersample: u32 = 1; // opt-in via --supersample=N; 2x gives better AA on small CJK.
+    // 2x supersampling is the default as of 2026-04-16: CJK fonts ≤10.5pt hit the GDI
+    // no-AA fallback with CLEARTYPE_QUALITY, but supersampling + Lanczos downscale
+    // restores grayscale AA matching Word EMF output.
+    let mut supersample: u32 = 2;
     for arg in &args[3..] {
         if let Some(list) = arg.strip_prefix("--exclude=") {
             exclude = list.split(',').map(|s| s.trim().to_lowercase()).collect();
