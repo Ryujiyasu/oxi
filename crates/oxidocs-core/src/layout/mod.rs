@@ -2816,18 +2816,19 @@ impl LayoutEngine {
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
                     // Two-phase overflow handling:
-                    // Phase 1: first small overflow absorbed by justify (no compression needed)
-                    // Phase 2: second overflow needs compression check
-                    let absorb = if overflow_tw > 0 && overflow_tw <= 60 && !compress_used {
-                        // Small overflow (≤ 3pt): justify can absorb without compression
+                    // Phase 1: small overflow (≤3pt) absorbed only if line has compressible chars
+                    //          (Word uses semi-yakumono compression to absorb; no compressibles → break)
+                    // Phase 2: larger overflow absorbed by pair-yakumono compression
+                    let line_compress_count = current_line.fragments.iter()
+                        .flat_map(|f| f.text.chars())
+                        .filter(|&c| kinsoku::is_cjk_compressible(c))
+                        .count();
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 60
+                        && !compress_used && line_compress_count > 0 {
+                        // Small overflow (≤3pt): line has yakumono that can semi-compress
                         true
                     } else if overflow_tw > 0 && self.compress_punctuation {
-                        let count = current_line.fragments.iter()
-                            .flat_map(|f| f.text.chars())
-                            .filter(|&c| kinsoku::is_cjk_compressible(c))
-                            .count();
-                        let savings_tw = count as i32 * pt_to_tw(font_size * 0.5);
-                        // Allow if compression can absorb AND ratio is reasonable (≤50%)
+                        let savings_tw = line_compress_count as i32 * pt_to_tw(font_size * 0.5);
                         if savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62 {
                             true
                         } else { false }
