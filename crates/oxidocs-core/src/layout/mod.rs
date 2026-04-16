@@ -205,9 +205,15 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        // Pre-pass: resolve fitText runs using actual font metrics
+        let mut doc_resolved = doc.clone();
+        for page in &mut doc_resolved.pages {
+            self.resolve_fit_text_page(page);
+        }
+
         let mut pages = Vec::new();
 
-        for page in &doc.pages {
+        for page in &doc_resolved.pages {
             let laid_out = self.layout_page(page);
             pages.extend(laid_out);
         }
@@ -230,18 +236,29 @@ impl LayoutEngine {
 
     /// Resolve font size for a run, considering paragraph style defaults and heading level
     fn resolve_font_size(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> f32 {
-        if let Some(fs) = run_style.font_size {
-            return fs;
-        }
-        if let Some(ref drs) = para_style.default_run_style {
+        let base = if let Some(fs) = run_style.font_size {
+            fs
+        } else if let Some(ref drs) = para_style.default_run_style {
             if let Some(fs) = drs.font_size {
-                return fs;
+                fs
+            } else if let Some(level) = para_style.heading_level {
+                heading_default_font_size(level)
+            } else {
+                self.default_font_size
+            }
+        } else if let Some(level) = para_style.heading_level {
+            heading_default_font_size(level)
+        } else {
+            self.default_font_size
+        };
+        // Word auto-shrinks superscript/subscript to 2/3 of base size
+        // when no explicit font_size is set on the run.
+        if run_style.font_size.is_none() {
+            if matches!(run_style.vertical_align, Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)) {
+                return (base * 2.0 / 3.0 * 2.0).round() / 2.0; // round to 0.5pt
             }
         }
-        if let Some(level) = para_style.heading_level {
-            return heading_default_font_size(level);
-        }
-        self.default_font_size
+        base
     }
 
     /// Resolve font family for a run.
@@ -383,6 +400,89 @@ impl LayoutEngine {
         }
     }
 
+    /// Resolve fitText runs: calculate actual character widths using font metrics,
+    /// then set character_spacing (expand) or text_scale (compress) to match target.
+    fn resolve_fit_text_page(&self, page: &mut Page) {
+        self.resolve_fit_text_blocks(&mut page.blocks);
+        for note in &mut page.footnotes {
+            self.resolve_fit_text_blocks(&mut note.blocks);
+        }
+        self.resolve_fit_text_blocks(&mut page.header);
+        self.resolve_fit_text_blocks(&mut page.footer);
+    }
+
+    fn resolve_fit_text_blocks(&self, blocks: &mut [Block]) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(para) => {
+                    self.resolve_fit_text_runs(&mut para.runs, &para.style);
+                }
+                Block::Table(table) => {
+                    for row in table.rows.iter_mut() {
+                        for cell in row.cells.iter_mut() {
+                            self.resolve_fit_text_blocks(&mut cell.blocks);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_fit_text_runs(&self, runs: &mut [Run], para_style: &ParagraphStyle) {
+        let mut i = 0;
+        while i < runs.len() {
+            if let (Some(target_w), Some(group_id)) = (runs[i].style.fit_text, runs[i].style.fit_text_id) {
+                let start = i;
+                while i < runs.len() && runs[i].style.fit_text_id == Some(group_id) {
+                    i += 1;
+                }
+                let char_count: usize = runs[start..i].iter()
+                    .map(|r| r.text.chars().count()).sum();
+                if char_count == 0 { continue; }
+
+                // Get ACTUAL natural width by calling break_into_lines with cs=0.
+                // This accounts for autoSpaceDE, yakumono, etc.
+                let saved_cs: Vec<Option<f32>> = runs[start..i].iter()
+                    .map(|r| r.style.character_spacing).collect();
+                for run in &mut runs[start..i] {
+                    run.style.character_spacing = Some(0.0);
+                }
+                let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> =
+                    runs[start..i].iter().enumerate()
+                    .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
+                    .collect();
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None);
+                let natural_w: f32 = lines.iter()
+                    .flat_map(|l| l.fragments.iter())
+                    .map(|f| f.width)
+                    .sum();
+
+                // Restore original cs before overriding
+                for (idx, run) in runs[start..i].iter_mut().enumerate() {
+                    run.style.character_spacing = saved_cs[idx];
+                }
+
+                if natural_w > 0.01 {
+                    if natural_w <= target_w {
+                        let raw_extra = (target_w - natural_w) / char_count as f32;
+                        for run in &mut runs[start..i] {
+                            run.style.character_spacing = Some(raw_extra);
+                        }
+                    } else {
+                        let scale = target_w / natural_w * 100.0;
+                        for run in &mut runs[start..i] {
+                            run.style.text_scale = Some(scale);
+                            run.style.character_spacing = Some(0.0);
+                        }
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
         let total_content_width = page.size.width - page.margin.left - page.margin.right;
         // COM-confirmed (2026-04-03, order_08): when header extends below margin.top,
@@ -483,9 +583,35 @@ impl LayoutEngine {
             if let Some(note) = page.footnotes.iter().find(|n| n.number == id) {
                 let cw = page.size.width - page.margin.left - page.margin.right;
                 let mut h: f32 = 0.0;
+                let mut first_para = true;
                 for nb in &note.blocks {
                     if let Block::Paragraph(p) = nb {
-                        h += self.estimate_para_height(p, cw, page.grid_line_pitch, None);
+                        if first_para {
+                            // Footnote rendering prepends a seq number to the first
+                            // paragraph, which increases its width and may add a line.
+                            // Clone and add prefix to match actual rendering.
+                            let mut p2 = p.clone();
+                            let seq = page.footnotes.iter()
+                                .position(|n| n.number == id)
+                                .map(|pos| (pos as u32) + 1)
+                                .unwrap_or(id);
+                            let prefix = format!("{}", seq);
+                            if let Some(first_run) = p2.runs.first_mut() {
+                                if first_run.text.is_empty() {
+                                    first_run.text = prefix;
+                                } else {
+                                    first_run.text = format!("{}{}", prefix, first_run.text);
+                                }
+                            }
+                            let ph = self.estimate_para_height(&p2, cw, None, None);
+                            // The footnote marker (superscript number) renders
+                            // at a different Y position, effectively adding
+                            // ~half a line of extra height per footnote.
+                            h += ph + 2.0;
+                            first_para = false;
+                        } else {
+                            h += self.estimate_para_height(p, cw, None, None);
+                        }
                     }
                 }
                 h
@@ -598,6 +724,11 @@ impl LayoutEngine {
                                 if !seen_new.contains(&id) {
                                     seen_new.push(id);
                                     let h = estimate_footnote_h(id);
+                                    // First footnote on page includes separator overhead
+                                    if footnote_ids_current_page.is_empty() && seen_new.len() == 1 {
+                                        full += 6.0;
+                                        delta += 6.0;
+                                    }
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
                                         delta += h;
@@ -619,7 +750,16 @@ impl LayoutEngine {
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
                                 if !ids.contains(&id) {
+                                    // First footnote: separator line (2pt + 4pt padding)
+                                    if ids.is_empty() {
+                                        *reserve += 6.0;
+                                    }
                                     ids.push(id);
+                                    // estimate + per-note rendering overhead
+                                    // (superscript marker consumes ~10pt extra Y space
+                                    // not captured by estimate_para_height)
+                                    // Per-note overhead accounts for superscript marker
+                                    // vertical space in actual rendering vs estimate
                                     *reserve += estimate_footnote_h(id);
                                 }
                             }
@@ -803,6 +943,10 @@ impl LayoutEngine {
                             content_width = col_widths[0];
                         }
                         current_page_idx += pages_added;
+                        // Update block_page_index: if the paragraph moved entirely
+                        // to the new page (no elements left on the old page), update
+                        // the index so footnote rendering assigns to the correct page.
+                        *block_page_indices.last_mut().unwrap() = current_page_idx;
                         // Round 29: paragraph spanned page boundaries internally.
                         // The footnote reservation was for the FIRST page; new pages
                         // start with this paragraph's footnote refs only.
@@ -1097,18 +1241,40 @@ impl LayoutEngine {
                             page.size.height - page.margin.bottom
                         };
 
-                        // Estimate total footnote content height to position the
-                        // footnote area top correctly. Footnotes are typically
-                        // 1-2pt smaller than body but we use estimate_para_height
-                        // which already inherits per-paragraph style.
-                        let mut total_h: f32 = 0.0;
+                        // Find the last body element Y on this page to avoid overlap
+                        let body_bottom_y = lp.elements.iter()
+                            .map(|e| e.y + e.height)
+                            .fold(0.0_f32, f32::max);
+
+                        // Calculate footnote heights and only include notes that fit
+                        // above the body content. Notes that don't fit are deferred.
+                        let mut note_heights: Vec<f32> = Vec::new();
                         for note in &notes {
+                            let mut nh: f32 = 0.0;
                             for nb in &note.blocks {
                                 if let Block::Paragraph(p) = nb {
-                                    total_h += self.estimate_para_height(p, hdr_width, grid_pitch, None);
+                                    nh += self.estimate_para_height(p, hdr_width, grid_pitch, None);
                                 }
                             }
+                            note_heights.push(nh);
                         }
+                        let separator_h_pre: f32 = 2.0;
+                        let separator_pad_pre: f32 = 4.0;
+                        // Determine how many notes fit: add notes one by one from the
+                        // bottom; stop when area_top would overlap body content.
+                        let mut total_h: f32 = 0.0;
+                        let mut fit_count = notes.len();
+                        for i in 0..notes.len() {
+                            let candidate = total_h + note_heights[i] + separator_h_pre + separator_pad_pre;
+                            let candidate_top = footnote_bottom - candidate;
+                            if candidate_top < body_bottom_y + 2.0 {
+                                // This note doesn't fit; truncate here
+                                fit_count = i;
+                                break;
+                            }
+                            total_h += note_heights[i];
+                        }
+                        let notes: Vec<&Footnote> = notes[..fit_count].to_vec();
                         // Separator: short horizontal line above the footnotes.
                         let separator_h: f32 = 2.0;
                         let separator_pad: f32 = 4.0;
@@ -1659,8 +1825,22 @@ impl LayoutEngine {
         // even if the page has linesAndChars docGrid. Otherwise the chars get
         // padded to the body's grid pitch and the line wraps ~5 chars early.
         let effective_char_pitch = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_pitch };
-        let available_width = if effective_char_pitch.is_some() {
-            content_width  // charGrid: ignore indents for wrapping
+        // charGrid: standard 1-cell indent uses full content width (COM-confirmed).
+        // Larger indents (2+ cells) reduce available cells by the excess.
+        let available_width = if let Some(pitch) = effective_char_pitch {
+            let indent_total = indent_left + indent_right;
+            let indent_cells = (indent_total / pitch).round() as usize;
+            if indent_cells > 1 {
+                let total_cells = (content_width / pitch).floor() as usize;
+                let reduce = indent_cells - 1;
+                if reduce < total_cells {
+                    (total_cells - reduce) as f32 * pitch
+                } else {
+                    content_width
+                }
+            } else {
+                content_width
+            }
         } else {
             content_width - indent_left - indent_right
         };
@@ -1745,7 +1925,8 @@ impl LayoutEngine {
             &para.style,
         );
 
-        // Line-break the text
+        // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
+        // NOT shift start position. Text starts at margin, line is shorter.
         let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
         let lines = self.break_into_lines(&fragments, available_width, effective_first_indent, &para.style, effective_char_pitch);
 
@@ -1940,26 +2121,28 @@ impl LayoutEngine {
             }
 
             let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
-            // For right-aligned text, firstLine indent reduces available width but
-            // doesn't shift line_x (text is pushed from the right edge).
-            let line_x = if para.alignment == Alignment::Right {
-                start_x + indent_left
-            } else {
-                start_x + indent_left + extra_indent
-            };
+            // COM-confirmed (d77a): firstLine indent reduces available width but
+            // does NOT shift line_x. Text starts at margin+indent_left regardless.
+            // The first line is simply shorter (justify compresses or right side truncates).
+            let line_x = start_x + indent_left;
 
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
             let is_last_line = line_idx == lines.len() - 1;
+            // For alignment/justify, use indent-adjusted width.
+            // Justify/alignment uses indent-adjusted width. In charGrid mode,
+            // break_into_lines may put more chars than fit in the indented area;
+            // negative slack triggers punctuation compression to fit.
+            let render_width = content_width - indent_left - indent_right;
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
                 Alignment::Center => {
                     // Word GDI: integer pixel division at 96dpi for center alignment
-                    let slack_tw = ((available_width - extra_indent - line_text_width) * 20.0).round() as i32;
+                    let slack_tw = ((render_width - extra_indent - line_text_width) * 20.0).round() as i32;
                     let center_tw = slack_tw / 2; // integer division (truncate)
                     center_tw as f32 / 20.0
                 },
-                Alignment::Right => available_width - extra_indent - line_text_width,
+                Alignment::Right => render_width - extra_indent - line_text_width,
                 Alignment::Justify => 0.0,
                 // Distribute: when justification applies (multi-fragment lines), offset is 0
                 // because slack is distributed across fragments. When justification can't
@@ -1968,7 +2151,7 @@ impl LayoutEngine {
                     if line.fragments.len() > 1 {
                         0.0
                     } else {
-                        let slack = available_width - extra_indent - line_text_width;
+                        let slack = render_width - extra_indent - line_text_width;
                         if slack > 0.0 { slack / 2.0 } else { 0.0 }
                     }
                 }
@@ -2000,7 +2183,7 @@ impl LayoutEngine {
                             .count() as f32 * (pitch - fs)
                     }).sum::<f32>()
                 } else { 0.0 };
-                let mut slack = available_width - extra_indent - line_text_width - grid_extra_on_line;
+                let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
 
                 // Phase 1: CJK punctuation compression (full-width -> half-width)
                 // Only compress when the line overflows (slack < 0).
@@ -2140,7 +2323,11 @@ impl LayoutEngine {
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
-                        character_spacing: snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing,
+                        character_spacing: if frag.style.fit_text.is_some() {
+                            frag.style.character_spacing.unwrap_or(0.0) + justify_char_spacing
+                        } else {
+                            snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing
+                        },
                 });
                 if let Some(pi) = body_para_index {
                     el.paragraph_index = Some(pi);
@@ -2227,10 +2414,15 @@ impl LayoutEngine {
             if use_cumulative {
                 let j = cumul_line_idx;
                 let (cn, cc) = if grid_pitch.is_none() && is_single_lm0 {
-                    // COM-confirmed (2026-04-12, 0e7a p2): LM0 single spacing
-                    // uses CEIL for cumulative line position.
-                    let cn = (((j + 1) as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
-                    let cc = ((j as f32 * raw_spaced_tw / 10.0).ceil() * 10.0) as i32;
+                    // COM-confirmed (2026-04-16, 0e7a): LM0 single spacing should use
+                    // position-based cumul, not index × raw. When paragraphs have
+                    // different raws (9pt body in 10.5pt doc), per-paragraph raw
+                    // applied over a shared index underestimates positions.
+                    // Use mult_cumul_raw (shared position accumulator) with CEIL.
+                    let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
+                    let new_pos = old_pos + raw_spaced_tw;
+                    let cn = (new_pos / 10.0).ceil() as i32 * 10;
+                    let cc = (old_pos / 10.0).ceil() as i32 * 10;
                     (cn, cc)
                 } else if is_multiple_spacing {
                     // COM-confirmed (2026-04-14, mixed font repro): Multiple spacing
@@ -2247,8 +2439,8 @@ impl LayoutEngine {
                     (cn, cc)
                 };
                 *cursor_y += (cn - cc) as f32 / 20.0;
-                // Update cumulative raw position for Multiple spacing
-                if is_multiple_spacing {
+                // Update cumulative raw position for Multiple spacing AND LM0 single.
+                if is_multiple_spacing || (grid_pitch.is_none() && is_single_lm0) {
                     if let Some(ref mut cr) = mult_cumul_raw {
                         **cr += raw_spaced_tw;
                     }
@@ -2367,6 +2559,7 @@ impl LayoutEngine {
         // Integer twips accumulator for line break decisions.
         // Avoids f32 rounding drift that causes ±0.1pt error over 40+ characters.
         let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
+        let mut compress_used = false; // true after compression-based overflow absorption
         let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
 
         // Word buffer spans across fragment boundaries so that a single word
@@ -2393,7 +2586,7 @@ impl LayoutEngine {
                     let word_width_tw = pt_to_tw(word_width);
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
@@ -2419,7 +2612,12 @@ impl LayoutEngine {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
 
-            let cs = snap_character_spacing(style.character_spacing.unwrap_or(0.0));
+            // fitText runs: skip GDI snap to preserve exact target width
+            let cs = if style.fit_text.is_some() {
+                style.character_spacing.unwrap_or(0.0)
+            } else {
+                snap_character_spacing(style.character_spacing.unwrap_or(0.0))
+            };
 
             // Pre-resolve font metrics and GDI width maps for this fragment.
             // Avoids repeated font family resolution and HashMap lookups per character.
@@ -2433,6 +2631,7 @@ impl LayoutEngine {
             // "compressPunctuation" or "compressPunctuationAndJapaneseKana".
             // Most modern docs use "doNotCompress" → no compression.
             let chars_vec: Vec<char> = text.chars().collect();
+            // Yakumono pair compression for line break width calculation.
             let yakumono_compressed: Vec<bool> = if self.compress_punctuation {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
@@ -2470,8 +2669,40 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
+                // Physical yakumono compression (COM-confirmed b837 2026-04-16):
+                //   Pair (both chars): 6pt (×0.5) — e.g., 。）→ 6+6pt
+                //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
+                //   Other brackets: use native font width (bracket shapes vary widely by
+                //     context in Word — 6, 10.5, 11, 11.5, 12pt — no simple compression rule)
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
+                } else if self.compress_punctuation {
+                    // Expand pair rule: when yakumono_compressed[neighbor] = true AND
+                    // this char is also yakumono, both compress.
+                    let is_yakumono_any = matches!(ch,
+                        '（' | '）' | '「' | '」' | '『' | '』' | '〔' | '〕' |
+                        '【' | '】' | '《' | '》' | '〈' | '〉' | '｛' | '｝' |
+                        '［' | '］' | '、' | '。' | '，' | '．'
+                    );
+                    if is_yakumono_any {
+                        let prev_compressed = char_index > 0
+                            && yakumono_compressed[char_index - 1];
+                        let next_compressed = char_index + 1 < chars_vec.len()
+                            && yakumono_compressed[char_index + 1];
+                        if prev_compressed || next_compressed {
+                            // Adjacent to pair-compressed yakumono: also compress
+                            char_width *= 0.5;
+                        } else if matches!(ch, '、' | '。' | '，' | '．') {
+                            // Standalone 、 。 between non-triggers: compress to ≈7pt
+                            let prev_non_tr = char_index == 0
+                                || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
+                            let next_non_tr = char_index + 1 >= chars_vec.len()
+                                || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
+                            if prev_non_tr && next_non_tr {
+                                char_width *= 0.583;
+                            }
+                        }
+                    }
                 }
                 // §4.6.3 CJK-adjacent space widening — COM-confirmed 2026-04-08.
                 // The Latin space (' ') is widened to ≈ font_size/2 (half-em) when:
@@ -2527,7 +2758,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -2613,9 +2844,33 @@ impl LayoutEngine {
                             last.width += extra;
                         }
                         current_width += extra;
+                        current_width_tw += pt_to_tw(extra);
                     }
 
-                    if current_width_tw + pt_to_tw(char_width) > available_tw && !current_line.fragments.is_empty() {
+                    let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
+                    // Two-phase overflow handling:
+                    // Phase 1: small overflow (≤3pt) absorbed only if line has compressible chars
+                    //          (Word uses semi-yakumono compression to absorb; no compressibles → break)
+                    // Phase 2: larger overflow absorbed by pair-yakumono compression
+                    let line_compress_count = current_line.fragments.iter()
+                        .flat_map(|f| f.text.chars())
+                        .filter(|&c| kinsoku::is_cjk_compressible(c))
+                        .count();
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 60
+                        && !compress_used && line_compress_count > 0 {
+                        // Small overflow (≤3pt): line has yakumono that can semi-compress
+                        true
+                    } else if overflow_tw > 0 && self.compress_punctuation {
+                        let savings_tw = line_compress_count as i32 * pt_to_tw(font_size * 0.5);
+                        if savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62 {
+                            true
+                        } else { false }
+                    } else { false };
+                    // Set compress_used after Phase 2 absorption (not Phase 1)
+                    if absorb && overflow_tw > 60 {
+                        compress_used = true;
+                    }
+                    if overflow_tw > 0 && !absorb && !current_line.fragments.is_empty() {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
@@ -2640,7 +2895,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                             continue;
                         }
 
@@ -2665,7 +2920,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
@@ -2704,6 +2959,7 @@ impl LayoutEngine {
                                 last.width += extra;
                             }
                             current_width += extra;
+                            current_width_tw += pt_to_tw(extra);
                         }
                     }
                     if word_style.is_none() {
@@ -2728,7 +2984,7 @@ impl LayoutEngine {
             let wft = word_field_type.take();
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0;
+                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
@@ -3278,14 +3534,13 @@ impl LayoutEngine {
         let default_pad_t = default_pad.as_ref().and_then(|m| m.top).unwrap_or(0.0);
         let default_pad_b = default_pad.as_ref().and_then(|m| m.bottom).unwrap_or(0.0);
 
-        // Table cell grid snap: COM-confirmed always enabled regardless of compat mode.
-        // adjustLineHeightInTable is always false (COM measurement of 151 documents).
-        // Previous compat<15 check was incorrect — Word 2010 mode also grid-snaps table cells.
-        let table_grid_pitch: Option<f32> = if self.adjust_line_height_in_table {
-            None
-        } else {
-            grid_pitch
-        };
+        // Table cell grid snap: Word snaps table ROW HEIGHTS to grid pitch
+        // regardless of `adjustLineHeightInTable`. COM-measured 04b88e7e0b25
+        // (which DOES set adjustLineHeightInTable) still has Word rendering
+        // rows at linePitch * ceil(content/pitch) — 18.5pt for linePitch=360tw.
+        // The flag affects intra-cell line-height behavior (see line_height_inner)
+        // but NOT the row-height grid-snap.
+        let table_grid_pitch: Option<f32> = grid_pitch;
 
         // COM-confirmed (2026-04-09): top border displaces table content downward
         // by the border width. cell_top_y = table_start_y + top_border_width.
@@ -3615,7 +3870,11 @@ impl LayoutEngine {
                                 .map(|s| s.to_string());
 
                             // Split text character by character for wrapping
-                            let cs = snap_character_spacing(run.style.character_spacing.unwrap_or(0.0));
+                            let cs = if run.style.fit_text.is_some() {
+                                run.style.character_spacing.unwrap_or(0.0)
+                            } else {
+                                snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
+                            };
                             let mut buf = String::new();
                             let mut buf_w: f32 = 0.0;
                             for ch in run.text.chars() {
