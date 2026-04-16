@@ -823,8 +823,10 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                 style.indent_first_line = doc_para.indent_first_line;
                                 style.indent_first_line_chars = doc_para.indent_first_line_chars;
                             }
-                            // Empty paragraphs never have explicit widowControl
-                            style.widow_control = doc_para.widow_control;
+                            // Empty paragraphs: only override if docDefaults explicitly sets widowControl
+                            if doc_para.has_explicit_widow_control {
+                                style.widow_control = doc_para.widow_control;
+                            }
                         }
 
                         current_blocks.push(Block::Paragraph(Paragraph {
@@ -1258,10 +1260,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     style.default_run_style = ds.default_run_style.clone();
                 }
             }
-            // Inherit keepNext, keepLines, contextualSpacing from style
+            // Inherit keepNext, keepLines, contextualSpacing, widowControl from style
             if ds.keep_next { style.keep_next = true; }
             if ds.keep_lines { style.keep_lines = true; }
             if ds.contextual_spacing { style.contextual_spacing = true; }
+            // Inherit widow_control: style's explicit setting takes precedence
+            if !style.has_explicit_widow_control && ds.has_explicit_widow_control {
+                style.widow_control = ds.widow_control;
+            }
             // Inherit numPr from style definition
             if style.num_id.is_none() {
                 if let Some(ref nid) = ds.num_id {
@@ -1350,8 +1356,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             style.indent_first_line = doc_para.indent_first_line;
             style.indent_first_line_chars = doc_para.indent_first_line_chars;
         }
-        // COM-confirmed: pPrDefault widowControl=false must override the struct default (true)
-        if !style.has_explicit_widow_control {
+        // Only override widow_control from docDefaults if docDefaults explicitly
+        // sets widowControl. When pPrDefault is empty, doc_para has the struct
+        // default (true), which would incorrectly override Normal style's false.
+        if !style.has_explicit_widow_control && doc_para.has_explicit_widow_control {
             style.widow_control = doc_para.widow_control;
         }
     }
@@ -3976,9 +3984,13 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
                     }
                     "fitText" => {
                         for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "val" {
+                            let ln = local_name(attr.key.as_ref());
+                            if ln == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 style.fit_text = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            } else if ln == "id" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                style.fit_text_id = val.parse::<i64>().ok();
                             }
                         }
                     }

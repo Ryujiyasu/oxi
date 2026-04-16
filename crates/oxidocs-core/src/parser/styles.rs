@@ -217,8 +217,8 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if !child.keep_lines && parent.keep_lines {
         child.keep_lines = true;
     }
-    if !child.widow_control && parent.widow_control {
-        child.widow_control = true;
+    if !child.has_explicit_widow_control {
+        child.widow_control = parent.widow_control;
     }
     if !child.page_break_before && parent.page_break_before {
         child.page_break_before = true;
@@ -610,9 +610,13 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
         }
         "fitText" => {
             for attr in e.attributes().flatten() {
-                if local_name(attr.key.as_ref()) == "val" {
+                let ln = local_name(attr.key.as_ref());
+                if ln == "val" {
                     let val = String::from_utf8_lossy(&attr.value);
                     rs.fit_text = val.parse::<f32>().ok().map(|v| v / 20.0);
+                } else if ln == "id" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.fit_text_id = val.parse::<i64>().ok();
                 }
             }
         }
@@ -780,6 +784,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.widow_control = enabled;
+            style.has_explicit_widow_control = true;
         }
         "bidi" => {
             let mut enabled = true;
@@ -1231,6 +1236,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.widow_control = enabled;
+                            style.has_explicit_widow_control = true;
                         }
                         "jc" => {
                             for attr in e.attributes().flatten() {
