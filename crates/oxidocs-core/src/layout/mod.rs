@@ -2664,12 +2664,36 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
-                // Physical yakumono pair compression: when two adjacent CJK
-                // puncts form a pair, Word compresses ONE of them to half width.
-                // Applying physically here (not just grid_extra) makes line
-                // break width match Word's actual layout behavior.
+                // Physical yakumono compression (COM-confirmed b837 2026-04-16):
+                //   Paired (both chars): 6pt (×0.5) — 。）→ both half-width
+                //   Standalone opener between CJK: 7.5pt (×0.625) — （
+                //   Standalone closer between CJK: 7pt (×0.583) — 、 。 」 』 ）
+                // Pair rule expanded: adjacent yakumono both compress, not just one.
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
+                } else if self.compress_punctuation {
+                    let is_opener = matches!(ch,
+                        '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［'
+                    );
+                    let is_closer = matches!(ch,
+                        '）' | '」' | '』' | '〕' | '】' | '》' | '〉' | '｝' | '］' |
+                        '、' | '。' | '，' | '．'
+                    );
+                    if is_opener || is_closer {
+                        let prev_non_tr = char_index == 0
+                            || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
+                        let next_non_tr = char_index + 1 >= chars_vec.len()
+                            || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
+                        // Opener needs non-trigger PREV (free left); Closer needs non-trigger NEXT (free right)
+                        let compress = if is_opener { prev_non_tr } else { next_non_tr };
+                        if compress && prev_non_tr && next_non_tr {
+                            // Standalone between non-triggers
+                            char_width *= if is_opener { 0.625 } else { 0.583 };
+                        } else if compress {
+                            // Pair-adjacent yakumono (Word compresses BOTH to half)
+                            char_width *= 0.5;
+                        }
+                    }
                 }
                 // §4.6.3 CJK-adjacent space widening — COM-confirmed 2026-04-08.
                 // The Latin space (' ') is widened to ≈ font_size/2 (half-em) when:
