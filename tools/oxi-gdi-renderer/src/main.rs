@@ -8,7 +8,7 @@ use std::path::Path;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: {} <input.docx> <output_prefix> [dpi] [--exclude=text,border,shading,box,image,clip]", args[0]);
+        eprintln!("Usage: {} <input.docx> <output_prefix> [dpi] [--exclude=text,border,shading,box,image,clip] [--supersample=N]", args[0]);
         std::process::exit(1);
     }
 
@@ -16,11 +16,15 @@ fn main() {
     let output_prefix = &args[2];
     let dpi: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(150);
 
-    // Parse --exclude flag from any argument
+    // Parse --exclude flag and --supersample=N flag from any argument
     let mut exclude: Vec<String> = Vec::new();
+    let mut supersample: u32 = 1; // opt-in via --supersample=N; 2x gives better AA on small CJK.
     for arg in &args[3..] {
         if let Some(list) = arg.strip_prefix("--exclude=") {
             exclude = list.split(',').map(|s| s.trim().to_lowercase()).collect();
+        }
+        if let Some(n) = arg.strip_prefix("--supersample=") {
+            supersample = n.parse().unwrap_or(2);
         }
     }
 
@@ -32,7 +36,7 @@ fn main() {
     let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc);
     let result = engine.layout(&doc);
 
-    eprintln!("Parsed {} pages, DPI={}", result.pages.len(), dpi);
+    eprintln!("Parsed {} pages, DPI={} supersample={}x", result.pages.len(), dpi, supersample);
     if !exclude.is_empty() {
         eprintln!("Excluding: {:?}", exclude);
     }
@@ -40,7 +44,7 @@ fn main() {
     // Render each page with GDI
     #[cfg(windows)]
     {
-        render_pages_gdi(&result, output_prefix, dpi, &exclude);
+        render_pages_gdi(&result, output_prefix, dpi, supersample, &exclude);
     }
 
     #[cfg(not(windows))]
@@ -51,14 +55,18 @@ fn main() {
 }
 
 #[cfg(windows)]
-fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, exclude: &[String]) {
+fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, supersample: u32, exclude: &[String]) {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::*;
     use windows::core::*;
 
-    let scale = dpi as f64 / 72.0;
+    // Supersample: render at render_dpi internally, then downscale to output dpi.
+    let render_dpi = dpi * supersample.max(1);
+    let scale = render_dpi as f64 / 72.0;
 
     for (page_idx, page) in result.pages.iter().enumerate() {
+        let out_w = (page.width as f64 * dpi as f64 / 72.0).round() as u32;
+        let out_h = (page.height as f64 * dpi as f64 / 72.0).round() as u32;
         let w = (page.width as f64 * scale).round() as i32;
         let h = (page.height as f64 * scale).round() as i32;
 
@@ -440,9 +448,15 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
             let img = image::RgbImage::from_raw(w as u32, h as u32, rgb_pixels)
                 .expect("Failed to create image");
+            let final_img = if supersample > 1 && (w as u32 != out_w || h as u32 != out_h) {
+                let dynamic = image::DynamicImage::ImageRgb8(img);
+                dynamic.resize_exact(out_w, out_h, image::imageops::FilterType::Lanczos3).to_rgb8()
+            } else {
+                img
+            };
             let out_path = format!("{}_p{}.png", prefix, page_idx + 1);
-            img.save(&out_path).expect("Failed to save PNG");
-            eprintln!("  Saved {} ({}x{})", out_path, w, h);
+            final_img.save(&out_path).expect("Failed to save PNG");
+            eprintln!("  Saved {} ({}x{})", out_path, final_img.width(), final_img.height());
 
             // Cleanup
             SelectObject(mem_dc, old_bmp);
