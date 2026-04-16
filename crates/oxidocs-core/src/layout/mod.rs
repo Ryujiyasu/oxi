@@ -483,7 +483,35 @@ impl LayoutEngine {
             let mut footer_h: f32 = 0.0;
             for block in &page.footer {
                 if let Block::Paragraph(p) = block {
-                    footer_h += self.estimate_para_height(p, cw, gp, None);
+                    // estimate_para_height uses word_line_height_table_cell for
+                    // empty paragraphs, which under-estimates footer empty lines.
+                    // Override for empty footer paragraphs: use no-grid line height
+                    // matching Word's actual footer rendering.
+                    let h = if p.runs.is_empty() || p.runs.iter().all(|r| r.text.is_empty()) {
+                        let empty_fs = p.style.ppr_rpr.as_ref()
+                            .and_then(|r| r.font_size)
+                            .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
+                        let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let metrics = self.metrics_for_para_mark(&rpr_ref, &p.style);
+                        // If page has grid, Word grid-snaps footer lines to pitch.
+                        // 14pt + 10.5pt in 18pt grid → each paragraph uses 18pt cell.
+                        // COM-measured (2026-04-17, 04b88e): bridging to 5-page layout
+                        // requires grid-aware footer height.
+                        if let Some(pitch) = gp {
+                            if pitch > 0.0 {
+                                let nat = metrics.word_line_height_no_grid(empty_fs);
+                                let cells = (nat / pitch).ceil().max(1.0);
+                                cells * pitch
+                            } else {
+                                metrics.word_line_height_no_grid(empty_fs)
+                            }
+                        } else {
+                            metrics.word_line_height_no_grid(empty_fs)
+                        }
+                    } else {
+                        self.estimate_para_height(p, cw, gp, None)
+                    };
+                    footer_h += h;
                 }
             }
             (footer_dist + footer_h).max(page.margin.bottom)
