@@ -469,7 +469,28 @@ impl LayoutEngine {
                 }
             }
         }
-        let content_height = page.size.height - start_y - page.margin.bottom;
+        // Body content area: reserves footer space at the bottom.
+        // Word reserves footer height from the body content area. If body extends
+        // past the footer-top position, content overlaps footer. COM-confirmed
+        // on 04b88e (2026-04-17): Word body stops above footer, Oxi body extends
+        // past it — causing 1 fewer page than Word.
+        // Footer reservation = footer_distance + footer_height. Compare to
+        // page.margin.bottom; use whichever is larger.
+        let footer_reserved = if !page.footer.is_empty() {
+            let footer_dist = page.footer_distance.unwrap_or(36.0);
+            let cw = page.size.width - page.margin.left - page.margin.right;
+            let gp = page.grid_line_pitch;
+            let mut footer_h: f32 = 0.0;
+            for block in &page.footer {
+                if let Block::Paragraph(p) = block {
+                    footer_h += self.estimate_para_height(p, cw, gp, None);
+                }
+            }
+            (footer_dist + footer_h).max(page.margin.bottom)
+        } else {
+            page.margin.bottom
+        };
+        let content_height = page.size.height - start_y - footer_reserved;
         // Round 29 (2026-04-08): per-page dynamic footnote reservation.
         // Footnotes are reserved at the bottom of the page where their reference
         // appears. The amount reserved varies per page based on which footnotes
