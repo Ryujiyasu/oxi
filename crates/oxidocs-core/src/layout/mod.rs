@@ -1050,6 +1050,26 @@ impl LayoutEngine {
                         }
                     }
 
+                    // page_break_after: render the (typically empty) paragraph
+                    // on the current page, then force a new page for the NEXT
+                    // block. Used for the inline-br-in-empty-paragraph pattern;
+                    // see `project_empty_br_para_stub.md`.
+                    if para.style.page_break_after && !elements.is_empty() {
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        cursor_y = start_y;
+                        current_column = 0;
+                        start_x = col_x_positions[0];
+                        content_width = col_widths[0];
+                        current_page_idx += 1;
+                        lm2_cells = 0;
+                        footnote_reserve_current = 0.0;
+                        footnote_ids_current_page.clear();
+                    }
+
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
                 }
