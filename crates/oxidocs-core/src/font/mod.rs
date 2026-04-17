@@ -584,6 +584,13 @@ impl FontMetricsRegistry {
         // EXCEPTION: MS PGothic / MS PMincho are proportional (see char_width_pt_with_gdi_map).
         let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
         if metrics.units_per_em == 256 && !is_pgothic_family {
+            // Yakumono fixed advance — see char_width_pt_with_gdi_map for rationale.
+            if font_size > 10.5 {
+                if matches!(c, '（'|'「'|'『'|'〔'|'【'|'《'|'〈'|'｛'|'［') { return 10.5; }
+                if matches!(c, '）'|'」'|'』'|'〕'|'】'|'》'|'〉'|'｝'|'］') { return 10.0; }
+                if matches!(c, '、'|'。'|'，'|'．') { return 10.5; }
+                if c == '\u{30FB}' { return 9.0; }
+            }
             if is_fullwidth(c) { return font_size; }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
@@ -655,6 +662,33 @@ impl FontMetricsRegistry {
         // COM-confirmed (c7b9 P9 MS PGothic 10.5pt): 48-49 ch/line, not 43.
         let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
         if metrics.units_per_em == 256 && !is_pgothic_family {
+            // COM-confirmed 2026-04-18 (d77a idx=9 MS Gothic 12pt line 1 39 chars):
+            // Word caps yakumono (CJK punct) advance at ~10.5pt regardless of
+            // font size at MS Gothic/Mincho UPM=256. E.g., at 12pt fontsize:
+            //   '（' '「' '、' single → 10.5pt (not 12pt)
+            //   '」' single → 10.0pt
+            //   ・ (U+30FB) → 9.0pt (narrower)
+            // At MS Mincho 10.5pt: yakumono at 10.5pt = fontsize (no visible change).
+            // At MS Gothic 12pt: yakumono at 10.5pt = -1.5pt from fontsize.
+            // Pair compression (e.g., ）」 → 6pt+10pt) handled elsewhere.
+            if font_size > 10.5 {
+                // yak_open
+                if matches!(c, '（'|'「'|'『'|'〔'|'【'|'《'|'〈'|'｛'|'［') {
+                    return 10.5;
+                }
+                // yak_close
+                if matches!(c, '）'|'」'|'』'|'〕'|'】'|'》'|'〉'|'｝'|'］') {
+                    return 10.0;
+                }
+                // yak_dot
+                if matches!(c, '、'|'。'|'，'|'．') {
+                    return 10.5;
+                }
+                // KATAKANA MIDDLE DOT (narrower than other yakumono)
+                if c == '\u{30FB}' {
+                    return 9.0;
+                }
+            }
             if is_fullwidth(c) {
                 return font_size;
             }
