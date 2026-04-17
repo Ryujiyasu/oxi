@@ -20,7 +20,7 @@ import win32com.client
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT = Path(__file__).with_name("output") / "lm2_multipara_cell.json"
+OUT = Path(__file__).with_name("output") / "lm2_multipara_cell_ext.json"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 TMP = Path("pipeline_data") / "_lm2_multipara_tmp.docx"
 TMP.parent.mkdir(parents=True, exist_ok=True)
@@ -29,8 +29,8 @@ CT = '<?xml version="1.0"?>\n<Types xmlns="http://schemas.openxmlformats.org/pac
 RELS = '<?xml version="1.0"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
 
 FONTS = [("ＭＳ 明朝", "MS Mincho"), ("ＭＳ ゴシック", "MS Gothic")]
-SIZES = [10.5, 12.0]
-NS = [1, 2, 3, 4]
+SIZES = [9.0, 10.0, 10.5, 11.0, 12.0, 13.0, 14.0, 16.0, 18.0]
+NS = [1, 2, 3]
 DOC_GRIDS = [
     ("none", ""),
     ("lm2_360", '<w:docGrid w:type="lines" w:linePitch="360"/>'),
