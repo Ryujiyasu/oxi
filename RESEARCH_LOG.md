@@ -15,34 +15,68 @@ Format:
 
 ---
 
-## 2026-04-18 — oxi-3 — confirmed — yakumono compression trigger = cSC + compat≥15
-- context: d77a p.9 drift root cause investigation (memory
-  project_yakumono_rule_unconfirmed.md said "trigger UNKNOWN")
-- hypothesis: some Word setting combination triggers yakumono compression
-  beyond simple `compressPunctuation` alone
-- method: bisect d77a settings.xml by removing features; minimal-docx
-  rebuild with controlled settings
-- evidence:
-  - `pipeline_data/d77a_yakumono_bisect.json`: baseline d77a fs=12 '（'=10.5 (compressed);
-    `no_characterSpacingControl` variant → fs=12 '（'=12.0 (NOT compressed)
-  - `pipeline_data/yakumono_sweep.json` (minimal repro):
-    - cSC alone or cSC+useFELayout or cSC+balanceByte → '（' NOT compressed
-    - cSC + compatibilityMode=15 → '（' compressed (10.5 at fs=12)
-    - cSC + compat15: '）' ALWAYS halves when followed by ',、。' (adjacent pair)
-    - without cSC: no compression at all
-- confirmed rule (full): `characterSpacingControl="compressPunctuation"` AND
-  `compatibilityMode >= 15` are BOTH required
-- partial rule: '（' in my minimal repro context "い（う" does NOT compress,
-  but '（' in d77a "約（第" DOES compress → context dependency unknown
-  (possibly ideograph-before triggers additional rule)
-- outcome: SUPERSEDES `project_yakumono_rule_unconfirmed.md` "trigger
-  UNKNOWN" claim. First-class trigger confirmed. Implementation gate:
-  `compress_punctuation && compat_mode >= 15`. Oxi parser ALREADY reads
-  both fields (grep confirms `compat_mode: u32` at ir/types.rs:23).
+## 2026-04-18 — oxi-3 — needs-reconciliation — yakumono compression trigger = cSC + compat≥15
+**STATUS DOWNGRADED from "confirmed" to "needs-reconciliation" 2026-04-18 (oxi-1 review)**
+
+Reason for downgrade:
+- `bisect_d77a_minimal.py` uses `SRC = d77a.docx` as base and swaps ONLY
+  settings.xml. document.xml / styles.xml / fontTable.xml / sectPr /
+  themeFontLang all remain d77a's. This is **subtractive from d77a**, NOT
+  a true scratch. Per oxi-1 2026-04-18 scratch+jc=both test
+  (`gen_scratch_jc_both.py`), this same class of "minimal" approach
+  yielded a false trigger (jc=both seemed to trigger in d77a-subtractive
+  but NOT in true scratch).
+- `yakumono_sweep.json` actual data (cSC + compat=15 minimal template, truly
+  scratch XML): MSGothic_12.0 → `（=12.0, 、=12.0, 「=12.0, 」=12.0, 。=12.0`
+  (ALL singles at fontsize, NOT compressed). This DIRECTLY contradicts
+  the claim "cSC + compat15 → '（' compressed (10.5 at fs=12)".
+  Only pair '）' halves (always, even at baseline). Pair compression is
+  separate from single-yakumono compression and NOT blocked by cSC/compat.
+
+Revised assessment:
+- True trigger for d77a's single-yakumono compression remains **UNKNOWN**
+- `cSC + compat=15` is NECESSARY (without cSC no compression) but NOT
+  SUFFICIENT (scratch + cSC + compat=15 doesn't compress)
+- Additional d77a-inherited property (fontTable / styles / sectPr detail /
+  theme / rsid) combines with cSC+compat=15 to activate compression
+- Implementation gate "compress_punctuation && compat_mode >= 15" is
+  therefore insufficient — would regress any doc with cSC+compat=15 but
+  without the missing trigger
+
+Next investigation (deferred to dedicated session per user 2026-04-18):
+- Truly additive bisection: scratch + cSC + compat=15 + ONE more d77a
+  property at a time. Goal: find the minimal sufficient set.
+- Candidates: fontTable with real PANOSE, sectPr drawingGrid properties,
+  themeFontLang, rPrDefault rFonts cascade.
+
+Original evidence preserved for reference:
+- `pipeline_data/d77a_yakumono_bisect.json` (subtractive from d77a)
+- `pipeline_data/yakumono_sweep.json` (true scratch — shows NO compression)
 - scripts: `tools/metrics/bisect_d77a_yakumono.py`,
   `bisect_d77a_minimal.py`, `sweep_yakumono_formula.py`
-- next: dedicated session to implement compat15 gate + ')、' pair
-  pre-compression at break_into_lines (currently only in absorb path)
+
+Cross-reference: oxi-1 2026-04-18 `project_yakumono_jc_both_FALSIFIED.md`
+reached same conclusion via independent path (scratch+jc=both test).
+
+## 2026-04-18 — oxi-1 — premise-falsified — fix/yakumono-jc-conditional
+- branch: fix/yakumono-jc-conditional (commit 4bec783) — RETAINED (not deleted)
+- premise: yakumono compression trigger = jc=both (justification)
+- evidence for premise: R3 (d77a subtractive with minimal styles + jc=both
+  on Normal) reproduced compression; memory project_yakumono_trigger_IS_jc_both.md
+- falsification: 2026-04-18 scratch test gen_scratch_jc_both.py
+  (truly minimal docx + only <w:jc val="both"/> + compressPunctuation)
+  shows ・=12.00pt (NOT compressed, ratio 100%). Independent verification
+  in memory `project_yakumono_jc_both_FALSIFIED.md`.
+- diagnosis: R3 compression was caused by d77a inherited properties
+  (fontTable, sectPr, settings compat block, etc.), NOT by jc=both alone.
+  Same class of artifact as oxi-3 cSC+compat15 bisect (both subtractive
+  from d77a, both gave false triggers).
+- outcome: DO NOT MERGE fix/yakumono-jc-conditional. The branch is
+  retained as historical record so next-session exploration doesn't
+  retrace the same falsified path.
+- calibration: 6th falsified fix this oxi-1 session; zero applied to
+  main; bottom-5 floor 3.0166 unchanged. Zero-regression Ra principle
+  functioning correctly.
 
 ## 2026-04-18 — oxi-1 — refuted — d77a cell wrap hypothesis
 - context: d77a p.9 drift (rank 2 bottom-5, 0.6042)
