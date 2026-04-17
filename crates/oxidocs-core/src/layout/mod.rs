@@ -2962,7 +2962,13 @@ impl LayoutEngine {
                         .collect::<Vec<_>>()
                         .windows(2)
                         .any(|w| kinsoku::is_yakumono_trigger(w[0]) && kinsoku::is_yakumono_trigger(w[1]));
-                    let absorb = if overflow_tw > 0 && overflow_tw <= 10
+                    // Threshold raised 10→50tw (2026-04-18) per
+                    // project_wrap_overflow_analyzer_e3c545.md analysis:
+                    // e3c545 idx=29 at +18tw triggers 20.5pt cascade; 4 of its
+                    // 18 over-wraps cluster in 10-50tw and are gated by
+                    // has_pair so d77a over-wraps (has_pair=false) remain
+                    // unaffected.
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && has_pair
                     { true } else { false };
                     let _ = line_compress_count;
