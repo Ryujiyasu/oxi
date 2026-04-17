@@ -15,6 +15,17 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-1 — refuted — b837 footnote spill hypothesis (oxi-2 unblock)
+- context: Task #3 — b837 rank 4; oxi-2's footnote spill investigation
+- hypothesis (oxi-2): Word splits long multi-line footnote bodies across pages
+- method: Word COM measurement of all 25 fns in b837 (ref_page + body_first_page + body_last_page); 3 additive scratch variants with single/many/multi-line fns
+- evidence: ZERO spill in 42 total fns tested (25 real + 17 scratch). All fn body_first_page == body_last_page. Word's rule: fn bodies NEVER span page boundaries.
+- outcome: REFUTED. oxi-2 unblocked — pivot to estimate_footnote_h per-fn over-count (10pt/fn). Real bug location: mod.rs:631 per-footnote height estimate, NOT spill model.
+- supporting evidence: existing output/b837_footnote_y.json + new pipeline_data/b837_footnote_spill.json
+- tools: measure_b837_footnote_spill.py, gen_footnote_spill_repro.py
+- memory: project_b837_footnote_spill_FALSIFIED.md
+- impact: oxi-2 status can change from "investigating spill" to "investigating per-fn estimate over-count"
+
 ## 2026-04-18 — oxi-1 — re-confirmed — 0e7a p.2 layout ceiling
 - context: rank 1 bottom-5 (0.5767); prior memos claimed layout ceiling,
   re-verification requested per Task #2
