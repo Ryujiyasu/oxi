@@ -22,6 +22,8 @@ DOCID_MAP = {
              "pipeline_data/_683f_oxi_layout.json"),
     "0e7a": ("0e7af1ae8f21_20230331_resources_open_data_contract_sample_00",
              "pipeline_data/_0e7a_oxi_layout.json"),
+    "b837": ("b837808d0555_20240705_resources_data_guideline_02",
+             "pipeline_data/_b837_oxi_layout.json"),
 }
 
 def load():
