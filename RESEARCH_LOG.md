@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-1 — drift-localized — b35 p.1 Class B +2.5pt body offset
+- context: Task #4 — b35 rank 3 bottom-5 (SSIM 0.6134), prior memos claim Class B
+- hypothesis: b35 p.1 has measurable per-paragraph drift like 2ea81 Class B
+- method: Word COM per-paragraph Y + Oxi --dump-layout per-block Y; align by text content
+- evidence: 4 body paragraphs aligned (Oxi dump has only 4 body para_idx; tables use block para_idx). All 4 show +2.00-2.50pt downward drift. Median |Δ|=+2.50pt, consistent.
+- outcome: NOT ceiling. Class B drift CONFIRMED. Likely same root cause as Task #1 line=exact boundary rule. Fixing line=exact rule may simultaneously improve b35 p.1 body paras. Table-row drift is SEPARATE mechanism (covered by oxi-4 LM0 cell formula).
+- impact on session: bottom-5 coverage now complete (all 5 + rank 6 diagnosed). 4 have dedicated-session-ready fix targets, 1 ceiling, 1 pivot.
+- tools: diff_b35_p1_paras.py
+- memory: project_b35_p1_class_B_drift_confirmed.md
+
 ## 2026-04-18 — oxi-1 — refuted — b837 footnote spill hypothesis (oxi-2 unblock)
 - context: Task #3 — b837 rank 4; oxi-2's footnote spill investigation
 - hypothesis (oxi-2): Word splits long multi-line footnote bodies across pages
