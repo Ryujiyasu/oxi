@@ -31,7 +31,7 @@ word_results = render_with_word(paths)
 oxi_results = render_with_oxi(paths)
 scores = calculate_ssim(word_results, oxi_results, skip_heatmap=True)
 
-print(f"\n{'doc':<55} {'page':>4} {'old':>7} {'new':>7} {'diff':>+8}")
+print(f"\n{'doc':<55} {'page':>4} {'old':>7} {'new':>7} {'diff':>8}")
 print("-" * 90)
 doc_min_new = {}
 doc_min_old = {}

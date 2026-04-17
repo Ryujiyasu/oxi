@@ -27,7 +27,8 @@ def main():
         time.sleep(1.5)
 
         # Document paragraphs — XML body index 48 = COM Paragraphs(49) (1-based)
-        target_idx = 49  # 1-based: XML paras[48] = Word Paragraphs(49)
+        # 1-based: XML paras[N] = Word Paragraphs(N+1)
+        target_idx = int(sys.argv[1]) if len(sys.argv) > 1 else 49
 
         p = doc.Paragraphs(target_idx)
         rng = p.Range
