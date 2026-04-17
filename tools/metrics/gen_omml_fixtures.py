@@ -80,14 +80,20 @@ FIXTURES = {
                 '<m:e><m:r><m:t>x+1</m:t></m:r></m:e></m:box>',
     },
     "09_bar": {
-        "desc": "overline (bar) on x",
-        "math": '<m:bar><m:barPr><m:pos m:val="top"/></m:barPr>'
-                '<m:e><m:r><m:t>x</m:t></m:r></m:e></m:bar>',
+        "desc": "overline (bar) on x (no pos = default top)",
+        # Simplified: omit m:barPr (defaults to top overline).
+        # Previous variant with <m:pos m:val="top"/> crashed Word COM.
+        "math": '<m:bar><m:e><m:r><m:t>x</m:t></m:r></m:e></m:bar>',
     },
     "10_limit": {
-        "desc": "lower limit: lim x→0",
-        "math": '<m:limLow><m:e><m:r><m:t>lim</m:t></m:r></m:e>'
-                '<m:lim><m:r><m:t>x→0</m:t></m:r></m:lim></m:limLow>',
+        "desc": "lower limit: lim_{x→0} f(x)",
+        # Fixed: base is m:func with fName='lim' and empty e; lim contains sub.
+        # Previous variant put bare text 'lim' in m:e which crashed Word COM.
+        "math": '<m:limLow>'
+                '<m:e><m:func><m:fName><m:r><m:t>lim</m:t></m:r></m:fName>'
+                '<m:e><m:r><m:t>f(x)</m:t></m:r></m:e></m:func></m:e>'
+                '<m:lim><m:r><m:t>x→0</m:t></m:r></m:lim>'
+                '</m:limLow>',
     },
 }
 
