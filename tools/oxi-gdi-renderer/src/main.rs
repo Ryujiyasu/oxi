@@ -492,7 +492,7 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                pi + 1, page.width, page.height).unwrap();
         let mut first = true;
         for el in &page.elements {
-            let (kind, text_json, font_size, extra) = match &el.content {
+            let (kind, text_json, font_size) = match &el.content {
                 LayoutContent::Text { text, font_size, .. } => {
                     let mut esc = String::with_capacity(text.len());
                     for c in text.chars() {
@@ -509,16 +509,12 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                             c => esc.push(c),
                         }
                     }
-                    ("text", format!("\"{}\"", esc), *font_size, String::new())
+                    ("text", format!("\"{}\"", esc), *font_size)
                 }
-                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0, String::new()),
-                LayoutContent::TableBorder { x1, y1, x2, y2, width, .. } => {
-                    ("border", "null".to_string(), 0.0,
-                     format!(", \"x1\": {:.3}, \"y1\": {:.3}, \"x2\": {:.3}, \"y2\": {:.3}, \"bw\": {:.3}",
-                             x1, y1, x2, y2, width))
-                }
-                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0, String::new()),
-                _ => ("other", "null".to_string(), 0.0, String::new()),
+                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0),
+                LayoutContent::TableBorder { .. } => ("border", "null".to_string(), 0.0),
+                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0),
+                _ => ("other", "null".to_string(), 0.0),
             };
             if !first { out.push_str(",\n"); }
             first = false;
@@ -526,8 +522,8 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             let ri_json = el.run_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let co_json = el.char_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, extra).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json).unwrap();
         }
         out.push_str("\n    ]}");
     }
