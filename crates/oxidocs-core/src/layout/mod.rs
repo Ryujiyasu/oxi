@@ -2943,26 +2943,23 @@ impl LayoutEngine {
                     }
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
-                    // Two-phase overflow handling:
-                    // Phase 1: small overflow (≤3pt) absorbed only if line has compressible chars
-                    //          (Word uses semi-yakumono compression to absorb; no compressibles → break)
-                    // Phase 2: larger overflow absorbed by pair-yakumono compression
                     let line_compress_count = current_line.fragments.iter()
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
                         .count();
-                    let absorb = if overflow_tw > 0 && overflow_tw <= 60
-                        && !compress_used && line_compress_count > 0 {
-                        // Small overflow (≤3pt): line has yakumono that can semi-compress
-                        true
-                    } else if overflow_tw > 0 && self.compress_punctuation {
+                    // COM-confirmed d77a p.2 PARA 21 (2026-04-17): Word breaks
+                    // strictly when overflow > 0. Previous Phase 1 absorption up
+                    // to 3pt (60tw) let Oxi fit 41 chars/line vs Word's 39 for
+                    // MS Gothic 12pt in LM2 docGrid, accumulating to 1 missing
+                    // 8th line per long paragraph. Phase 2 (pair-yakumono
+                    // compression for compress_punctuation docs) retained.
+                    let absorb = if overflow_tw > 0 && self.compress_punctuation {
                         let savings_tw = line_compress_count as i32 * pt_to_tw(font_size * 0.5);
                         if savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62 {
                             true
                         } else { false }
                     } else { false };
-                    // Set compress_used after Phase 2 absorption (not Phase 1)
-                    if absorb && overflow_tw > 60 {
+                    if absorb {
                         compress_used = true;
                     }
                     if overflow_tw > 0 && !absorb && !current_line.fragments.is_empty() {
