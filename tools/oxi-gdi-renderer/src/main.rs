@@ -22,12 +22,16 @@ fn main() {
     // no-AA fallback with CLEARTYPE_QUALITY, but supersampling + Lanczos downscale
     // restores grayscale AA matching Word EMF output.
     let mut supersample: u32 = 2;
+    let mut dump_layout: Option<String> = None;
     for arg in &args[3..] {
         if let Some(list) = arg.strip_prefix("--exclude=") {
             exclude = list.split(',').map(|s| s.trim().to_lowercase()).collect();
         }
         if let Some(n) = arg.strip_prefix("--supersample=") {
             supersample = n.parse().unwrap_or(2);
+        }
+        if let Some(path) = arg.strip_prefix("--dump-layout=") {
+            dump_layout = Some(path.to_string());
         }
     }
 
@@ -42,6 +46,12 @@ fn main() {
     eprintln!("Parsed {} pages, DPI={} supersample={}x", result.pages.len(), dpi, supersample);
     if !exclude.is_empty() {
         eprintln!("Excluding: {:?}", exclude);
+    }
+
+    if let Some(ref path) = dump_layout {
+        dump_layout_json(&result, path);
+        eprintln!("Layout dumped to {}", path);
+        return;
     }
 
     // Render each page with GDI
@@ -468,4 +478,41 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
             ReleaseDC(HWND(std::ptr::null_mut()), screen_dc);
         }
     }
+}
+
+/// Dump layout elements to JSON for per-element x/y diffing against Word DML.
+/// Minimal schema — enough to locate each text fragment in document space.
+fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
+    use oxidocs_core::layout::LayoutContent;
+    use std::fmt::Write;
+    let mut out = String::from("{\n  \"pages\": [\n");
+    for (pi, page) in result.pages.iter().enumerate() {
+        if pi > 0 { out.push_str(",\n"); }
+        write!(&mut out, "    {{\"page\": {}, \"width\": {:.3}, \"height\": {:.3}, \"elements\": [\n",
+               pi + 1, page.width, page.height).unwrap();
+        let mut first = true;
+        for el in &page.elements {
+            let (kind, text_json, font_size) = match &el.content {
+                LayoutContent::Text { text, font_size, .. } => {
+                    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+                    ("text", format!("\"{}\"", escaped), *font_size)
+                }
+                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0),
+                LayoutContent::TableBorder { .. } => ("border", "null".to_string(), 0.0),
+                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0),
+                _ => ("other", "null".to_string(), 0.0),
+            };
+            if !first { out.push_str(",\n"); }
+            first = false;
+            let pi_json = el.paragraph_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            let ri_json = el.run_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            let co_json = el.char_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            write!(&mut out,
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json).unwrap();
+        }
+        out.push_str("\n    ]}");
+    }
+    out.push_str("\n  ]\n}\n");
+    std::fs::write(path, out).expect("Failed to write dump-layout JSON");
 }
