@@ -1103,6 +1103,7 @@ impl LayoutEngine {
                         page.size.height,
                         &mut pages,
                         &mut elements,
+                        Some(block_idx),
                     );
                     elements.extend(table_elements);
 
@@ -1766,6 +1767,7 @@ impl LayoutEngine {
                         None,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut tb_pages, &mut tb_elems,
+                        None,
                     );
                     elements.extend(tb_elems);
                     elements.extend(table_elements);
@@ -3577,6 +3579,7 @@ impl LayoutEngine {
         page_height: f32,
         pages: &mut Vec<LayoutPage>,
         current_elements: &mut Vec<LayoutElement>,
+        block_idx: Option<usize>,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
@@ -3873,6 +3876,7 @@ impl LayoutEngine {
                         grid_char_pitch,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut dummy_pages, &mut dummy_elems,
+                        block_idx,
                     );
                     for elem in nested_elements {
                         cell_elements.push(elem);
@@ -4149,7 +4153,7 @@ impl LayoutEngine {
                             let mut rx = 0.0_f32;
                             for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
-                                cell_elements.push(LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h + cell_text_y_off, adj_w, lh, LayoutContent::Text {
+                                let mut cell_el = LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h + cell_text_y_off, adj_w, lh, LayoutContent::Text {
                                         text: text.clone(),
                                         font_size: *fs,
                                         font_family: font_family.clone(),
@@ -4162,7 +4166,12 @@ impl LayoutEngine {
                                         highlight: highlight.clone(),
                                         character_spacing: *cs,
                                         field_type: None,
-                                }));
+                                });
+                                // Attribute to the table's source block index so diff tools
+                                // can localize cell text. Without this, para_idx is None and
+                                // docs with many tables produce unusable --dump-layout output.
+                                cell_el.paragraph_index = block_idx;
+                                cell_elements.push(cell_el);
                                 rx += adj_w + frag_spacing[frag_idx];
                             }
                             content_h += lh;
