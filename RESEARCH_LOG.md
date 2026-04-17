@@ -66,8 +66,33 @@ Format:
 - refuted: cell wrap (2026-04-18)
 - current direction: looking at cell height / vertical align / floating shape overhead
 
-### oxi-2 — b837 p.4 (idle)
-- waiting: on oxi-4 LM0 formula; unclear what residual bug remains after that lands
+### 🔥 BLOCKER — footnote area over-reserve on b837 p.4
+- **Status**: BLOCKS oxi-4 `39ebdb9` charGrid fix from merging
+- **Symptom**: Oxi reserves full footnote body height per page; Word splits
+  long footnotes across pages, reserving only what fits.
+- **Measurement** (from oxi-4 memo `project_b837_footnote_over_reserve`):
+  - p.4: Oxi reserves 198.5pt for 5 footnotes (all lines, 13 line-bodies)
+  - Word reserves ~80pt less (splits fn 22's 5-line body across pages)
+  - Oxi's cap puts paras[59] 2nd line past page end → premature break
+- **Potential gain** (if fixed together with charGrid):
+  - b837 p2: +0.0836
+  - b837 p4: +0.0089 (target)
+  - b837 p5: recovers from -0.0387 to possibly positive
+  - Bottom-5 impact: potentially enough to push b837 out of bottom-5 entirely
+- **Assignee (2026-04-18)**: oxi-2 (reassigned from fix/b35-multiline-cell)
+- **Branch suggestion**: `fix/footnote-area-spill`
+- **Key files**:
+  - `crates/oxidocs-core/src/layout/mod.rs` — `estimate_footnote_h` cap logic
+  - Memo chain: `project_chargrid_2cell_indent_width.md` →
+    `project_footnote_reserve_sensitivity.md` →
+    `project_b837_footnote_over_reserve.md`
+- **Design direction**: implement Word-like footnote-area spill across pages
+  (cap per-page at remaining body-space, overflow to next page's fn area).
+
+### oxi-2 — footnote area spill (reassigned)
+- target: implement Word-like footnote area page-split
+- blocks: oxi-4 charGrid fix `39ebdb9`
+- evidence: `project_b837_footnote_over_reserve.md` in agent memory
 
 ---
 
