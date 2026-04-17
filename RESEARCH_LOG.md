@@ -15,6 +15,22 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-1 — re-confirmed — 0e7a p.2 layout ceiling
+- context: rank 1 bottom-5 (0.5767); prior memos claimed layout ceiling,
+  re-verification requested per Task #2
+- hypothesis: 0e7a p.2 has no remaining layout drift; SSIM gap is
+  sub-pixel / AA / glyph-rendering only
+- method: fresh Oxi --dump-layout on current main + Word COM per-paragraph Y
+  measurement; align 20 paragraphs by text content
+- evidence: median Δ=+0.00pt, max |Δ|=0.50pt across 20 aligned paragraphs;
+  17 of 20 paras show Δ=+0.00 exactly
+- outcome: LAYOUT CEILING confirmed. 0e7a p.2 SSIM 0.5767 NOT
+  layout-improvable. Future sessions should skip this page for layout
+  work and focus on d77a p.9 (rank 2) where drift IS fixable
+  (line=exact boundary rule — see preceding entry).
+- tools: measure_word_paras_generic.py, diff_0e7a_p2_paras.py
+- memory: project_0e7a_p2_ceiling_CONFIRMED_2026_04_18.md
+
 ## 2026-04-18 — oxi-1 — confirmed — line=exact boundary rule (additive)
 - context: 2ea81 idx=6→7 +2pt bug (see project_2ea81_line_exact_boundary_bug.md)
 - hypothesis: at adjacent paragraphs both with lineRule=exact, Y advance A→B uses lineA's value, not lineB
