@@ -2947,18 +2947,23 @@ impl LayoutEngine {
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
                         .count();
-                    // COM-confirmed d77a p.2 PARA 21 (2026-04-17): Word breaks
-                    // strictly when overflow > 0. Previous Phase 1 absorption up
-                    // to 3pt (60tw) let Oxi fit 41 chars/line vs Word's 39 for
-                    // MS Gothic 12pt in LM2 docGrid, accumulating to 1 missing
-                    // 8th line per long paragraph. Phase 2 (pair-yakumono
-                    // compression for compress_punctuation docs) retained.
-                    let absorb = if overflow_tw > 0 && self.compress_punctuation {
-                        let savings_tw = line_compress_count as i32 * pt_to_tw(font_size * 0.5);
-                        if savings_tw >= overflow_tw && overflow_tw * 100 <= savings_tw * 62 {
-                            true
-                        } else { false }
-                    } else { false };
+                    // Phase 2 pair-yakumono compression for compressPunctuation docs.
+                    // COM-refined 2026-04-17: Word only absorbs overflow when a
+                    // PAIR of adjacent yakumono is present that can actually
+                    // compress. Previous `count * font_size * 0.5` formula
+                    // overestimated available savings, letting Oxi fit 1-2 extra
+                    // chars/line on long paragraphs. Restrict absorption to small
+                    // overflow (≤ 10tw = 0.5pt) and only when we have evidence of
+                    // pair-compressible yakumono on the line.
+                    let has_pair = current_line.fragments.iter()
+                        .flat_map(|f| f.text.chars())
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|w| kinsoku::is_yakumono_trigger(w[0]) && kinsoku::is_yakumono_trigger(w[1]));
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 10
+                        && self.compress_punctuation && has_pair
+                    { true } else { false };
+                    let _ = line_compress_count;
                     if absorb {
                         compress_used = true;
                     }
