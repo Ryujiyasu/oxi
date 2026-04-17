@@ -70,3 +70,13 @@ Format:
 - waiting: on oxi-4 LM0 formula; unclear what residual bug remains after that lands
 
 ---
+
+## Confidence merges (Path B — correct regardless of SSIM)
+
+Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
+repro + spec reference, but didn't necessarily improve bottom-5 floor. See
+CLAUDE.md §9 Path B for the rules.
+
+(none yet — first one will land here)
+
+---
