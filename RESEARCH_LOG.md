@@ -15,6 +15,19 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-2 — baseline-inventory — comments + tracked-changes sparsity confirmed
+
+- context: feat/comments-tracked-changes Phase 1 Tick 1 — establish baseline usage floor before Phase 2 implementation
+- hypothesis: the 177/184 baseline .docx corpus contains enough comment + tracked-change usage to drive COM measurement and regression testing
+- method: zip+XML scan of all 184 docx under `oxi-main/tools/golden-test/documents/docx/`. Count `w:commentRange*`, `w:commentReference`, `w:comment` bodies, `w:ins`, `w:del`, `w:moveFrom/To`, `w:*PrChange` markers. Detect `word/comments.xml`, `commentsExtended.xml`, `commentsIds.xml`, `people.xml`
+- evidence (JSON at tools/metrics/output/{comments_inventory,tracked_changes_inventory}.json):
+  - docs_with_word_comments_xml: **0 / 184**
+  - docs_with_any_revision_marker: **5 / 184** (all 1×w:del, one additionally 1×w:pPrChange, single author, boilerplate `people.xml`)
+  - zero replies, zero moves, zero rPrChange, zero multi-reviewer scenarios in corpus
+- outcome: REFUTED. Baseline provides essentially no test signal for comment + revision rendering. All Tick 2–3 COM measurements and all Phase 2 regression suites MUST use self-authored fixtures. Advantage: no SSIM floor risk for these features (Path B [confidence-merge] is the natural merge gate); work can proceed on dedicated branch without bottom-N concern.
+- tools: `tools/metrics/inventory_comments_tracked_changes.py`
+- next-tick: Tick 2 — author N reference docx fixtures in `tools/fixtures/comments_samples/` (even a provisional set unblocks Tick 2 COM measurement). This pulls Tick 5-6 earlier in the pipeline.
+
 ## 🔥 BLOCKER: GDI preset render coverage (Path A fix target)
 
 ## 2026-04-18 — oxi-1 — drift-localized — b35 p.1 Class B +2.5pt body offset
