@@ -63,5 +63,12 @@ merge_ok = post > pre
 | oxi-3    | fix/2ea81-p2 | 2ea81 p2 (rank 6, LM2 linePitch) |
 | **oxi-4**| **fix/lm0-cell-formula** | **LM0 cell formula (gates 683f+b35)** |
 
+## No-deferred rule (2026-04-17)
+One loop iteration must complete **measurement → implementation → quick verify**
+as a single unit. Do NOT stop after measurement with "next steps deferred"
+unless explicitly blocked. If out of time within an iteration, commit
+work-in-progress to a WIP branch so the next iteration can resume without
+re-measuring.
+
 ## Loop prompt
 `/loop 進めて` — read this file and CLAUDE.md, continue the Ra loop.
