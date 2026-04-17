@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from .config import OXI_ROOT, OXI_PNG_DIR, RENDER_DPI
 
-RENDER_TIMEOUT = 60
+RENDER_TIMEOUT = 300
 
 # GDI renderer binary path
 GDI_RENDERER = os.path.join(OXI_ROOT, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
@@ -38,6 +38,7 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
         # GDI renderer outputs: {prefix}_p1.png, {prefix}_p2.png, ...
         prefix = str(out_dir / "oxi")
 
+        timed_out = False
         try:
             proc = subprocess.Popen(
                 [GDI_RENDERER,
@@ -52,17 +53,19 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-                print(f"[NG] Oxi GDI timeout ({doc_id}): >{RENDER_TIMEOUT}s")
-                results[docx_path] = []
-                continue
+                print(f"[WARN] Oxi GDI timeout ({doc_id}): >{RENDER_TIMEOUT}s — using partial output")
+                timed_out = True
 
-            if proc.returncode != 0:
+            if not timed_out and proc.returncode != 0:
                 err_text = stderr.decode("utf-8", errors="replace")[:300]
                 print(f"[NG] Oxi GDI error ({doc_id}):\n{err_text}")
                 results[docx_path] = []
                 continue
 
-            # Rename output files: oxi_p1.png -> page_0001.png
+            # Rename whatever pages were produced, even on timeout.
+            # Some docs render 70+ pages and can't finish in the timeout, but
+            # SSIM comparison only uses min(Word, Oxi) pages, so partial output
+            # is better than zero output.
             page_idx = 1
             while True:
                 src = out_dir / f"oxi_p{page_idx}.png"
@@ -74,7 +77,8 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
 
             png_paths = sorted(out_dir.glob("page_*.png"))
             results[docx_path] = [str(p) for p in png_paths]
-            print(f"  Oxi GDI: {doc_id} ({len(png_paths)} pages)")
+            tag = "[WARN] partial" if timed_out else "  Oxi GDI"
+            print(f"{tag}: {doc_id} ({len(png_paths)} pages)")
 
         except Exception as e:
             print(f"[NG] Oxi GDI error ({doc_id}): {e}")
