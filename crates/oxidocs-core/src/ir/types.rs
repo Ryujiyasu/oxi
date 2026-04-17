@@ -755,6 +755,10 @@ pub struct ParagraphStyle {
     /// Page break before this paragraph (w:pageBreakBefore)
     #[serde(default)]
     pub page_break_before: bool,
+    /// Page break AFTER this paragraph (empty-paragraph-with-inline-br pattern).
+    /// Word renders the empty paragraph's mark on the CURRENT page then breaks.
+    #[serde(default)]
+    pub page_break_after: bool,
     /// Paragraph borders
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub borders: Option<ParagraphBorders>,
@@ -862,6 +866,7 @@ impl Default for ParagraphStyle {
             shading: None,
             ppr_rpr: None,
             page_break_before: false,
+            page_break_after: false,
             borders: None,
             keep_next: false,
             keep_lines: false,

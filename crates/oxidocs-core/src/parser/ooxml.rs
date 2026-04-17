@@ -1415,10 +1415,21 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    // Convert inline page break (w:br type="page" as \x0C in first run) to page_break_before
+    // Convert inline page break (w:br type="page" as \x0C in first run).
+    // COM-confirmed 2026-04-17: when the paragraph is empty except for the br,
+    // Word renders the paragraph's mark as a stub line on the CURRENT page
+    // then breaks. That maps to `page_break_after`. When the br is followed by
+    // other non-empty content, it remains `page_break_before` (existing behavior).
+    // See `project_empty_br_para_stub.md`.
     if let Some(first_run) = runs.first() {
         if first_run.text.trim() == "\x0C" || first_run.text == "\x0C" {
-            style.page_break_before = true;
+            let only_br = runs.len() == 1
+                || runs.iter().skip(1).all(|r| r.text.is_empty());
+            if only_br {
+                style.page_break_after = true;
+            } else {
+                style.page_break_before = true;
+            }
             runs.remove(0); // Remove the break-only run
         }
     }

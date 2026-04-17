@@ -1050,6 +1050,26 @@ impl LayoutEngine {
                         }
                     }
 
+                    // page_break_after: render the (typically empty) paragraph
+                    // on the current page, then force a new page for the NEXT
+                    // block. Used for the inline-br-in-empty-paragraph pattern;
+                    // see `project_empty_br_para_stub.md`.
+                    if para.style.page_break_after && !elements.is_empty() {
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        cursor_y = start_y;
+                        current_column = 0;
+                        start_x = col_x_positions[0];
+                        content_width = col_widths[0];
+                        current_page_idx += 1;
+                        lm2_cells = 0;
+                        footnote_reserve_current = 0.0;
+                        footnote_ids_current_page.clear();
+                    }
+
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
                 }
@@ -2187,10 +2207,11 @@ impl LayoutEngine {
             }
 
             let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
-            // COM-confirmed (d77a): firstLine indent reduces available width but
-            // does NOT shift line_x. Text starts at margin+indent_left regardless.
-            // The first line is simply shorter (justify compresses or right side truncates).
-            let line_x = start_x + indent_left;
+            // COM-confirmed 2026-04-17 (measure_hanging_indent_v2.py): first-line
+            // indent DOES shift line_x. Word places line 1 at margin+indent_left+
+            // first_line_indent, continuation lines at margin+indent_left. Applies
+            // to both positive firstLine (e.g. +21pt) and hanging (negative, e.g. -9pt).
+            let line_x = start_x + indent_left + extra_indent;
 
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
