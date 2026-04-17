@@ -494,8 +494,22 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
         for el in &page.elements {
             let (kind, text_json, font_size) = match &el.content {
                 LayoutContent::Text { text, font_size, .. } => {
-                    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-                    ("text", format!("\"{}\"", escaped), *font_size)
+                    let mut esc = String::with_capacity(text.len());
+                    for c in text.chars() {
+                        match c {
+                            '\\' => esc.push_str("\\\\"),
+                            '"'  => esc.push_str("\\\""),
+                            '\n' => esc.push_str("\\n"),
+                            '\r' => esc.push_str("\\r"),
+                            '\t' => esc.push_str("\\t"),
+                            c if (c as u32) < 0x20 => {
+                                use std::fmt::Write as _;
+                                write!(&mut esc, "\\u{:04x}", c as u32).unwrap();
+                            }
+                            c => esc.push(c),
+                        }
+                    }
+                    ("text", format!("\"{}\"", esc), *font_size)
                 }
                 LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0),
                 LayoutContent::TableBorder { .. } => ("border", "null".to_string(), 0.0),
