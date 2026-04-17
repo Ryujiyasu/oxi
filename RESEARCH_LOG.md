@@ -15,6 +15,35 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-3 — confirmed — yakumono compression trigger = cSC + compat≥15
+- context: d77a p.9 drift root cause investigation (memory
+  project_yakumono_rule_unconfirmed.md said "trigger UNKNOWN")
+- hypothesis: some Word setting combination triggers yakumono compression
+  beyond simple `compressPunctuation` alone
+- method: bisect d77a settings.xml by removing features; minimal-docx
+  rebuild with controlled settings
+- evidence:
+  - `pipeline_data/d77a_yakumono_bisect.json`: baseline d77a fs=12 '（'=10.5 (compressed);
+    `no_characterSpacingControl` variant → fs=12 '（'=12.0 (NOT compressed)
+  - `pipeline_data/yakumono_sweep.json` (minimal repro):
+    - cSC alone or cSC+useFELayout or cSC+balanceByte → '（' NOT compressed
+    - cSC + compatibilityMode=15 → '（' compressed (10.5 at fs=12)
+    - cSC + compat15: '）' ALWAYS halves when followed by ',、。' (adjacent pair)
+    - without cSC: no compression at all
+- confirmed rule (full): `characterSpacingControl="compressPunctuation"` AND
+  `compatibilityMode >= 15` are BOTH required
+- partial rule: '（' in my minimal repro context "い（う" does NOT compress,
+  but '（' in d77a "約（第" DOES compress → context dependency unknown
+  (possibly ideograph-before triggers additional rule)
+- outcome: SUPERSEDES `project_yakumono_rule_unconfirmed.md` "trigger
+  UNKNOWN" claim. First-class trigger confirmed. Implementation gate:
+  `compress_punctuation && compat_mode >= 15`. Oxi parser ALREADY reads
+  both fields (grep confirms `compat_mode: u32` at ir/types.rs:23).
+- scripts: `tools/metrics/bisect_d77a_yakumono.py`,
+  `bisect_d77a_minimal.py`, `sweep_yakumono_formula.py`
+- next: dedicated session to implement compat15 gate + ')、' pair
+  pre-compression at break_into_lines (currently only in absorb path)
+
 ## 2026-04-18 — oxi-1 — refuted — d77a cell wrap hypothesis
 - context: d77a p.9 drift (rank 2 bottom-5, 0.6042)
 - hypothesis: cell text wrapping differs between Oxi and Word
