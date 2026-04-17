@@ -2723,13 +2723,19 @@ impl LayoutEngine {
             let latin_gdi_map = self.registry.get_gdi_char_widths(&latin_metrics.family, font_size);
             let cjk_gdi_map = cjk_metrics.map(|m| self.registry.get_gdi_char_widths(&m.family, font_size)).flatten();
 
-            // Yakumono compression flags (約物詰め): COM-confirmed (2026-04-08).
-            // Only applied when document setting w:characterSpacingControl is
-            // "compressPunctuation" or "compressPunctuationAndJapaneseKana".
-            // Most modern docs use "doNotCompress" → no compression.
+            // Yakumono compression flags (約物詰め): COM-confirmed (2026-04-08,
+            // refined 2026-04-18 bisect).
+            // Trigger requires BOTH:
+            //   - w:characterSpacingControl = "compressPunctuation" or "compressPunctuationAndJapaneseKana"
+            //   - w:compat/w:compatSetting compatibilityMode >= 15 (Word 2013+)
+            // See RESEARCH_LOG.md 2026-04-18 and pipeline_data/d77a_yakumono_bisect.json:
+            //   - cSC alone: NO compression (minimal repro confirmed)
+            //   - cSC + compat15: yakumono pair compression applies
+            // Most modern docs use "doNotCompress" → no compression regardless of compat.
+            let yakumono_enabled = self.compress_punctuation && self.compat_mode >= 15;
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
-            let yakumono_compressed: Vec<bool> = if self.compress_punctuation {
+            let yakumono_compressed: Vec<bool> = if yakumono_enabled {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
                 for i in 0..n {
@@ -2773,7 +2779,7 @@ impl LayoutEngine {
                 //     context in Word — 6, 10.5, 11, 11.5, 12pt — no simple compression rule)
                 if yakumono_compressed[char_index] {
                     char_width *= 0.5;
-                } else if self.compress_punctuation {
+                } else if yakumono_enabled {
                     // Expand pair rule: when yakumono_compressed[neighbor] = true AND
                     // this char is also yakumono, both compress.
                     let is_yakumono_any = matches!(ch,
@@ -2969,7 +2975,7 @@ impl LayoutEngine {
                     // has_pair so d77a over-wraps (has_pair=false) remain
                     // unaffected.
                     let absorb = if overflow_tw > 0 && overflow_tw <= 50
-                        && self.compress_punctuation && has_pair
+                        && self.compress_punctuation && self.compat_mode >= 15 && has_pair
                     { true } else { false };
                     let _ = line_compress_count;
                     if absorb {
