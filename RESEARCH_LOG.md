@@ -15,68 +15,60 @@ Format:
 
 ---
 
-## 2026-04-18 — oxi-3 — needs-reconciliation — yakumono compression trigger = cSC + compat≥15
-**STATUS DOWNGRADED from "confirmed" to "needs-reconciliation" 2026-04-18 (oxi-1 review)**
+## 🔥 BLOCKER: GDI preset render coverage (Path A fix target)
 
-Reason for downgrade:
-- `bisect_d77a_minimal.py` uses `SRC = d77a.docx` as base and swaps ONLY
-  settings.xml. document.xml / styles.xml / fontTable.xml / sectPr /
-  themeFontLang all remain d77a's. This is **subtractive from d77a**, NOT
-  a true scratch. Per oxi-1 2026-04-18 scratch+jc=both test
-  (`gen_scratch_jc_both.py`), this same class of "minimal" approach
-  yielded a false trigger (jc=both seemed to trigger in d77a-subtractive
-  but NOT in true scratch).
-- `yakumono_sweep.json` actual data (cSC + compat=15 minimal template, truly
-  scratch XML): MSGothic_12.0 → `（=12.0, 、=12.0, 「=12.0, 」=12.0, 。=12.0`
-  (ALL singles at fontsize, NOT compressed). This DIRECTLY contradicts
-  the claim "cSC + compat15 → '（' compressed (10.5 at fs=12)".
-  Only pair '）' halves (always, even at baseline). Pair compression is
-  separate from single-yakumono compression and NOT blocked by cSC/compat.
+## 2026-04-18 — oxi-2 — reproducible-bug — PresetShape handler only renders bracketPair
 
-Revised assessment:
-- True trigger for d77a's single-yakumono compression remains **UNKNOWN**
-- `cSC + compat=15` is NECESSARY (without cSC no compression) but NOT
-  SUFFICIENT (scratch + cSC + compat=15 doesn't compress)
-- Additional d77a-inherited property (fontTable / styles / sectPr detail /
-  theme / rsid) combines with cSC+compat=15 to activate compression
-- Implementation gate "compress_punctuation && compat_mode >= 15" is
-  therefore insufficient — would regress any doc with cSC+compat=15 but
-  without the missing trigger
+- context: 2ea81 rank 6 AlternateContent analysis led to finding
+- hypothesis: `tools/oxi-gdi-renderer/src/main.rs:377-433` PresetShape
+  handler has `if shape_type == "bracketPair"` but NO else branch. All
+  other preset types (rect, roundRect, ellipse, straightConnector1,
+  bentConnector3, etc.) fall through silently = rendered as nothing
+- evidence:
+  - grep confirmed only bracketPair branch exists in the match
+  - 2ea81 has 17 AlternateContent shapes (7 rect, 4 roundRect, 3 ellipse,
+    2 straightConnector1, 1 bentConnector3) + 4 pic:pic images
+  - 11 of 17 have txbx (text content renders via separate path) but
+    borders/fills/lines do NOT render
+  - 6 of 17 are shape-only (no txbx) → **completely invisible**
+  - Also explains earlier "spt 32 connector invisible" finding — VML
+    fallback maps to same PresetShape path
+- outcome: Path A fix candidate (direct bottom-5 improvement expected)
+- bottom-5 / rank 6+ impact:
+  - 2ea81 (rank 6): 6 invisible + 11 missing borders — likely 4th major
+    bug class after line=exact, tbRlV, spt 202
+  - b35 (rank 3): 1 missing rect border (form header text box)
+  - b837 (rank 4): 1 AlternateContent shape
+  - Other bottom-5 docs: 0 AlternateContent
+- implementation scope (dedicated session): 5 GDI primitive branches
+  - rect → `Rectangle()`
+  - roundRect → `RoundRect()`
+  - ellipse → `Ellipse()`
+  - straightConnector1 (and VML spt 32) → `MoveToEx` + `LineTo`
+  - bentConnector3 → polyline (3-segment right-angle bent)
+  - Plus stroke weight / color / flip handling
+  Approximately 1 hour's work per the memo.
+- memos: `asset_preset_shape_render_gaps.md`, `asset_vml_spt32_connector.md`
 
-Next investigation (deferred to dedicated session per user 2026-04-18):
-- Truly additive bisection: scratch + cSC + compat=15 + ONE more d77a
-  property at a time. Goal: find the minimal sufficient set.
-- Candidates: fontTable with real PANOSE, sectPr drawingGrid properties,
-  themeFontLang, rPrDefault rFonts cascade.
+## 2026-04-18 — oxi-2 — reproducible-bug — line=exact boundary +2pt
+- context: 2ea81 page 1 (rank 6, 0.6356); 2ea81 is Class B (page-aligned, intra-page only)
+- hypothesis: when lineSpacingRule=exact changes between adjacent paragraphs (e.g., line=260tw empty → line=300tw body), Oxi advances by NEXT para's value (15pt) while Word uses CURRENT para's value (13pt); +2pt per boundary
+- evidence:
+  - Word DML + docx pPr: 2ea81 idx=6 empty (line=260tw exact), idx=7 body (line=300tw exact); Word measured advance 6→7 = 13pt
+  - Oxi layout dump: dy jumps +2.7 → +4.7 exactly at idx=6→7 boundary
+  - minimal repro (`tools/metrics/repro_line_exact_boundary.py`) reproduces precisely: Word A→C=26pt, Oxi A→C=28pt for 3-paragraph 260/260/300 sequence
+- outcome: HANDOFF to dedicated session. Not applying code change per /loop policy.
+  Code location candidates: `mod.rs:~2045-2100` (line_height computation), `mod.rs:2538` (cursor_y advance). Verify the empty-paragraph's line_height uses its own pPr not next's.
+- wider impact: form-style docs (tax/application) with mixed exact line heights accumulate +delta per boundary. Potentially affects SSIM for 2ea81 rank 6 and similar form docs.
+- memos: `project_2ea81_line_exact_boundary_bug.md`, `project_2ea81_class_b.md`
 
-Original evidence preserved for reference:
-- `pipeline_data/d77a_yakumono_bisect.json` (subtractive from d77a)
-- `pipeline_data/yakumono_sweep.json` (true scratch — shows NO compression)
-- scripts: `tools/metrics/bisect_d77a_yakumono.py`,
-  `bisect_d77a_minimal.py`, `sweep_yakumono_formula.py`
-
-Cross-reference: oxi-1 2026-04-18 `project_yakumono_jc_both_FALSIFIED.md`
-reached same conclusion via independent path (scratch+jc=both test).
-
-## 2026-04-18 — oxi-1 — premise-falsified — fix/yakumono-jc-conditional
-- branch: fix/yakumono-jc-conditional (commit 4bec783) — RETAINED (not deleted)
-- premise: yakumono compression trigger = jc=both (justification)
-- evidence for premise: R3 (d77a subtractive with minimal styles + jc=both
-  on Normal) reproduced compression; memory project_yakumono_trigger_IS_jc_both.md
-- falsification: 2026-04-18 scratch test gen_scratch_jc_both.py
-  (truly minimal docx + only <w:jc val="both"/> + compressPunctuation)
-  shows ・=12.00pt (NOT compressed, ratio 100%). Independent verification
-  in memory `project_yakumono_jc_both_FALSIFIED.md`.
-- diagnosis: R3 compression was caused by d77a inherited properties
-  (fontTable, sectPr, settings compat block, etc.), NOT by jc=both alone.
-  Same class of artifact as oxi-3 cSC+compat15 bisect (both subtractive
-  from d77a, both gave false triggers).
-- outcome: DO NOT MERGE fix/yakumono-jc-conditional. The branch is
-  retained as historical record so next-session exploration doesn't
-  retrace the same falsified path.
-- calibration: 6th falsified fix this oxi-1 session; zero applied to
-  main; bottom-5 floor 3.0166 unchanged. Zero-regression Ra principle
-  functioning correctly.
+## 2026-04-18 — oxi-2 — refuted — yakumono rule `min(fs, 10.5)` char-advance
+- context: d77a idx=9 line 1 (MS Gothic 12pt) showed '（' advance=10.5pt when fontsize=12, leading to "single yakumono compression" hypothesis
+- hypothesis: Oxi's `char_width_pt` returns fontsize for fullwidth yakumono; should cap at 10.5pt
+- evidence: minimal repro (tested 4 compat modes × 2 fonts × 6 sizes = 48 cases) showed yakumono advance = fontsize in all cases. Rule refuted.
+- outcome: parallel session (oxi-3?) merged 1e05fe3 "fixed advance" from a different angle and was later REVERTED (b7fde5e). My refusal to merge was validated.
+- note: /loop cannot reproduce the real-doc trigger for yakumono compression. Requires dedicated bisect-from-real-doc approach with subprocess isolation.
+- memos: `project_yakumono_rule_unconfirmed.md`, `project_word_single_yakumono_compression.md`, `project_firstline_render_no_shift.md`
 
 ## 2026-04-18 — oxi-1 — refuted — d77a cell wrap hypothesis
 - context: d77a p.9 drift (rank 2 bottom-5, 0.6042)
