@@ -59,3 +59,6 @@ tools/oxi-gdi-renderer/target/
 --layout-json_*.png
 --output_*.png
 tools/oxi-gdi-renderer/--*.png
+
+# Per-worktree TASK.md files — not shared via main
+/TASK.md

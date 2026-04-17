@@ -17,6 +17,56 @@ Format:
 
 ## 🔥 BLOCKER: GDI preset render coverage (Path A fix target)
 
+## 2026-04-18 — oxi-1 — drift-localized — b35 p.1 Class B +2.5pt body offset
+- context: Task #4 — b35 rank 3 bottom-5 (SSIM 0.6134), prior memos claim Class B
+- hypothesis: b35 p.1 has measurable per-paragraph drift like 2ea81 Class B
+- method: Word COM per-paragraph Y + Oxi --dump-layout per-block Y; align by text content
+- evidence: 4 body paragraphs aligned (Oxi dump has only 4 body para_idx; tables use block para_idx). All 4 show +2.00-2.50pt downward drift. Median |Δ|=+2.50pt, consistent.
+- outcome: NOT ceiling. Class B drift CONFIRMED. Likely same root cause as Task #1 line=exact boundary rule. Fixing line=exact rule may simultaneously improve b35 p.1 body paras. Table-row drift is SEPARATE mechanism (covered by oxi-4 LM0 cell formula).
+- impact on session: bottom-5 coverage now complete (all 5 + rank 6 diagnosed). 4 have dedicated-session-ready fix targets, 1 ceiling, 1 pivot.
+- tools: diff_b35_p1_paras.py
+- memory: project_b35_p1_class_B_drift_confirmed.md
+
+## 2026-04-18 — oxi-1 — refuted — b837 footnote spill hypothesis (oxi-2 unblock)
+- context: Task #3 — b837 rank 4; oxi-2's footnote spill investigation
+- hypothesis (oxi-2): Word splits long multi-line footnote bodies across pages
+- method: Word COM measurement of all 25 fns in b837 (ref_page + body_first_page + body_last_page); 3 additive scratch variants with single/many/multi-line fns
+- evidence: ZERO spill in 42 total fns tested (25 real + 17 scratch). All fn body_first_page == body_last_page. Word's rule: fn bodies NEVER span page boundaries.
+- outcome: REFUTED. oxi-2 unblocked — pivot to estimate_footnote_h per-fn over-count (10pt/fn). Real bug location: mod.rs:631 per-footnote height estimate, NOT spill model.
+- supporting evidence: existing output/b837_footnote_y.json + new pipeline_data/b837_footnote_spill.json
+- tools: measure_b837_footnote_spill.py, gen_footnote_spill_repro.py
+- memory: project_b837_footnote_spill_FALSIFIED.md
+- impact: oxi-2 status can change from "investigating spill" to "investigating per-fn estimate over-count"
+
+## 2026-04-18 — oxi-1 — re-confirmed — 0e7a p.2 layout ceiling
+- context: rank 1 bottom-5 (0.5767); prior memos claimed layout ceiling,
+  re-verification requested per Task #2
+- hypothesis: 0e7a p.2 has no remaining layout drift; SSIM gap is
+  sub-pixel / AA / glyph-rendering only
+- method: fresh Oxi --dump-layout on current main + Word COM per-paragraph Y
+  measurement; align 20 paragraphs by text content
+- evidence: median Δ=+0.00pt, max |Δ|=0.50pt across 20 aligned paragraphs;
+  17 of 20 paras show Δ=+0.00 exactly
+- outcome: LAYOUT CEILING confirmed. 0e7a p.2 SSIM 0.5767 NOT
+  layout-improvable. Future sessions should skip this page for layout
+  work and focus on d77a p.9 (rank 2) where drift IS fixable
+  (line=exact boundary rule — see preceding entry).
+- tools: measure_word_paras_generic.py, diff_0e7a_p2_paras.py
+- memory: project_0e7a_p2_ceiling_CONFIRMED_2026_04_18.md
+
+## 2026-04-18 — oxi-1 — confirmed — line=exact boundary rule (additive)
+- context: 2ea81 idx=6→7 +2pt bug (see project_2ea81_line_exact_boundary_bug.md)
+- hypothesis: at adjacent paragraphs both with lineRule=exact, Y advance A→B uses lineA's value, not lineB
+- method: 5 scratch additive variants (V1-V5) from python-docx Document(); different font/empty/non-empty/increasing/decreasing combinations
+- evidence: all 5 variants confirm delta = N_A × lineA/20; V5 DECREASING (400→240) also matches (excludes naive "use larger" hypothesis)
+- outcome: additive rule CONFIRMED. Oxi bug = +2pt at empty-paragraph boundary. Real-doc verification partial (2ea81 re-measured for idx=2→3 Oxi matches Word; idx=6→7 memo has Oxi+2pt). COM RPC crashes on larger docs blocked 29dc6/6514f214 verification.
+- tools: repro_line_exact_variants.py, verify_line_exact_rule_3docs.py, verify_line_exact_oxi_vs_word.py
+- outcome for next: implementation in dedicated session. Location: mod.rs paragraph cursor advance when prev para lineRule=exact. Must preserve non-empty-A cases.
+- memory: project_line_exact_rule_additive_confirmed.md
+
+## 2026-04-18 — oxi-3 — needs-reconciliation — yakumono compression trigger = cSC + compat≥15
+**STATUS DOWNGRADED from "confirmed" to "needs-reconciliation" 2026-04-18 (oxi-1 review)**
+
 ## 2026-04-18 — oxi-2 — reproducible-bug — PresetShape handler only renders bracketPair
 
 - context: 2ea81 rank 6 AlternateContent analysis led to finding
