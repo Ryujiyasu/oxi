@@ -72,6 +72,41 @@ Branch fix/gdi-preset-shapes carries iter2 commit b1a9edf.
 
 
 ---
+## 2026-04-18 — dedicated — iter3-4 + full verify — GDI PresetShape final state
+
+Iter3: non-bracketPair stroke width cap to 1pt (commit a4ea88c)
+Iter4: PS_INSIDEFRAME pen style for non-bracketPair (commit 5982db7)
+
+Full verify 177-doc / 352-page (iter4):
+  23 improved / 310 unchanged / 19 regressed
+  Net: +0.0892 (informational, not gate)
+  Bottom-5 floor: 3.0597 → 3.0567 (-0.0030) → **Path A FAIL**
+
+Bottom-5 movement:
+  1. 0e7a p.2   0.5767 = (unchanged)
+  2. d77a p.9   0.6042 = (unchanged)
+  3. b35  p.1   0.6134 → 0.6127  (-0.0007, tolerance)
+  4. 2ea81 p.2  ENTERED from rank 6 at 0.6306 (-0.0050 from 0.6356)
+  5. b837 p.4   0.6325 = (unchanged)
+  683f dropped out (was rank 5 at 0.6329, now outside bottom-5)
+
+Blocker: 2ea81 p.2 regression. PS_INSIDEFRAME improved b35/29dc6e
+significantly but made 2ea81 p.2 slightly worse (-0.0044 iter3 → -0.0050
+iter4). The shape in 2ea81 p.2 may need specific investigation — its
+roundRect callouts may anchor differently than other docs.
+
+Branch fix/gdi-preset-shapes final state (5 commits f79c502..5982db7):
+- 5 primitives (rect/roundRect/ellipse/straightConnector1/bentConnector3)
+- fill_color field in IR
+- Invisible shape skip
+- Stroke width cap
+- PS_INSIDEFRAME pen style
+
+Session close decision: branch preserved, main unchanged. Next dedicated
+session should focus specifically on 2ea81 p.2 shape positioning —
+likely a small fix unlocks Path A merge.
+
+
 
 ## 2026-04-18 — dedicated — partial-implementation — GDI PresetShape 5 primitives
 
