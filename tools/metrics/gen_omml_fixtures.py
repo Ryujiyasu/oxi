@@ -95,6 +95,72 @@ FIXTURES = {
                 '<m:lim><m:r><m:t>x→0</m:t></m:r></m:lim>'
                 '</m:limLow>',
     },
+    # Complex real-world formulas
+    "11_einstein": {
+        "desc": "Einstein: E = mc²",
+        "math": '<m:r><m:t>E = m</m:t></m:r>'
+                '<m:sSup><m:e><m:r><m:t>c</m:t></m:r></m:e>'
+                '<m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>',
+    },
+    "12_quadratic": {
+        "desc": "quadratic formula x = (-b ± √(b² - 4ac))/(2a)",
+        "math": '<m:r><m:t>x = </m:t></m:r>'
+                '<m:f>'
+                '<m:num>'
+                '<m:r><m:t>-b ± </m:t></m:r>'
+                '<m:rad><m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/>'
+                '<m:e>'
+                '<m:sSup><m:e><m:r><m:t>b</m:t></m:r></m:e>'
+                '<m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>'
+                '<m:r><m:t> - 4ac</m:t></m:r>'
+                '</m:e></m:rad>'
+                '</m:num>'
+                '<m:den><m:r><m:t>2a</m:t></m:r></m:den>'
+                '</m:f>',
+    },
+    "13_euler_id": {
+        "desc": "Euler's identity: e^(iπ) + 1 = 0",
+        "math": '<m:sSup><m:e><m:r><m:t>e</m:t></m:r></m:e>'
+                '<m:sup><m:r><m:t>iπ</m:t></m:r></m:sup></m:sSup>'
+                '<m:r><m:t> + 1 = 0</m:t></m:r>',
+    },
+    "14_gaussian": {
+        "desc": "Gaussian integral: ∫_{-∞}^{∞} e^(-x²) dx = √π",
+        "math": '<m:nary>'
+                '<m:naryPr><m:chr m:val="∫"/><m:limLoc m:val="subSup"/></m:naryPr>'
+                '<m:sub><m:r><m:t>-∞</m:t></m:r></m:sub>'
+                '<m:sup><m:r><m:t>∞</m:t></m:r></m:sup>'
+                '<m:e>'
+                '<m:sSup><m:e><m:r><m:t>e</m:t></m:r></m:e>'
+                '<m:sup><m:r><m:t>-x</m:t></m:r></m:sup></m:sSup>'
+                '<m:r><m:t> dx</m:t></m:r>'
+                '</m:e></m:nary>'
+                '<m:r><m:t> = </m:t></m:r>'
+                '<m:rad><m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/>'
+                '<m:e><m:r><m:t>π</m:t></m:r></m:e></m:rad>',
+    },
+    "15_sum_series": {
+        "desc": "Basel problem: ∑_{n=1}^∞ 1/n² = π²/6",
+        "math": '<m:nary>'
+                '<m:naryPr><m:chr m:val="∑"/><m:limLoc m:val="undOvr"/></m:naryPr>'
+                '<m:sub><m:r><m:t>n=1</m:t></m:r></m:sub>'
+                '<m:sup><m:r><m:t>∞</m:t></m:r></m:sup>'
+                '<m:e>'
+                '<m:f>'
+                '<m:num><m:r><m:t>1</m:t></m:r></m:num>'
+                '<m:den>'
+                '<m:sSup><m:e><m:r><m:t>n</m:t></m:r></m:e>'
+                '<m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>'
+                '</m:den></m:f>'
+                '</m:e></m:nary>'
+                '<m:r><m:t> = </m:t></m:r>'
+                '<m:f>'
+                '<m:num>'
+                '<m:sSup><m:e><m:r><m:t>π</m:t></m:r></m:e>'
+                '<m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>'
+                '</m:num>'
+                '<m:den><m:r><m:t>6</m:t></m:r></m:den></m:f>',
+    },
 }
 
 
