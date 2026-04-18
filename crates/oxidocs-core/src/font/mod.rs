@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod math_constants;
+pub use math_constants::{MathConstants, MathTable};
+
 fn default_upm() -> u16 { 2048 }
 
 /// Pixel-rounded multiplication matching Word's font metrics.
