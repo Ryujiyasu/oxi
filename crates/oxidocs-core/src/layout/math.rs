@@ -248,6 +248,71 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: 0.0,
             }
         }
+        MathExpr::Bar { pos, base } => {
+            let bb = layout_expr(base, ctx);
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let (gap, thick, extra) = match pos {
+                crate::ir::BarPos::Top => (
+                    table.du_to_pt(table.constants.OverbarVerticalGap, fs),
+                    table.du_to_pt(table.constants.OverbarRuleThickness, fs),
+                    table.du_to_pt(table.constants.OverbarExtraAscender, fs),
+                ),
+                crate::ir::BarPos::Bot => (
+                    table.du_to_pt(table.constants.UnderbarVerticalGap, fs),
+                    table.du_to_pt(table.constants.UnderbarRuleThickness, fs),
+                    table.du_to_pt(table.constants.UnderbarExtraDescender, fs),
+                ),
+            };
+            let mut bbox = bb;
+            match pos {
+                crate::ir::BarPos::Top => bbox.ascent += gap + thick + extra,
+                crate::ir::BarPos::Bot => bbox.descent += gap + thick + extra,
+            }
+            bbox
+        }
+        MathExpr::Accent { base, .. } => {
+            let bb = layout_expr(base, ctx);
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let gap = table.du_to_pt(table.constants.OverbarVerticalGap, fs);
+            MathBBox {
+                advance: bb.advance,
+                ascent: bb.ascent + gap + fs * 0.9,
+                descent: bb.descent,
+                italic_correction: 0.0,
+            }
+        }
+        MathExpr::Limit { base, lim, pos } => {
+            let bb = layout_expr(base, ctx);
+            let lim_ctx = ctx.descend_script();
+            let lb = layout_expr(lim, &lim_ctx);
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let common = bb.advance.max(lb.advance);
+            match pos {
+                crate::ir::LimitPos::Lower => {
+                    let gap = table.du_to_pt(table.constants.LowerLimitGapMin, fs);
+                    let drop = table.du_to_pt(table.constants.LowerLimitBaselineDropMin, fs);
+                    MathBBox {
+                        advance: common,
+                        ascent: bb.ascent,
+                        descent: bb.descent + gap + drop + lb.ascent + lb.descent,
+                        italic_correction: 0.0,
+                    }
+                }
+                crate::ir::LimitPos::Upper => {
+                    let gap = table.du_to_pt(table.constants.UpperLimitGapMin, fs);
+                    let rise = table.du_to_pt(table.constants.UpperLimitBaselineRiseMin, fs);
+                    MathBBox {
+                        advance: common,
+                        ascent: bb.ascent + gap + rise + lb.ascent + lb.descent,
+                        descent: bb.descent,
+                        italic_correction: 0.0,
+                    }
+                }
+            }
+        }
         MathExpr::Matrix { rows, .. } => {
             if rows.is_empty() { return MathBBox::default(); }
             let n_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
@@ -512,6 +577,15 @@ pub fn emit_expr(
         }
         MathExpr::Delimiter { beg, end, content, .. } => {
             emit_delimiter(*beg, *end, content, x, baseline_y, ctx)
+        }
+        MathExpr::Bar { pos, base } => {
+            emit_bar(*pos, base, x, baseline_y, ctx)
+        }
+        MathExpr::Accent { accent, base } => {
+            emit_accent(*accent, base, x, baseline_y, ctx)
+        }
+        MathExpr::Limit { base, lim, pos } => {
+            emit_limit(base, lim, *pos, x, baseline_y, ctx)
         }
         // Other primitives: fall back to flat text via extract_flat_text.
         _ => {
@@ -857,6 +931,191 @@ fn emit_matrix(
         ascent: total_height / 2.0 + axis_h,
         descent: total_height / 2.0 - axis_h,
         italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit bar (overline/underline) as TableBorder above or below base.
+fn emit_bar(
+    pos: crate::ir::BarPos,
+    base: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    use crate::ir::BarPos;
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    let base_bbox = layout_expr(base, ctx);
+    let (base_elems, _) = emit_expr(base, x, baseline_y, ctx);
+    let mut elems = base_elems;
+
+    let (gap, thick, extra) = match pos {
+        BarPos::Top => (
+            table.du_to_pt(table.constants.OverbarVerticalGap, fs),
+            table.du_to_pt(table.constants.OverbarRuleThickness, fs),
+            table.du_to_pt(table.constants.OverbarExtraAscender, fs),
+        ),
+        BarPos::Bot => (
+            table.du_to_pt(table.constants.UnderbarVerticalGap, fs),
+            table.du_to_pt(table.constants.UnderbarRuleThickness, fs),
+            table.du_to_pt(table.constants.UnderbarExtraDescender, fs),
+        ),
+    };
+
+    // Bar y position.
+    let bar_y = match pos {
+        BarPos::Top => baseline_y - base_bbox.ascent - gap - thick / 2.0,
+        BarPos::Bot => baseline_y + base_bbox.descent + gap + thick / 2.0,
+    };
+
+    elems.push(LayoutElement::new(
+        x,
+        bar_y - thick / 2.0,
+        base_bbox.advance,
+        thick,
+        LayoutContent::TableBorder {
+            x1: x, y1: bar_y,
+            x2: x + base_bbox.advance, y2: bar_y,
+            color: None,
+            width: thick,
+        },
+    ));
+
+    let mut bbox = base_bbox;
+    match pos {
+        BarPos::Top => bbox.ascent += gap + thick + extra,
+        BarPos::Bot => bbox.descent += gap + thick + extra,
+    }
+    (elems, bbox)
+}
+
+/// Emit accent: combining accent char positioned above base, centered via
+/// TopAccentAttachment (or geometric center as fallback).
+fn emit_accent(
+    accent: char,
+    base: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let glyphs = MathGlyphTables::cambria_math();
+    let fs = ctx.font_size;
+
+    let base_bbox = layout_expr(base, ctx);
+    let (base_elems, _) = emit_expr(base, x, baseline_y, ctx);
+    let mut elems = base_elems;
+
+    // Horizontal attachment: look up the substituted first char of base.
+    let first_char = extract_first_char(base);
+    let attach_x = if let Some(c) = first_char {
+        let sub = math_substitute(c);
+        glyphs.top_accent_attachment(sub)
+            .map(|du| table.du_to_pt(du, fs))
+            .unwrap_or(base_bbox.advance / 2.0)
+    } else {
+        base_bbox.advance / 2.0
+    };
+
+    // Accent y: above base's ascent with OverbarVerticalGap gap.
+    let acc_size = fs * 0.9; // slightly smaller than base
+    let ascent = base_bbox.ascent;
+    let accent_y_top = baseline_y - ascent
+        - table.du_to_pt(table.constants.OverbarVerticalGap, fs);
+    // emit_text_at places text at top = baseline - ascent_approx.
+    // We want the accent's BOTTOM at accent_y_top. Approximating accent
+    // ascent as fs*0.8, we set its baseline at accent_y_top + fs*0.8.
+    let accent_baseline = accent_y_top + acc_size * 0.2;
+    // Accent char rendered at (x + attach_x, accent_baseline) but shifted
+    // left by half accent width for visual centering.
+    let accent_w = acc_size * 0.4;
+    let accent_x = x + attach_x - accent_w / 2.0;
+    elems.push(emit_text_at(accent.to_string(), accent_x, accent_baseline, acc_size));
+
+    let bbox = MathBBox {
+        advance: base_bbox.advance,
+        ascent: base_bbox.ascent + table.du_to_pt(table.constants.OverbarVerticalGap, fs)
+            + acc_size,
+        descent: base_bbox.descent,
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Extract first leaf char of a MathExpr (for accent attachment lookup).
+fn extract_first_char(expr: &MathExpr) -> Option<char> {
+    match expr {
+        MathExpr::Text(s) | MathExpr::Run { text: s, .. } => s.chars().next(),
+        MathExpr::Seq(children) => children.iter().find_map(extract_first_char),
+        MathExpr::Superscript { base, .. } | MathExpr::Subscript { base, .. }
+        | MathExpr::SubSuperscript { base, .. } | MathExpr::PreScript { base, .. }
+        | MathExpr::Accent { base, .. } | MathExpr::Bar { base, .. }
+        | MathExpr::Limit { base, .. } | MathExpr::GroupChar { base, .. }
+        | MathExpr::BorderBox { base, .. } => extract_first_char(base),
+        MathExpr::BoxExpr(inner) | MathExpr::Phantom(inner) => extract_first_char(inner),
+        MathExpr::Radical { radicand, .. } => extract_first_char(radicand),
+        _ => None,
+    }
+}
+
+/// Emit limit: base with lim expression above (limUpp) or below (limLow).
+fn emit_limit(
+    base: &MathExpr,
+    lim: &MathExpr,
+    pos: crate::ir::LimitPos,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    use crate::ir::LimitPos;
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    let base_bbox = layout_expr(base, ctx);
+    let lim_ctx = ctx.descend_script();
+    let lim_bbox = layout_expr(lim, &lim_ctx);
+
+    // Center lim horizontally on base.
+    let common_w = base_bbox.advance.max(lim_bbox.advance);
+    let base_x = x + (common_w - base_bbox.advance) / 2.0;
+    let lim_x = x + (common_w - lim_bbox.advance) / 2.0;
+
+    let (base_elems, _) = emit_expr(base, base_x, baseline_y, ctx);
+    let mut elems = base_elems;
+
+    let (lim_baseline, _gap) = match pos {
+        LimitPos::Lower => {
+            let gap = table.du_to_pt(table.constants.LowerLimitGapMin, fs);
+            let drop = table.du_to_pt(table.constants.LowerLimitBaselineDropMin, fs);
+            let lb = baseline_y + base_bbox.descent + gap + drop + lim_bbox.ascent;
+            (lb, gap)
+        }
+        LimitPos::Upper => {
+            let gap = table.du_to_pt(table.constants.UpperLimitGapMin, fs);
+            let rise = table.du_to_pt(table.constants.UpperLimitBaselineRiseMin, fs);
+            let lb = baseline_y - base_bbox.ascent - gap - rise;
+            (lb, gap)
+        }
+    };
+    let (lim_elems, _) = emit_expr(lim, lim_x, lim_baseline, &lim_ctx);
+    elems.extend(lim_elems);
+
+    let bbox = match pos {
+        LimitPos::Lower => MathBBox {
+            advance: common_w,
+            ascent: base_bbox.ascent,
+            descent: (baseline_y + base_bbox.descent - baseline_y)
+                + (lim_baseline - baseline_y) - base_bbox.descent + lim_bbox.descent,
+            italic_correction: 0.0,
+        },
+        LimitPos::Upper => MathBBox {
+            advance: common_w,
+            ascent: (baseline_y - lim_baseline) + lim_bbox.ascent,
+            descent: base_bbox.descent,
+            italic_correction: 0.0,
+        },
     };
     (elems, bbox)
 }
