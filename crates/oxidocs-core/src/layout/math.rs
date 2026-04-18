@@ -221,11 +221,18 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
         MathExpr::Radical { radicand, .. } => {
             let rb = layout_expr(radicand, ctx);
             let table = MathTable::cambria_math();
-            let gap = table.du_to_pt(table.constants.RadicalVerticalGap, ctx.font_size);
-            let thk = table.du_to_pt(table.constants.RadicalRuleThickness, ctx.font_size);
+            let fs = ctx.font_size;
+            let gap_du = if ctx.style.is_display() {
+                table.constants.RadicalDisplayStyleVerticalGap
+            } else {
+                table.constants.RadicalVerticalGap
+            };
+            let gap = table.du_to_pt(gap_du, fs);
+            let thk = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
+            let extra = table.du_to_pt(table.constants.RadicalExtraAscender, fs);
             MathBBox {
-                advance: rb.advance + ctx.font_size * 0.5, // radical sign width estimate
-                ascent: rb.ascent + gap + thk,
+                advance: rb.advance + fs * 0.6,
+                ascent: rb.ascent + gap + thk + extra,
                 descent: rb.descent,
                 italic_correction: 0.0,
             }
@@ -459,6 +466,9 @@ pub fn emit_expr(
         MathExpr::SubSuperscript { base, sub, sup } => {
             emit_subsuperscript(base, sub, sup, x, baseline_y, ctx)
         }
+        MathExpr::Radical { degree, radicand } => {
+            emit_radical(degree.as_deref(), radicand, x, baseline_y, ctx)
+        }
         // Other primitives: fall back to flat text via extract_flat_text.
         _ => {
             let flat = extract_flat_text(expr);
@@ -609,6 +619,94 @@ fn emit_subscript(
         italic_correction: sub_bbox.italic_correction,
     };
     (base_elems, bbox)
+}
+
+/// Emit radical: √ sign + overline over radicand. Optional degree for nth-root.
+fn emit_radical(
+    degree: Option<&MathExpr>,
+    radicand: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    // Radicand bbox (at the same style — not script).
+    let rad_bbox = layout_expr(radicand, ctx);
+
+    // MATH constants (select display vs inline gap).
+    let v_gap_du = if ctx.style.is_display() {
+        table.constants.RadicalDisplayStyleVerticalGap
+    } else {
+        table.constants.RadicalVerticalGap
+    };
+    let v_gap = table.du_to_pt(v_gap_du, fs);
+    let rule_thick = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
+    let extra_asc = table.du_to_pt(table.constants.RadicalExtraAscender, fs);
+
+    // Radical sign "√" (U+221A) rendered as text. Its ascent + descent should
+    // cover the radicand's full height + vertical gap + rule thickness.
+    let sign_width = fs * 0.6;  // approximate √ glyph advance
+
+    // Radicand inner left edge (after √ sign).
+    let radicand_x = x + sign_width;
+
+    // Overbar y: above radicand top, gap above.
+    let radicand_top_y = baseline_y - rad_bbox.ascent;
+    let bar_y = radicand_top_y - v_gap - rule_thick / 2.0;
+    let bar_width = rad_bbox.advance;
+
+    // Render the √ sign. Its top should roughly align with bar.
+    let mut elems = Vec::new();
+    // Substitute √ char (U+221A, not in our substitution table).
+    elems.push(emit_text_at(
+        '\u{221A}'.to_string(),
+        x,
+        baseline_y,
+        fs,
+    ));
+
+    // Render radicand.
+    let (rad_elems, _rb) = emit_expr(radicand, radicand_x, baseline_y, ctx);
+    elems.extend(rad_elems);
+
+    // Render the horizontal overbar.
+    elems.push(LayoutElement::new(
+        radicand_x,
+        bar_y - rule_thick / 2.0,
+        bar_width,
+        rule_thick,
+        LayoutContent::TableBorder {
+            x1: radicand_x,
+            y1: bar_y,
+            x2: radicand_x + bar_width,
+            y2: bar_y,
+            color: None,
+            width: rule_thick,
+        },
+    ));
+
+    // Optional degree: small nth-root index to upper-left of √.
+    if let Some(deg_expr) = degree {
+        let deg_ctx = ctx.descend_script().descend_script(); // ScriptScript
+        let raise_du = table.constants.RadicalDegreeBottomRaisePercent; // percent
+        let raise_frac = raise_du as f32 / 100.0;
+        let deg_baseline = baseline_y - fs * raise_frac;
+        let deg_x = x - table.du_to_pt(
+            -table.constants.RadicalKernAfterDegree.abs(), fs,
+        ).abs().max(fs * 0.15);
+        let (de, _db) = emit_expr(deg_expr, deg_x, deg_baseline, &deg_ctx);
+        elems.extend(de);
+    }
+
+    let bbox = MathBBox {
+        advance: sign_width + rad_bbox.advance,
+        ascent: rad_bbox.ascent + v_gap + rule_thick + extra_asc,
+        descent: rad_bbox.descent,
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
 }
 
 /// Emit combined sub+superscript: base with sub below and sup above at same x.
