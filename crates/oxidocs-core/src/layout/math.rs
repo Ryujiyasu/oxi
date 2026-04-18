@@ -158,11 +158,26 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
         }
         // Phase 3: full recursive layout for these primitives.
         MathExpr::Fraction { num, den, .. } => {
-            let nb = layout_expr(num, &ctx.descend_script());
-            let db = layout_expr(den, &ctx.descend_script());
+            let sub_ctx = if ctx.style.is_display() { *ctx } else { ctx.descend_script() };
+            let nb = layout_expr(num, &sub_ctx);
+            let db = layout_expr(den, &sub_ctx);
             let table = MathTable::cambria_math();
-            let gap = table.du_to_pt(table.constants.FractionRuleThickness, ctx.font_size);
-            MathBBox::vstack(&nb, &db, gap)
+            let fs = ctx.font_size;
+            let (num_shift_du, den_shift_du) = if ctx.style.is_display() {
+                (table.constants.FractionNumeratorDisplayStyleShiftUp,
+                 table.constants.FractionDenominatorDisplayStyleShiftDown)
+            } else {
+                (table.constants.FractionNumeratorShiftUp,
+                 table.constants.FractionDenominatorShiftDown)
+            };
+            let num_shift_up = table.du_to_pt(num_shift_du, fs);
+            let den_shift_down = table.du_to_pt(den_shift_du, fs);
+            MathBBox {
+                advance: nb.advance.max(db.advance),
+                ascent: num_shift_up + nb.ascent,
+                descent: den_shift_down + db.descent,
+                italic_correction: 0.0,
+            }
         }
         MathExpr::Superscript { base, sup } => {
             let bb = layout_expr(base, ctx);
