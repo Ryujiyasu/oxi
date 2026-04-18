@@ -13,6 +13,64 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-04-18 — dedicated — partial-implementation — GDI PresetShape 5 primitives
+
+- branch: fix/gdi-preset-shapes (commit f79c502) — NOT merged
+- context: oxi-2 found GDI renderer's PresetShape handler only supports
+  bracketPair. Adding rect/roundRect/ellipse/straightConnector1/bentConnector3
+  mechanism is needed for 2ea81 (rank 6) and other docs with these shapes.
+- implementation: 5 GDI calls added (Rectangle, RoundRect, Ellipse,
+  MoveToEx+LineTo, Polyline). Mechanism uses IR-provided x/y/w/h.
+- stylistic gap identified: regression on all 5 tested docs because default
+  stroke style (solid black, IR-provided width) doesnt match Word:
+    2ea81 p.2 (rank 6): 0.6356 -> 0.6292 (-0.0064)
+    b35 p.1 (rank 3):   0.6134 -> 0.6110 (-0.0024)
+    29dc6e p.6:         0.9327 -> 0.9239 (-0.0088)
+    1636d28 p.1:        0.7255 -> 0.7189 (-0.0066)
+    2ea81 p.1:          0.7829 -> 0.7789 (-0.0040)
+- Ra §9 decision: NOT merged. Bottom-5 floor would regress (b35 rank 3
+  directly affected). Branch fix/gdi-preset-shapes retained.
+- gap to close before merge:
+    1. COM-measure Word stroke width/color for these shape types (3+ docs)
+    2. Extend IR PresetShape with fill info (solid/noFill/color)
+    3. Adjust stroke width to match Words pen behavior
+    4. Cross-verify SSIM >= current on affected docs
+- lesson: adding functionally-correct rendering can regress SSIM if
+  styling details differ. "No render" produces blank pixels; "wrong
+  style render" produces differing pixels — the latter scores lower.
+  Stylistic fidelity is prerequisite for Path A landing.
+
+---
+
+---
+
+## 2026-04-18 — dedicated — partial-implementation — GDI PresetShape 5 primitives
+
+- branch: fix/gdi-preset-shapes (commit f79c502) — NOT merged
+- context: oxi-2 found GDI renderer's PresetShape handler only supports
+  bracketPair. Adding rect/roundRect/ellipse/straightConnector1/bentConnector3
+  mechanism is needed for 2ea81 (rank 6) and other docs with these shapes.
+- implementation: 5 GDI calls added (Rectangle, RoundRect, Ellipse,
+  MoveToEx+LineTo, Polyline). Mechanism uses IR-provided x/y/w/h.
+- stylistic gap identified: regression on all 5 tested docs because default
+  stroke style (solid black, IR-provided width) doesnt match Word:
+    2ea81 p.2 (rank 6): 0.6356 -> 0.6292 (-0.0064)
+    b35 p.1 (rank 3):   0.6134 -> 0.6110 (-0.0024)
+    29dc6e p.6:         0.9327 -> 0.9239 (-0.0088)
+    1636d28 p.1:        0.7255 -> 0.7189 (-0.0066)
+    2ea81 p.1:          0.7829 -> 0.7789 (-0.0040)
+- Ra §9 decision: NOT merged. Bottom-5 floor would regress (b35 rank 3
+  directly affected). Branch fix/gdi-preset-shapes retained.
+- gap to close before merge:
+    1. COM-measure Word stroke width/color for these shape types (3+ docs)
+    2. Extend IR PresetShape with fill info (solid/noFill/color)
+    3. Adjust stroke width to match Words pen behavior
+    4. Cross-verify SSIM >= current on affected docs
+- lesson: adding functionally-correct rendering can regress SSIM if
+  styling details differ. "No render" produces blank pixels; "wrong
+  style render" produces differing pixels — the latter scores lower.
+  Stylistic fidelity is prerequisite for Path A landing.
+
 ---
 
 ## 2026-04-18 — oxi-1 — drift-localized — b35 p.1 Class B +2.5pt body offset
