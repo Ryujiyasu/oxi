@@ -5413,7 +5413,7 @@ fn renumber_note_refs(
                     }
                 }
             }
-            Block::Image(_) | Block::UnsupportedElement(_) => {}
+            Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
         }
     }
 }
@@ -5455,7 +5455,7 @@ fn collect_note_refs(blocks: &[Block], ctx: &ParseContext, footnotes: &mut Vec<F
                     }
                 }
             }
-            Block::Image(_) | Block::UnsupportedElement(_) => {}
+            Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
         }
     }
 }

@@ -1159,6 +1159,10 @@ impl LayoutEngine {
                 Block::UnsupportedElement(_) => {
                     // Skip unsupported elements in layout
                 }
+                Block::Math(_) => {
+                    // Phase 2 stub: OMML math blocks not yet laid out inline.
+                    // Phase 3 will emit LayoutElement::Math for the GDI renderer.
+                }
             }
         }
 
@@ -1781,6 +1785,9 @@ impl LayoutEngine {
                     cursor_y += img.height;
                 }
                 Block::UnsupportedElement(_) => {}
+                Block::Math(_) => {
+                    // Phase 2 stub: textbox-embedded OMML math not yet rendered.
+                }
             }
         }
 

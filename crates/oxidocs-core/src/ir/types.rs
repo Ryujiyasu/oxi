@@ -109,6 +109,10 @@ pub enum Block {
     Paragraph(Paragraph),
     Table(Table),
     Image(Image),
+    /// OMML math block (inline `<m:oMath>` or display `<m:oMathPara>`).
+    /// See `crates/oxidocs-core/src/ir/math.rs` for the recursive
+    /// expression tree.
+    Math(crate::ir::math::MathBlock),
     /// Placeholder for unsupported content (SmartArt, Chart, etc.)
     UnsupportedElement(UnsupportedElement),
 }
