@@ -15,6 +15,20 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-2 — spec-notes-written — ECMA-376 §17.13.1 + §17.13.5
+
+- context: feat/comments-tracked-changes Phase 1 Tick 4 (spec notes)
+- deliverables:
+  - `docs/spec/comments_tracked_changes/comments_notes.md` — parts, content types, inline markers, comments.xml structure, commentsExtended threading, Word display rules (not-in-spec), JIS X 4051 interaction, parser checklist, fixture cross-reference
+  - `docs/spec/comments_tracked_changes/revisions_notes.md` — element taxonomy (ins/del/move/\*Change), block-level ins/del via pPr/rPr, accept/reject semantics, Word display rules, IR sketch (Phase 2 planning), parser checklist
+- key observations recorded for Phase 2:
+  - `w:id` on revisions is NOT durable across saves; parsers must not use it as stable identifier
+  - Paragraph-mark insert/delete lives on `pPr/rPr`, NOT as an outer `<w:ins>` — common miss
+  - `moveFrom/To` pair via shared `w:id` on the Range markers + opaque `w:name` label
+  - Comment balloon geometry, stacking, author color palette are all renderer-defined (not spec)
+  - `w15:paraIdParent` and `w15:parentParaId` both appear in the wild; accept on parse, emit canonical form on write
+- next: Tick 7 (attack matrix + master index), OR Tick 2-3 (Word COM measurement against the 10 fixtures — requires Word running on this box)
+
 ## 2026-04-18 — oxi-2 — fixtures-ready — 10 minimal repros for comments + tracked changes
 
 - context: feat/comments-tracked-changes Phase 1 Tick 5-6 pulled forward (baseline too sparse for Tick 2-3 COM without self-authored docs)
