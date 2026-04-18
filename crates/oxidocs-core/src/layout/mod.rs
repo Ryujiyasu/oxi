@@ -1,4 +1,5 @@
 mod kinsoku;
+pub mod math;
 
 use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
