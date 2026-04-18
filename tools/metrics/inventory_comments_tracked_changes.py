@@ -55,8 +55,10 @@ REVISION_PATTERNS = {
 # and any <w:ins|del|move*... w:author="...">
 AUTHOR_RE = re.compile(r'w:author="([^"]*)"')
 
-# Comment reply thread detection: commentsExtended.xml has w:parentId="<id>" on each comment.
-PARENT_ID_RE = re.compile(r'w:parentId="(\d+)"')
+# Comment reply thread detection: commentsExtended.xml has
+#   <w15:commentEx w15:paraId="..." w15:paraIdParent="..." w15:done="0|1"/>
+# A reply is any commentEx that carries w15:paraIdParent.
+PARENT_ID_RE = re.compile(r'w15:paraIdParent="([0-9A-Fa-f]+)"')
 COMMENT_ID_RE = re.compile(r'w:id="(\d+)"')
 
 

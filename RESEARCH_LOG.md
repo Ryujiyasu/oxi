@@ -15,6 +15,18 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-2 — fixtures-ready — 10 minimal repros for comments + tracked changes
+
+- context: feat/comments-tracked-changes Phase 1 Tick 5-6 pulled forward (baseline too sparse for Tick 2-3 COM without self-authored docs)
+- hypothesis: 10 feature-isolated fixtures are enough to unblock subsequent COM measurement + spec notes
+- method: zip-level OOXML generator (`tools/fixtures/comments_samples/build_comments_samples.py`), one fixture per feature; validated via python-docx open + inventory re-scan
+- evidence: all 10 open cleanly; per-file marker counts exactly match intent; MANIFEST.json committed alongside
+- coverage: 01 single comment / 02 comment+reply / 03 resolved / 04 multi-para range / 05 single ins / 06 single del / 07 mixed ins+del / 08 moveFrom+moveTo / 09 rPrChange bold / 10 two reviewers (Alice+Bob)
+- side-effect: inventory scanner reply-detection pattern corrected (`w:parentId` → `w15:paraIdParent`); baseline totals unchanged (still 0 comments, 5 del-only)
+- next: Tick 2-3 runs Word COM measurement against these fixtures — balloon position, range highlight color, ins underline style, del strikethrough color, multi-reviewer color rotation
+- tools: tools/fixtures/comments_samples/build_comments_samples.py
+- path: tools/fixtures/comments_samples/fixture_{01..10}_*.docx (+ MANIFEST.json)
+
 ## 2026-04-18 — oxi-2 — baseline-inventory — comments + tracked-changes sparsity confirmed
 
 - context: feat/comments-tracked-changes Phase 1 Tick 1 — establish baseline usage floor before Phase 2 implementation
