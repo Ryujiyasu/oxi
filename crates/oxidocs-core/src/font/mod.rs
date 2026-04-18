@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod math_constants;
+pub mod math_substitute;
 pub use math_constants::{MathConstants, MathTable};
+pub use math_substitute::{math_substitute, math_substitute_str};
 
 fn default_upm() -> u16 { 2048 }
 
