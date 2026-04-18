@@ -136,6 +136,42 @@ likely a small fix unlocks Path A merge.
   Stylistic fidelity is prerequisite for Path A landing.
 
 ---
+## 2026-04-18 — dedicated — deep-dive — text_y_offset centering vs bottom-align
+
+Investigation of Task #1 residual: why line=exact rule appears correct but
+cursor advance is already correct. Measured Word at 300 DPI:
+
+  repro (line=13, font=10.5):
+    Word text top offset from line box: +3.26pt (after 1.96pt ink offset = 1.30pt cell offset)
+    Oxi text top offset:                 +4.46pt (cell offset 2.50pt)
+  repro (line=15, font=10.5):
+    Word cell offset: 3.14pt
+    Oxi cell offset: 4.50pt
+
+  Both show Oxi +1.2pt below Word consistently.
+
+Oxis formula:  (bottom-align)
+Word actual:   (centering) — matches A case.
+
+Test (branch fix/text-y-offset-exact): change to centering unconditionally.
+  1ec1 p.1 (textbox Shape 4 exact=22 font=14): 0.6701 -> 0.6370 (-0.0331) !!!
+  2ea81 p.1: +0.0017
+  d77a p.1: +0.0206
+  Bottom-5 docs: no change (they dont use exact heavily)
+
+Conclusion: Word uses TWO modes:
+  - Body paragraphs with lineRule=exact: CENTER text in box
+  - Textbox/shape paragraphs with lineRule=exact: BOTTOM-ALIGN
+
+Oxis current bottom-align is correct for textbox but wrong for body.
+Full fix requires adding  context parameter to
+. Not implemented this session — bottom-5 gate
+wouldnt budge (bottom-5 docs are body but use auto not exact, so
+they arent affected).
+
+Branch fix/text-y-offset-exact: REVERTED. Finding logged for future impl.
+
+
 
 ## 2026-04-18 — oxi-1 — drift-localized — b35 p.1 Class B +2.5pt body offset
 - context: Task #4 — b35 rank 3 bottom-5 (SSIM 0.6134), prior memos claim Class B
