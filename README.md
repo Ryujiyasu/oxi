@@ -195,19 +195,22 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (177 docs, 352 pages)"
-  x-axis ["03-28", "04-01", "04-06", "04-10", "04-13", "04-14"]
+  x-axis ["03-28", "04-01", "04-06", "04-10", "04-13", "04-14", "04-18"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8191, 0.8430, 0.8520, 0.8567, 0.8584]
+  line [0.7884, 0.8191, 0.8430, 0.8520, 0.8567, 0.8584, 0.8597]
 ```
 
-| Date | avg SSIM | Key Changes |
-|------|----------|-------------|
-| 2026-03-28 | 0.7884 | Baseline: grid snap, spacing collapse, justify, GDI metrics |
-| 2026-04-06 | **0.8430** | LM0 line height, docGrid no-type, font alias, eastAsia fallback |
-| 2026-04-10 | **0.8520** | leftChars indent, fullwidth symbols, font unification |
-| 2026-04-14 | **0.8584** | 12 new OOXML elements, 10tw char width, cumulative raw model |
+| Date | avg SSIM | bottom-5 sum | Key Changes |
+|------|----------|--------------|-------------|
+| 2026-03-28 | 0.7884 | — | Baseline: grid snap, spacing collapse, justify, GDI metrics |
+| 2026-04-06 | **0.8430** | — | LM0 line height, docGrid no-type, font alias, eastAsia fallback |
+| 2026-04-10 | **0.8520** | — | leftChars indent, fullwidth symbols, font unification |
+| 2026-04-14 | **0.8584** | 2.8035 | 12 new OOXML elements, 10tw char width, cumulative raw model |
+| 2026-04-18 | **0.8597** | **3.0597** | 4-agent parallel session: CJK wrap strict overflow, empty-br stub, hanging-indent, row-height, yakumono compat15 gate, additive-primary methodology established (+0.2562 bottom-5) |
 
-For detailed daily progress, COM-confirmed specifications, and DML structural comparison results, see [docs/layout_accuracy.md](docs/layout_accuracy.md).
+**Bottom-5 floor sum** (Σ of 5 lowest per-doc min(page SSIM)) is the merge gate — it protects against whack-a-mole regressions that average SSIM misses. Each fix must strictly raise the bottom-5 floor.
+
+For detailed daily progress, COM-confirmed specifications, and DML structural comparison results, see [docs/layout_accuracy.md](docs/layout_accuracy.md) and [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
 ---
 
