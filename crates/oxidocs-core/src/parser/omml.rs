@@ -142,6 +142,15 @@ fn parse_single_expr(
         // Radical
         "rad" => Ok(Some(parse_radical(reader)?)),
 
+        // Delimiter (brackets around content)
+        "d" => Ok(Some(parse_delimiter(reader)?)),
+
+        // Matrix
+        "m" => Ok(Some(parse_matrix(reader)?)),
+
+        // N-ary operator
+        "nary" => Ok(Some(parse_nary(reader)?)),
+
         // Properties containers — skip (read through the closing tag)
         "rPr" | "fPr" | "sSubPr" | "sSupPr" | "sSubSupPr" | "sPrePr"
         | "radPr" | "naryPr" | "mPr" | "mcs" | "mc" | "mcPr" | "dPr"
@@ -423,6 +432,214 @@ fn wrap_seq(mut children: Vec<MathExpr>) -> MathExpr {
         1 => children.pop().unwrap(),
         _ => MathExpr::Seq(children),
     }
+}
+
+/// Parse `<m:d>` delimiter: begChr/endChr/sepChr from dPr, content from e.
+fn parse_delimiter(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    let mut beg: char = '(';
+    let mut end: char = ')';
+    let mut sep: Option<char> = None;
+    let mut content: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "dPr" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    let t = local(ee.name().as_ref());
+                                    if t == "begChr" || t == "endChr" || t == "sepChr" {
+                                        for attr in ee.attributes().flatten() {
+                                            if local(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                if let Some(c) = v.chars().next() {
+                                                    match t.as_str() {
+                                                        "begChr" => beg = c,
+                                                        "endChr" => end = c,
+                                                        "sepChr" => sep = Some(c),
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "dPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in dPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "e" => {
+                        content = Some(wrap_seq(parse_expr_sequence(reader, "e")?));
+                    }
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "d" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                "EOF in m:d".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Delimiter {
+        beg,
+        end,
+        sep,
+        content: Box::new(content.unwrap_or(MathExpr::Text(String::new()))),
+    })
+}
+
+/// Parse `<m:m>` matrix: rows from mr, cells from e within row.
+fn parse_matrix(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    use crate::ir::MathAlignment;
+    let mut rows: Vec<Vec<MathExpr>> = Vec::new();
+    let mut col_align = MathAlignment::Center;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "mPr" => {
+                        // Parse mcJc for column alignment
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    if local(ee.name().as_ref()) == "mcJc" {
+                                        for attr in ee.attributes().flatten() {
+                                            if local(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                col_align = match v.as_ref() {
+                                                    "left" => MathAlignment::Left,
+                                                    "right" => MathAlignment::Right,
+                                                    "centerGroup" => MathAlignment::CenterGroup,
+                                                    _ => MathAlignment::Center,
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "mPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in mPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "mr" => {
+                        // Parse a row: sequence of <m:e> cells
+                        let mut row_cells: Vec<MathExpr> = Vec::new();
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(ee)) => {
+                                    let t = local(ee.name().as_ref());
+                                    if t == "e" {
+                                        row_cells.push(wrap_seq(parse_expr_sequence(reader, "e")?));
+                                    } else {
+                                        skip_until_end(reader, &t)?;
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "mr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in mr".to_string())),
+                                _ => {}
+                            }
+                        }
+                        rows.push(row_cells);
+                    }
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "m" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                "EOF in m:m".to_string())),
+            _ => {}
+        }
+    }
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    Ok(MathExpr::Matrix { rows, cols, col_align })
+}
+
+/// Parse `<m:nary>`: n-ary operator (sum, integral, product).
+fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    use crate::ir::LimLoc;
+    let mut op: char = '\u{2211}'; // default ∑
+    let mut lim_loc = LimLoc::SubSup;
+    let mut grow = false;
+    let mut sub: Option<Box<MathExpr>> = None;
+    let mut sup: Option<Box<MathExpr>> = None;
+    let mut operand: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "naryPr" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    let t = local(ee.name().as_ref());
+                                    match t.as_str() {
+                                        "chr" => {
+                                            for attr in ee.attributes().flatten() {
+                                                if local(attr.key.as_ref()) == "val" {
+                                                    let v = String::from_utf8_lossy(&attr.value);
+                                                    if let Some(c) = v.chars().next() { op = c; }
+                                                }
+                                            }
+                                        }
+                                        "limLoc" => {
+                                            for attr in ee.attributes().flatten() {
+                                                if local(attr.key.as_ref()) == "val" {
+                                                    let v = String::from_utf8_lossy(&attr.value);
+                                                    lim_loc = match v.as_ref() {
+                                                        "undOvr" => LimLoc::UndOvr,
+                                                        _ => LimLoc::SubSup,
+                                                    };
+                                                }
+                                            }
+                                        }
+                                        "grow" => {
+                                            for attr in ee.attributes().flatten() {
+                                                if local(attr.key.as_ref()) == "val" {
+                                                    let v = String::from_utf8_lossy(&attr.value);
+                                                    grow = v.as_ref() == "1" || v.as_ref() == "true" || v.as_ref() == "on";
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "naryPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in naryPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "sub" => sub = Some(Box::new(wrap_seq(parse_expr_sequence(reader, "sub")?))),
+                    "sup" => sup = Some(Box::new(wrap_seq(parse_expr_sequence(reader, "sup")?))),
+                    "e" => operand = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "nary" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                "EOF in m:nary".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Nary {
+        op,
+        sub,
+        sup,
+        operand: Box::new(operand.unwrap_or(MathExpr::Text(String::new()))),
+        lim_loc,
+        grow,
+    })
 }
 
 /// Advance the reader past the closing tag matching `end_tag`, balancing

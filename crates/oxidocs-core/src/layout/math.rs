@@ -311,7 +311,7 @@ fn append_flat(out: &mut String, expr: &MathExpr) {
             append_flat(out, arg);
         }
         MathExpr::Matrix { rows, .. } => {
-            out.push('[');
+            // Matrix itself has no brackets; Delimiter wraps it when needed.
             for (i, row) in rows.iter().enumerate() {
                 if i > 0 { out.push(';'); out.push(' '); }
                 for (j, cell) in row.iter().enumerate() {
@@ -319,7 +319,6 @@ fn append_flat(out: &mut String, expr: &MathExpr) {
                     append_flat(out, cell);
                 }
             }
-            out.push(']');
         }
         MathExpr::Accent { accent, base } => {
             append_flat(out, base);
