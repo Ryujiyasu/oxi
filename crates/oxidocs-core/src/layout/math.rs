@@ -237,8 +237,46 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: 0.0,
             }
         }
+        MathExpr::Delimiter { content, .. } => {
+            let cb = layout_expr(content, ctx);
+            let fs = ctx.font_size;
+            let delim_w = fs * 0.45;
+            MathBBox {
+                advance: cb.advance + 2.0 * delim_w,
+                ascent: cb.ascent.max(fs * 0.8),
+                descent: cb.descent.max(fs * 0.2),
+                italic_correction: 0.0,
+            }
+        }
+        MathExpr::Matrix { rows, .. } => {
+            if rows.is_empty() { return MathBBox::default(); }
+            let n_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+            let mut col_widths = vec![0.0_f32; n_cols];
+            let mut row_heights = vec![0.0_f32; rows.len()];
+            for (i, row) in rows.iter().enumerate() {
+                for (j, cell) in row.iter().enumerate() {
+                    let bb = layout_expr(cell, ctx);
+                    if bb.advance > col_widths[j] { col_widths[j] = bb.advance; }
+                    let h = bb.ascent + bb.descent;
+                    if h > row_heights[i] { row_heights[i] = h; }
+                }
+            }
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let gap = table.du_to_pt(table.constants.MathLeading, fs);
+            let axis_h = table.du_to_pt(table.constants.AxisHeight, fs);
+            let total_h: f32 = row_heights.iter().sum::<f32>()
+                + gap * rows.len().saturating_sub(1) as f32;
+            let total_w: f32 = col_widths.iter().sum::<f32>()
+                + gap * n_cols.saturating_sub(1) as f32;
+            MathBBox {
+                advance: total_w,
+                ascent: total_h / 2.0 + axis_h,
+                descent: total_h / 2.0 - axis_h,
+                italic_correction: 0.0,
+            }
+        }
         // Primitives not yet implemented — return zero bbox.
-        // Phase 3 fills in Nary / Matrix / Delimiter / Accent / etc.
         _ => MathBBox::default(),
     }
 }
@@ -468,6 +506,12 @@ pub fn emit_expr(
         }
         MathExpr::Radical { degree, radicand } => {
             emit_radical(degree.as_deref(), radicand, x, baseline_y, ctx)
+        }
+        MathExpr::Matrix { rows, col_align, .. } => {
+            emit_matrix(rows, *col_align, x, baseline_y, ctx)
+        }
+        MathExpr::Delimiter { beg, end, content, .. } => {
+            emit_delimiter(*beg, *end, content, x, baseline_y, ctx)
         }
         // Other primitives: fall back to flat text via extract_flat_text.
         _ => {
@@ -704,6 +748,152 @@ fn emit_radical(
         advance: sign_width + rad_bbox.advance,
         ascent: rad_bbox.ascent + v_gap + rule_thick + extra_asc,
         descent: rad_bbox.descent,
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit matrix: 2D grid of cells with per-column alignment and per-row heights.
+fn emit_matrix(
+    rows: &[Vec<MathExpr>],
+    col_align: crate::ir::MathAlignment,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    use crate::ir::MathAlignment;
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    if rows.is_empty() {
+        return (vec![], MathBBox::default());
+    }
+    let n_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    if n_cols == 0 {
+        return (vec![], MathBBox::default());
+    }
+
+    // Pre-compute bbox for each cell.
+    let mut cell_bboxes: Vec<Vec<MathBBox>> = Vec::with_capacity(rows.len());
+    for row in rows.iter() {
+        let row_bb: Vec<MathBBox> = row.iter()
+            .map(|e| layout_expr(e, ctx))
+            .collect();
+        cell_bboxes.push(row_bb);
+    }
+
+    // Column widths: max advance per column.
+    let mut col_widths = vec![0.0_f32; n_cols];
+    for row in cell_bboxes.iter() {
+        for (j, bb) in row.iter().enumerate() {
+            if bb.advance > col_widths[j] {
+                col_widths[j] = bb.advance;
+            }
+        }
+    }
+    // Row heights: max (ascent + descent) per row.
+    let row_heights: Vec<f32> = cell_bboxes.iter()
+        .map(|row| row.iter()
+            .map(|bb| bb.ascent + bb.descent)
+            .fold(0.0_f32, f32::max))
+        .collect();
+    let row_ascents: Vec<f32> = cell_bboxes.iter()
+        .map(|row| row.iter()
+            .map(|bb| bb.ascent)
+            .fold(0.0_f32, f32::max))
+        .collect();
+
+    // Inter-column gap ~ MathLeading (from MATH constants).
+    let col_gap = table.du_to_pt(table.constants.MathLeading, fs);
+    // Inter-row gap: same order of magnitude as col_gap.
+    let row_gap = table.du_to_pt(table.constants.MathLeading, fs);
+
+    // Matrix origin y: top of first row = baseline_y - axis_height - half_height.
+    // For simplicity, center vertically on the math axis.
+    let axis_h = table.du_to_pt(table.constants.AxisHeight, fs);
+    let total_height: f32 = row_heights.iter().sum::<f32>()
+        + row_gap * (rows.len().saturating_sub(1)) as f32;
+    let matrix_top_y = baseline_y - axis_h - total_height / 2.0;
+
+    // Compute column x positions.
+    let col_xs: Vec<f32> = {
+        let mut xs = Vec::with_capacity(n_cols);
+        let mut cur = x;
+        for (i, w) in col_widths.iter().enumerate() {
+            xs.push(cur);
+            cur += *w;
+            if i + 1 < n_cols { cur += col_gap; }
+        }
+        xs
+    };
+
+    // Emit each cell.
+    let mut elems = Vec::new();
+    let mut cur_y = matrix_top_y;
+    for (i, row) in rows.iter().enumerate() {
+        let row_baseline = cur_y + row_ascents[i];
+        for (j, cell) in row.iter().enumerate() {
+            if j >= n_cols { break; }
+            let cell_bb = &cell_bboxes[i][j];
+            let col_w = col_widths[j];
+            let col_x = col_xs[j];
+            // Align cell within column.
+            let cell_x = match col_align {
+                MathAlignment::Left => col_x,
+                MathAlignment::Right => col_x + col_w - cell_bb.advance,
+                _ => col_x + (col_w - cell_bb.advance) / 2.0,  // center or centerGroup
+            };
+            let (ce, _) = emit_expr(cell, cell_x, row_baseline, ctx);
+            elems.extend(ce);
+        }
+        cur_y += row_heights[i] + row_gap;
+    }
+
+    let total_width: f32 = col_widths.iter().sum::<f32>()
+        + col_gap * (n_cols.saturating_sub(1)) as f32;
+
+    let bbox = MathBBox {
+        advance: total_width,
+        ascent: total_height / 2.0 + axis_h,
+        descent: total_height / 2.0 - axis_h,
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit delimiter: begChr on left, content, endChr on right.
+/// Delimiter glyphs render at the base font size (not stretched yet —
+/// Phase 3 later adds MATH vertical_variants for grow).
+fn emit_delimiter(
+    beg: char,
+    end: char,
+    content: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let fs = ctx.font_size;
+    let mut elems = Vec::new();
+
+    // Left delimiter char.
+    let left_w = fs * 0.45;
+    elems.push(emit_text_at(beg.to_string(), x, baseline_y, fs));
+
+    // Content bbox to determine overall advance.
+    let content_bbox = layout_expr(content, ctx);
+    let content_x = x + left_w;
+    let (content_elems, _) = emit_expr(content, content_x, baseline_y, ctx);
+    elems.extend(content_elems);
+
+    // Right delimiter char.
+    let right_x = content_x + content_bbox.advance;
+    let right_w = fs * 0.45;
+    elems.push(emit_text_at(end.to_string(), right_x, baseline_y, fs));
+
+    let bbox = MathBBox {
+        advance: left_w + content_bbox.advance + right_w,
+        ascent: content_bbox.ascent.max(fs * 0.8),
+        descent: content_bbox.descent.max(fs * 0.2),
         italic_correction: 0.0,
     };
     (elems, bbox)
