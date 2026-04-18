@@ -1,4 +1,6 @@
-//! OMML math layout — bounding-box and position computation.
+//! OMML math layout — bounding-box and position computation, plus
+//! Phase 3 MVP: emit flat `LayoutElement::Text` entries for the GDI
+//! renderer to draw Cambria Math glyphs.
 //!
 //! This module defines the interface for Phase 3 math rendering. It
 //! consumes a `MathBlock` tree and produces a bounding box + positioned
@@ -218,6 +220,156 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
     }
 }
 
+/// Extract all text content from a MathExpr tree, applying
+/// `math_substitute` to each character. Returns a flat string suitable
+/// for Phase 3 MVP rendering as a single line via `LayoutElement::Text`.
+///
+/// Structural chars are inserted for fractions ("/"), radicals ("√"),
+/// delimiters (their `beg`/`end` chars), etc., to give human-readable
+/// approximation. Proper stacked layout comes in later Phase 3 commits.
+pub fn extract_flat_text(expr: &MathExpr) -> String {
+    let mut out = String::new();
+    append_flat(&mut out, expr);
+    out
+}
+
+fn append_flat(out: &mut String, expr: &MathExpr) {
+    match expr {
+        MathExpr::Text(s) | MathExpr::Run { text: s, .. } => {
+            for c in s.chars() { out.push(math_substitute(c)); }
+        }
+        MathExpr::Seq(children) => {
+            for c in children { append_flat(out, c); }
+        }
+        MathExpr::Fraction { num, den, bar_type } => {
+            use crate::ir::FracBarType;
+            match bar_type {
+                FracBarType::NoBar => {
+                    append_flat(out, num);
+                    out.push(' ');
+                    append_flat(out, den);
+                }
+                FracBarType::Linear => {
+                    append_flat(out, num);
+                    out.push('/');
+                    append_flat(out, den);
+                }
+                _ => {
+                    append_flat(out, num);
+                    out.push('/');
+                    append_flat(out, den);
+                }
+            }
+        }
+        MathExpr::Superscript { base, sup } => {
+            append_flat(out, base);
+            out.push('^');
+            append_flat(out, sup);
+        }
+        MathExpr::Subscript { base, sub } => {
+            append_flat(out, base);
+            out.push('_');
+            append_flat(out, sub);
+        }
+        MathExpr::SubSuperscript { base, sub, sup } => {
+            append_flat(out, base);
+            out.push('_');
+            append_flat(out, sub);
+            out.push('^');
+            append_flat(out, sup);
+        }
+        MathExpr::PreScript { base, sub, sup } => {
+            out.push('_');
+            append_flat(out, sub);
+            out.push('^');
+            append_flat(out, sup);
+            append_flat(out, base);
+        }
+        MathExpr::Radical { degree, radicand } => {
+            if let Some(d) = degree {
+                out.push('^');
+                append_flat(out, d);
+            }
+            out.push('√');
+            append_flat(out, radicand);
+        }
+        MathExpr::Nary { op, sub, sup, operand, .. } => {
+            out.push(*op);
+            if let Some(s) = sub { out.push('_'); append_flat(out, s); }
+            if let Some(s) = sup { out.push('^'); append_flat(out, s); }
+            out.push(' ');
+            append_flat(out, operand);
+        }
+        MathExpr::Delimiter { beg, end, content, .. } => {
+            out.push(*beg);
+            append_flat(out, content);
+            out.push(*end);
+        }
+        MathExpr::Function { name, arg } => {
+            append_flat(out, name);
+            out.push(' ');
+            append_flat(out, arg);
+        }
+        MathExpr::Matrix { rows, .. } => {
+            out.push('[');
+            for (i, row) in rows.iter().enumerate() {
+                if i > 0 { out.push(';'); out.push(' '); }
+                for (j, cell) in row.iter().enumerate() {
+                    if j > 0 { out.push(' '); }
+                    append_flat(out, cell);
+                }
+            }
+            out.push(']');
+        }
+        MathExpr::Accent { accent, base } => {
+            append_flat(out, base);
+            out.push(*accent);
+        }
+        MathExpr::Bar { base, .. } => {
+            out.push('‾');
+            append_flat(out, base);
+        }
+        MathExpr::Limit { base, lim, pos } => {
+            use crate::ir::LimitPos;
+            append_flat(out, base);
+            match pos {
+                LimitPos::Lower => out.push('_'),
+                LimitPos::Upper => out.push('^'),
+            }
+            append_flat(out, lim);
+        }
+        MathExpr::GroupChar { chr, base, .. } => {
+            append_flat(out, base);
+            out.push(*chr);
+        }
+        MathExpr::EqArray(children) => {
+            for (i, c) in children.iter().enumerate() {
+                if i > 0 { out.push_str("; "); }
+                append_flat(out, c);
+            }
+        }
+        MathExpr::BoxExpr(inner) | MathExpr::Phantom(inner) => {
+            append_flat(out, inner);
+        }
+        MathExpr::BorderBox { base, .. } => {
+            append_flat(out, base);
+        }
+    }
+}
+
+/// Flatten a whole MathBlock to a single text string (substituted).
+pub fn extract_flat_text_block(block: &MathBlock) -> String {
+    let exprs: &[MathExpr] = match block {
+        MathBlock::Inline(xs) => xs,
+        MathBlock::Display { content, .. } => content,
+    };
+    let mut out = String::new();
+    for e in exprs {
+        append_flat(&mut out, e);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +445,57 @@ mod tests {
         assert!((ctx_s.effective_font_size() - 10.5 * 0.73).abs() < 0.01);
         let ctx_ss = ctx_s.descend_script();
         assert!((ctx_ss.effective_font_size() - 10.5 * 0.60).abs() < 0.01);
+    }
+
+    #[test]
+    fn extract_flat_fraction() {
+        let frac = MathExpr::Fraction {
+            num: Box::new(MathExpr::Text("a".to_string())),
+            den: Box::new(MathExpr::Text("b".to_string())),
+            bar_type: FracBarType::Bar,
+        };
+        let text = extract_flat_text(&frac);
+        // Both chars should be math-substituted (𝑎, 𝑏) with '/' between.
+        assert_eq!(text, "\u{1D44E}/\u{1D44F}");
+    }
+
+    #[test]
+    fn extract_flat_superscript() {
+        let sup = MathExpr::Superscript {
+            base: Box::new(MathExpr::Text("x".to_string())),
+            sup: Box::new(MathExpr::Text("2".to_string())),
+        };
+        assert_eq!(extract_flat_text(&sup), "\u{1D465}^2"); // 𝑥^2
+    }
+
+    #[test]
+    fn extract_flat_nested_delim() {
+        // (a + b) → parenthesized substituted chars
+        let inner = MathExpr::Seq(vec![
+            MathExpr::Text("a".to_string()),
+            MathExpr::Text("+".to_string()),
+            MathExpr::Text("b".to_string()),
+        ]);
+        let d = MathExpr::Delimiter {
+            beg: '(', end: ')', sep: None,
+            content: Box::new(inner),
+        };
+        assert_eq!(extract_flat_text(&d), "(\u{1D44E}+\u{1D44F})"); // (𝑎+𝑏)
+    }
+
+    #[test]
+    fn extract_flat_block() {
+        let block = MathBlock::Display {
+            content: vec![
+                MathExpr::Text("E".to_string()),
+                MathExpr::Text("=".to_string()),
+                MathExpr::Text("mc".to_string()),
+            ],
+            jc: MathAlignment::Center,
+        };
+        let t = extract_flat_text_block(&block);
+        // E→𝐸, = unchanged, m→𝑚, c→𝑐
+        assert_eq!(t, "\u{1D438}=\u{1D45A}\u{1D450}");
     }
 
     #[test]

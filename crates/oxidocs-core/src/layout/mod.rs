@@ -1159,9 +1159,37 @@ impl LayoutEngine {
                 Block::UnsupportedElement(_) => {
                     // Skip unsupported elements in layout
                 }
-                Block::Math(_) => {
-                    // Phase 2 stub: OMML math blocks not yet laid out inline.
-                    // Phase 3 will emit LayoutElement::Math for the GDI renderer.
+                Block::Math(math_block) => {
+                    // Phase 3 MVP: emit flat text with math-substituted glyphs.
+                    // Proper fraction/sup/sub positioning comes in later commits.
+                    let math_font_size: f32 = 10.5; // Cambria Math default
+                    let flat = crate::layout::math::extract_flat_text_block(math_block);
+                    if !flat.is_empty() {
+                        let bbox = crate::layout::math::layout_math_block(math_block, math_font_size);
+                        let x = page.margin.left;
+                        let el = LayoutElement::new(
+                            x,
+                            cursor_y,
+                            bbox.advance.max(flat.chars().count() as f32 * math_font_size * 0.55),
+                            bbox.height().max(math_font_size * 1.2),
+                            LayoutContent::Text {
+                                text: flat,
+                                font_size: math_font_size,
+                                font_family: Some("Cambria Math".to_string()),
+                                bold: false,
+                                italic: false,
+                                underline: false,
+                                underline_style: None,
+                                strikethrough: false,
+                                color: None,
+                                highlight: None,
+                                field_type: None,
+                                character_spacing: 0.0,
+                            },
+                        );
+                        elements.push(el);
+                        cursor_y += bbox.height().max(math_font_size * 1.2);
+                    }
                 }
             }
         }
