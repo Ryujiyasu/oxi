@@ -1,0 +1,8195 @@
+{
+  "font": "Cambria Math",
+  "upm": 2048,
+  "italic_correction": [
+    {
+      "gid": 1325,
+      "glyph_name": "uni210A",
+      "codepoint": 8458,
+      "codepoint_hex": "U+210A",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1346,
+      "glyph_name": "uni212F",
+      "codepoint": 8495,
+      "codepoint_hex": "U+212F",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1348,
+      "glyph_name": "uni2134",
+      "codepoint": 8500,
+      "codepoint_hex": "U+2134",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1516,
+      "glyph_name": "integral",
+      "codepoint": 8747,
+      "codepoint_hex": "U+222B",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1517,
+      "glyph_name": "uni222C",
+      "codepoint": 8748,
+      "codepoint_hex": "U+222C",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1518,
+      "glyph_name": "uni222D",
+      "codepoint": 8749,
+      "codepoint_hex": "U+222D",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1519,
+      "glyph_name": "uni222E",
+      "codepoint": 8750,
+      "codepoint_hex": "U+222E",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1520,
+      "glyph_name": "uni222F",
+      "codepoint": 8751,
+      "codepoint_hex": "U+222F",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1521,
+      "glyph_name": "uni2230",
+      "codepoint": 8752,
+      "codepoint_hex": "U+2230",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1522,
+      "glyph_name": "uni2231",
+      "codepoint": 8753,
+      "codepoint_hex": "U+2231",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1523,
+      "glyph_name": "uni2232",
+      "codepoint": 8754,
+      "codepoint_hex": "U+2232",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1524,
+      "glyph_name": "uni2233",
+      "codepoint": 8755,
+      "codepoint_hex": "U+2233",
+      "italic_correction": 415
+    },
+    {
+      "gid": 1827,
+      "glyph_name": "u1D434",
+      "codepoint": 119860,
+      "codepoint_hex": "U+1D434",
+      "italic_correction": 20
+    },
+    {
+      "gid": 1828,
+      "glyph_name": "u1D435",
+      "codepoint": 119861,
+      "codepoint_hex": "U+1D435",
+      "italic_correction": 55
+    },
+    {
+      "gid": 1829,
+      "glyph_name": "u1D436",
+      "codepoint": 119862,
+      "codepoint_hex": "U+1D436",
+      "italic_correction": 90
+    },
+    {
+      "gid": 1830,
+      "glyph_name": "u1D437",
+      "codepoint": 119863,
+      "codepoint_hex": "U+1D437",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1831,
+      "glyph_name": "u1D438",
+      "codepoint": 119864,
+      "codepoint_hex": "U+1D438",
+      "italic_correction": 80
+    },
+    {
+      "gid": 1832,
+      "glyph_name": "u1D439",
+      "codepoint": 119865,
+      "codepoint_hex": "U+1D439",
+      "italic_correction": 80
+    },
+    {
+      "gid": 1833,
+      "glyph_name": "u1D43A",
+      "codepoint": 119866,
+      "codepoint_hex": "U+1D43A",
+      "italic_correction": 90
+    },
+    {
+      "gid": 1834,
+      "glyph_name": "u1D43B",
+      "codepoint": 119867,
+      "codepoint_hex": "U+1D43B",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1835,
+      "glyph_name": "u1D43C",
+      "codepoint": 119868,
+      "codepoint_hex": "U+1D43C",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1836,
+      "glyph_name": "u1D43D",
+      "codepoint": 119869,
+      "codepoint_hex": "U+1D43D",
+      "italic_correction": 40
+    },
+    {
+      "gid": 1837,
+      "glyph_name": "u1D43E",
+      "codepoint": 119870,
+      "codepoint_hex": "U+1D43E",
+      "italic_correction": 62
+    },
+    {
+      "gid": 1838,
+      "glyph_name": "u1D43F",
+      "codepoint": 119871,
+      "codepoint_hex": "U+1D43F",
+      "italic_correction": 42
+    },
+    {
+      "gid": 1839,
+      "glyph_name": "u1D440",
+      "codepoint": 119872,
+      "codepoint_hex": "U+1D440",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1840,
+      "glyph_name": "u1D441",
+      "codepoint": 119873,
+      "codepoint_hex": "U+1D441",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1841,
+      "glyph_name": "u1D442",
+      "codepoint": 119874,
+      "codepoint_hex": "U+1D442",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1842,
+      "glyph_name": "u1D443",
+      "codepoint": 119875,
+      "codepoint_hex": "U+1D443",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1843,
+      "glyph_name": "u1D444",
+      "codepoint": 119876,
+      "codepoint_hex": "U+1D444",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1844,
+      "glyph_name": "u1D445",
+      "codepoint": 119877,
+      "codepoint_hex": "U+1D445",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1845,
+      "glyph_name": "u1D446",
+      "codepoint": 119878,
+      "codepoint_hex": "U+1D446",
+      "italic_correction": 40
+    },
+    {
+      "gid": 1846,
+      "glyph_name": "u1D447",
+      "codepoint": 119879,
+      "codepoint_hex": "U+1D447",
+      "italic_correction": 45
+    },
+    {
+      "gid": 1847,
+      "glyph_name": "u1D448",
+      "codepoint": 119880,
+      "codepoint_hex": "U+1D448",
+      "italic_correction": 40
+    },
+    {
+      "gid": 1848,
+      "glyph_name": "u1D449",
+      "codepoint": 119881,
+      "codepoint_hex": "U+1D449",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1849,
+      "glyph_name": "u1D44A",
+      "codepoint": 119882,
+      "codepoint_hex": "U+1D44A",
+      "italic_correction": 80
+    },
+    {
+      "gid": 1850,
+      "glyph_name": "u1D44B",
+      "codepoint": 119883,
+      "codepoint_hex": "U+1D44B",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1851,
+      "glyph_name": "u1D44C",
+      "codepoint": 119884,
+      "codepoint_hex": "U+1D44C",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1852,
+      "glyph_name": "u1D44D",
+      "codepoint": 119885,
+      "codepoint_hex": "U+1D44D",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1853,
+      "glyph_name": "u1D44E",
+      "codepoint": 119886,
+      "codepoint_hex": "U+1D44E",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1854,
+      "glyph_name": "u1D44F",
+      "codepoint": 119887,
+      "codepoint_hex": "U+1D44F",
+      "italic_correction": 45
+    },
+    {
+      "gid": 1855,
+      "glyph_name": "u1D450",
+      "codepoint": 119888,
+      "codepoint_hex": "U+1D450",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1856,
+      "glyph_name": "u1D451",
+      "codepoint": 119889,
+      "codepoint_hex": "U+1D451",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1857,
+      "glyph_name": "u1D452",
+      "codepoint": 119890,
+      "codepoint_hex": "U+1D452",
+      "italic_correction": 45
+    },
+    {
+      "gid": 1858,
+      "glyph_name": "u1D453",
+      "codepoint": 119891,
+      "codepoint_hex": "U+1D453",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1859,
+      "glyph_name": "u1D454",
+      "codepoint": 119892,
+      "codepoint_hex": "U+1D454",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1860,
+      "glyph_name": "uni210E",
+      "codepoint": 8462,
+      "codepoint_hex": "U+210E",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1861,
+      "glyph_name": "u1D456",
+      "codepoint": 119894,
+      "codepoint_hex": "U+1D456",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1862,
+      "glyph_name": "u1D457",
+      "codepoint": 119895,
+      "codepoint_hex": "U+1D457",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1863,
+      "glyph_name": "u1D458",
+      "codepoint": 119896,
+      "codepoint_hex": "U+1D458",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1864,
+      "glyph_name": "u1D459",
+      "codepoint": 119897,
+      "codepoint_hex": "U+1D459",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1865,
+      "glyph_name": "u1D45A",
+      "codepoint": 119898,
+      "codepoint_hex": "U+1D45A",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1866,
+      "glyph_name": "u1D45B",
+      "codepoint": 119899,
+      "codepoint_hex": "U+1D45B",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1867,
+      "glyph_name": "u1D45C",
+      "codepoint": 119900,
+      "codepoint_hex": "U+1D45C",
+      "italic_correction": 45
+    },
+    {
+      "gid": 1868,
+      "glyph_name": "u1D45D",
+      "codepoint": 119901,
+      "codepoint_hex": "U+1D45D",
+      "italic_correction": 25
+    },
+    {
+      "gid": 1869,
+      "glyph_name": "u1D45E",
+      "codepoint": 119902,
+      "codepoint_hex": "U+1D45E",
+      "italic_correction": 62
+    },
+    {
+      "gid": 1870,
+      "glyph_name": "u1D45F",
+      "codepoint": 119903,
+      "codepoint_hex": "U+1D45F",
+      "italic_correction": 45
+    },
+    {
+      "gid": 1871,
+      "glyph_name": "u1D460",
+      "codepoint": 119904,
+      "codepoint_hex": "U+1D460",
+      "italic_correction": 42
+    },
+    {
+      "gid": 1872,
+      "glyph_name": "u1D461",
+      "codepoint": 119905,
+      "codepoint_hex": "U+1D461",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1873,
+      "glyph_name": "u1D462",
+      "codepoint": 119906,
+      "codepoint_hex": "U+1D462",
+      "italic_correction": 52
+    },
+    {
+      "gid": 1874,
+      "glyph_name": "u1D463",
+      "codepoint": 119907,
+      "codepoint_hex": "U+1D463",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1875,
+      "glyph_name": "u1D464",
+      "codepoint": 119908,
+      "codepoint_hex": "U+1D464",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1876,
+      "glyph_name": "u1D465",
+      "codepoint": 119909,
+      "codepoint_hex": "U+1D465",
+      "italic_correction": 62
+    },
+    {
+      "gid": 1877,
+      "glyph_name": "u1D466",
+      "codepoint": 119910,
+      "codepoint_hex": "U+1D466",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1878,
+      "glyph_name": "u1D467",
+      "codepoint": 119911,
+      "codepoint_hex": "U+1D467",
+      "italic_correction": 35
+    },
+    {
+      "gid": 1983,
+      "glyph_name": "u1D6E2",
+      "codepoint": 120546,
+      "codepoint_hex": "U+1D6E2",
+      "italic_correction": 20
+    },
+    {
+      "gid": 1984,
+      "glyph_name": "u1D6E3",
+      "codepoint": 120547,
+      "codepoint_hex": "U+1D6E3",
+      "italic_correction": 55
+    },
+    {
+      "gid": 1985,
+      "glyph_name": "u1D6E4",
+      "codepoint": 120548,
+      "codepoint_hex": "U+1D6E4",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1986,
+      "glyph_name": "u1D6E5",
+      "codepoint": 120549,
+      "codepoint_hex": "U+1D6E5",
+      "italic_correction": 20
+    },
+    {
+      "gid": 1987,
+      "glyph_name": "u1D6E6",
+      "codepoint": 120550,
+      "codepoint_hex": "U+1D6E6",
+      "italic_correction": 80
+    },
+    {
+      "gid": 1988,
+      "glyph_name": "u1D6E7",
+      "codepoint": 120551,
+      "codepoint_hex": "U+1D6E7",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1989,
+      "glyph_name": "u1D6E8",
+      "codepoint": 120552,
+      "codepoint_hex": "U+1D6E8",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1990,
+      "glyph_name": "u1D6E9",
+      "codepoint": 120553,
+      "codepoint_hex": "U+1D6E9",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1991,
+      "glyph_name": "u1D6EA",
+      "codepoint": 120554,
+      "codepoint_hex": "U+1D6EA",
+      "italic_correction": 65
+    },
+    {
+      "gid": 1992,
+      "glyph_name": "u1D6EB",
+      "codepoint": 120555,
+      "codepoint_hex": "U+1D6EB",
+      "italic_correction": 62
+    },
+    {
+      "gid": 1993,
+      "glyph_name": "u1D6EC",
+      "codepoint": 120556,
+      "codepoint_hex": "U+1D6EC",
+      "italic_correction": 40
+    },
+    {
+      "gid": 1994,
+      "glyph_name": "u1D6ED",
+      "codepoint": 120557,
+      "codepoint_hex": "U+1D6ED",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1995,
+      "glyph_name": "u1D6EE",
+      "codepoint": 120558,
+      "codepoint_hex": "U+1D6EE",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1996,
+      "glyph_name": "u1D6EF",
+      "codepoint": 120559,
+      "codepoint_hex": "U+1D6EF",
+      "italic_correction": 60
+    },
+    {
+      "gid": 1997,
+      "glyph_name": "u1D6F0",
+      "codepoint": 120560,
+      "codepoint_hex": "U+1D6F0",
+      "italic_correction": 50
+    },
+    {
+      "gid": 1998,
+      "glyph_name": "u1D6F1",
+      "codepoint": 120561,
+      "codepoint_hex": "U+1D6F1",
+      "italic_correction": 52
+    },
+    {
+      "gid": 1999,
+      "glyph_name": "u1D6F2",
+      "codepoint": 120562,
+      "codepoint_hex": "U+1D6F2",
+      "italic_correction": 50
+    },
+    {
+      "gid": 2000,
+      "glyph_name": "u1D6F3",
+      "codepoint": 120563,
+      "codepoint_hex": "U+1D6F3",
+      "italic_correction": 50
+    },
+    {
+      "gid": 2001,
+      "glyph_name": "u1D6F4",
+      "codepoint": 120564,
+      "codepoint_hex": "U+1D6F4",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2002,
+      "glyph_name": "u1D6F5",
+      "codepoint": 120565,
+      "codepoint_hex": "U+1D6F5",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2003,
+      "glyph_name": "u1D6F6",
+      "codepoint": 120566,
+      "codepoint_hex": "U+1D6F6",
+      "italic_correction": 52
+    },
+    {
+      "gid": 2004,
+      "glyph_name": "u1D6F7",
+      "codepoint": 120567,
+      "codepoint_hex": "U+1D6F7",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2005,
+      "glyph_name": "u1D6F8",
+      "codepoint": 120568,
+      "codepoint_hex": "U+1D6F8",
+      "italic_correction": 50
+    },
+    {
+      "gid": 2006,
+      "glyph_name": "u1D6F9",
+      "codepoint": 120569,
+      "codepoint_hex": "U+1D6F9",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2007,
+      "glyph_name": "u1D6FA",
+      "codepoint": 120570,
+      "codepoint_hex": "U+1D6FA",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2008,
+      "glyph_name": "u1D6FB",
+      "codepoint": 120571,
+      "codepoint_hex": "U+1D6FB",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2009,
+      "glyph_name": "u1D6FC",
+      "codepoint": 120572,
+      "codepoint_hex": "U+1D6FC",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2010,
+      "glyph_name": "u1D6FD",
+      "codepoint": 120573,
+      "codepoint_hex": "U+1D6FD",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2011,
+      "glyph_name": "u1D6FE",
+      "codepoint": 120574,
+      "codepoint_hex": "U+1D6FE",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2012,
+      "glyph_name": "u1D6FF",
+      "codepoint": 120575,
+      "codepoint_hex": "U+1D6FF",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2013,
+      "glyph_name": "u1D700",
+      "codepoint": 120576,
+      "codepoint_hex": "U+1D700",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2014,
+      "glyph_name": "u1D701",
+      "codepoint": 120577,
+      "codepoint_hex": "U+1D701",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2015,
+      "glyph_name": "u1D702",
+      "codepoint": 120578,
+      "codepoint_hex": "U+1D702",
+      "italic_correction": 60
+    },
+    {
+      "gid": 2016,
+      "glyph_name": "u1D703",
+      "codepoint": 120579,
+      "codepoint_hex": "U+1D703",
+      "italic_correction": 60
+    },
+    {
+      "gid": 2017,
+      "glyph_name": "u1D704",
+      "codepoint": 120580,
+      "codepoint_hex": "U+1D704",
+      "italic_correction": 35
+    },
+    {
+      "gid": 2018,
+      "glyph_name": "u1D705",
+      "codepoint": 120581,
+      "codepoint_hex": "U+1D705",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2019,
+      "glyph_name": "u1D706",
+      "codepoint": 120582,
+      "codepoint_hex": "U+1D706",
+      "italic_correction": 35
+    },
+    {
+      "gid": 2020,
+      "glyph_name": "u1D707",
+      "codepoint": 120583,
+      "codepoint_hex": "U+1D707",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2021,
+      "glyph_name": "u1D708",
+      "codepoint": 120584,
+      "codepoint_hex": "U+1D708",
+      "italic_correction": 60
+    },
+    {
+      "gid": 2022,
+      "glyph_name": "u1D709",
+      "codepoint": 120585,
+      "codepoint_hex": "U+1D709",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2023,
+      "glyph_name": "u1D70A",
+      "codepoint": 120586,
+      "codepoint_hex": "U+1D70A",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2024,
+      "glyph_name": "u1D70B",
+      "codepoint": 120587,
+      "codepoint_hex": "U+1D70B",
+      "italic_correction": 44
+    },
+    {
+      "gid": 2025,
+      "glyph_name": "u1D70C",
+      "codepoint": 120588,
+      "codepoint_hex": "U+1D70C",
+      "italic_correction": 25
+    },
+    {
+      "gid": 2026,
+      "glyph_name": "u1D70E",
+      "codepoint": 120590,
+      "codepoint_hex": "U+1D70E",
+      "italic_correction": 50
+    },
+    {
+      "gid": 2027,
+      "glyph_name": "u1D70D",
+      "codepoint": 120589,
+      "codepoint_hex": "U+1D70D",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2028,
+      "glyph_name": "u1D70F",
+      "codepoint": 120591,
+      "codepoint_hex": "U+1D70F",
+      "italic_correction": 44
+    },
+    {
+      "gid": 2029,
+      "glyph_name": "u1D710",
+      "codepoint": 120592,
+      "codepoint_hex": "U+1D710",
+      "italic_correction": 35
+    },
+    {
+      "gid": 2030,
+      "glyph_name": "u1D711",
+      "codepoint": 120593,
+      "codepoint_hex": "U+1D711",
+      "italic_correction": 44
+    },
+    {
+      "gid": 2031,
+      "glyph_name": "u1D712",
+      "codepoint": 120594,
+      "codepoint_hex": "U+1D712",
+      "italic_correction": 20
+    },
+    {
+      "gid": 2032,
+      "glyph_name": "u1D713",
+      "codepoint": 120595,
+      "codepoint_hex": "U+1D713",
+      "italic_correction": 30
+    },
+    {
+      "gid": 2033,
+      "glyph_name": "u1D714",
+      "codepoint": 120596,
+      "codepoint_hex": "U+1D714",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2034,
+      "glyph_name": "u1D715",
+      "codepoint": 120597,
+      "codepoint_hex": "U+1D715",
+      "italic_correction": 52
+    },
+    {
+      "gid": 2035,
+      "glyph_name": "u1D716",
+      "codepoint": 120598,
+      "codepoint_hex": "U+1D716",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2036,
+      "glyph_name": "u1D717",
+      "codepoint": 120599,
+      "codepoint_hex": "U+1D717",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2037,
+      "glyph_name": "u1D718",
+      "codepoint": 120600,
+      "codepoint_hex": "U+1D718",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2038,
+      "glyph_name": "u1D719",
+      "codepoint": 120601,
+      "codepoint_hex": "U+1D719",
+      "italic_correction": 44
+    },
+    {
+      "gid": 2039,
+      "glyph_name": "u1D71A",
+      "codepoint": 120602,
+      "codepoint_hex": "U+1D71A",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2040,
+      "glyph_name": "u1D71B",
+      "codepoint": 120603,
+      "codepoint_hex": "U+1D71B",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2267,
+      "glyph_name": "u1D49C",
+      "codepoint": 119964,
+      "codepoint_hex": "U+1D49C",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2268,
+      "glyph_name": "uni212C",
+      "codepoint": 8492,
+      "codepoint_hex": "U+212C",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2269,
+      "glyph_name": "u1D49E",
+      "codepoint": 119966,
+      "codepoint_hex": "U+1D49E",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2270,
+      "glyph_name": "u1D49F",
+      "codepoint": 119967,
+      "codepoint_hex": "U+1D49F",
+      "italic_correction": 42
+    },
+    {
+      "gid": 2271,
+      "glyph_name": "uni2130",
+      "codepoint": 8496,
+      "codepoint_hex": "U+2130",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2272,
+      "glyph_name": "uni2131",
+      "codepoint": 8497,
+      "codepoint_hex": "U+2131",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2273,
+      "glyph_name": "u1D4A2",
+      "codepoint": 119970,
+      "codepoint_hex": "U+1D4A2",
+      "italic_correction": 60
+    },
+    {
+      "gid": 2274,
+      "glyph_name": "uni210B",
+      "codepoint": 8459,
+      "codepoint_hex": "U+210B",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2275,
+      "glyph_name": "uni2110",
+      "codepoint": 8464,
+      "codepoint_hex": "U+2110",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2276,
+      "glyph_name": "u1D4A5",
+      "codepoint": 119973,
+      "codepoint_hex": "U+1D4A5",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2277,
+      "glyph_name": "u1D4A6",
+      "codepoint": 119974,
+      "codepoint_hex": "U+1D4A6",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2278,
+      "glyph_name": "uni2112",
+      "codepoint": 8466,
+      "codepoint_hex": "U+2112",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2279,
+      "glyph_name": "uni2133",
+      "codepoint": 8499,
+      "codepoint_hex": "U+2133",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2280,
+      "glyph_name": "u1D4A9",
+      "codepoint": 119977,
+      "codepoint_hex": "U+1D4A9",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2281,
+      "glyph_name": "u1D4AA",
+      "codepoint": 119978,
+      "codepoint_hex": "U+1D4AA",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2282,
+      "glyph_name": "u1D4AB",
+      "codepoint": 119979,
+      "codepoint_hex": "U+1D4AB",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2283,
+      "glyph_name": "u1D4AC",
+      "codepoint": 119980,
+      "codepoint_hex": "U+1D4AC",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2284,
+      "glyph_name": "uni211B",
+      "codepoint": 8475,
+      "codepoint_hex": "U+211B",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2285,
+      "glyph_name": "u1D4AE",
+      "codepoint": 119982,
+      "codepoint_hex": "U+1D4AE",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2286,
+      "glyph_name": "u1D4AF",
+      "codepoint": 119983,
+      "codepoint_hex": "U+1D4AF",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2287,
+      "glyph_name": "u1D4B0",
+      "codepoint": 119984,
+      "codepoint_hex": "U+1D4B0",
+      "italic_correction": 44
+    },
+    {
+      "gid": 2288,
+      "glyph_name": "u1D4B1",
+      "codepoint": 119985,
+      "codepoint_hex": "U+1D4B1",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2289,
+      "glyph_name": "u1D4B2",
+      "codepoint": 119986,
+      "codepoint_hex": "U+1D4B2",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2290,
+      "glyph_name": "u1D4B3",
+      "codepoint": 119987,
+      "codepoint_hex": "U+1D4B3",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2291,
+      "glyph_name": "u1D4B4",
+      "codepoint": 119988,
+      "codepoint_hex": "U+1D4B4",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2292,
+      "glyph_name": "u1D4B5",
+      "codepoint": 119989,
+      "codepoint_hex": "U+1D4B5",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2293,
+      "glyph_name": "u1D4B6",
+      "codepoint": 119990,
+      "codepoint_hex": "U+1D4B6",
+      "italic_correction": 48
+    },
+    {
+      "gid": 2294,
+      "glyph_name": "u1D4B7",
+      "codepoint": 119991,
+      "codepoint_hex": "U+1D4B7",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2295,
+      "glyph_name": "u1D4B8",
+      "codepoint": 119992,
+      "codepoint_hex": "U+1D4B8",
+      "italic_correction": 50
+    },
+    {
+      "gid": 2296,
+      "glyph_name": "u1D4B9",
+      "codepoint": 119993,
+      "codepoint_hex": "U+1D4B9",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2297,
+      "glyph_name": "u1D4BB",
+      "codepoint": 119995,
+      "codepoint_hex": "U+1D4BB",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2298,
+      "glyph_name": "u1D4BD",
+      "codepoint": 119997,
+      "codepoint_hex": "U+1D4BD",
+      "italic_correction": 42
+    },
+    {
+      "gid": 2299,
+      "glyph_name": "u1D4BE",
+      "codepoint": 119998,
+      "codepoint_hex": "U+1D4BE",
+      "italic_correction": 48
+    },
+    {
+      "gid": 2300,
+      "glyph_name": "u1D4BF",
+      "codepoint": 119999,
+      "codepoint_hex": "U+1D4BF",
+      "italic_correction": 48
+    },
+    {
+      "gid": 2301,
+      "glyph_name": "u1D4C0",
+      "codepoint": 120000,
+      "codepoint_hex": "U+1D4C0",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2302,
+      "glyph_name": "u1D4C2",
+      "codepoint": 120002,
+      "codepoint_hex": "U+1D4C2",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2303,
+      "glyph_name": "u1D4C3",
+      "codepoint": 120003,
+      "codepoint_hex": "U+1D4C3",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2304,
+      "glyph_name": "u1D4C5",
+      "codepoint": 120005,
+      "codepoint_hex": "U+1D4C5",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2305,
+      "glyph_name": "u1D4C6",
+      "codepoint": 120006,
+      "codepoint_hex": "U+1D4C6",
+      "italic_correction": 60
+    },
+    {
+      "gid": 2306,
+      "glyph_name": "u1D4C7",
+      "codepoint": 120007,
+      "codepoint_hex": "U+1D4C7",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2307,
+      "glyph_name": "u1D4C8",
+      "codepoint": 120008,
+      "codepoint_hex": "U+1D4C8",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2308,
+      "glyph_name": "u1D4C9",
+      "codepoint": 120009,
+      "codepoint_hex": "U+1D4C9",
+      "italic_correction": 65
+    },
+    {
+      "gid": 2309,
+      "glyph_name": "u1D4CA",
+      "codepoint": 120010,
+      "codepoint_hex": "U+1D4CA",
+      "italic_correction": 45
+    },
+    {
+      "gid": 2310,
+      "glyph_name": "u1D4CB",
+      "codepoint": 120011,
+      "codepoint_hex": "U+1D4CB",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2311,
+      "glyph_name": "u1D4CC",
+      "codepoint": 120012,
+      "codepoint_hex": "U+1D4CC",
+      "italic_correction": 80
+    },
+    {
+      "gid": 2312,
+      "glyph_name": "u1D4CD",
+      "codepoint": 120013,
+      "codepoint_hex": "U+1D4CD",
+      "italic_correction": 55
+    },
+    {
+      "gid": 2313,
+      "glyph_name": "u1D4CE",
+      "codepoint": 120014,
+      "codepoint_hex": "U+1D4CE",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2314,
+      "glyph_name": "u1D4CF",
+      "codepoint": 120015,
+      "codepoint_hex": "U+1D4CF",
+      "italic_correction": 62
+    },
+    {
+      "gid": 2835,
+      "glyph_name": "u1D6A4",
+      "codepoint": 120484,
+      "codepoint_hex": "U+1D6A4",
+      "italic_correction": 10
+    },
+    {
+      "gid": 2836,
+      "glyph_name": "u1D6A5",
+      "codepoint": 120485,
+      "codepoint_hex": "U+1D6A5",
+      "italic_correction": 20
+    },
+    {
+      "gid": 2843,
+      "glyph_name": "glyph02843",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 40
+    },
+    {
+      "gid": 2844,
+      "glyph_name": "glyph02844",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 60
+    },
+    {
+      "gid": 3002,
+      "glyph_name": "glyph03002",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 20
+    },
+    {
+      "gid": 3003,
+      "glyph_name": "glyph03003",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3004,
+      "glyph_name": "glyph03004",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 90
+    },
+    {
+      "gid": 3005,
+      "glyph_name": "glyph03005",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3006,
+      "glyph_name": "glyph03006",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 80
+    },
+    {
+      "gid": 3007,
+      "glyph_name": "glyph03007",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 70
+    },
+    {
+      "gid": 3008,
+      "glyph_name": "glyph03008",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 90
+    },
+    {
+      "gid": 3009,
+      "glyph_name": "glyph03009",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3010,
+      "glyph_name": "glyph03010",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3011,
+      "glyph_name": "glyph03011",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3012,
+      "glyph_name": "glyph03012",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3013,
+      "glyph_name": "glyph03013",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3014,
+      "glyph_name": "glyph03014",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3015,
+      "glyph_name": "glyph03015",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 48
+    },
+    {
+      "gid": 3016,
+      "glyph_name": "glyph03016",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3017,
+      "glyph_name": "glyph03017",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 48
+    },
+    {
+      "gid": 3018,
+      "glyph_name": "glyph03018",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3019,
+      "glyph_name": "glyph03019",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3020,
+      "glyph_name": "glyph03020",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 40
+    },
+    {
+      "gid": 3021,
+      "glyph_name": "glyph03021",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3022,
+      "glyph_name": "glyph03022",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3023,
+      "glyph_name": "glyph03023",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3024,
+      "glyph_name": "glyph03024",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 40
+    },
+    {
+      "gid": 3025,
+      "glyph_name": "glyph03025",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3026,
+      "glyph_name": "glyph03026",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3027,
+      "glyph_name": "glyph03027",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3028,
+      "glyph_name": "glyph03028",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3029,
+      "glyph_name": "glyph03029",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3030,
+      "glyph_name": "glyph03030",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3031,
+      "glyph_name": "glyph03031",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3032,
+      "glyph_name": "glyph03032",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3033,
+      "glyph_name": "glyph03033",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3034,
+      "glyph_name": "glyph03034",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3035,
+      "glyph_name": "glyph03035",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3036,
+      "glyph_name": "glyph03036",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 70
+    },
+    {
+      "gid": 3037,
+      "glyph_name": "glyph03037",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 70
+    },
+    {
+      "gid": 3038,
+      "glyph_name": "glyph03038",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 60
+    },
+    {
+      "gid": 3039,
+      "glyph_name": "glyph03039",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 70
+    },
+    {
+      "gid": 3040,
+      "glyph_name": "glyph03040",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3041,
+      "glyph_name": "glyph03041",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3042,
+      "glyph_name": "glyph03042",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3043,
+      "glyph_name": "glyph03043",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 25
+    },
+    {
+      "gid": 3044,
+      "glyph_name": "glyph03044",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3045,
+      "glyph_name": "glyph03045",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3046,
+      "glyph_name": "glyph03046",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 42
+    },
+    {
+      "gid": 3047,
+      "glyph_name": "glyph03047",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3048,
+      "glyph_name": "glyph03048",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3049,
+      "glyph_name": "glyph03049",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3050,
+      "glyph_name": "glyph03050",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3051,
+      "glyph_name": "glyph03051",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3052,
+      "glyph_name": "glyph03052",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3053,
+      "glyph_name": "glyph03053",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3054,
+      "glyph_name": "glyph03054",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 20
+    },
+    {
+      "gid": 3055,
+      "glyph_name": "glyph03055",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3056,
+      "glyph_name": "glyph03056",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 60
+    },
+    {
+      "gid": 3057,
+      "glyph_name": "glyph03057",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 20
+    },
+    {
+      "gid": 3058,
+      "glyph_name": "glyph03058",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3059,
+      "glyph_name": "glyph03059",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3060,
+      "glyph_name": "glyph03060",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3061,
+      "glyph_name": "glyph03061",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3062,
+      "glyph_name": "glyph03062",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 48
+    },
+    {
+      "gid": 3063,
+      "glyph_name": "glyph03063",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3064,
+      "glyph_name": "glyph03064",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 40
+    },
+    {
+      "gid": 3065,
+      "glyph_name": "glyph03065",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3066,
+      "glyph_name": "glyph03066",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 48
+    },
+    {
+      "gid": 3067,
+      "glyph_name": "glyph03067",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3068,
+      "glyph_name": "glyph03068",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3069,
+      "glyph_name": "glyph03069",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3070,
+      "glyph_name": "glyph03070",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 50
+    },
+    {
+      "gid": 3071,
+      "glyph_name": "glyph03071",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 40
+    },
+    {
+      "gid": 3072,
+      "glyph_name": "glyph03072",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3073,
+      "glyph_name": "glyph03073",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 40
+    },
+    {
+      "gid": 3074,
+      "glyph_name": "glyph03074",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3075,
+      "glyph_name": "glyph03075",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3076,
+      "glyph_name": "glyph03076",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3077,
+      "glyph_name": "glyph03077",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 60
+    },
+    {
+      "gid": 3078,
+      "glyph_name": "glyph03078",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3079,
+      "glyph_name": "glyph03079",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3080,
+      "glyph_name": "glyph03080",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3081,
+      "glyph_name": "glyph03081",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3082,
+      "glyph_name": "glyph03082",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3083,
+      "glyph_name": "glyph03083",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 80
+    },
+    {
+      "gid": 3084,
+      "glyph_name": "glyph03084",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3085,
+      "glyph_name": "glyph03085",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 90
+    },
+    {
+      "gid": 3086,
+      "glyph_name": "glyph03086",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 62
+    },
+    {
+      "gid": 3087,
+      "glyph_name": "glyph03087",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 60
+    },
+    {
+      "gid": 3088,
+      "glyph_name": "glyph03088",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3089,
+      "glyph_name": "glyph03089",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3090,
+      "glyph_name": "glyph03090",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3091,
+      "glyph_name": "glyph03091",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3092,
+      "glyph_name": "glyph03092",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 60
+    },
+    {
+      "gid": 3093,
+      "glyph_name": "glyph03093",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 90
+    },
+    {
+      "gid": 3094,
+      "glyph_name": "glyph03094",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3095,
+      "glyph_name": "glyph03095",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 44
+    },
+    {
+      "gid": 3096,
+      "glyph_name": "glyph03096",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3097,
+      "glyph_name": "glyph03097",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3098,
+      "glyph_name": "glyph03098",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 55
+    },
+    {
+      "gid": 3099,
+      "glyph_name": "glyph03099",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 44
+    },
+    {
+      "gid": 3100,
+      "glyph_name": "glyph03100",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3101,
+      "glyph_name": "glyph03101",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 44
+    },
+    {
+      "gid": 3102,
+      "glyph_name": "glyph03102",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 35
+    },
+    {
+      "gid": 3103,
+      "glyph_name": "glyph03103",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 30
+    },
+    {
+      "gid": 3104,
+      "glyph_name": "glyph03104",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3105,
+      "glyph_name": "glyph03105",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 52
+    },
+    {
+      "gid": 3106,
+      "glyph_name": "glyph03106",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 65
+    },
+    {
+      "gid": 3107,
+      "glyph_name": "glyph03107",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3108,
+      "glyph_name": "glyph03108",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3109,
+      "glyph_name": "glyph03109",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 44
+    },
+    {
+      "gid": 3110,
+      "glyph_name": "glyph03110",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3111,
+      "glyph_name": "glyph03111",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 45
+    },
+    {
+      "gid": 3504,
+      "glyph_name": "glyph03504",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3505,
+      "glyph_name": "glyph03505",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3506,
+      "glyph_name": "glyph03506",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3507,
+      "glyph_name": "glyph03507",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1365
+    },
+    {
+      "gid": 3508,
+      "glyph_name": "glyph03508",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3509,
+      "glyph_name": "glyph03509",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3510,
+      "glyph_name": "glyph03510",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3511,
+      "glyph_name": "glyph03511",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3512,
+      "glyph_name": "glyph03512",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3513,
+      "glyph_name": "glyph03513",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3514,
+      "glyph_name": "glyph03514",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3515,
+      "glyph_name": "glyph03515",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3516,
+      "glyph_name": "glyph03516",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3517,
+      "glyph_name": "glyph03517",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3518,
+      "glyph_name": "glyph03518",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3519,
+      "glyph_name": "glyph03519",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3520,
+      "glyph_name": "glyph03520",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3521,
+      "glyph_name": "glyph03521",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3522,
+      "glyph_name": "glyph03522",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3523,
+      "glyph_name": "glyph03523",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3524,
+      "glyph_name": "glyph03524",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3525,
+      "glyph_name": "glyph03525",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3526,
+      "glyph_name": "glyph03526",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3527,
+      "glyph_name": "glyph03527",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3528,
+      "glyph_name": "glyph03528",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    },
+    {
+      "gid": 3529,
+      "glyph_name": "glyph03529",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 420
+    },
+    {
+      "gid": 3530,
+      "glyph_name": "glyph03530",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 755
+    },
+    {
+      "gid": 3531,
+      "glyph_name": "glyph03531",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "italic_correction": 1105
+    }
+  ],
+  "top_accent_attachment": [
+    {
+      "gid": 432,
+      "glyph_name": "gravecomb",
+      "codepoint": 768,
+      "codepoint_hex": "U+0300",
+      "top_accent_attachment": -364
+    },
+    {
+      "gid": 436,
+      "glyph_name": "acutecomb",
+      "codepoint": 769,
+      "codepoint_hex": "U+0301",
+      "top_accent_attachment": -252
+    },
+    {
+      "gid": 440,
+      "glyph_name": "uni0302",
+      "codepoint": 770,
+      "codepoint_hex": "U+0302",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 444,
+      "glyph_name": "uni030C",
+      "codepoint": 780,
+      "codepoint_hex": "U+030C",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 449,
+      "glyph_name": "tildecomb",
+      "codepoint": 771,
+      "codepoint_hex": "U+0303",
+      "top_accent_attachment": -284
+    },
+    {
+      "gid": 453,
+      "glyph_name": "glyph00453",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 457,
+      "glyph_name": "uni0304",
+      "codepoint": 772,
+      "codepoint_hex": "U+0304",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 461,
+      "glyph_name": "uni0306",
+      "codepoint": 774,
+      "codepoint_hex": "U+0306",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 465,
+      "glyph_name": "uni030A",
+      "codepoint": 778,
+      "codepoint_hex": "U+030A",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 469,
+      "glyph_name": "uni030B",
+      "codepoint": 779,
+      "codepoint_hex": "U+030B",
+      "top_accent_attachment": -168
+    },
+    {
+      "gid": 473,
+      "glyph_name": "glyph00473",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -293
+    },
+    {
+      "gid": 540,
+      "glyph_name": "Alpha",
+      "codepoint": 913,
+      "codepoint_hex": "U+0391",
+      "top_accent_attachment": 668
+    },
+    {
+      "gid": 541,
+      "glyph_name": "Beta",
+      "codepoint": 914,
+      "codepoint_hex": "U+0392",
+      "top_accent_attachment": 612
+    },
+    {
+      "gid": 542,
+      "glyph_name": "Gamma",
+      "codepoint": 915,
+      "codepoint_hex": "U+0393",
+      "top_accent_attachment": 624
+    },
+    {
+      "gid": 544,
+      "glyph_name": "Epsilon",
+      "codepoint": 917,
+      "codepoint_hex": "U+0395",
+      "top_accent_attachment": 640
+    },
+    {
+      "gid": 545,
+      "glyph_name": "Zeta",
+      "codepoint": 918,
+      "codepoint_hex": "U+0396",
+      "top_accent_attachment": 580
+    },
+    {
+      "gid": 546,
+      "glyph_name": "Eta",
+      "codepoint": 919,
+      "codepoint_hex": "U+0397",
+      "top_accent_attachment": 700
+    },
+    {
+      "gid": 547,
+      "glyph_name": "Theta",
+      "codepoint": 920,
+      "codepoint_hex": "U+0398",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 548,
+      "glyph_name": "Iota",
+      "codepoint": 921,
+      "codepoint_hex": "U+0399",
+      "top_accent_attachment": 335
+    },
+    {
+      "gid": 549,
+      "glyph_name": "Kappa",
+      "codepoint": 922,
+      "codepoint_hex": "U+039A",
+      "top_accent_attachment": 652
+    },
+    {
+      "gid": 550,
+      "glyph_name": "Lambda",
+      "codepoint": 923,
+      "codepoint_hex": "U+039B",
+      "top_accent_attachment": 656
+    },
+    {
+      "gid": 551,
+      "glyph_name": "Mu",
+      "codepoint": 924,
+      "codepoint_hex": "U+039C",
+      "top_accent_attachment": 868
+    },
+    {
+      "gid": 552,
+      "glyph_name": "Nu",
+      "codepoint": 925,
+      "codepoint_hex": "U+039D",
+      "top_accent_attachment": 740
+    },
+    {
+      "gid": 553,
+      "glyph_name": "Xi",
+      "codepoint": 926,
+      "codepoint_hex": "U+039E",
+      "top_accent_attachment": 608
+    },
+    {
+      "gid": 554,
+      "glyph_name": "Omicron",
+      "codepoint": 927,
+      "codepoint_hex": "U+039F",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 555,
+      "glyph_name": "Pi",
+      "codepoint": 928,
+      "codepoint_hex": "U+03A0",
+      "top_accent_attachment": 692
+    },
+    {
+      "gid": 556,
+      "glyph_name": "Rho",
+      "codepoint": 929,
+      "codepoint_hex": "U+03A1",
+      "top_accent_attachment": 624
+    },
+    {
+      "gid": 557,
+      "glyph_name": "Sigma",
+      "codepoint": 931,
+      "codepoint_hex": "U+03A3",
+      "top_accent_attachment": 612
+    },
+    {
+      "gid": 558,
+      "glyph_name": "Tau",
+      "codepoint": 932,
+      "codepoint_hex": "U+03A4",
+      "top_accent_attachment": 612
+    },
+    {
+      "gid": 559,
+      "glyph_name": "Upsilon",
+      "codepoint": 933,
+      "codepoint_hex": "U+03A5",
+      "top_accent_attachment": 620
+    },
+    {
+      "gid": 560,
+      "glyph_name": "Phi",
+      "codepoint": 934,
+      "codepoint_hex": "U+03A6",
+      "top_accent_attachment": 800
+    },
+    {
+      "gid": 561,
+      "glyph_name": "Chi",
+      "codepoint": 935,
+      "codepoint_hex": "U+03A7",
+      "top_accent_attachment": 620
+    },
+    {
+      "gid": 562,
+      "glyph_name": "Psi",
+      "codepoint": 936,
+      "codepoint_hex": "U+03A8",
+      "top_accent_attachment": 800
+    },
+    {
+      "gid": 563,
+      "glyph_name": "uni03A9",
+      "codepoint": 937,
+      "codepoint_hex": "U+03A9",
+      "top_accent_attachment": 696
+    },
+    {
+      "gid": 959,
+      "glyph_name": "Delta",
+      "codepoint": 8710,
+      "codepoint_hex": "U+2206",
+      "top_accent_attachment": 640
+    },
+    {
+      "gid": 1191,
+      "glyph_name": "uni0305",
+      "codepoint": 773,
+      "codepoint_hex": "U+0305",
+      "top_accent_attachment": -360
+    },
+    {
+      "gid": 1192,
+      "glyph_name": "glyph01192",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -332
+    },
+    {
+      "gid": 1193,
+      "glyph_name": "uni030D",
+      "codepoint": 781,
+      "codepoint_hex": "U+030D",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1194,
+      "glyph_name": "uni030E",
+      "codepoint": 782,
+      "codepoint_hex": "U+030E",
+      "top_accent_attachment": -284
+    },
+    {
+      "gid": 1195,
+      "glyph_name": "uni030F",
+      "codepoint": 783,
+      "codepoint_hex": "U+030F",
+      "top_accent_attachment": -372
+    },
+    {
+      "gid": 1196,
+      "glyph_name": "uni0310",
+      "codepoint": 784,
+      "codepoint_hex": "U+0310",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1197,
+      "glyph_name": "uni0311",
+      "codepoint": 785,
+      "codepoint_hex": "U+0311",
+      "top_accent_attachment": -284
+    },
+    {
+      "gid": 1198,
+      "glyph_name": "glyph01198",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -304
+    },
+    {
+      "gid": 1199,
+      "glyph_name": "glyph01199",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -312
+    },
+    {
+      "gid": 1200,
+      "glyph_name": "uni0316",
+      "codepoint": 790,
+      "codepoint_hex": "U+0316",
+      "top_accent_attachment": -316
+    },
+    {
+      "gid": 1201,
+      "glyph_name": "uni0317",
+      "codepoint": 791,
+      "codepoint_hex": "U+0317",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1202,
+      "glyph_name": "uni0318",
+      "codepoint": 792,
+      "codepoint_hex": "U+0318",
+      "top_accent_attachment": -300
+    },
+    {
+      "gid": 1203,
+      "glyph_name": "uni0319",
+      "codepoint": 793,
+      "codepoint_hex": "U+0319",
+      "top_accent_attachment": -300
+    },
+    {
+      "gid": 1204,
+      "glyph_name": "uni031A",
+      "codepoint": 794,
+      "codepoint_hex": "U+031A",
+      "top_accent_attachment": -252
+    },
+    {
+      "gid": 1205,
+      "glyph_name": "glyph01205",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -100
+    },
+    {
+      "gid": 1206,
+      "glyph_name": "uni031C",
+      "codepoint": 796,
+      "codepoint_hex": "U+031C",
+      "top_accent_attachment": -256
+    },
+    {
+      "gid": 1207,
+      "glyph_name": "uni031D",
+      "codepoint": 797,
+      "codepoint_hex": "U+031D",
+      "top_accent_attachment": -296
+    },
+    {
+      "gid": 1208,
+      "glyph_name": "uni031E",
+      "codepoint": 798,
+      "codepoint_hex": "U+031E",
+      "top_accent_attachment": -300
+    },
+    {
+      "gid": 1209,
+      "glyph_name": "uni031F",
+      "codepoint": 799,
+      "codepoint_hex": "U+031F",
+      "top_accent_attachment": -296
+    },
+    {
+      "gid": 1210,
+      "glyph_name": "uni0320",
+      "codepoint": 800,
+      "codepoint_hex": "U+0320",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1211,
+      "glyph_name": "uni0321",
+      "codepoint": 801,
+      "codepoint_hex": "U+0321",
+      "top_accent_attachment": -412
+    },
+    {
+      "gid": 1212,
+      "glyph_name": "uni0322",
+      "codepoint": 802,
+      "codepoint_hex": "U+0322",
+      "top_accent_attachment": -144
+    },
+    {
+      "gid": 1213,
+      "glyph_name": "glyph01213",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": -296
+    },
+    {
+      "gid": 1214,
+      "glyph_name": "uni0324",
+      "codepoint": 804,
+      "codepoint_hex": "U+0324",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1215,
+      "glyph_name": "uni0325",
+      "codepoint": 805,
+      "codepoint_hex": "U+0325",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1216,
+      "glyph_name": "uni0329",
+      "codepoint": 809,
+      "codepoint_hex": "U+0329",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1217,
+      "glyph_name": "uni032A",
+      "codepoint": 810,
+      "codepoint_hex": "U+032A",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1218,
+      "glyph_name": "uni032B",
+      "codepoint": 811,
+      "codepoint_hex": "U+032B",
+      "top_accent_attachment": -280
+    },
+    {
+      "gid": 1219,
+      "glyph_name": "uni032C",
+      "codepoint": 812,
+      "codepoint_hex": "U+032C",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1220,
+      "glyph_name": "uni032D",
+      "codepoint": 813,
+      "codepoint_hex": "U+032D",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1221,
+      "glyph_name": "uni032E",
+      "codepoint": 814,
+      "codepoint_hex": "U+032E",
+      "top_accent_attachment": -296
+    },
+    {
+      "gid": 1222,
+      "glyph_name": "uni032F",
+      "codepoint": 815,
+      "codepoint_hex": "U+032F",
+      "top_accent_attachment": -280
+    },
+    {
+      "gid": 1223,
+      "glyph_name": "uni0330",
+      "codepoint": 816,
+      "codepoint_hex": "U+0330",
+      "top_accent_attachment": -272
+    },
+    {
+      "gid": 1224,
+      "glyph_name": "uni0331",
+      "codepoint": 817,
+      "codepoint_hex": "U+0331",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1225,
+      "glyph_name": "uni0332",
+      "codepoint": 818,
+      "codepoint_hex": "U+0332",
+      "top_accent_attachment": -360
+    },
+    {
+      "gid": 1226,
+      "glyph_name": "uni0333",
+      "codepoint": 819,
+      "codepoint_hex": "U+0333",
+      "top_accent_attachment": -360
+    },
+    {
+      "gid": 1227,
+      "glyph_name": "uni0334",
+      "codepoint": 820,
+      "codepoint_hex": "U+0334",
+      "top_accent_attachment": -272
+    },
+    {
+      "gid": 1228,
+      "glyph_name": "uni0335",
+      "codepoint": 821,
+      "codepoint_hex": "U+0335",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1229,
+      "glyph_name": "uni0336",
+      "codepoint": 822,
+      "codepoint_hex": "U+0336",
+      "top_accent_attachment": -596
+    },
+    {
+      "gid": 1230,
+      "glyph_name": "uni0337",
+      "codepoint": 823,
+      "codepoint_hex": "U+0337",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1231,
+      "glyph_name": "uni0338",
+      "codepoint": 824,
+      "codepoint_hex": "U+0338",
+      "top_accent_attachment": -308
+    },
+    {
+      "gid": 1232,
+      "glyph_name": "uni0339",
+      "codepoint": 825,
+      "codepoint_hex": "U+0339",
+      "top_accent_attachment": -320
+    },
+    {
+      "gid": 1233,
+      "glyph_name": "uni033A",
+      "codepoint": 826,
+      "codepoint_hex": "U+033A",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1234,
+      "glyph_name": "uni033B",
+      "codepoint": 827,
+      "codepoint_hex": "U+033B",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1235,
+      "glyph_name": "uni033C",
+      "codepoint": 828,
+      "codepoint_hex": "U+033C",
+      "top_accent_attachment": -284
+    },
+    {
+      "gid": 1236,
+      "glyph_name": "uni033D",
+      "codepoint": 829,
+      "codepoint_hex": "U+033D",
+      "top_accent_attachment": -296
+    },
+    {
+      "gid": 1237,
+      "glyph_name": "uni033E",
+      "codepoint": 830,
+      "codepoint_hex": "U+033E",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1238,
+      "glyph_name": "uni033F",
+      "codepoint": 831,
+      "codepoint_hex": "U+033F",
+      "top_accent_attachment": -360
+    },
+    {
+      "gid": 1239,
+      "glyph_name": "uni0340",
+      "codepoint": 832,
+      "codepoint_hex": "U+0340",
+      "top_accent_attachment": -336
+    },
+    {
+      "gid": 1240,
+      "glyph_name": "uni0341",
+      "codepoint": 833,
+      "codepoint_hex": "U+0341",
+      "top_accent_attachment": -248
+    },
+    {
+      "gid": 1241,
+      "glyph_name": "uni0342",
+      "codepoint": 834,
+      "codepoint_hex": "U+0342",
+      "top_accent_attachment": -260
+    },
+    {
+      "gid": 1242,
+      "glyph_name": "uni0343",
+      "codepoint": 835,
+      "codepoint_hex": "U+0343",
+      "top_accent_attachment": -316
+    },
+    {
+      "gid": 1243,
+      "glyph_name": "uni0345",
+      "codepoint": 837,
+      "codepoint_hex": "U+0345",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1244,
+      "glyph_name": "uni0346",
+      "codepoint": 838,
+      "codepoint_hex": "U+0346",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1245,
+      "glyph_name": "uni0347",
+      "codepoint": 839,
+      "codepoint_hex": "U+0347",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1246,
+      "glyph_name": "uni0348",
+      "codepoint": 840,
+      "codepoint_hex": "U+0348",
+      "top_accent_attachment": -300
+    },
+    {
+      "gid": 1247,
+      "glyph_name": "uni0349",
+      "codepoint": 841,
+      "codepoint_hex": "U+0349",
+      "top_accent_attachment": -272
+    },
+    {
+      "gid": 1248,
+      "glyph_name": "uni034A",
+      "codepoint": 842,
+      "codepoint_hex": "U+034A",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1249,
+      "glyph_name": "uni034B",
+      "codepoint": 843,
+      "codepoint_hex": "U+034B",
+      "top_accent_attachment": -276
+    },
+    {
+      "gid": 1250,
+      "glyph_name": "uni034C",
+      "codepoint": 844,
+      "codepoint_hex": "U+034C",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1251,
+      "glyph_name": "uni034D",
+      "codepoint": 845,
+      "codepoint_hex": "U+034D",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1252,
+      "glyph_name": "uni034E",
+      "codepoint": 846,
+      "codepoint_hex": "U+034E",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1254,
+      "glyph_name": "uni0350",
+      "codepoint": 848,
+      "codepoint_hex": "U+0350",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1255,
+      "glyph_name": "uni0351",
+      "codepoint": 849,
+      "codepoint_hex": "U+0351",
+      "top_accent_attachment": -264
+    },
+    {
+      "gid": 1256,
+      "glyph_name": "uni0352",
+      "codepoint": 850,
+      "codepoint_hex": "U+0352",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1257,
+      "glyph_name": "uni0353",
+      "codepoint": 851,
+      "codepoint_hex": "U+0353",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1258,
+      "glyph_name": "uni0354",
+      "codepoint": 852,
+      "codepoint_hex": "U+0354",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1259,
+      "glyph_name": "uni0355",
+      "codepoint": 853,
+      "codepoint_hex": "U+0355",
+      "top_accent_attachment": -312
+    },
+    {
+      "gid": 1260,
+      "glyph_name": "uni0356",
+      "codepoint": 854,
+      "codepoint_hex": "U+0356",
+      "top_accent_attachment": -308
+    },
+    {
+      "gid": 1261,
+      "glyph_name": "uni0357",
+      "codepoint": 855,
+      "codepoint_hex": "U+0357",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1268,
+      "glyph_name": "uni0363",
+      "codepoint": 867,
+      "codepoint_hex": "U+0363",
+      "top_accent_attachment": -312
+    },
+    {
+      "gid": 1269,
+      "glyph_name": "uni0364",
+      "codepoint": 868,
+      "codepoint_hex": "U+0364",
+      "top_accent_attachment": -276
+    },
+    {
+      "gid": 1270,
+      "glyph_name": "uni0365",
+      "codepoint": 869,
+      "codepoint_hex": "U+0365",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1271,
+      "glyph_name": "uni0366",
+      "codepoint": 870,
+      "codepoint_hex": "U+0366",
+      "top_accent_attachment": -280
+    },
+    {
+      "gid": 1272,
+      "glyph_name": "uni0367",
+      "codepoint": 871,
+      "codepoint_hex": "U+0367",
+      "top_accent_attachment": -304
+    },
+    {
+      "gid": 1273,
+      "glyph_name": "uni0368",
+      "codepoint": 872,
+      "codepoint_hex": "U+0368",
+      "top_accent_attachment": -268
+    },
+    {
+      "gid": 1274,
+      "glyph_name": "uni0369",
+      "codepoint": 873,
+      "codepoint_hex": "U+0369",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1275,
+      "glyph_name": "uni036A",
+      "codepoint": 874,
+      "codepoint_hex": "U+036A",
+      "top_accent_attachment": -260
+    },
+    {
+      "gid": 1276,
+      "glyph_name": "uni036B",
+      "codepoint": 875,
+      "codepoint_hex": "U+036B",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 1277,
+      "glyph_name": "uni036C",
+      "codepoint": 876,
+      "codepoint_hex": "U+036C",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1278,
+      "glyph_name": "uni036D",
+      "codepoint": 877,
+      "codepoint_hex": "U+036D",
+      "top_accent_attachment": -304
+    },
+    {
+      "gid": 1279,
+      "glyph_name": "uni036E",
+      "codepoint": 878,
+      "codepoint_hex": "U+036E",
+      "top_accent_attachment": -292
+    },
+    {
+      "gid": 1280,
+      "glyph_name": "uni036F",
+      "codepoint": 879,
+      "codepoint_hex": "U+036F",
+      "top_accent_attachment": -284
+    },
+    {
+      "gid": 1318,
+      "glyph_name": "uni20D7",
+      "codepoint": 8407,
+      "codepoint_hex": "U+20D7",
+      "top_accent_attachment": 340
+    },
+    {
+      "gid": 1319,
+      "glyph_name": "uni2102",
+      "codepoint": 8450,
+      "codepoint_hex": "U+2102",
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 1327,
+      "glyph_name": "uni210D",
+      "codepoint": 8461,
+      "codepoint_hex": "U+210D",
+      "top_accent_attachment": 820
+    },
+    {
+      "gid": 1331,
+      "glyph_name": "uni2115",
+      "codepoint": 8469,
+      "codepoint_hex": "U+2115",
+      "top_accent_attachment": 776
+    },
+    {
+      "gid": 1334,
+      "glyph_name": "uni2119",
+      "codepoint": 8473,
+      "codepoint_hex": "U+2119",
+      "top_accent_attachment": 716
+    },
+    {
+      "gid": 1335,
+      "glyph_name": "uni211A",
+      "codepoint": 8474,
+      "codepoint_hex": "U+211A",
+      "top_accent_attachment": 784
+    },
+    {
+      "gid": 1337,
+      "glyph_name": "uni211D",
+      "codepoint": 8477,
+      "codepoint_hex": "U+211D",
+      "top_accent_attachment": 692
+    },
+    {
+      "gid": 1338,
+      "glyph_name": "uni2124",
+      "codepoint": 8484,
+      "codepoint_hex": "U+2124",
+      "top_accent_attachment": 648
+    },
+    {
+      "gid": 1355,
+      "glyph_name": "uni213D",
+      "codepoint": 8509,
+      "codepoint_hex": "U+213D",
+      "top_accent_attachment": 772
+    },
+    {
+      "gid": 1356,
+      "glyph_name": "uni213E",
+      "codepoint": 8510,
+      "codepoint_hex": "U+213E",
+      "top_accent_attachment": 632
+    },
+    {
+      "gid": 1357,
+      "glyph_name": "uni213F",
+      "codepoint": 8511,
+      "codepoint_hex": "U+213F",
+      "top_accent_attachment": 820
+    },
+    {
+      "gid": 1358,
+      "glyph_name": "uni2140",
+      "codepoint": 8512,
+      "codepoint_hex": "U+2140",
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 1363,
+      "glyph_name": "uni2145",
+      "codepoint": 8517,
+      "codepoint_hex": "U+2145",
+      "top_accent_attachment": 924
+    },
+    {
+      "gid": 1364,
+      "glyph_name": "uni2146",
+      "codepoint": 8518,
+      "codepoint_hex": "U+2146",
+      "top_accent_attachment": 1076
+    },
+    {
+      "gid": 1365,
+      "glyph_name": "uni2147",
+      "codepoint": 8519,
+      "codepoint_hex": "U+2147",
+      "top_accent_attachment": 800
+    },
+    {
+      "gid": 1366,
+      "glyph_name": "uni2148",
+      "codepoint": 8520,
+      "codepoint_hex": "U+2148",
+      "top_accent_attachment": 572
+    },
+    {
+      "gid": 1367,
+      "glyph_name": "uni2149",
+      "codepoint": 8521,
+      "codepoint_hex": "U+2149",
+      "top_accent_attachment": 588
+    },
+    {
+      "gid": 1775,
+      "glyph_name": "u1D400",
+      "codepoint": 119808,
+      "codepoint_hex": "U+1D400",
+      "top_accent_attachment": 728
+    },
+    {
+      "gid": 1776,
+      "glyph_name": "u1D401",
+      "codepoint": 119809,
+      "codepoint_hex": "U+1D401",
+      "top_accent_attachment": 676
+    },
+    {
+      "gid": 1777,
+      "glyph_name": "u1D402",
+      "codepoint": 119810,
+      "codepoint_hex": "U+1D402",
+      "top_accent_attachment": 760
+    },
+    {
+      "gid": 1778,
+      "glyph_name": "u1D403",
+      "codepoint": 119811,
+      "codepoint_hex": "U+1D403",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 1779,
+      "glyph_name": "u1D404",
+      "codepoint": 119812,
+      "codepoint_hex": "U+1D404",
+      "top_accent_attachment": 688
+    },
+    {
+      "gid": 1780,
+      "glyph_name": "u1D405",
+      "codepoint": 119813,
+      "codepoint_hex": "U+1D405",
+      "top_accent_attachment": 688
+    },
+    {
+      "gid": 1781,
+      "glyph_name": "u1D406",
+      "codepoint": 119814,
+      "codepoint_hex": "U+1D406",
+      "top_accent_attachment": 772
+    },
+    {
+      "gid": 1782,
+      "glyph_name": "u1D407",
+      "codepoint": 119815,
+      "codepoint_hex": "U+1D407",
+      "top_accent_attachment": 760
+    },
+    {
+      "gid": 1783,
+      "glyph_name": "u1D408",
+      "codepoint": 119816,
+      "codepoint_hex": "U+1D408",
+      "top_accent_attachment": 372
+    },
+    {
+      "gid": 1784,
+      "glyph_name": "u1D409",
+      "codepoint": 119817,
+      "codepoint_hex": "U+1D409",
+      "top_accent_attachment": 368
+    },
+    {
+      "gid": 1785,
+      "glyph_name": "u1D40A",
+      "codepoint": 119818,
+      "codepoint_hex": "U+1D40A",
+      "top_accent_attachment": 688
+    },
+    {
+      "gid": 1786,
+      "glyph_name": "u1D40B",
+      "codepoint": 119819,
+      "codepoint_hex": "U+1D40B",
+      "top_accent_attachment": 376
+    },
+    {
+      "gid": 1787,
+      "glyph_name": "u1D40C",
+      "codepoint": 119820,
+      "codepoint_hex": "U+1D40C",
+      "top_accent_attachment": 884
+    },
+    {
+      "gid": 1788,
+      "glyph_name": "u1D40D",
+      "codepoint": 119821,
+      "codepoint_hex": "U+1D40D",
+      "top_accent_attachment": 732
+    },
+    {
+      "gid": 1789,
+      "glyph_name": "u1D40E",
+      "codepoint": 119822,
+      "codepoint_hex": "U+1D40E",
+      "top_accent_attachment": 728
+    },
+    {
+      "gid": 1790,
+      "glyph_name": "u1D40F",
+      "codepoint": 119823,
+      "codepoint_hex": "U+1D40F",
+      "top_accent_attachment": 688
+    },
+    {
+      "gid": 1791,
+      "glyph_name": "u1D410",
+      "codepoint": 119824,
+      "codepoint_hex": "U+1D410",
+      "top_accent_attachment": 720
+    },
+    {
+      "gid": 1792,
+      "glyph_name": "u1D411",
+      "codepoint": 119825,
+      "codepoint_hex": "U+1D411",
+      "top_accent_attachment": 688
+    },
+    {
+      "gid": 1793,
+      "glyph_name": "u1D412",
+      "codepoint": 119826,
+      "codepoint_hex": "U+1D412",
+      "top_accent_attachment": 612
+    },
+    {
+      "gid": 1794,
+      "glyph_name": "u1D413",
+      "codepoint": 119827,
+      "codepoint_hex": "U+1D413",
+      "top_accent_attachment": 680
+    },
+    {
+      "gid": 1795,
+      "glyph_name": "u1D414",
+      "codepoint": 119828,
+      "codepoint_hex": "U+1D414",
+      "top_accent_attachment": 752
+    },
+    {
+      "gid": 1796,
+      "glyph_name": "u1D415",
+      "codepoint": 119829,
+      "codepoint_hex": "U+1D415",
+      "top_accent_attachment": 708
+    },
+    {
+      "gid": 1797,
+      "glyph_name": "u1D416",
+      "codepoint": 119830,
+      "codepoint_hex": "U+1D416",
+      "top_accent_attachment": 1068
+    },
+    {
+      "gid": 1798,
+      "glyph_name": "u1D417",
+      "codepoint": 119831,
+      "codepoint_hex": "U+1D417",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 1799,
+      "glyph_name": "u1D418",
+      "codepoint": 119832,
+      "codepoint_hex": "U+1D418",
+      "top_accent_attachment": 680
+    },
+    {
+      "gid": 1800,
+      "glyph_name": "u1D419",
+      "codepoint": 119833,
+      "codepoint_hex": "U+1D419",
+      "top_accent_attachment": 632
+    },
+    {
+      "gid": 1801,
+      "glyph_name": "u1D41A",
+      "codepoint": 119834,
+      "codepoint_hex": "U+1D41A",
+      "top_accent_attachment": 616
+    },
+    {
+      "gid": 1802,
+      "glyph_name": "u1D41B",
+      "codepoint": 119835,
+      "codepoint_hex": "U+1D41B",
+      "top_accent_attachment": 340
+    },
+    {
+      "gid": 1803,
+      "glyph_name": "u1D41C",
+      "codepoint": 119836,
+      "codepoint_hex": "U+1D41C",
+      "top_accent_attachment": 580
+    },
+    {
+      "gid": 1804,
+      "glyph_name": "u1D41D",
+      "codepoint": 119837,
+      "codepoint_hex": "U+1D41D",
+      "top_accent_attachment": 900
+    },
+    {
+      "gid": 1805,
+      "glyph_name": "u1D41E",
+      "codepoint": 119838,
+      "codepoint_hex": "U+1D41E",
+      "top_accent_attachment": 584
+    },
+    {
+      "gid": 1806,
+      "glyph_name": "u1D41F",
+      "codepoint": 119839,
+      "codepoint_hex": "U+1D41F",
+      "top_accent_attachment": 584
+    },
+    {
+      "gid": 1807,
+      "glyph_name": "u1D420",
+      "codepoint": 119840,
+      "codepoint_hex": "U+1D420",
+      "top_accent_attachment": 552
+    },
+    {
+      "gid": 1808,
+      "glyph_name": "u1D421",
+      "codepoint": 119841,
+      "codepoint_hex": "U+1D421",
+      "top_accent_attachment": 340
+    },
+    {
+      "gid": 1811,
+      "glyph_name": "u1D424",
+      "codepoint": 119844,
+      "codepoint_hex": "U+1D424",
+      "top_accent_attachment": 340
+    },
+    {
+      "gid": 1812,
+      "glyph_name": "u1D425",
+      "codepoint": 119845,
+      "codepoint_hex": "U+1D425",
+      "top_accent_attachment": 332
+    },
+    {
+      "gid": 1813,
+      "glyph_name": "u1D426",
+      "codepoint": 119846,
+      "codepoint_hex": "U+1D426",
+      "top_accent_attachment": 1048
+    },
+    {
+      "gid": 1814,
+      "glyph_name": "u1D427",
+      "codepoint": 119847,
+      "codepoint_hex": "U+1D427",
+      "top_accent_attachment": 668
+    },
+    {
+      "gid": 1815,
+      "glyph_name": "u1D428",
+      "codepoint": 119848,
+      "codepoint_hex": "U+1D428",
+      "top_accent_attachment": 600
+    },
+    {
+      "gid": 1816,
+      "glyph_name": "u1D429",
+      "codepoint": 119849,
+      "codepoint_hex": "U+1D429",
+      "top_accent_attachment": 664
+    },
+    {
+      "gid": 1817,
+      "glyph_name": "u1D42A",
+      "codepoint": 119850,
+      "codepoint_hex": "U+1D42A",
+      "top_accent_attachment": 616
+    },
+    {
+      "gid": 1818,
+      "glyph_name": "u1D42B",
+      "codepoint": 119851,
+      "codepoint_hex": "U+1D42B",
+      "top_accent_attachment": 540
+    },
+    {
+      "gid": 1819,
+      "glyph_name": "u1D42C",
+      "codepoint": 119852,
+      "codepoint_hex": "U+1D42C",
+      "top_accent_attachment": 544
+    },
+    {
+      "gid": 1820,
+      "glyph_name": "u1D42D",
+      "codepoint": 119853,
+      "codepoint_hex": "U+1D42D",
+      "top_accent_attachment": 448
+    },
+    {
+      "gid": 1821,
+      "glyph_name": "u1D42E",
+      "codepoint": 119854,
+      "codepoint_hex": "U+1D42E",
+      "top_accent_attachment": 588
+    },
+    {
+      "gid": 1822,
+      "glyph_name": "u1D42F",
+      "codepoint": 119855,
+      "codepoint_hex": "U+1D42F",
+      "top_accent_attachment": 620
+    },
+    {
+      "gid": 1823,
+      "glyph_name": "u1D430",
+      "codepoint": 119856,
+      "codepoint_hex": "U+1D430",
+      "top_accent_attachment": 908
+    },
+    {
+      "gid": 1824,
+      "glyph_name": "u1D431",
+      "codepoint": 119857,
+      "codepoint_hex": "U+1D431",
+      "top_accent_attachment": 584
+    },
+    {
+      "gid": 1825,
+      "glyph_name": "u1D432",
+      "codepoint": 119858,
+      "codepoint_hex": "U+1D432",
+      "top_accent_attachment": 636
+    },
+    {
+      "gid": 1826,
+      "glyph_name": "u1D433",
+      "codepoint": 119859,
+      "codepoint_hex": "U+1D433",
+      "top_accent_attachment": 536
+    },
+    {
+      "gid": 1827,
+      "glyph_name": "u1D434",
+      "codepoint": 119860,
+      "codepoint_hex": "U+1D434",
+      "top_accent_attachment": 908
+    },
+    {
+      "gid": 1828,
+      "glyph_name": "u1D435",
+      "codepoint": 119861,
+      "codepoint_hex": "U+1D435",
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 1829,
+      "glyph_name": "u1D436",
+      "codepoint": 119862,
+      "codepoint_hex": "U+1D436",
+      "top_accent_attachment": 864
+    },
+    {
+      "gid": 1830,
+      "glyph_name": "u1D437",
+      "codepoint": 119863,
+      "codepoint_hex": "U+1D437",
+      "top_accent_attachment": 776
+    },
+    {
+      "gid": 1831,
+      "glyph_name": "u1D438",
+      "codepoint": 119864,
+      "codepoint_hex": "U+1D438",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 1832,
+      "glyph_name": "u1D439",
+      "codepoint": 119865,
+      "codepoint_hex": "U+1D439",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 1833,
+      "glyph_name": "u1D43A",
+      "codepoint": 119866,
+      "codepoint_hex": "U+1D43A",
+      "top_accent_attachment": 860
+    },
+    {
+      "gid": 1834,
+      "glyph_name": "u1D43B",
+      "codepoint": 119867,
+      "codepoint_hex": "U+1D43B",
+      "top_accent_attachment": 896
+    },
+    {
+      "gid": 1835,
+      "glyph_name": "u1D43C",
+      "codepoint": 119868,
+      "codepoint_hex": "U+1D43C",
+      "top_accent_attachment": 572
+    },
+    {
+      "gid": 1836,
+      "glyph_name": "u1D43D",
+      "codepoint": 119869,
+      "codepoint_hex": "U+1D43D",
+      "top_accent_attachment": 568
+    },
+    {
+      "gid": 1837,
+      "glyph_name": "u1D43E",
+      "codepoint": 119870,
+      "codepoint_hex": "U+1D43E",
+      "top_accent_attachment": 844
+    },
+    {
+      "gid": 1838,
+      "glyph_name": "u1D43F",
+      "codepoint": 119871,
+      "codepoint_hex": "U+1D43F",
+      "top_accent_attachment": 576
+    },
+    {
+      "gid": 1839,
+      "glyph_name": "u1D440",
+      "codepoint": 119872,
+      "codepoint_hex": "U+1D440",
+      "top_accent_attachment": 1048
+    },
+    {
+      "gid": 1840,
+      "glyph_name": "u1D441",
+      "codepoint": 119873,
+      "codepoint_hex": "U+1D441",
+      "top_accent_attachment": 908
+    },
+    {
+      "gid": 1841,
+      "glyph_name": "u1D442",
+      "codepoint": 119874,
+      "codepoint_hex": "U+1D442",
+      "top_accent_attachment": 860
+    },
+    {
+      "gid": 1842,
+      "glyph_name": "u1D443",
+      "codepoint": 119875,
+      "codepoint_hex": "U+1D443",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 1843,
+      "glyph_name": "u1D444",
+      "codepoint": 119876,
+      "codepoint_hex": "U+1D444",
+      "top_accent_attachment": 860
+    },
+    {
+      "gid": 1844,
+      "glyph_name": "u1D445",
+      "codepoint": 119877,
+      "codepoint_hex": "U+1D445",
+      "top_accent_attachment": 812
+    },
+    {
+      "gid": 1845,
+      "glyph_name": "u1D446",
+      "codepoint": 119878,
+      "codepoint_hex": "U+1D446",
+      "top_accent_attachment": 740
+    },
+    {
+      "gid": 1846,
+      "glyph_name": "u1D447",
+      "codepoint": 119879,
+      "codepoint_hex": "U+1D447",
+      "top_accent_attachment": 680
+    },
+    {
+      "gid": 1847,
+      "glyph_name": "u1D448",
+      "codepoint": 119880,
+      "codepoint_hex": "U+1D448",
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 1848,
+      "glyph_name": "u1D449",
+      "codepoint": 119881,
+      "codepoint_hex": "U+1D449",
+      "top_accent_attachment": 720
+    },
+    {
+      "gid": 1849,
+      "glyph_name": "u1D44A",
+      "codepoint": 119882,
+      "codepoint_hex": "U+1D44A",
+      "top_accent_attachment": 1072
+    },
+    {
+      "gid": 1850,
+      "glyph_name": "u1D44B",
+      "codepoint": 119883,
+      "codepoint_hex": "U+1D44B",
+      "top_accent_attachment": 844
+    },
+    {
+      "gid": 1851,
+      "glyph_name": "u1D44C",
+      "codepoint": 119884,
+      "codepoint_hex": "U+1D44C",
+      "top_accent_attachment": 704
+    },
+    {
+      "gid": 1852,
+      "glyph_name": "u1D44D",
+      "codepoint": 119885,
+      "codepoint_hex": "U+1D44D",
+      "top_accent_attachment": 808
+    },
+    {
+      "gid": 1853,
+      "glyph_name": "u1D44E",
+      "codepoint": 119886,
+      "codepoint_hex": "U+1D44E",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 1854,
+      "glyph_name": "u1D44F",
+      "codepoint": 119887,
+      "codepoint_hex": "U+1D44F",
+      "top_accent_attachment": 620
+    },
+    {
+      "gid": 1855,
+      "glyph_name": "u1D450",
+      "codepoint": 119888,
+      "codepoint_hex": "U+1D450",
+      "top_accent_attachment": 636
+    },
+    {
+      "gid": 1856,
+      "glyph_name": "u1D451",
+      "codepoint": 119889,
+      "codepoint_hex": "U+1D451",
+      "top_accent_attachment": 800
+    },
+    {
+      "gid": 1857,
+      "glyph_name": "u1D452",
+      "codepoint": 119890,
+      "codepoint_hex": "U+1D452",
+      "top_accent_attachment": 636
+    },
+    {
+      "gid": 1858,
+      "glyph_name": "u1D453",
+      "codepoint": 119891,
+      "codepoint_hex": "U+1D453",
+      "top_accent_attachment": 840
+    },
+    {
+      "gid": 1859,
+      "glyph_name": "u1D454",
+      "codepoint": 119892,
+      "codepoint_hex": "U+1D454",
+      "top_accent_attachment": 820
+    },
+    {
+      "gid": 1860,
+      "glyph_name": "uni210E",
+      "codepoint": 8462,
+      "codepoint_hex": "U+210E",
+      "top_accent_attachment": 620
+    },
+    {
+      "gid": 1861,
+      "glyph_name": "u1D456",
+      "codepoint": 119894,
+      "codepoint_hex": "U+1D456",
+      "top_accent_attachment": 440
+    },
+    {
+      "gid": 1862,
+      "glyph_name": "u1D457",
+      "codepoint": 119895,
+      "codepoint_hex": "U+1D457",
+      "top_accent_attachment": 536
+    },
+    {
+      "gid": 1863,
+      "glyph_name": "u1D458",
+      "codepoint": 119896,
+      "codepoint_hex": "U+1D458",
+      "top_accent_attachment": 620
+    },
+    {
+      "gid": 1864,
+      "glyph_name": "u1D459",
+      "codepoint": 119897,
+      "codepoint_hex": "U+1D459",
+      "top_accent_attachment": 452
+    },
+    {
+      "gid": 1865,
+      "glyph_name": "u1D45A",
+      "codepoint": 119898,
+      "codepoint_hex": "U+1D45A",
+      "top_accent_attachment": 960
+    },
+    {
+      "gid": 1866,
+      "glyph_name": "u1D45B",
+      "codepoint": 119899,
+      "codepoint_hex": "U+1D45B",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 1867,
+      "glyph_name": "u1D45C",
+      "codepoint": 119900,
+      "codepoint_hex": "U+1D45C",
+      "top_accent_attachment": 656
+    },
+    {
+      "gid": 1868,
+      "glyph_name": "u1D45D",
+      "codepoint": 119901,
+      "codepoint_hex": "U+1D45D",
+      "top_accent_attachment": 728
+    },
+    {
+      "gid": 1869,
+      "glyph_name": "u1D45E",
+      "codepoint": 119902,
+      "codepoint_hex": "U+1D45E",
+      "top_accent_attachment": 644
+    },
+    {
+      "gid": 1870,
+      "glyph_name": "u1D45F",
+      "codepoint": 119903,
+      "codepoint_hex": "U+1D45F",
+      "top_accent_attachment": 576
+    },
+    {
+      "gid": 1871,
+      "glyph_name": "u1D460",
+      "codepoint": 119904,
+      "codepoint_hex": "U+1D460",
+      "top_accent_attachment": 568
+    },
+    {
+      "gid": 1872,
+      "glyph_name": "u1D461",
+      "codepoint": 119905,
+      "codepoint_hex": "U+1D461",
+      "top_accent_attachment": 488
+    },
+    {
+      "gid": 1873,
+      "glyph_name": "u1D462",
+      "codepoint": 119906,
+      "codepoint_hex": "U+1D462",
+      "top_accent_attachment": 640
+    },
+    {
+      "gid": 1874,
+      "glyph_name": "u1D463",
+      "codepoint": 119907,
+      "codepoint_hex": "U+1D463",
+      "top_accent_attachment": 688
+    },
+    {
+      "gid": 1875,
+      "glyph_name": "u1D464",
+      "codepoint": 119908,
+      "codepoint_hex": "U+1D464",
+      "top_accent_attachment": 804
+    },
+    {
+      "gid": 1876,
+      "glyph_name": "u1D465",
+      "codepoint": 119909,
+      "codepoint_hex": "U+1D465",
+      "top_accent_attachment": 664
+    },
+    {
+      "gid": 1877,
+      "glyph_name": "u1D466",
+      "codepoint": 119910,
+      "codepoint_hex": "U+1D466",
+      "top_accent_attachment": 684
+    },
+    {
+      "gid": 1878,
+      "glyph_name": "u1D467",
+      "codepoint": 119911,
+      "codepoint_hex": "U+1D467",
+      "top_accent_attachment": 656
+    },
+    {
+      "gid": 1983,
+      "glyph_name": "u1D6E2",
+      "codepoint": 120546,
+      "codepoint_hex": "U+1D6E2",
+      "top_accent_attachment": 908
+    },
+    {
+      "gid": 1984,
+      "glyph_name": "u1D6E3",
+      "codepoint": 120547,
+      "codepoint_hex": "U+1D6E3",
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 1985,
+      "glyph_name": "u1D6E4",
+      "codepoint": 120548,
+      "codepoint_hex": "U+1D6E4",
+      "top_accent_attachment": 804
+    },
+    {
+      "gid": 1986,
+      "glyph_name": "u1D6E5",
+      "codepoint": 120549,
+      "codepoint_hex": "U+1D6E5",
+      "top_accent_attachment": 880
+    },
+    {
+      "gid": 1987,
+      "glyph_name": "u1D6E6",
+      "codepoint": 120550,
+      "codepoint_hex": "U+1D6E6",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 1988,
+      "glyph_name": "u1D6E7",
+      "codepoint": 120551,
+      "codepoint_hex": "U+1D6E7",
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 1989,
+      "glyph_name": "u1D6E8",
+      "codepoint": 120552,
+      "codepoint_hex": "U+1D6E8",
+      "top_accent_attachment": 896
+    },
+    {
+      "gid": 1990,
+      "glyph_name": "u1D6E9",
+      "codepoint": 120553,
+      "codepoint_hex": "U+1D6E9",
+      "top_accent_attachment": 844
+    },
+    {
+      "gid": 1991,
+      "glyph_name": "u1D6EA",
+      "codepoint": 120554,
+      "codepoint_hex": "U+1D6EA",
+      "top_accent_attachment": 528
+    },
+    {
+      "gid": 1992,
+      "glyph_name": "u1D6EB",
+      "codepoint": 120555,
+      "codepoint_hex": "U+1D6EB",
+      "top_accent_attachment": 844
+    },
+    {
+      "gid": 1993,
+      "glyph_name": "u1D6EC",
+      "codepoint": 120556,
+      "codepoint_hex": "U+1D6EC",
+      "top_accent_attachment": 920
+    },
+    {
+      "gid": 1994,
+      "glyph_name": "u1D6ED",
+      "codepoint": 120557,
+      "codepoint_hex": "U+1D6ED",
+      "top_accent_attachment": 1048
+    },
+    {
+      "gid": 1995,
+      "glyph_name": "u1D6EE",
+      "codepoint": 120558,
+      "codepoint_hex": "U+1D6EE",
+      "top_accent_attachment": 908
+    },
+    {
+      "gid": 1996,
+      "glyph_name": "u1D6EF",
+      "codepoint": 120559,
+      "codepoint_hex": "U+1D6EF",
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 1997,
+      "glyph_name": "u1D6F0",
+      "codepoint": 120560,
+      "codepoint_hex": "U+1D6F0",
+      "top_accent_attachment": 860
+    },
+    {
+      "gid": 1998,
+      "glyph_name": "u1D6F1",
+      "codepoint": 120561,
+      "codepoint_hex": "U+1D6F1",
+      "top_accent_attachment": 884
+    },
+    {
+      "gid": 1999,
+      "glyph_name": "u1D6F2",
+      "codepoint": 120562,
+      "codepoint_hex": "U+1D6F2",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 2000,
+      "glyph_name": "u1D6F3",
+      "codepoint": 120563,
+      "codepoint_hex": "U+1D6F3",
+      "top_accent_attachment": 860
+    },
+    {
+      "gid": 2001,
+      "glyph_name": "u1D6F4",
+      "codepoint": 120564,
+      "codepoint_hex": "U+1D6F4",
+      "top_accent_attachment": 796
+    },
+    {
+      "gid": 2002,
+      "glyph_name": "u1D6F5",
+      "codepoint": 120565,
+      "codepoint_hex": "U+1D6F5",
+      "top_accent_attachment": 680
+    },
+    {
+      "gid": 2003,
+      "glyph_name": "u1D6F6",
+      "codepoint": 120566,
+      "codepoint_hex": "U+1D6F6",
+      "top_accent_attachment": 744
+    },
+    {
+      "gid": 2004,
+      "glyph_name": "u1D6F7",
+      "codepoint": 120567,
+      "codepoint_hex": "U+1D6F7",
+      "top_accent_attachment": 888
+    },
+    {
+      "gid": 2005,
+      "glyph_name": "u1D6F8",
+      "codepoint": 120568,
+      "codepoint_hex": "U+1D6F8",
+      "top_accent_attachment": 844
+    },
+    {
+      "gid": 2006,
+      "glyph_name": "u1D6F9",
+      "codepoint": 120569,
+      "codepoint_hex": "U+1D6F9",
+      "top_accent_attachment": 868
+    },
+    {
+      "gid": 2007,
+      "glyph_name": "u1D6FA",
+      "codepoint": 120570,
+      "codepoint_hex": "U+1D6FA",
+      "top_accent_attachment": 864
+    },
+    {
+      "gid": 2008,
+      "glyph_name": "u1D6FB",
+      "codepoint": 120571,
+      "codepoint_hex": "U+1D6FB",
+      "top_accent_attachment": 760
+    },
+    {
+      "gid": 2009,
+      "glyph_name": "u1D6FC",
+      "codepoint": 120572,
+      "codepoint_hex": "U+1D6FC",
+      "top_accent_attachment": 760
+    },
+    {
+      "gid": 2010,
+      "glyph_name": "u1D6FD",
+      "codepoint": 120573,
+      "codepoint_hex": "U+1D6FD",
+      "top_accent_attachment": 832
+    },
+    {
+      "gid": 2011,
+      "glyph_name": "u1D6FE",
+      "codepoint": 120574,
+      "codepoint_hex": "U+1D6FE",
+      "top_accent_attachment": 648
+    },
+    {
+      "gid": 2012,
+      "glyph_name": "u1D6FF",
+      "codepoint": 120575,
+      "codepoint_hex": "U+1D6FF",
+      "top_accent_attachment": 792
+    },
+    {
+      "gid": 2013,
+      "glyph_name": "u1D700",
+      "codepoint": 120576,
+      "codepoint_hex": "U+1D700",
+      "top_accent_attachment": 696
+    },
+    {
+      "gid": 2014,
+      "glyph_name": "u1D701",
+      "codepoint": 120577,
+      "codepoint_hex": "U+1D701",
+      "top_accent_attachment": 744
+    },
+    {
+      "gid": 2015,
+      "glyph_name": "u1D702",
+      "codepoint": 120578,
+      "codepoint_hex": "U+1D702",
+      "top_accent_attachment": 664
+    },
+    {
+      "gid": 2016,
+      "glyph_name": "u1D703",
+      "codepoint": 120579,
+      "codepoint_hex": "U+1D703",
+      "top_accent_attachment": 736
+    },
+    {
+      "gid": 2017,
+      "glyph_name": "u1D704",
+      "codepoint": 120580,
+      "codepoint_hex": "U+1D704",
+      "top_accent_attachment": 372
+    },
+    {
+      "gid": 2018,
+      "glyph_name": "u1D705",
+      "codepoint": 120581,
+      "codepoint_hex": "U+1D705",
+      "top_accent_attachment": 712
+    },
+    {
+      "gid": 2019,
+      "glyph_name": "u1D706",
+      "codepoint": 120582,
+      "codepoint_hex": "U+1D706",
+      "top_accent_attachment": 672
+    },
+    {
+      "gid": 2020,
+      "glyph_name": "u1D707",
+      "codepoint": 120583,
+      "codepoint_hex": "U+1D707",
+      "top_accent_attachment": 708
+    },
+    {
+      "gid": 2021,
+      "glyph_name": "u1D708",
+      "codepoint": 120584,
+      "codepoint_hex": "U+1D708",
+      "top_accent_attachment": 640
+    },
+    {
+      "gid": 2022,
+      "glyph_name": "u1D709",
+      "codepoint": 120585,
+      "codepoint_hex": "U+1D709",
+      "top_accent_attachment": 700
+    },
+    {
+      "gid": 2023,
+      "glyph_name": "u1D70A",
+      "codepoint": 120586,
+      "codepoint_hex": "U+1D70A",
+      "top_accent_attachment": 656
+    },
+    {
+      "gid": 2024,
+      "glyph_name": "u1D70B",
+      "codepoint": 120587,
+      "codepoint_hex": "U+1D70B",
+      "top_accent_attachment": 684
+    },
+    {
+      "gid": 2025,
+      "glyph_name": "u1D70C",
+      "codepoint": 120588,
+      "codepoint_hex": "U+1D70C",
+      "top_accent_attachment": 716
+    },
+    {
+      "gid": 2026,
+      "glyph_name": "u1D70E",
+      "codepoint": 120590,
+      "codepoint_hex": "U+1D70E",
+      "top_accent_attachment": 748
+    },
+    {
+      "gid": 2027,
+      "glyph_name": "u1D70D",
+      "codepoint": 120589,
+      "codepoint_hex": "U+1D70D",
+      "top_accent_attachment": 612
+    },
+    {
+      "gid": 2028,
+      "glyph_name": "u1D70F",
+      "codepoint": 120591,
+      "codepoint_hex": "U+1D70F",
+      "top_accent_attachment": 584
+    },
+    {
+      "gid": 2029,
+      "glyph_name": "u1D710",
+      "codepoint": 120592,
+      "codepoint_hex": "U+1D710",
+      "top_accent_attachment": 612
+    },
+    {
+      "gid": 2030,
+      "glyph_name": "u1D711",
+      "codepoint": 120593,
+      "codepoint_hex": "U+1D711",
+      "top_accent_attachment": 840
+    },
+    {
+      "gid": 2031,
+      "glyph_name": "u1D712",
+      "codepoint": 120594,
+      "codepoint_hex": "U+1D712",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 2032,
+      "glyph_name": "u1D713",
+      "codepoint": 120595,
+      "codepoint_hex": "U+1D713",
+      "top_accent_attachment": 952
+    },
+    {
+      "gid": 2033,
+      "glyph_name": "u1D714",
+      "codepoint": 120596,
+      "codepoint_hex": "U+1D714",
+      "top_accent_attachment": 864
+    },
+    {
+      "gid": 2034,
+      "glyph_name": "u1D715",
+      "codepoint": 120597,
+      "codepoint_hex": "U+1D715",
+      "top_accent_attachment": 732
+    },
+    {
+      "gid": 2035,
+      "glyph_name": "u1D716",
+      "codepoint": 120598,
+      "codepoint_hex": "U+1D716",
+      "top_accent_attachment": 712
+    },
+    {
+      "gid": 2036,
+      "glyph_name": "u1D717",
+      "codepoint": 120599,
+      "codepoint_hex": "U+1D717",
+      "top_accent_attachment": 812
+    },
+    {
+      "gid": 2037,
+      "glyph_name": "u1D718",
+      "codepoint": 120600,
+      "codepoint_hex": "U+1D718",
+      "top_accent_attachment": 756
+    },
+    {
+      "gid": 2038,
+      "glyph_name": "u1D719",
+      "codepoint": 120601,
+      "codepoint_hex": "U+1D719",
+      "top_accent_attachment": 912
+    },
+    {
+      "gid": 2039,
+      "glyph_name": "u1D71A",
+      "codepoint": 120602,
+      "codepoint_hex": "U+1D71A",
+      "top_accent_attachment": 676
+    },
+    {
+      "gid": 2040,
+      "glyph_name": "u1D71B",
+      "codepoint": 120603,
+      "codepoint_hex": "U+1D71B",
+      "top_accent_attachment": 920
+    },
+    {
+      "gid": 2267,
+      "glyph_name": "u1D49C",
+      "codepoint": 119964,
+      "codepoint_hex": "U+1D49C",
+      "top_accent_attachment": 1440
+    },
+    {
+      "gid": 2268,
+      "glyph_name": "uni212C",
+      "codepoint": 8492,
+      "codepoint_hex": "U+212C",
+      "top_accent_attachment": 792
+    },
+    {
+      "gid": 2269,
+      "glyph_name": "u1D49E",
+      "codepoint": 119966,
+      "codepoint_hex": "U+1D49E",
+      "top_accent_attachment": 848
+    },
+    {
+      "gid": 2270,
+      "glyph_name": "u1D49F",
+      "codepoint": 119967,
+      "codepoint_hex": "U+1D49F",
+      "top_accent_attachment": 788
+    },
+    {
+      "gid": 2271,
+      "glyph_name": "uni2130",
+      "codepoint": 8496,
+      "codepoint_hex": "U+2130",
+      "top_accent_attachment": 820
+    },
+    {
+      "gid": 2272,
+      "glyph_name": "uni2131",
+      "codepoint": 8497,
+      "codepoint_hex": "U+2131",
+      "top_accent_attachment": 932
+    },
+    {
+      "gid": 2273,
+      "glyph_name": "u1D4A2",
+      "codepoint": 119970,
+      "codepoint_hex": "U+1D4A2",
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 2274,
+      "glyph_name": "uni210B",
+      "codepoint": 8459,
+      "codepoint_hex": "U+210B",
+      "top_accent_attachment": 1140
+    },
+    {
+      "gid": 2275,
+      "glyph_name": "uni2110",
+      "codepoint": 8464,
+      "codepoint_hex": "U+2110",
+      "top_accent_attachment": 600
+    },
+    {
+      "gid": 2276,
+      "glyph_name": "u1D4A5",
+      "codepoint": 119973,
+      "codepoint_hex": "U+1D4A5",
+      "top_accent_attachment": 896
+    },
+    {
+      "gid": 2277,
+      "glyph_name": "u1D4A6",
+      "codepoint": 119974,
+      "codepoint_hex": "U+1D4A6",
+      "top_accent_attachment": 1036
+    },
+    {
+      "gid": 2278,
+      "glyph_name": "uni2112",
+      "codepoint": 8466,
+      "codepoint_hex": "U+2112",
+      "top_accent_attachment": 840
+    },
+    {
+      "gid": 2279,
+      "glyph_name": "uni2133",
+      "codepoint": 8499,
+      "codepoint_hex": "U+2133",
+      "top_accent_attachment": 1308
+    },
+    {
+      "gid": 2280,
+      "glyph_name": "u1D4A9",
+      "codepoint": 119977,
+      "codepoint_hex": "U+1D4A9",
+      "top_accent_attachment": 1208
+    },
+    {
+      "gid": 2281,
+      "glyph_name": "u1D4AA",
+      "codepoint": 119978,
+      "codepoint_hex": "U+1D4AA",
+      "top_accent_attachment": 908
+    },
+    {
+      "gid": 2282,
+      "glyph_name": "u1D4AB",
+      "codepoint": 119979,
+      "codepoint_hex": "U+1D4AB",
+      "top_accent_attachment": 920
+    },
+    {
+      "gid": 2283,
+      "glyph_name": "u1D4AC",
+      "codepoint": 119980,
+      "codepoint_hex": "U+1D4AC",
+      "top_accent_attachment": 864
+    },
+    {
+      "gid": 2284,
+      "glyph_name": "uni211B",
+      "codepoint": 8475,
+      "codepoint_hex": "U+211B",
+      "top_accent_attachment": 964
+    },
+    {
+      "gid": 2285,
+      "glyph_name": "u1D4AE",
+      "codepoint": 119982,
+      "codepoint_hex": "U+1D4AE",
+      "top_accent_attachment": 816
+    },
+    {
+      "gid": 2286,
+      "glyph_name": "u1D4AF",
+      "codepoint": 119983,
+      "codepoint_hex": "U+1D4AF",
+      "top_accent_attachment": 852
+    },
+    {
+      "gid": 2287,
+      "glyph_name": "u1D4B0",
+      "codepoint": 119984,
+      "codepoint_hex": "U+1D4B0",
+      "top_accent_attachment": 1032
+    },
+    {
+      "gid": 2288,
+      "glyph_name": "u1D4B1",
+      "codepoint": 119985,
+      "codepoint_hex": "U+1D4B1",
+      "top_accent_attachment": 852
+    },
+    {
+      "gid": 2289,
+      "glyph_name": "u1D4B2",
+      "codepoint": 119986,
+      "codepoint_hex": "U+1D4B2",
+      "top_accent_attachment": 1240
+    },
+    {
+      "gid": 2290,
+      "glyph_name": "u1D4B3",
+      "codepoint": 119987,
+      "codepoint_hex": "U+1D4B3",
+      "top_accent_attachment": 1088
+    },
+    {
+      "gid": 2291,
+      "glyph_name": "u1D4B4",
+      "codepoint": 119988,
+      "codepoint_hex": "U+1D4B4",
+      "top_accent_attachment": 1036
+    },
+    {
+      "gid": 2292,
+      "glyph_name": "u1D4B5",
+      "codepoint": 119989,
+      "codepoint_hex": "U+1D4B5",
+      "top_accent_attachment": 1000
+    },
+    {
+      "gid": 2293,
+      "glyph_name": "u1D4B6",
+      "codepoint": 119990,
+      "codepoint_hex": "U+1D4B6",
+      "top_accent_attachment": 864
+    },
+    {
+      "gid": 2294,
+      "glyph_name": "u1D4B7",
+      "codepoint": 119991,
+      "codepoint_hex": "U+1D4B7",
+      "top_accent_attachment": 932
+    },
+    {
+      "gid": 2295,
+      "glyph_name": "u1D4B8",
+      "codepoint": 119992,
+      "codepoint_hex": "U+1D4B8",
+      "top_accent_attachment": 692
+    },
+    {
+      "gid": 2296,
+      "glyph_name": "u1D4B9",
+      "codepoint": 119993,
+      "codepoint_hex": "U+1D4B9",
+      "top_accent_attachment": 980
+    },
+    {
+      "gid": 2297,
+      "glyph_name": "u1D4BB",
+      "codepoint": 119995,
+      "codepoint_hex": "U+1D4BB",
+      "top_accent_attachment": 892
+    },
+    {
+      "gid": 2298,
+      "glyph_name": "u1D4BD",
+      "codepoint": 119997,
+      "codepoint_hex": "U+1D4BD",
+      "top_accent_attachment": 1004
+    },
+    {
+      "gid": 2299,
+      "glyph_name": "u1D4BE",
+      "codepoint": 119998,
+      "codepoint_hex": "U+1D4BE",
+      "top_accent_attachment": 744
+    },
+    {
+      "gid": 2300,
+      "glyph_name": "u1D4BF",
+      "codepoint": 119999,
+      "codepoint_hex": "U+1D4BF",
+      "top_accent_attachment": 800
+    },
+    {
+      "gid": 2301,
+      "glyph_name": "u1D4C0",
+      "codepoint": 120000,
+      "codepoint_hex": "U+1D4C0",
+      "top_accent_attachment": 976
+    },
+    {
+      "gid": 2302,
+      "glyph_name": "u1D4C2",
+      "codepoint": 120002,
+      "codepoint_hex": "U+1D4C2",
+      "top_accent_attachment": 1296
+    },
+    {
+      "gid": 2303,
+      "glyph_name": "u1D4C3",
+      "codepoint": 120003,
+      "codepoint_hex": "U+1D4C3",
+      "top_accent_attachment": 1036
+    },
+    {
+      "gid": 2304,
+      "glyph_name": "u1D4C5",
+      "codepoint": 120005,
+      "codepoint_hex": "U+1D4C5",
+      "top_accent_attachment": 1116
+    },
+    {
+      "gid": 2305,
+      "glyph_name": "u1D4C6",
+      "codepoint": 120006,
+      "codepoint_hex": "U+1D4C6",
+      "top_accent_attachment": 844
+    },
+    {
+      "gid": 2306,
+      "glyph_name": "u1D4C7",
+      "codepoint": 120007,
+      "codepoint_hex": "U+1D4C7",
+      "top_accent_attachment": 1052
+    },
+    {
+      "gid": 2307,
+      "glyph_name": "u1D4C8",
+      "codepoint": 120008,
+      "codepoint_hex": "U+1D4C8",
+      "top_accent_attachment": 804
+    },
+    {
+      "gid": 2308,
+      "glyph_name": "u1D4C9",
+      "codepoint": 120009,
+      "codepoint_hex": "U+1D4C9",
+      "top_accent_attachment": 752
+    },
+    {
+      "gid": 2309,
+      "glyph_name": "u1D4CA",
+      "codepoint": 120010,
+      "codepoint_hex": "U+1D4CA",
+      "top_accent_attachment": 884
+    },
+    {
+      "gid": 2310,
+      "glyph_name": "u1D4CB",
+      "codepoint": 120011,
+      "codepoint_hex": "U+1D4CB",
+      "top_accent_attachment": 832
+    },
+    {
+      "gid": 2311,
+      "glyph_name": "u1D4CC",
+      "codepoint": 120012,
+      "codepoint_hex": "U+1D4CC",
+      "top_accent_attachment": 1200
+    },
+    {
+      "gid": 2312,
+      "glyph_name": "u1D4CD",
+      "codepoint": 120013,
+      "codepoint_hex": "U+1D4CD",
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 2313,
+      "glyph_name": "u1D4CE",
+      "codepoint": 120014,
+      "codepoint_hex": "U+1D4CE",
+      "top_accent_attachment": 968
+    },
+    {
+      "gid": 2314,
+      "glyph_name": "u1D4CF",
+      "codepoint": 120015,
+      "codepoint_hex": "U+1D4CF",
+      "top_accent_attachment": 748
+    },
+    {
+      "gid": 2828,
+      "glyph_name": "uni0237",
+      "codepoint": 567,
+      "codepoint_hex": "U+0237",
+      "top_accent_attachment": 268
+    },
+    {
+      "gid": 2829,
+      "glyph_name": "glyph02829",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 316
+    },
+    {
+      "gid": 2830,
+      "glyph_name": "glyph02830",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 300
+    },
+    {
+      "gid": 2831,
+      "glyph_name": "glyph02831",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 220
+    },
+    {
+      "gid": 2832,
+      "glyph_name": "glyph02832",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 208
+    },
+    {
+      "gid": 2833,
+      "glyph_name": "glyph02833",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 232
+    },
+    {
+      "gid": 2834,
+      "glyph_name": "glyph02834",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 216
+    },
+    {
+      "gid": 2835,
+      "glyph_name": "u1D6A4",
+      "codepoint": 120484,
+      "codepoint_hex": "U+1D6A4",
+      "top_accent_attachment": 372
+    },
+    {
+      "gid": 2836,
+      "glyph_name": "u1D6A5",
+      "codepoint": 120485,
+      "codepoint_hex": "U+1D6A5",
+      "top_accent_attachment": 468
+    },
+    {
+      "gid": 2837,
+      "glyph_name": "glyph02837",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 292
+    },
+    {
+      "gid": 2838,
+      "glyph_name": "glyph02838",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 252
+    },
+    {
+      "gid": 2839,
+      "glyph_name": "glyph02839",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 300
+    },
+    {
+      "gid": 2840,
+      "glyph_name": "glyph02840",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 264
+    },
+    {
+      "gid": 2841,
+      "glyph_name": "glyph02841",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 440
+    },
+    {
+      "gid": 2842,
+      "glyph_name": "glyph02842",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 508
+    },
+    {
+      "gid": 2843,
+      "glyph_name": "glyph02843",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 632
+    },
+    {
+      "gid": 2844,
+      "glyph_name": "glyph02844",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 716
+    },
+    {
+      "gid": 2845,
+      "glyph_name": "glyph02845",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 640
+    },
+    {
+      "gid": 2846,
+      "glyph_name": "glyph02846",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 736
+    },
+    {
+      "gid": 2847,
+      "glyph_name": "glyph02847",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 284
+    },
+    {
+      "gid": 2848,
+      "glyph_name": "glyph02848",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 276
+    },
+    {
+      "gid": 2849,
+      "glyph_name": "glyph02849",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 312
+    },
+    {
+      "gid": 2850,
+      "glyph_name": "glyph02850",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 320
+    },
+    {
+      "gid": 2851,
+      "glyph_name": "glyph02851",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 396
+    },
+    {
+      "gid": 2852,
+      "glyph_name": "glyph02852",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 356
+    },
+    {
+      "gid": 2853,
+      "glyph_name": "glyph02853",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 256
+    },
+    {
+      "gid": 2854,
+      "glyph_name": "glyph02854",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 248
+    },
+    {
+      "gid": 2855,
+      "glyph_name": "glyph02855",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 304
+    },
+    {
+      "gid": 2856,
+      "glyph_name": "glyph02856",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 292
+    },
+    {
+      "gid": 2857,
+      "glyph_name": "glyph02857",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 364
+    },
+    {
+      "gid": 2858,
+      "glyph_name": "glyph02858",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 444
+    },
+    {
+      "gid": 2859,
+      "glyph_name": "glyph02859",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 412
+    },
+    {
+      "gid": 2860,
+      "glyph_name": "glyph02860",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 484
+    },
+    {
+      "gid": 3002,
+      "glyph_name": "glyph03002",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 936
+    },
+    {
+      "gid": 3003,
+      "glyph_name": "glyph03003",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 3004,
+      "glyph_name": "glyph03004",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 892
+    },
+    {
+      "gid": 3005,
+      "glyph_name": "glyph03005",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 3006,
+      "glyph_name": "glyph03006",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 825
+    },
+    {
+      "gid": 3007,
+      "glyph_name": "glyph03007",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 3008,
+      "glyph_name": "glyph03008",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 904
+    },
+    {
+      "gid": 3009,
+      "glyph_name": "glyph03009",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 896
+    },
+    {
+      "gid": 3010,
+      "glyph_name": "glyph03010",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 536
+    },
+    {
+      "gid": 3011,
+      "glyph_name": "glyph03011",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 724
+    },
+    {
+      "gid": 3012,
+      "glyph_name": "glyph03012",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 876
+    },
+    {
+      "gid": 3013,
+      "glyph_name": "glyph03013",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 568
+    },
+    {
+      "gid": 3014,
+      "glyph_name": "glyph03014",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 1088
+    },
+    {
+      "gid": 3015,
+      "glyph_name": "glyph03015",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 928
+    },
+    {
+      "gid": 3016,
+      "glyph_name": "glyph03016",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 880
+    },
+    {
+      "gid": 3017,
+      "glyph_name": "glyph03017",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 3018,
+      "glyph_name": "glyph03018",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 888
+    },
+    {
+      "gid": 3019,
+      "glyph_name": "glyph03019",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 3020,
+      "glyph_name": "glyph03020",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 772
+    },
+    {
+      "gid": 3021,
+      "glyph_name": "glyph03021",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 696
+    },
+    {
+      "gid": 3022,
+      "glyph_name": "glyph03022",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 888
+    },
+    {
+      "gid": 3023,
+      "glyph_name": "glyph03023",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 748
+    },
+    {
+      "gid": 3024,
+      "glyph_name": "glyph03024",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 1072
+    },
+    {
+      "gid": 3025,
+      "glyph_name": "glyph03025",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 884
+    },
+    {
+      "gid": 3026,
+      "glyph_name": "glyph03026",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 748
+    },
+    {
+      "gid": 3027,
+      "glyph_name": "glyph03027",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 824
+    },
+    {
+      "gid": 3028,
+      "glyph_name": "glyph03028",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 776
+    },
+    {
+      "gid": 3029,
+      "glyph_name": "glyph03029",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 690
+    },
+    {
+      "gid": 3030,
+      "glyph_name": "glyph03030",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 764
+    },
+    {
+      "gid": 3031,
+      "glyph_name": "glyph03031",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 840
+    },
+    {
+      "gid": 3032,
+      "glyph_name": "glyph03032",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 728
+    },
+    {
+      "gid": 3033,
+      "glyph_name": "glyph03033",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 875
+    },
+    {
+      "gid": 3034,
+      "glyph_name": "glyph03034",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 860
+    },
+    {
+      "gid": 3035,
+      "glyph_name": "glyph03035",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 690
+    },
+    {
+      "gid": 3036,
+      "glyph_name": "glyph03036",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 508
+    },
+    {
+      "gid": 3037,
+      "glyph_name": "glyph03037",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 780
+    },
+    {
+      "gid": 3038,
+      "glyph_name": "glyph03038",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 552
+    },
+    {
+      "gid": 3039,
+      "glyph_name": "glyph03039",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 492
+    },
+    {
+      "gid": 3040,
+      "glyph_name": "glyph03040",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 1076
+    },
+    {
+      "gid": 3041,
+      "glyph_name": "glyph03041",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 808
+    },
+    {
+      "gid": 3042,
+      "glyph_name": "glyph03042",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 724
+    },
+    {
+      "gid": 3043,
+      "glyph_name": "glyph03043",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 864
+    },
+    {
+      "gid": 3044,
+      "glyph_name": "glyph03044",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 728
+    },
+    {
+      "gid": 3045,
+      "glyph_name": "glyph03045",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 692
+    },
+    {
+      "gid": 3046,
+      "glyph_name": "glyph03046",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 640
+    },
+    {
+      "gid": 3047,
+      "glyph_name": "glyph03047",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 540
+    },
+    {
+      "gid": 3048,
+      "glyph_name": "glyph03048",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 736
+    },
+    {
+      "gid": 3049,
+      "glyph_name": "glyph03049",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 636
+    },
+    {
+      "gid": 3050,
+      "glyph_name": "glyph03050",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 904
+    },
+    {
+      "gid": 3051,
+      "glyph_name": "glyph03051",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 784
+    },
+    {
+      "gid": 3052,
+      "glyph_name": "glyph03052",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 772
+    },
+    {
+      "gid": 3053,
+      "glyph_name": "glyph03053",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 680
+    },
+    {
+      "gid": 3112,
+      "glyph_name": "glyph03112",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 324
+    },
+    {
+      "gid": 3113,
+      "glyph_name": "glyph03113",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 324
+    },
+    {
+      "gid": 3114,
+      "glyph_name": "glyph03114",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 388
+    },
+    {
+      "gid": 3115,
+      "glyph_name": "glyph03115",
+      "codepoint": null,
+      "codepoint_hex": null,
+      "top_accent_attachment": 564
+    },
+    {
+      "gid": 3376,
+      "glyph_name": "uni20D0",
+      "codepoint": 8400,
+      "codepoint_hex": "U+20D0",
+      "top_accent_attachment": 412
+    },
+    {
+      "gid": 3377,
+      "glyph_name": "uni20D1",
+      "codepoint": 8401,
+      "codepoint_hex": "U+20D1",
+      "top_accent_attachment": 340
+    },
+    {
+      "gid": 3380,
+      "glyph_name": "uni20D4",
+      "codepoint": 8404,
+      "codepoint_hex": "U+20D4",
+      "top_accent_attachment": 650
+    },
+    {
+      "gid": 3381,
+      "glyph_name": "uni20D5",
+      "codepoint": 8405,
+      "codepoint_hex": "U+20D5",
+      "top_accent_attachment": 450
+    },
+    {
+      "gid": 3382,
+      "glyph_name": "uni20D6",
+      "codepoint": 8406,
+      "codepoint_hex": "U+20D6",
+      "top_accent_attachment": 412
+    },
+    {
+      "gid": 4662,
+      "glyph_name": "uni0307",
+      "codepoint": 775,
+      "codepoint_hex": "U+0307",
+      "top_accent_attachment": -288
+    },
+    {
+      "gid": 4663,
+      "glyph_name": "uni0308",
+      "codepoint": 776,
+      "codepoint_hex": "U+0308",
+      "top_accent_attachment": -288
+    }
+  ],
+  "extended_shapes": [
+    {
+      "gid": 1516,
+      "glyph_name": "integral",
+      "codepoint": 8747,
+      "codepoint_hex": "U+222B"
+    },
+    {
+      "gid": 1517,
+      "glyph_name": "uni222C",
+      "codepoint": 8748,
+      "codepoint_hex": "U+222C"
+    },
+    {
+      "gid": 1518,
+      "glyph_name": "uni222D",
+      "codepoint": 8749,
+      "codepoint_hex": "U+222D"
+    },
+    {
+      "gid": 1519,
+      "glyph_name": "uni222E",
+      "codepoint": 8750,
+      "codepoint_hex": "U+222E"
+    },
+    {
+      "gid": 1520,
+      "glyph_name": "uni222F",
+      "codepoint": 8751,
+      "codepoint_hex": "U+222F"
+    },
+    {
+      "gid": 1521,
+      "glyph_name": "uni2230",
+      "codepoint": 8752,
+      "codepoint_hex": "U+2230"
+    },
+    {
+      "gid": 1522,
+      "glyph_name": "uni2231",
+      "codepoint": 8753,
+      "codepoint_hex": "U+2231"
+    },
+    {
+      "gid": 1523,
+      "glyph_name": "uni2232",
+      "codepoint": 8754,
+      "codepoint_hex": "U+2232"
+    },
+    {
+      "gid": 1524,
+      "glyph_name": "uni2233",
+      "codepoint": 8755,
+      "codepoint_hex": "U+2233"
+    },
+    {
+      "gid": 3415,
+      "glyph_name": "glyph03415",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3416,
+      "glyph_name": "glyph03416",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3417,
+      "glyph_name": "glyph03417",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3418,
+      "glyph_name": "glyph03418",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3419,
+      "glyph_name": "glyph03419",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3420,
+      "glyph_name": "glyph03420",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3421,
+      "glyph_name": "glyph03421",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3422,
+      "glyph_name": "glyph03422",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3423,
+      "glyph_name": "glyph03423",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3424,
+      "glyph_name": "glyph03424",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3425,
+      "glyph_name": "glyph03425",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3426,
+      "glyph_name": "glyph03426",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3427,
+      "glyph_name": "glyph03427",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3428,
+      "glyph_name": "glyph03428",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3429,
+      "glyph_name": "glyph03429",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3430,
+      "glyph_name": "glyph03430",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3431,
+      "glyph_name": "glyph03431",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3432,
+      "glyph_name": "glyph03432",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3433,
+      "glyph_name": "glyph03433",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3434,
+      "glyph_name": "glyph03434",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3435,
+      "glyph_name": "glyph03435",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3436,
+      "glyph_name": "glyph03436",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3437,
+      "glyph_name": "glyph03437",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3438,
+      "glyph_name": "glyph03438",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3439,
+      "glyph_name": "glyph03439",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3440,
+      "glyph_name": "glyph03440",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3441,
+      "glyph_name": "glyph03441",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3442,
+      "glyph_name": "glyph03442",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3443,
+      "glyph_name": "glyph03443",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3444,
+      "glyph_name": "glyph03444",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3445,
+      "glyph_name": "glyph03445",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3446,
+      "glyph_name": "glyph03446",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3447,
+      "glyph_name": "glyph03447",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3448,
+      "glyph_name": "glyph03448",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3449,
+      "glyph_name": "glyph03449",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3450,
+      "glyph_name": "glyph03450",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3451,
+      "glyph_name": "glyph03451",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3452,
+      "glyph_name": "glyph03452",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3453,
+      "glyph_name": "glyph03453",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3454,
+      "glyph_name": "glyph03454",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3455,
+      "glyph_name": "glyph03455",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3456,
+      "glyph_name": "glyph03456",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3457,
+      "glyph_name": "glyph03457",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3458,
+      "glyph_name": "glyph03458",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3459,
+      "glyph_name": "glyph03459",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3460,
+      "glyph_name": "glyph03460",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3461,
+      "glyph_name": "glyph03461",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3462,
+      "glyph_name": "glyph03462",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3463,
+      "glyph_name": "glyph03463",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3464,
+      "glyph_name": "glyph03464",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3465,
+      "glyph_name": "glyph03465",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3466,
+      "glyph_name": "glyph03466",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3467,
+      "glyph_name": "glyph03467",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3468,
+      "glyph_name": "glyph03468",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3469,
+      "glyph_name": "glyph03469",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3470,
+      "glyph_name": "glyph03470",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3471,
+      "glyph_name": "glyph03471",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3472,
+      "glyph_name": "glyph03472",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3473,
+      "glyph_name": "glyph03473",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3474,
+      "glyph_name": "glyph03474",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3475,
+      "glyph_name": "uni2045",
+      "codepoint": 8261,
+      "codepoint_hex": "U+2045"
+    },
+    {
+      "gid": 3476,
+      "glyph_name": "glyph03476",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3477,
+      "glyph_name": "glyph03477",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3478,
+      "glyph_name": "glyph03478",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3479,
+      "glyph_name": "glyph03479",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3481,
+      "glyph_name": "glyph03481",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3482,
+      "glyph_name": "glyph03482",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3483,
+      "glyph_name": "glyph03483",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3484,
+      "glyph_name": "glyph03484",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3495,
+      "glyph_name": "glyph03495",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3496,
+      "glyph_name": "glyph03496",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3497,
+      "glyph_name": "glyph03497",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3498,
+      "glyph_name": "glyph03498",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3500,
+      "glyph_name": "glyph03500",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3501,
+      "glyph_name": "glyph03501",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3502,
+      "glyph_name": "glyph03502",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3503,
+      "glyph_name": "glyph03503",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3504,
+      "glyph_name": "glyph03504",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3505,
+      "glyph_name": "glyph03505",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3506,
+      "glyph_name": "glyph03506",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3507,
+      "glyph_name": "glyph03507",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3508,
+      "glyph_name": "glyph03508",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3509,
+      "glyph_name": "glyph03509",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3510,
+      "glyph_name": "glyph03510",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3511,
+      "glyph_name": "glyph03511",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3512,
+      "glyph_name": "glyph03512",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3513,
+      "glyph_name": "glyph03513",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3514,
+      "glyph_name": "glyph03514",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3515,
+      "glyph_name": "glyph03515",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3516,
+      "glyph_name": "glyph03516",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3517,
+      "glyph_name": "glyph03517",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3518,
+      "glyph_name": "glyph03518",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3519,
+      "glyph_name": "glyph03519",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3520,
+      "glyph_name": "glyph03520",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3521,
+      "glyph_name": "glyph03521",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3522,
+      "glyph_name": "glyph03522",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3523,
+      "glyph_name": "glyph03523",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3524,
+      "glyph_name": "glyph03524",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3525,
+      "glyph_name": "glyph03525",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3526,
+      "glyph_name": "glyph03526",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3527,
+      "glyph_name": "glyph03527",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3528,
+      "glyph_name": "glyph03528",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3529,
+      "glyph_name": "glyph03529",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3530,
+      "glyph_name": "glyph03530",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3531,
+      "glyph_name": "glyph03531",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3532,
+      "glyph_name": "glyph03532",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3533,
+      "glyph_name": "glyph03533",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3534,
+      "glyph_name": "glyph03534",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3535,
+      "glyph_name": "glyph03535",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3536,
+      "glyph_name": "glyph03536",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3537,
+      "glyph_name": "glyph03537",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3538,
+      "glyph_name": "glyph03538",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3539,
+      "glyph_name": "glyph03539",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3613,
+      "glyph_name": "glyph03613",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3614,
+      "glyph_name": "glyph03614",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3615,
+      "glyph_name": "glyph03615",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3616,
+      "glyph_name": "glyph03616",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3617,
+      "glyph_name": "glyph03617",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3618,
+      "glyph_name": "glyph03618",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3619,
+      "glyph_name": "uni29FC",
+      "codepoint": 10748,
+      "codepoint_hex": "U+29FC"
+    },
+    {
+      "gid": 3620,
+      "glyph_name": "glyph03620",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3621,
+      "glyph_name": "glyph03621",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3622,
+      "glyph_name": "glyph03622",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3623,
+      "glyph_name": "uni29FD",
+      "codepoint": 10749,
+      "codepoint_hex": "U+29FD"
+    },
+    {
+      "gid": 3624,
+      "glyph_name": "glyph03624",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3625,
+      "glyph_name": "glyph03625",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3626,
+      "glyph_name": "glyph03626",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3627,
+      "glyph_name": "glyph03627",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3628,
+      "glyph_name": "glyph03628",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3629,
+      "glyph_name": "glyph03629",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3630,
+      "glyph_name": "glyph03630",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3631,
+      "glyph_name": "glyph03631",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3632,
+      "glyph_name": "glyph03632",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3777,
+      "glyph_name": "glyph03777",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3778,
+      "glyph_name": "glyph03778",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3779,
+      "glyph_name": "glyph03779",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3780,
+      "glyph_name": "glyph03780",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3781,
+      "glyph_name": "glyph03781",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3782,
+      "glyph_name": "glyph03782",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3783,
+      "glyph_name": "glyph03783",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3784,
+      "glyph_name": "glyph03784",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3785,
+      "glyph_name": "glyph03785",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3786,
+      "glyph_name": "glyph03786",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3787,
+      "glyph_name": "uni2A05",
+      "codepoint": 10757,
+      "codepoint_hex": "U+2A05"
+    },
+    {
+      "gid": 3788,
+      "glyph_name": "glyph03788",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3789,
+      "glyph_name": "glyph03789",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3790,
+      "glyph_name": "uni2A07",
+      "codepoint": 10759,
+      "codepoint_hex": "U+2A07"
+    },
+    {
+      "gid": 3791,
+      "glyph_name": "glyph03791",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3792,
+      "glyph_name": "uni2A08",
+      "codepoint": 10760,
+      "codepoint_hex": "U+2A08"
+    },
+    {
+      "gid": 3793,
+      "glyph_name": "glyph03793",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 3794,
+      "glyph_name": "glyph03794",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4568,
+      "glyph_name": "glyph04568",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4569,
+      "glyph_name": "glyph04569",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4570,
+      "glyph_name": "glyph04570",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4571,
+      "glyph_name": "glyph04571",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4572,
+      "glyph_name": "glyph04572",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4640,
+      "glyph_name": "glyph04640",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4641,
+      "glyph_name": "glyph04641",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4642,
+      "glyph_name": "glyph04642",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4643,
+      "glyph_name": "glyph04643",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4644,
+      "glyph_name": "glyph04644",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4645,
+      "glyph_name": "glyph04645",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4646,
+      "glyph_name": "glyph04646",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4647,
+      "glyph_name": "glyph04647",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4648,
+      "glyph_name": "glyph04648",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4649,
+      "glyph_name": "glyph04649",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4650,
+      "glyph_name": "glyph04650",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4651,
+      "glyph_name": "glyph04651",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4672,
+      "glyph_name": "glyph04672",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4673,
+      "glyph_name": "glyph04673",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4674,
+      "glyph_name": "glyph04674",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4675,
+      "glyph_name": "glyph04675",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4676,
+      "glyph_name": "glyph04676",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4677,
+      "glyph_name": "glyph04677",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4678,
+      "glyph_name": "glyph04678",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4679,
+      "glyph_name": "glyph04679",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4680,
+      "glyph_name": "glyph04680",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4681,
+      "glyph_name": "glyph04681",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4682,
+      "glyph_name": "glyph04682",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4683,
+      "glyph_name": "glyph04683",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4684,
+      "glyph_name": "glyph04684",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4685,
+      "glyph_name": "glyph04685",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4686,
+      "glyph_name": "glyph04686",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4687,
+      "glyph_name": "glyph04687",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4688,
+      "glyph_name": "glyph04688",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4689,
+      "glyph_name": "glyph04689",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4690,
+      "glyph_name": "glyph04690",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4691,
+      "glyph_name": "glyph04691",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4692,
+      "glyph_name": "glyph04692",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4693,
+      "glyph_name": "glyph04693",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4694,
+      "glyph_name": "glyph04694",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4695,
+      "glyph_name": "glyph04695",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4696,
+      "glyph_name": "glyph04696",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4697,
+      "glyph_name": "glyph04697",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4698,
+      "glyph_name": "glyph04698",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4699,
+      "glyph_name": "glyph04699",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4700,
+      "glyph_name": "glyph04700",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4701,
+      "glyph_name": "glyph04701",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4702,
+      "glyph_name": "glyph04702",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4703,
+      "glyph_name": "glyph04703",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4704,
+      "glyph_name": "glyph04704",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4705,
+      "glyph_name": "glyph04705",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4706,
+      "glyph_name": "glyph04706",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4707,
+      "glyph_name": "glyph04707",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4708,
+      "glyph_name": "glyph04708",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4709,
+      "glyph_name": "glyph04709",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4710,
+      "glyph_name": "glyph04710",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4711,
+      "glyph_name": "glyph04711",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4712,
+      "glyph_name": "glyph04712",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4713,
+      "glyph_name": "glyph04713",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4714,
+      "glyph_name": "glyph04714",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4715,
+      "glyph_name": "glyph04715",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4716,
+      "glyph_name": "glyph04716",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4717,
+      "glyph_name": "glyph04717",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4718,
+      "glyph_name": "glyph04718",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4719,
+      "glyph_name": "glyph04719",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4720,
+      "glyph_name": "glyph04720",
+      "codepoint": null,
+      "codepoint_hex": null
+    },
+    {
+      "gid": 4721,
+      "glyph_name": "glyph04721",
+      "codepoint": null,
+      "codepoint_hex": null
+    }
+  ],
+  "vertical_variants": [
+    {
+      "gid": 513,
+      "glyph_name": "bar",
+      "codepoint": 124,
+      "codepoint_hex": "U+007C",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "bar",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03627",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04698",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03628",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04708",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03629",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04718",
+          "advance": 7512
+        },
+        {
+          "variant_glyph": "glyph04720",
+          "advance": 8756
+        }
+      ]
+    },
+    {
+      "gid": 932,
+      "glyph_name": "fraction",
+      "codepoint": 8260,
+      "codepoint_hex": "U+2044",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "fraction",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03415",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph03416",
+          "advance": 3911
+        },
+        {
+          "variant_glyph": "glyph03417",
+          "advance": 5911
+        },
+        {
+          "variant_glyph": "glyph03418",
+          "advance": 8592
+        }
+      ]
+    },
+    {
+      "gid": 958,
+      "glyph_name": "radical",
+      "codepoint": 8730,
+      "codepoint_hex": "U+221A",
+      "n_variants": 6,
+      "variants": [
+        {
+          "variant_glyph": "radical",
+          "advance": 1972
+        },
+        {
+          "variant_glyph": "glyph03493",
+          "advance": 2544
+        },
+        {
+          "variant_glyph": "glyph03495",
+          "advance": 4569
+        },
+        {
+          "variant_glyph": "glyph03496",
+          "advance": 6829
+        },
+        {
+          "variant_glyph": "glyph03497",
+          "advance": 9129
+        },
+        {
+          "variant_glyph": "glyph03498",
+          "advance": 11429
+        }
+      ]
+    },
+    {
+      "gid": 962,
+      "glyph_name": "product",
+      "codepoint": 8719,
+      "codepoint_hex": "U+220F",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "product",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03536",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph03537",
+          "advance": 3911
+        },
+        {
+          "variant_glyph": "glyph03538",
+          "advance": 5911
+        },
+        {
+          "variant_glyph": "glyph03539",
+          "advance": 8591
+        }
+      ]
+    },
+    {
+      "gid": 963,
+      "glyph_name": "summation",
+      "codepoint": 8721,
+      "codepoint_hex": "U+2211",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "summation",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03532",
+          "advance": 2312
+        },
+        {
+          "variant_glyph": "glyph03533",
+          "advance": 3911
+        },
+        {
+          "variant_glyph": "glyph03534",
+          "advance": 5911
+        },
+        {
+          "variant_glyph": "glyph03535",
+          "advance": 8590
+        }
+      ]
+    },
+    {
+      "gid": 1313,
+      "glyph_name": "uni2016",
+      "codepoint": 8214,
+      "codepoint_hex": "U+2016",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni2016",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03630",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04699",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03631",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04709",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03632",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04719",
+          "advance": 7512
+        },
+        {
+          "variant_glyph": "glyph04721",
+          "advance": 8756
+        }
+      ]
+    },
+    {
+      "gid": 1371,
+      "glyph_name": "arrowup",
+      "codepoint": 8593,
+      "codepoint_hex": "U+2191",
+      "n_variants": 1,
+      "variants": [
+        {
+          "variant_glyph": "arrowup",
+          "advance": 1498
+        }
+      ]
+    },
+    {
+      "gid": 1373,
+      "glyph_name": "arrowdown",
+      "codepoint": 8595,
+      "codepoint_hex": "U+2193",
+      "n_variants": 1,
+      "variants": [
+        {
+          "variant_glyph": "arrowdown",
+          "advance": 1497
+        }
+      ]
+    },
+    {
+      "gid": 1435,
+      "glyph_name": "arrowdblup",
+      "codepoint": 8657,
+      "codepoint_hex": "U+21D1",
+      "n_variants": 1,
+      "variants": [
+        {
+          "variant_glyph": "arrowdblup",
+          "advance": 1482
+        }
+      ]
+    },
+    {
+      "gid": 1437,
+      "glyph_name": "arrowdbldown",
+      "codepoint": 8659,
+      "codepoint_hex": "U+21D3",
+      "n_variants": 1,
+      "variants": [
+        {
+          "variant_glyph": "arrowdbldown",
+          "advance": 1482
+        }
+      ]
+    },
+    {
+      "gid": 1495,
+      "glyph_name": "uni2210",
+      "codepoint": 8720,
+      "codepoint_hex": "U+2210",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "uni2210",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph04640",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04641",
+          "advance": 3911
+        },
+        {
+          "variant_glyph": "glyph04642",
+          "advance": 5911
+        },
+        {
+          "variant_glyph": "glyph04643",
+          "advance": 8591
+        }
+      ]
+    },
+    {
+      "gid": 1508,
+      "glyph_name": "uni2223",
+      "codepoint": 8739,
+      "codepoint_hex": "U+2223",
+      "n_variants": 1,
+      "variants": [
+        {
+          "variant_glyph": "uni2223",
+          "advance": 1566
+        }
+      ]
+    },
+    {
+      "gid": 1510,
+      "glyph_name": "uni2225",
+      "codepoint": 8741,
+      "codepoint_hex": "U+2225",
+      "n_variants": 1,
+      "variants": [
+        {
+          "variant_glyph": "uni2225",
+          "advance": 1566
+        }
+      ]
+    },
+    {
+      "gid": 1516,
+      "glyph_name": "integral",
+      "codepoint": 8747,
+      "codepoint_hex": "U+222B",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "integral",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03504",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03505",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03506",
+          "advance": 6583
+        },
+        {
+          "variant_glyph": "glyph03507",
+          "advance": 9460
+        }
+      ]
+    },
+    {
+      "gid": 1517,
+      "glyph_name": "uni222C",
+      "codepoint": 8748,
+      "codepoint_hex": "U+222C",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni222C",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03508",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03509",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03510",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1518,
+      "glyph_name": "uni222D",
+      "codepoint": 8749,
+      "codepoint_hex": "U+222D",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni222D",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03511",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03512",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03513",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1519,
+      "glyph_name": "uni222E",
+      "codepoint": 8750,
+      "codepoint_hex": "U+222E",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni222E",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03514",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03515",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03516",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1520,
+      "glyph_name": "uni222F",
+      "codepoint": 8751,
+      "codepoint_hex": "U+222F",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni222F",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03517",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03518",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03519",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1521,
+      "glyph_name": "uni2230",
+      "codepoint": 8752,
+      "codepoint_hex": "U+2230",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni2230",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03520",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03521",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03522",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1522,
+      "glyph_name": "uni2231",
+      "codepoint": 8753,
+      "codepoint_hex": "U+2231",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni2231",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03523",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03524",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03525",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1523,
+      "glyph_name": "uni2232",
+      "codepoint": 8754,
+      "codepoint_hex": "U+2232",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni2232",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03526",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03527",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03528",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1524,
+      "glyph_name": "uni2233",
+      "codepoint": 8755,
+      "codepoint_hex": "U+2233",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni2233",
+          "advance": 2218
+        },
+        {
+          "variant_glyph": "glyph03529",
+          "advance": 2769
+        },
+        {
+          "variant_glyph": "glyph03530",
+          "advance": 4406
+        },
+        {
+          "variant_glyph": "glyph03531",
+          "advance": 6583
+        }
+      ]
+    },
+    {
+      "gid": 1663,
+      "glyph_name": "uni22C0",
+      "codepoint": 8896,
+      "codepoint_hex": "U+22C0",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni22C0",
+          "advance": 1541
+        },
+        {
+          "variant_glyph": "glyph04644",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04645",
+          "advance": 3911
+        }
+      ]
+    },
+    {
+      "gid": 1664,
+      "glyph_name": "uni22C1",
+      "codepoint": 8897,
+      "codepoint_hex": "U+22C1",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni22C1",
+          "advance": 1541
+        },
+        {
+          "variant_glyph": "glyph04646",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04647",
+          "advance": 3911
+        }
+      ]
+    },
+    {
+      "gid": 1665,
+      "glyph_name": "uni22C2",
+      "codepoint": 8898,
+      "codepoint_hex": "U+22C2",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni22C2",
+          "advance": 1558
+        },
+        {
+          "variant_glyph": "glyph04648",
+          "advance": 2335
+        },
+        {
+          "variant_glyph": "glyph04649",
+          "advance": 3950
+        }
+      ]
+    },
+    {
+      "gid": 1666,
+      "glyph_name": "uni22C3",
+      "codepoint": 8899,
+      "codepoint_hex": "U+22C3",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni22C3",
+          "advance": 1558
+        },
+        {
+          "variant_glyph": "glyph04650",
+          "advance": 2335
+        },
+        {
+          "variant_glyph": "glyph04651",
+          "advance": 3950
+        }
+      ]
+    },
+    {
+      "gid": 1727,
+      "glyph_name": "uni2308",
+      "codepoint": 8968,
+      "codepoint_hex": "U+2308",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni2308",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03459",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04690",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03460",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04700",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03461",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04710",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03462",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 1728,
+      "glyph_name": "uni2309",
+      "codepoint": 8969,
+      "codepoint_hex": "U+2309",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni2309",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03463",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04691",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03464",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04701",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03465",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04711",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03466",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 1729,
+      "glyph_name": "uni230A",
+      "codepoint": 8970,
+      "codepoint_hex": "U+230A",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni230A",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03467",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04692",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03468",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04702",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03469",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04712",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03470",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 1730,
+      "glyph_name": "uni230B",
+      "codepoint": 8971,
+      "codepoint_hex": "U+230B",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni230B",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03471",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04693",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03472",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04703",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03473",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04713",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03474",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 1764,
+      "glyph_name": "uni27E6",
+      "codepoint": 10214,
+      "codepoint_hex": "U+27E6",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni27E6",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03443",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04696",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03444",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04706",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03445",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04716",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03446",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 1765,
+      "glyph_name": "uni27E7",
+      "codepoint": 10215,
+      "codepoint_hex": "U+27E7",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni27E7",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03447",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04697",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03448",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04707",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03449",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04717",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03450",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 1766,
+      "glyph_name": "uni27E8",
+      "codepoint": 10216,
+      "codepoint_hex": "U+27E8",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "uni27E8",
+          "advance": 1872
+        },
+        {
+          "variant_glyph": "glyph03451",
+          "advance": 2451
+        },
+        {
+          "variant_glyph": "glyph03452",
+          "advance": 3958
+        },
+        {
+          "variant_glyph": "glyph03453",
+          "advance": 5950
+        },
+        {
+          "variant_glyph": "glyph03454",
+          "advance": 8620
+        }
+      ]
+    },
+    {
+      "gid": 1767,
+      "glyph_name": "uni27E9",
+      "codepoint": 10217,
+      "codepoint_hex": "U+27E9",
+      "n_variants": 5,
+      "variants": [
+        {
+          "variant_glyph": "uni27E9",
+          "advance": 1872
+        },
+        {
+          "variant_glyph": "glyph03455",
+          "advance": 2452
+        },
+        {
+          "variant_glyph": "glyph03456",
+          "advance": 3958
+        },
+        {
+          "variant_glyph": "glyph03457",
+          "advance": 5950
+        },
+        {
+          "variant_glyph": "glyph03458",
+          "advance": 8620
+        }
+      ]
+    },
+    {
+      "gid": 1768,
+      "glyph_name": "uni2A00",
+      "codepoint": 10752,
+      "codepoint_hex": "U+2A00",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A00",
+          "advance": 1569
+        },
+        {
+          "variant_glyph": "glyph03777",
+          "advance": 2358
+        },
+        {
+          "variant_glyph": "glyph03778",
+          "advance": 3957
+        }
+      ]
+    },
+    {
+      "gid": 1769,
+      "glyph_name": "uni2A01",
+      "codepoint": 10753,
+      "codepoint_hex": "U+2A01",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A01",
+          "advance": 1569
+        },
+        {
+          "variant_glyph": "glyph03779",
+          "advance": 2358
+        },
+        {
+          "variant_glyph": "glyph03780",
+          "advance": 3957
+        }
+      ]
+    },
+    {
+      "gid": 1770,
+      "glyph_name": "uni2A02",
+      "codepoint": 10754,
+      "codepoint_hex": "U+2A02",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A02",
+          "advance": 1569
+        },
+        {
+          "variant_glyph": "glyph03781",
+          "advance": 2358
+        },
+        {
+          "variant_glyph": "glyph03782",
+          "advance": 3957
+        }
+      ]
+    },
+    {
+      "gid": 1771,
+      "glyph_name": "uni2A04",
+      "codepoint": 10756,
+      "codepoint_hex": "U+2A04",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A04",
+          "advance": 1568
+        },
+        {
+          "variant_glyph": "glyph03785",
+          "advance": 2326
+        },
+        {
+          "variant_glyph": "glyph03786",
+          "advance": 3950
+        }
+      ]
+    },
+    {
+      "gid": 1772,
+      "glyph_name": "uni2A06",
+      "codepoint": 10758,
+      "codepoint_hex": "U+2A06",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A06",
+          "advance": 1556
+        },
+        {
+          "variant_glyph": "glyph03789",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04569",
+          "advance": 3911
+        }
+      ]
+    },
+    {
+      "gid": 1773,
+      "glyph_name": "uni2A09",
+      "codepoint": 10761,
+      "codepoint_hex": "U+2A09",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A09",
+          "advance": 1329
+        },
+        {
+          "variant_glyph": "glyph03794",
+          "advance": 2363
+        },
+        {
+          "variant_glyph": "glyph04572",
+          "advance": 3915
+        }
+      ]
+    },
+    {
+      "gid": 3413,
+      "glyph_name": "uni27EA",
+      "codepoint": 10218,
+      "codepoint_hex": "U+27EA",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni27EA",
+          "advance": 1872
+        },
+        {
+          "variant_glyph": "glyph03613",
+          "advance": 2380
+        },
+        {
+          "variant_glyph": "glyph03614",
+          "advance": 3958
+        },
+        {
+          "variant_glyph": "glyph03615",
+          "advance": 5950
+        }
+      ]
+    },
+    {
+      "gid": 3414,
+      "glyph_name": "uni27EB",
+      "codepoint": 10219,
+      "codepoint_hex": "U+27EB",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni27EB",
+          "advance": 1872
+        },
+        {
+          "variant_glyph": "glyph03616",
+          "advance": 2380
+        },
+        {
+          "variant_glyph": "glyph03617",
+          "advance": 3958
+        },
+        {
+          "variant_glyph": "glyph03618",
+          "advance": 5950
+        }
+      ]
+    },
+    {
+      "gid": 3475,
+      "glyph_name": "uni2045",
+      "codepoint": 8261,
+      "codepoint_hex": "U+2045",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni2045",
+          "advance": 1908
+        },
+        {
+          "variant_glyph": "glyph03476",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04694",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03477",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04704",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03478",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04714",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03479",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 3480,
+      "glyph_name": "uni2046",
+      "codepoint": 8262,
+      "codepoint_hex": "U+2046",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "uni2046",
+          "advance": 1908
+        },
+        {
+          "variant_glyph": "glyph03481",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04695",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03482",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04705",
+          "advance": 5169
+        },
+        {
+          "variant_glyph": "glyph03483",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04715",
+          "advance": 7511
+        },
+        {
+          "variant_glyph": "glyph03484",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 3619,
+      "glyph_name": "uni29FC",
+      "codepoint": 10748,
+      "codepoint_hex": "U+29FC",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni29FC",
+          "advance": 1865
+        },
+        {
+          "variant_glyph": "glyph03620",
+          "advance": 2474
+        },
+        {
+          "variant_glyph": "glyph03621",
+          "advance": 4040
+        },
+        {
+          "variant_glyph": "glyph03622",
+          "advance": 6081
+        }
+      ]
+    },
+    {
+      "gid": 3623,
+      "glyph_name": "uni29FD",
+      "codepoint": 10749,
+      "codepoint_hex": "U+29FD",
+      "n_variants": 4,
+      "variants": [
+        {
+          "variant_glyph": "uni29FD",
+          "advance": 1865
+        },
+        {
+          "variant_glyph": "glyph03624",
+          "advance": 2474
+        },
+        {
+          "variant_glyph": "glyph03625",
+          "advance": 4040
+        },
+        {
+          "variant_glyph": "glyph03626",
+          "advance": 6081
+        }
+      ]
+    },
+    {
+      "gid": 3787,
+      "glyph_name": "uni2A05",
+      "codepoint": 10757,
+      "codepoint_hex": "U+2A05",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A05",
+          "advance": 1556
+        },
+        {
+          "variant_glyph": "glyph03788",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04568",
+          "advance": 3911
+        }
+      ]
+    },
+    {
+      "gid": 3790,
+      "glyph_name": "uni2A07",
+      "codepoint": 10759,
+      "codepoint_hex": "U+2A07",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A07",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03791",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04570",
+          "advance": 3911
+        }
+      ]
+    },
+    {
+      "gid": 3792,
+      "glyph_name": "uni2A08",
+      "codepoint": 10760,
+      "codepoint_hex": "U+2A08",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A08",
+          "advance": 1862
+        },
+        {
+          "variant_glyph": "glyph03793",
+          "advance": 2311
+        },
+        {
+          "variant_glyph": "glyph04571",
+          "advance": 3911
+        }
+      ]
+    },
+    {
+      "gid": 4003,
+      "glyph_name": "uni2A03",
+      "codepoint": 10755,
+      "codepoint_hex": "U+2A03",
+      "n_variants": 3,
+      "variants": [
+        {
+          "variant_glyph": "uni2A03",
+          "advance": 1568
+        },
+        {
+          "variant_glyph": "glyph03783",
+          "advance": 2350
+        },
+        {
+          "variant_glyph": "glyph03784",
+          "advance": 3950
+        }
+      ]
+    },
+    {
+      "gid": 4666,
+      "glyph_name": "parenleft",
+      "codepoint": 40,
+      "codepoint_hex": "U+0028",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "parenleft",
+          "advance": 1898
+        },
+        {
+          "variant_glyph": "glyph03435",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04672",
+          "advance": 3379
+        },
+        {
+          "variant_glyph": "glyph03436",
+          "advance": 4047
+        },
+        {
+          "variant_glyph": "glyph04678",
+          "advance": 5223
+        },
+        {
+          "variant_glyph": "glyph03437",
+          "advance": 6053
+        },
+        {
+          "variant_glyph": "glyph04684",
+          "advance": 7613
+        },
+        {
+          "variant_glyph": "glyph03438",
+          "advance": 8881
+        }
+      ]
+    },
+    {
+      "gid": 4667,
+      "glyph_name": "parenright",
+      "codepoint": 41,
+      "codepoint_hex": "U+0029",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "parenright",
+          "advance": 1898
+        },
+        {
+          "variant_glyph": "glyph03439",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04673",
+          "advance": 3379
+        },
+        {
+          "variant_glyph": "glyph03440",
+          "advance": 4047
+        },
+        {
+          "variant_glyph": "glyph04679",
+          "advance": 5223
+        },
+        {
+          "variant_glyph": "glyph03441",
+          "advance": 6053
+        },
+        {
+          "variant_glyph": "glyph04685",
+          "advance": 7613
+        },
+        {
+          "variant_glyph": "glyph03442",
+          "advance": 8881
+        }
+      ]
+    },
+    {
+      "gid": 4668,
+      "glyph_name": "braceleft",
+      "codepoint": 123,
+      "codepoint_hex": "U+007B",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "braceleft",
+          "advance": 1908
+        },
+        {
+          "variant_glyph": "glyph03419",
+          "advance": 2463
+        },
+        {
+          "variant_glyph": "glyph04676",
+          "advance": 3357
+        },
+        {
+          "variant_glyph": "glyph03420",
+          "advance": 4083
+        },
+        {
+          "variant_glyph": "glyph04682",
+          "advance": 5183
+        },
+        {
+          "variant_glyph": "glyph03421",
+          "advance": 6084
+        },
+        {
+          "variant_glyph": "glyph04688",
+          "advance": 7547
+        },
+        {
+          "variant_glyph": "glyph03422",
+          "advance": 8801
+        }
+      ]
+    },
+    {
+      "gid": 4669,
+      "glyph_name": "braceright",
+      "codepoint": 125,
+      "codepoint_hex": "U+007D",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "braceright",
+          "advance": 1908
+        },
+        {
+          "variant_glyph": "glyph03423",
+          "advance": 2463
+        },
+        {
+          "variant_glyph": "glyph04677",
+          "advance": 3357
+        },
+        {
+          "variant_glyph": "glyph03424",
+          "advance": 4083
+        },
+        {
+          "variant_glyph": "glyph04683",
+          "advance": 5183
+        },
+        {
+          "variant_glyph": "glyph03425",
+          "advance": 6084
+        },
+        {
+          "variant_glyph": "glyph04689",
+          "advance": 7547
+        },
+        {
+          "variant_glyph": "glyph03426",
+          "advance": 8801
+        }
+      ]
+    },
+    {
+      "gid": 4670,
+      "glyph_name": "bracketleft",
+      "codepoint": 91,
+      "codepoint_hex": "U+005B",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "bracketleft",
+          "advance": 1908
+        },
+        {
+          "variant_glyph": "glyph03427",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04674",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03428",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04680",
+          "advance": 5170
+        },
+        {
+          "variant_glyph": "glyph03429",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04686",
+          "advance": 7512
+        },
+        {
+          "variant_glyph": "glyph03430",
+          "advance": 8755
+        }
+      ]
+    },
+    {
+      "gid": 4671,
+      "glyph_name": "bracketright",
+      "codepoint": 93,
+      "codepoint_hex": "U+005D",
+      "n_variants": 8,
+      "variants": [
+        {
+          "variant_glyph": "bracketright",
+          "advance": 1908
+        },
+        {
+          "variant_glyph": "glyph03431",
+          "advance": 2475
+        },
+        {
+          "variant_glyph": "glyph04675",
+          "advance": 3361
+        },
+        {
+          "variant_glyph": "glyph03432",
+          "advance": 4075
+        },
+        {
+          "variant_glyph": "glyph04681",
+          "advance": 5170
+        },
+        {
+          "variant_glyph": "glyph03433",
+          "advance": 6075
+        },
+        {
+          "variant_glyph": "glyph04687",
+          "advance": 7512
+        },
+        {
+          "variant_glyph": "glyph03434",
+          "advance": 8755
+        }
+      ]
+    }
+  ]
+}
