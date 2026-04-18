@@ -15,6 +15,19 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-2 — partial — Tick 2-3 Word COM pass, 7/10 fixtures validated
+
+- context: feat/comments-tracked-changes Phase 1 Tick 2-3 (previously deferred; Word 16.0 turned out to be available on this box)
+- method: `tools/metrics/measure_comments_tracked_changes_com.py` opens each fixture with Word COM and dumps `doc.Revisions` + `doc.Comments` collections
+- evidence (7/10 OK): `doc.Revisions.Type` matches authoring intent for every revision fixture (05 wdRevisionInsert, 06 wdRevisionDelete, 07 × 3 alternating, 08 wdRevisionMovedFrom+MovedTo, 09 wdRevisionProperty). `doc.Comments.Scope.Text` matches authored range for 01 and 04
+- evidence (3/10 fail): 02 and 03 (both have commentsExtended.xml) and 10 (has people.xml) fail `Documents.Open` with `com_error` — Word validator rejects even though syntactic XML is well-formed (our scanner reads the markers). Fixture-authoring defect to repair in a follow-up tick; does not block Phase 2 parser rows P-03…P-09.
+- key Phase 2 confirmations:
+  - `<w:rPrChange>` is bucketed as `wdRevisionProperty` (3) in Word's Revisions.Type enum — a single Inserted/Deleted/Property IR enum matches Word's model.
+  - `moveFrom` / `moveTo` pair is reported as TWO separate revisions with identical range text — the `(pair_id, name)` linkage in revisions_notes.md §1.2 is the correct IR structure.
+  - `Comment.Scope.Text` spans `\r`-separated paragraphs for multi-para ranges — parser can represent range as (start: RunRef, end: RunRef) over a flat glyph list.
+- deliverable: `docs/spec/comments_tracked_changes/com_measurements/{comments_tracked_changes_com.json, README.md}`
+- still deferred: balloon geometry, author RGB palette (R-02), strikethrough Y on CJK text, connector line style, stacking geometry. All need UIA / pixel-sampling.
+
 ## 2026-04-18 — oxi-2 — phase-1-complete — attack matrix + master index; COM deferred
 
 - context: feat/comments-tracked-changes Phase 1 final tick (was Tick 7 in TASK.md)
