@@ -1160,35 +1160,20 @@ impl LayoutEngine {
                     // Skip unsupported elements in layout
                 }
                 Block::Math(math_block) => {
-                    // Phase 3 MVP: emit flat text with math-substituted glyphs.
-                    // Proper fraction/sup/sub positioning comes in later commits.
-                    let math_font_size: f32 = 10.5; // Cambria Math default
-                    let flat = crate::layout::math::extract_flat_text_block(math_block);
-                    if !flat.is_empty() {
-                        let bbox = crate::layout::math::layout_math_block(math_block, math_font_size);
-                        let x = page.margin.left;
-                        let el = LayoutElement::new(
-                            x,
-                            cursor_y,
-                            bbox.advance.max(flat.chars().count() as f32 * math_font_size * 0.55),
-                            bbox.height().max(math_font_size * 1.2),
-                            LayoutContent::Text {
-                                text: flat,
-                                font_size: math_font_size,
-                                font_family: Some("Cambria Math".to_string()),
-                                bold: false,
-                                italic: false,
-                                underline: false,
-                                underline_style: None,
-                                strikethrough: false,
-                                color: None,
-                                highlight: None,
-                                field_type: None,
-                                character_spacing: 0.0,
-                            },
-                        );
-                        elements.push(el);
-                        cursor_y += bbox.height().max(math_font_size * 1.2);
+                    // Phase 3: emit positioned LayoutElements for math primitives.
+                    // Fraction/Sup/Sub/SubSup render stacked; other primitives
+                    // fall back to flat text for now.
+                    let math_font_size: f32 = 10.5;
+                    let x = page.margin.left;
+                    let (math_elems, bbox) = crate::layout::math::emit_math_block(
+                        math_block, x, cursor_y, math_font_size,
+                    );
+                    if !math_elems.is_empty() {
+                        elements.extend(math_elems);
+                        // Advance by full bbox height + a line of descent leeway.
+                        let advance = bbox.height().max(math_font_size * 1.2)
+                            + math_font_size * 0.3;
+                        cursor_y += advance;
                     }
                 }
             }

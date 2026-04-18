@@ -21,6 +21,7 @@
 
 use crate::font::{MathTable, MathGlyphTables, math_substitute};
 use crate::ir::{MathBlock, MathExpr, MathStyle};
+use crate::layout::{LayoutElement, LayoutContent};
 
 /// Bounding box for a math fragment. All values in points, relative to
 /// a math baseline at y=0. Width extends rightward from origin x=0.
@@ -354,6 +355,313 @@ fn append_flat(out: &mut String, expr: &MathExpr) {
             append_flat(out, base);
         }
     }
+}
+
+// ============================================================================
+// Phase 3: Positioned LayoutElement emission
+// ============================================================================
+
+/// Emit a `LayoutElement::Text` for substituted characters at a given
+/// baseline y. `x` is the left edge. Uses Cambria Math font.
+fn emit_text_at(
+    text: String,
+    x: f32,
+    baseline_y: f32,
+    font_size: f32,
+) -> LayoutElement {
+    // Text element y in oxi convention = top of line-box, not baseline.
+    // Approximation: top = baseline - ascent, where ascent ≈ 0.8 × font_size.
+    let ascent_approx = font_size * 0.8;
+    let top = baseline_y - ascent_approx;
+    let char_count = text.chars().count() as f32;
+    let approx_width = char_count * font_size * 0.55;
+    LayoutElement::new(
+        x,
+        top,
+        approx_width,
+        font_size * 1.2,
+        LayoutContent::Text {
+            text,
+            font_size,
+            font_family: Some("Cambria Math".to_string()),
+            bold: false,
+            italic: false,
+            underline: false,
+            underline_style: None,
+            strikethrough: false,
+            color: None,
+            highlight: None,
+            field_type: None,
+            character_spacing: 0.0,
+        },
+    )
+}
+
+/// Emit positioned LayoutElements for a single math expression.
+/// Returns (elements, bbox). All elements use absolute page coordinates.
+///
+/// Origin: element is rendered with its LEFT edge at `x` and its BASELINE
+/// at `baseline_y`. Bbox returned describes the rendered content size.
+pub fn emit_expr(
+    expr: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let eff_size = ctx.effective_font_size();
+    match expr {
+        MathExpr::Text(s) | MathExpr::Run { text: s, .. } => {
+            if s.is_empty() {
+                return (vec![], MathBBox::default());
+            }
+            // Apply italic-math substitution per-char.
+            let subbed: String = s.chars().map(math_substitute).collect();
+            let bbox = leaf_text_bbox(s, ctx);
+            let el = emit_text_at(subbed, x, baseline_y, eff_size);
+            (vec![el], bbox)
+        }
+        MathExpr::Seq(children) => {
+            let mut elems = Vec::new();
+            let mut cur_x = x;
+            let mut total = MathBBox::default();
+            for child in children {
+                let (e, b) = emit_expr(child, cur_x, baseline_y, ctx);
+                elems.extend(e);
+                cur_x += b.advance;
+                total = total.hstack(&b);
+            }
+            (elems, total)
+        }
+        MathExpr::Fraction { num, den, bar_type } => {
+            emit_fraction(num, den, *bar_type, x, baseline_y, ctx)
+        }
+        MathExpr::Superscript { base, sup } => {
+            emit_superscript(base, sup, x, baseline_y, ctx)
+        }
+        MathExpr::Subscript { base, sub } => {
+            emit_subscript(base, sub, x, baseline_y, ctx)
+        }
+        MathExpr::SubSuperscript { base, sub, sup } => {
+            emit_subsuperscript(base, sub, sup, x, baseline_y, ctx)
+        }
+        // Other primitives: fall back to flat text via extract_flat_text.
+        _ => {
+            let flat = extract_flat_text(expr);
+            if flat.is_empty() {
+                return (vec![], MathBBox::default());
+            }
+            let bbox = layout_expr(expr, ctx);
+            let el = emit_text_at(flat, x, baseline_y, eff_size);
+            (vec![el], bbox)
+        }
+    }
+}
+
+/// Emit fraction with num above bar, den below bar. Bar drawn as TableBorder.
+fn emit_fraction(
+    num: &MathExpr,
+    den: &MathExpr,
+    bar_type: crate::ir::FracBarType,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    use crate::ir::FracBarType;
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    // Scale sub-expressions at script style if this is an inline fraction.
+    // (Display style keeps parent size for num/den.)
+    let sub_ctx = if ctx.style.is_display() { *ctx } else { ctx.descend_script() };
+
+    // Compute num and den bboxes without emission first.
+    let num_bbox = layout_expr(num, &sub_ctx);
+    let den_bbox = layout_expr(den, &sub_ctx);
+
+    // Fraction dimensions from MATH constants.
+    let (num_shift_du, den_shift_du, rule_thick_du) = if ctx.style.is_display() {
+        (
+            table.constants.FractionNumeratorDisplayStyleShiftUp,
+            table.constants.FractionDenominatorDisplayStyleShiftDown,
+            table.constants.FractionRuleThickness,
+        )
+    } else {
+        (
+            table.constants.FractionNumeratorShiftUp,
+            table.constants.FractionDenominatorShiftDown,
+            table.constants.FractionRuleThickness,
+        )
+    };
+    let num_shift_up = table.du_to_pt(num_shift_du, fs);
+    let den_shift_down = table.du_to_pt(den_shift_du, fs);
+    let rule_thick = table.du_to_pt(rule_thick_du, fs);
+    let axis_height = table.du_to_pt(table.constants.AxisHeight, fs);
+
+    // Common width: max of num and den advances.
+    let common_w = num_bbox.advance.max(den_bbox.advance);
+    let num_x = x + (common_w - num_bbox.advance) / 2.0;
+    let den_x = x + (common_w - den_bbox.advance) / 2.0;
+
+    // Num baseline: above baseline_y by num_shift_up.
+    let num_baseline = baseline_y - num_shift_up;
+    // Den baseline: below baseline_y by den_shift_down.
+    let den_baseline = baseline_y + den_shift_down;
+    // Bar center y: at math axis (baseline_y - axis_height).
+    let bar_y = baseline_y - axis_height;
+
+    let mut elems = Vec::new();
+    let (ne, _nb) = emit_expr(num, num_x, num_baseline, &sub_ctx);
+    let (de, _db) = emit_expr(den, den_x, den_baseline, &sub_ctx);
+    elems.extend(ne);
+    elems.extend(de);
+
+    // Emit the fraction bar as TableBorder (horizontal line) unless NoBar/Skewed.
+    if !matches!(bar_type, FracBarType::NoBar) && !matches!(bar_type, FracBarType::Linear) {
+        elems.push(LayoutElement::new(
+            x, bar_y - rule_thick / 2.0,
+            common_w, rule_thick,
+            LayoutContent::TableBorder {
+                x1: x,
+                y1: bar_y,
+                x2: x + common_w,
+                y2: bar_y,
+                color: None,
+                width: rule_thick,
+            },
+        ));
+    }
+
+    let bbox = MathBBox {
+        advance: common_w,
+        ascent: num_shift_up + num_bbox.ascent,
+        descent: den_shift_down + den_bbox.descent,
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit superscript: base followed by raised sup at script size.
+fn emit_superscript(
+    base: &MathExpr,
+    sup: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+    let (mut base_elems, base_bbox) = emit_expr(base, x, baseline_y, ctx);
+
+    let sup_ctx = ctx.descend_script();
+    let shift_up = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
+    let sup_x = x + base_bbox.advance + base_bbox.italic_correction;
+    let sup_baseline = baseline_y - shift_up;
+    let (sup_elems, sup_bbox) = emit_expr(sup, sup_x, sup_baseline, &sup_ctx);
+
+    base_elems.extend(sup_elems);
+    let bbox = MathBBox {
+        advance: base_bbox.advance + base_bbox.italic_correction + sup_bbox.advance,
+        ascent: base_bbox.ascent.max(shift_up + sup_bbox.ascent),
+        descent: base_bbox.descent,
+        italic_correction: sup_bbox.italic_correction,
+    };
+    (base_elems, bbox)
+}
+
+/// Emit subscript: base followed by lowered sub at script size.
+fn emit_subscript(
+    base: &MathExpr,
+    sub: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+    let (mut base_elems, base_bbox) = emit_expr(base, x, baseline_y, ctx);
+
+    let sub_ctx = ctx.descend_script();
+    let shift_down = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+    let sub_x = x + base_bbox.advance;
+    let sub_baseline = baseline_y + shift_down;
+    let (sub_elems, sub_bbox) = emit_expr(sub, sub_x, sub_baseline, &sub_ctx);
+
+    base_elems.extend(sub_elems);
+    let bbox = MathBBox {
+        advance: base_bbox.advance + sub_bbox.advance,
+        ascent: base_bbox.ascent,
+        descent: base_bbox.descent.max(shift_down + sub_bbox.descent),
+        italic_correction: sub_bbox.italic_correction,
+    };
+    (base_elems, bbox)
+}
+
+/// Emit combined sub+superscript: base with sub below and sup above at same x.
+fn emit_subsuperscript(
+    base: &MathExpr,
+    sub: &MathExpr,
+    sup: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+    let (mut base_elems, base_bbox) = emit_expr(base, x, baseline_y, ctx);
+
+    let s_ctx = ctx.descend_script();
+    let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
+    let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+
+    let script_x = x + base_bbox.advance + base_bbox.italic_correction;
+    let (sup_e, sup_b) = emit_expr(sup, script_x, baseline_y - sup_shift, &s_ctx);
+    let (sub_e, sub_b) = emit_expr(sub, script_x, baseline_y + sub_shift, &s_ctx);
+    base_elems.extend(sup_e);
+    base_elems.extend(sub_e);
+
+    let bbox = MathBBox {
+        advance: base_bbox.advance + base_bbox.italic_correction
+            + sup_b.advance.max(sub_b.advance),
+        ascent: base_bbox.ascent.max(sup_shift + sup_b.ascent),
+        descent: base_bbox.descent.max(sub_shift + sub_b.descent),
+        italic_correction: 0.0,
+    };
+    (base_elems, bbox)
+}
+
+/// Emit positioned LayoutElements for a full MathBlock.
+/// Returns (elements, total bbox). Origin: top-left at (x, cursor_y).
+pub fn emit_math_block(
+    block: &MathBlock,
+    x: f32,
+    cursor_y: f32,
+    font_size: f32,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let ctx = MathLayoutContext {
+        font_size,
+        style: MathStyle::from_block(block),
+    };
+    let exprs: &[MathExpr] = match block {
+        MathBlock::Inline(xs) => xs,
+        MathBlock::Display { content, .. } => content,
+    };
+    // Pre-compute baseline: first pass finds needed ascent.
+    let mut total_bbox = MathBBox::default();
+    for e in exprs {
+        let b = layout_expr(e, &ctx);
+        total_bbox = total_bbox.hstack(&b);
+    }
+    // Baseline sits at cursor_y + ascent (top-relative).
+    let baseline_y = cursor_y + total_bbox.ascent.max(font_size * 0.8);
+
+    let mut elems = Vec::new();
+    let mut cur_x = x;
+    for e in exprs {
+        let (ee, b) = emit_expr(e, cur_x, baseline_y, &ctx);
+        elems.extend(ee);
+        cur_x += b.advance;
+    }
+    (elems, total_bbox)
 }
 
 /// Flatten a whole MathBlock to a single text string (substituted).
