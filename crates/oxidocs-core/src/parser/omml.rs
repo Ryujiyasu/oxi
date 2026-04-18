@@ -151,6 +151,34 @@ fn parse_single_expr(
         // N-ary operator
         "nary" => Ok(Some(parse_nary(reader)?)),
 
+        // Accent (hat, tilde, macron, vector)
+        "acc" => Ok(Some(parse_accent(reader)?)),
+
+        // Bar (overline/underline)
+        "bar" => Ok(Some(parse_bar(reader)?)),
+
+        // Limits (lim_{x→0} / limⁿ)
+        "limLow" => Ok(Some(parse_limit(reader, "limLow", crate::ir::LimitPos::Lower)?)),
+        "limUpp" => Ok(Some(parse_limit(reader, "limUpp", crate::ir::LimitPos::Upper)?)),
+
+        // Function (sin x, cos y, log z)
+        "func" => Ok(Some(parse_func(reader)?)),
+
+        // Group character (underbrace, overbrace)
+        "groupChr" => Ok(Some(parse_group_chr(reader)?)),
+
+        // Equation array (stacked equations)
+        "eqArr" => Ok(Some(parse_eq_arr(reader)?)),
+
+        // Box (visual grouping, no bar)
+        "box" => Ok(Some(parse_box(reader)?)),
+
+        // Bordered box (rectangle border around expr)
+        "borderBox" => Ok(Some(parse_border_box(reader)?)),
+
+        // Phantom (reserves space without ink)
+        "phant" => Ok(Some(parse_phantom(reader)?)),
+
         // Properties containers — skip (read through the closing tag)
         "rPr" | "fPr" | "sSubPr" | "sSupPr" | "sSubSupPr" | "sPrePr"
         | "radPr" | "naryPr" | "mPr" | "mcs" | "mc" | "mcPr" | "dPr"
@@ -642,6 +670,329 @@ fn parse_nary(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
     })
 }
 
+/// Parse `<m:acc>` accent: chr from accPr, base from e.
+fn parse_accent(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    let mut accent: char = '\u{0302}'; // default ̂ hat
+    let mut base: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "accPr" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    if local(ee.name().as_ref()) == "chr" {
+                                        for attr in ee.attributes().flatten() {
+                                            if local(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                if let Some(c) = v.chars().next() { accent = c; }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "accPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in accPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "acc" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart("EOF in m:acc".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Accent {
+        accent,
+        base: Box::new(base.unwrap_or(MathExpr::Text(String::new()))),
+    })
+}
+
+/// Parse `<m:bar>`: overline (pos=top) or underline (pos=bot), base from e.
+fn parse_bar(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    use crate::ir::BarPos;
+    let mut pos = BarPos::Top;
+    let mut base: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "barPr" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    if local(ee.name().as_ref()) == "pos" {
+                                        for attr in ee.attributes().flatten() {
+                                            if local(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                pos = match v.as_ref() {
+                                                    "bot" => BarPos::Bot,
+                                                    _ => BarPos::Top,
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "barPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in barPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "bar" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart("EOF in m:bar".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Bar {
+        pos,
+        base: Box::new(base.unwrap_or(MathExpr::Text(String::new()))),
+    })
+}
+
+/// Parse `<m:limLow>` or `<m:limUpp>`: base from e, limit expr from lim.
+fn parse_limit(
+    reader: &mut Reader<&[u8]>,
+    tag_name: &str,
+    pos: crate::ir::LimitPos,
+) -> Result<MathExpr, ParseError> {
+    let mut base: Option<MathExpr> = None;
+    let mut lim: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    "lim" => lim = Some(wrap_seq(parse_expr_sequence(reader, "lim")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == tag_name => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                format!("EOF in m:{tag_name}"))),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Limit {
+        base: Box::new(base.unwrap_or(MathExpr::Text(String::new()))),
+        lim: Box::new(lim.unwrap_or(MathExpr::Text(String::new()))),
+        pos,
+    })
+}
+
+/// Parse `<m:func>` function: fName + e argument.
+fn parse_func(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    let mut name: Option<MathExpr> = None;
+    let mut arg: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "fName" => name = Some(wrap_seq(parse_expr_sequence(reader, "fName")?)),
+                    "e" => arg = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "func" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart("EOF in m:func".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Function {
+        name: Box::new(name.unwrap_or(MathExpr::Text(String::new()))),
+        arg: Box::new(arg.unwrap_or(MathExpr::Text(String::new()))),
+    })
+}
+
+/// Parse `<m:groupChr>` underbrace/overbrace: chr + pos from groupChrPr, base from e.
+fn parse_group_chr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    use crate::ir::BarPos;
+    let mut chr: char = '\u{23DF}'; // default bottom curly bracket
+    let mut pos = BarPos::Bot;
+    let mut base: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "groupChrPr" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    let t = local(ee.name().as_ref());
+                                    if t == "chr" {
+                                        for attr in ee.attributes().flatten() {
+                                            if local(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                if let Some(c) = v.chars().next() { chr = c; }
+                                            }
+                                        }
+                                    } else if t == "pos" {
+                                        for attr in ee.attributes().flatten() {
+                                            if local(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                pos = match v.as_ref() {
+                                                    "top" => BarPos::Top,
+                                                    _ => BarPos::Bot,
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "groupChrPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in groupChrPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "groupChr" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                "EOF in m:groupChr".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::GroupChar {
+        chr,
+        pos,
+        base: Box::new(base.unwrap_or(MathExpr::Text(String::new()))),
+    })
+}
+
+/// Parse `<m:eqArr>` equation array: stacked expressions (one per e).
+fn parse_eq_arr(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    let mut items: Vec<MathExpr> = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "e" => items.push(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "eqArr" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart("EOF in m:eqArr".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::EqArray(items))
+}
+
+/// Parse `<m:box>` visual grouping: content from e.
+fn parse_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    let mut inner: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "e" => inner = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "box" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart("EOF in m:box".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::BoxExpr(Box::new(
+        inner.unwrap_or(MathExpr::Text(String::new())),
+    )))
+}
+
+/// Parse `<m:borderBox>`: box with border, sides from borderBoxPr.
+fn parse_border_box(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    use crate::ir::BoxBorders;
+    let mut sides = BoxBorders::default();
+    let mut base: Option<MathExpr> = None;
+    // Default: all 4 sides drawn unless borderBoxPr specifies hideTop/hideBot/etc.
+    sides.top = true; sides.bot = true; sides.left = true; sides.right = true;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "borderBoxPr" => {
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Empty(ee)) | Ok(Event::Start(ee)) => {
+                                    let t = local(ee.name().as_ref());
+                                    match t.as_str() {
+                                        "hideTop" => sides.top = false,
+                                        "hideBot" => sides.bot = false,
+                                        "hideLeft" => sides.left = false,
+                                        "hideRight" => sides.right = false,
+                                        "strikeH" => sides.strikeh = true,
+                                        "strikeV" => sides.strikev = true,
+                                        "strikeBLTR" => sides.strikebltr = true,
+                                        "strikeTLBR" => sides.striketlbr = true,
+                                        _ => {}
+                                    }
+                                }
+                                Ok(Event::End(ee)) if local(ee.name().as_ref()) == "borderBoxPr" => break,
+                                Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                                    "EOF in borderBoxPr".to_string())),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "e" => base = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "borderBox" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart(
+                "EOF in m:borderBox".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::BorderBox {
+        base: Box::new(base.unwrap_or(MathExpr::Text(String::new()))),
+        sides,
+    })
+}
+
+/// Parse `<m:phant>` phantom: reserves space without ink.
+fn parse_phantom(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
+    let mut inner: Option<MathExpr> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = local(e.name().as_ref());
+                match tag.as_str() {
+                    "e" => inner = Some(wrap_seq(parse_expr_sequence(reader, "e")?)),
+                    _ => { skip_until_end(reader, &tag)?; }
+                }
+            }
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "phant" => break,
+            Ok(Event::Eof) => return Err(ParseError::MissingPart("EOF in m:phant".to_string())),
+            _ => {}
+        }
+    }
+    Ok(MathExpr::Phantom(Box::new(
+        inner.unwrap_or(MathExpr::Text(String::new())),
+    )))
+}
+
 /// Advance the reader past the closing tag matching `end_tag`, balancing
 /// nested opens/closes of the same name.
 fn skip_until_end(
@@ -873,6 +1224,113 @@ mod tests {
                 assert!(matches!(**den, MathExpr::Text(ref s) if s == "c"));
             }
             _ => panic!("expected outer Fraction"),
+        }
+    }
+
+    #[test]
+    fn parse_accent_hat() {
+        use crate::ir::MathExpr;
+        let xml = r#"<m:oMath xmlns:m="x"><m:acc>
+            <m:accPr><m:chr m:val="̂"/></m:accPr>
+            <m:e><m:r><m:t>x</m:t></m:r></m:e>
+        </m:acc></m:oMath>"#;
+        let block = parse(xml);
+        let exprs = match block { MathBlock::Inline(v) => v, _ => panic!() };
+        match &exprs[0] {
+            MathExpr::Accent { accent, base } => {
+                assert_eq!(*accent, '\u{0302}');
+                assert!(matches!(**base, MathExpr::Text(ref s) if s == "x"));
+            }
+            _ => panic!("expected Accent"),
+        }
+    }
+
+    #[test]
+    fn parse_bar_top() {
+        use crate::ir::{MathExpr, BarPos};
+        let xml = r#"<m:oMath xmlns:m="x"><m:bar>
+            <m:e><m:r><m:t>x</m:t></m:r></m:e>
+        </m:bar></m:oMath>"#;
+        let block = parse(xml);
+        let exprs = match block { MathBlock::Inline(v) => v, _ => panic!() };
+        match &exprs[0] {
+            MathExpr::Bar { pos, base } => {
+                assert_eq!(*pos, BarPos::Top);
+                assert!(matches!(**base, MathExpr::Text(ref s) if s == "x"));
+            }
+            _ => panic!("expected Bar"),
+        }
+    }
+
+    #[test]
+    fn parse_matrix_2x2() {
+        use crate::ir::MathExpr;
+        let xml = r#"<m:oMath xmlns:m="x"><m:m>
+            <m:mPr><m:mcs><m:mc><m:mcPr><m:count m:val="2"/></m:mcPr></m:mc></m:mcs></m:mPr>
+            <m:mr>
+                <m:e><m:r><m:t>a</m:t></m:r></m:e>
+                <m:e><m:r><m:t>b</m:t></m:r></m:e>
+            </m:mr>
+            <m:mr>
+                <m:e><m:r><m:t>c</m:t></m:r></m:e>
+                <m:e><m:r><m:t>d</m:t></m:r></m:e>
+            </m:mr>
+        </m:m></m:oMath>"#;
+        let block = parse(xml);
+        let exprs = match block { MathBlock::Inline(v) => v, _ => panic!() };
+        match &exprs[0] {
+            MathExpr::Matrix { rows, cols, .. } => {
+                assert_eq!(*cols, 2);
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0].len(), 2);
+                assert!(matches!(&rows[0][0], MathExpr::Text(s) if s == "a"));
+                assert!(matches!(&rows[1][1], MathExpr::Text(s) if s == "d"));
+            }
+            _ => panic!("expected Matrix"),
+        }
+    }
+
+    #[test]
+    fn parse_delimiter_square_brackets() {
+        use crate::ir::MathExpr;
+        let xml = r#"<m:oMath xmlns:m="x"><m:d>
+            <m:dPr><m:begChr m:val="["/><m:endChr m:val="]"/></m:dPr>
+            <m:e><m:r><m:t>x</m:t></m:r></m:e>
+        </m:d></m:oMath>"#;
+        let block = parse(xml);
+        let exprs = match block { MathBlock::Inline(v) => v, _ => panic!() };
+        match &exprs[0] {
+            MathExpr::Delimiter { beg, end, content, .. } => {
+                assert_eq!(*beg, '[');
+                assert_eq!(*end, ']');
+                assert!(matches!(**content, MathExpr::Text(ref s) if s == "x"));
+            }
+            _ => panic!("expected Delimiter"),
+        }
+    }
+
+    #[test]
+    fn parse_nary_sum() {
+        use crate::ir::MathExpr;
+        let xml = r#"<m:oMath xmlns:m="x"><m:nary>
+            <m:naryPr>
+                <m:chr m:val="∑"/>
+                <m:limLoc m:val="undOvr"/>
+                <m:grow m:val="1"/>
+            </m:naryPr>
+            <m:sub><m:r><m:t>i=1</m:t></m:r></m:sub>
+            <m:sup><m:r><m:t>n</m:t></m:r></m:sup>
+            <m:e><m:r><m:t>i</m:t></m:r></m:e>
+        </m:nary></m:oMath>"#;
+        let block = parse(xml);
+        let exprs = match block { MathBlock::Inline(v) => v, _ => panic!() };
+        match &exprs[0] {
+            MathExpr::Nary { op, grow, operand, .. } => {
+                assert_eq!(*op, '∑');
+                assert!(*grow);
+                assert!(matches!(**operand, MathExpr::Text(ref s) if s == "i"));
+            }
+            _ => panic!("expected Nary"),
         }
     }
 
