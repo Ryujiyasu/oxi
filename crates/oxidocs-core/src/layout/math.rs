@@ -341,6 +341,86 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: 0.0,
             }
         }
+        MathExpr::Nary { sub, sup, operand, .. } => {
+            let fs = ctx.font_size;
+            let op_size = if ctx.style.is_display() { fs * 1.6 } else { fs * 1.2 };
+            let op_w = op_size * 0.6;
+            let lim_ctx = ctx.descend_script();
+            let sub_b = sub.as_ref().map(|s| layout_expr(s, &lim_ctx));
+            let sup_b = sup.as_ref().map(|s| layout_expr(s, &lim_ctx));
+            let op_bbox = layout_expr(operand, ctx);
+            let limits_w = op_w
+                .max(sub_b.as_ref().map(|b| b.advance).unwrap_or(0.0))
+                .max(sup_b.as_ref().map(|b| b.advance).unwrap_or(0.0));
+            MathBBox {
+                advance: limits_w + fs * 0.1 + op_bbox.advance,
+                ascent: (op_size * 0.8)
+                    .max(sup_b.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
+                    .max(op_bbox.ascent),
+                descent: (op_size * 0.2)
+                    .max(sub_b.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
+                    .max(op_bbox.descent),
+                italic_correction: 0.0,
+            }
+        }
+        MathExpr::Function { name, arg } => {
+            let nb = layout_expr(name, ctx);
+            let ab = layout_expr(arg, ctx);
+            let gap = ctx.font_size * 0.15;
+            MathBBox {
+                advance: nb.advance + gap + ab.advance,
+                ascent: nb.ascent.max(ab.ascent),
+                descent: nb.descent.max(ab.descent),
+                italic_correction: ab.italic_correction,
+            }
+        }
+        MathExpr::GroupChar { pos, base, .. } => {
+            let bb = layout_expr(base, ctx);
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let gap = table.du_to_pt(table.constants.StretchStackGapAboveMin, fs);
+            let chr_h = fs * 0.8;
+            let mut bbox = bb;
+            match pos {
+                crate::ir::BarPos::Top => bbox.ascent += gap + chr_h,
+                crate::ir::BarPos::Bot => bbox.descent += gap + chr_h,
+            }
+            bbox
+        }
+        MathExpr::EqArray(items) => {
+            if items.is_empty() { return MathBBox::default(); }
+            let bbs: Vec<MathBBox> = items.iter().map(|e| layout_expr(e, ctx)).collect();
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let gap = table.du_to_pt(table.constants.StackGapMin, fs);
+            let total_h: f32 = bbs.iter().map(|b| b.height()).sum::<f32>()
+                + gap * items.len().saturating_sub(1) as f32;
+            let axis = table.du_to_pt(table.constants.AxisHeight, fs);
+            let common_w = bbs.iter().map(|b| b.advance).fold(0.0_f32, f32::max);
+            MathBBox {
+                advance: common_w,
+                ascent: total_h / 2.0 + axis,
+                descent: total_h / 2.0 - axis,
+                italic_correction: 0.0,
+            }
+        }
+        MathExpr::PreScript { base, sub, sup } => {
+            let s_ctx = ctx.descend_script();
+            let bb = layout_expr(base, ctx);
+            let sb = layout_expr(sub, &s_ctx);
+            let pb = layout_expr(sup, &s_ctx);
+            let pre_w = sb.advance.max(pb.advance);
+            let table = MathTable::cambria_math();
+            let fs = ctx.font_size;
+            let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
+            let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+            MathBBox {
+                advance: pre_w + bb.advance,
+                ascent: bb.ascent.max(sup_shift + pb.ascent),
+                descent: bb.descent.max(sub_shift + sb.descent),
+                italic_correction: bb.italic_correction,
+            }
+        }
         // Primitives not yet implemented — return zero bbox.
         _ => MathBBox::default(),
     }
@@ -586,6 +666,21 @@ pub fn emit_expr(
         }
         MathExpr::Limit { base, lim, pos } => {
             emit_limit(base, lim, *pos, x, baseline_y, ctx)
+        }
+        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
+            emit_nary(*op, sub.as_deref(), sup.as_deref(), operand, *lim_loc, x, baseline_y, ctx)
+        }
+        MathExpr::Function { name, arg } => {
+            emit_function(name, arg, x, baseline_y, ctx)
+        }
+        MathExpr::GroupChar { chr, pos, base } => {
+            emit_group_chr(*chr, *pos, base, x, baseline_y, ctx)
+        }
+        MathExpr::EqArray(items) => {
+            emit_eq_array(items, x, baseline_y, ctx)
+        }
+        MathExpr::PreScript { base, sub, sup } => {
+            emit_prescript(base, sub, sup, x, baseline_y, ctx)
         }
         // Other primitives: fall back to flat text via extract_flat_text.
         _ => {
@@ -931,6 +1026,240 @@ fn emit_matrix(
         ascent: total_height / 2.0 + axis_h,
         descent: total_height / 2.0 - axis_h,
         italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit n-ary operator with sub/sup limits.
+/// limLoc=undOvr: limits stacked above/below operator.
+/// limLoc=subSup: limits as scripts to the right.
+fn emit_nary(
+    op: char,
+    sub: Option<&MathExpr>,
+    sup: Option<&MathExpr>,
+    operand: &MathExpr,
+    lim_loc: crate::ir::LimLoc,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    use crate::ir::LimLoc;
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    // Operator glyph: render larger if grow or display.
+    let op_size = if ctx.style.is_display() { fs * 1.6 } else { fs * 1.2 };
+    let op_w = op_size * 0.6;
+
+    let mut elems = Vec::new();
+    let mut cur_x = x;
+
+    let lim_ctx = ctx.descend_script();
+    let sub_bbox = sub.map(|s| layout_expr(s, &lim_ctx));
+    let sup_bbox = sup.map(|s| layout_expr(s, &lim_ctx));
+
+    match lim_loc {
+        LimLoc::UndOvr => {
+            // Center operator and limits on common column.
+            let common_w = op_w
+                .max(sub_bbox.as_ref().map(|b| b.advance).unwrap_or(0.0))
+                .max(sup_bbox.as_ref().map(|b| b.advance).unwrap_or(0.0));
+            let op_x = cur_x + (common_w - op_w) / 2.0;
+            elems.push(emit_text_at(op.to_string(), op_x, baseline_y, op_size));
+
+            if let (Some(s_expr), Some(s_bb)) = (sup, sup_bbox.as_ref()) {
+                let sup_x = cur_x + (common_w - s_bb.advance) / 2.0;
+                let rise = table.du_to_pt(table.constants.UpperLimitBaselineRiseMin, fs);
+                let gap = table.du_to_pt(table.constants.UpperLimitGapMin, fs);
+                let sup_baseline = baseline_y - op_size * 0.8 - gap - rise;
+                let (e, _) = emit_expr(s_expr, sup_x, sup_baseline, &lim_ctx);
+                elems.extend(e);
+            }
+            if let (Some(s_expr), Some(s_bb)) = (sub, sub_bbox.as_ref()) {
+                let sub_x = cur_x + (common_w - s_bb.advance) / 2.0;
+                let drop = table.du_to_pt(table.constants.LowerLimitBaselineDropMin, fs);
+                let gap = table.du_to_pt(table.constants.LowerLimitGapMin, fs);
+                let sub_baseline = baseline_y + op_size * 0.2 + gap + drop;
+                let (e, _) = emit_expr(s_expr, sub_x, sub_baseline, &lim_ctx);
+                elems.extend(e);
+            }
+            cur_x += common_w;
+        }
+        LimLoc::SubSup => {
+            // Operator at baseline, sub/sup as regular scripts to the right.
+            elems.push(emit_text_at(op.to_string(), cur_x, baseline_y, op_size));
+            cur_x += op_w;
+            if let (Some(s_expr), Some(s_bb)) = (sup, sup_bbox.as_ref()) {
+                let sup_x = cur_x;
+                let shift_up = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
+                let (e, _) = emit_expr(s_expr, sup_x, baseline_y - shift_up, &lim_ctx);
+                elems.extend(e);
+                cur_x += s_bb.advance;
+            }
+            if let (Some(s_expr), Some(s_bb)) = (sub, sub_bbox.as_ref()) {
+                let shift_down = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+                let (e, _) = emit_expr(s_expr, cur_x - sub_bbox.as_ref().map(|b| b.advance).unwrap_or(0.0),
+                                       baseline_y + shift_down, &lim_ctx);
+                elems.extend(e);
+                if sup_bbox.is_none() { cur_x += s_bb.advance; }
+            }
+        }
+    }
+
+    // Small gap then operand.
+    cur_x += fs * 0.1;
+    let (op_elems, op_bbox) = emit_expr(operand, cur_x, baseline_y, ctx);
+    elems.extend(op_elems);
+
+    let bbox = MathBBox {
+        advance: cur_x - x + op_bbox.advance,
+        ascent: (op_size * 0.8)
+            .max(sup_bbox.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
+            .max(op_bbox.ascent),
+        descent: (op_size * 0.2)
+            .max(sub_bbox.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
+            .max(op_bbox.descent),
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit function: name + arg (e.g., sin x, log y).
+fn emit_function(
+    name: &MathExpr,
+    arg: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let fs = ctx.font_size;
+    let (name_elems, name_bbox) = emit_expr(name, x, baseline_y, ctx);
+    let gap = fs * 0.15;
+    let arg_x = x + name_bbox.advance + gap;
+    let (arg_elems, arg_bbox) = emit_expr(arg, arg_x, baseline_y, ctx);
+    let mut elems = name_elems;
+    elems.extend(arg_elems);
+    let bbox = MathBBox {
+        advance: name_bbox.advance + gap + arg_bbox.advance,
+        ascent: name_bbox.ascent.max(arg_bbox.ascent),
+        descent: name_bbox.descent.max(arg_bbox.descent),
+        italic_correction: arg_bbox.italic_correction,
+    };
+    (elems, bbox)
+}
+
+/// Emit group character: brace/bracket above or below base.
+fn emit_group_chr(
+    chr: char,
+    pos: crate::ir::BarPos,
+    base: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    use crate::ir::BarPos;
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+    let base_bbox = layout_expr(base, ctx);
+    let (base_elems, _) = emit_expr(base, x, baseline_y, ctx);
+    let mut elems = base_elems;
+
+    let gap = table.du_to_pt(table.constants.StretchStackGapAboveMin, fs);
+    let chr_size = fs * 0.8;
+    let chr_x = x + (base_bbox.advance - chr_size * 0.6) / 2.0;
+
+    let chr_baseline = match pos {
+        BarPos::Top => baseline_y - base_bbox.ascent - gap - chr_size * 0.2,
+        BarPos::Bot => baseline_y + base_bbox.descent + gap + chr_size * 0.8,
+    };
+    elems.push(emit_text_at(chr.to_string(), chr_x, chr_baseline, chr_size));
+
+    let mut bbox = base_bbox;
+    match pos {
+        BarPos::Top => bbox.ascent += gap + chr_size,
+        BarPos::Bot => bbox.descent += gap + chr_size,
+    }
+    (elems, bbox)
+}
+
+/// Emit equation array: vertically stacked expressions.
+fn emit_eq_array(
+    items: &[MathExpr],
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+
+    if items.is_empty() {
+        return (vec![], MathBBox::default());
+    }
+    let bboxes: Vec<MathBBox> = items.iter().map(|e| layout_expr(e, ctx)).collect();
+    let gap = table.du_to_pt(table.constants.StackGapMin, fs);
+    let total_h: f32 = bboxes.iter().map(|b| b.height()).sum::<f32>()
+        + gap * items.len().saturating_sub(1) as f32;
+    let common_w = bboxes.iter().map(|b| b.advance).fold(0.0_f32, f32::max);
+
+    let axis = table.du_to_pt(table.constants.AxisHeight, fs);
+    let mut cur_y = baseline_y - axis - total_h / 2.0;
+    let mut elems = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let bb = &bboxes[i];
+        let item_baseline = cur_y + bb.ascent;
+        let item_x = x + (common_w - bb.advance) / 2.0;
+        let (e, _) = emit_expr(item, item_x, item_baseline, ctx);
+        elems.extend(e);
+        cur_y += bb.height() + gap;
+    }
+    let bbox = MathBBox {
+        advance: common_w,
+        ascent: total_h / 2.0 + axis,
+        descent: total_h / 2.0 - axis,
+        italic_correction: 0.0,
+    };
+    (elems, bbox)
+}
+
+/// Emit pre-script: sub/sup to the LEFT of base (isotope notation ^14_6 C).
+fn emit_prescript(
+    base: &MathExpr,
+    sub: &MathExpr,
+    sup: &MathExpr,
+    x: f32,
+    baseline_y: f32,
+    ctx: &MathLayoutContext,
+) -> (Vec<LayoutElement>, MathBBox) {
+    let table = MathTable::cambria_math();
+    let fs = ctx.font_size;
+    let s_ctx = ctx.descend_script();
+    let sub_bbox = layout_expr(sub, &s_ctx);
+    let sup_bbox = layout_expr(sup, &s_ctx);
+
+    let pre_w = sub_bbox.advance.max(sup_bbox.advance);
+    let sup_shift = table.du_to_pt(table.constants.SuperscriptShiftUp, fs);
+    let sub_shift = table.du_to_pt(table.constants.SubscriptShiftDown, fs);
+
+    let mut elems = Vec::new();
+    // Pre-sup: right-aligned at x + pre_w, raised.
+    let sup_x = x + pre_w - sup_bbox.advance;
+    let (sup_e, _) = emit_expr(sup, sup_x, baseline_y - sup_shift, &s_ctx);
+    elems.extend(sup_e);
+    // Pre-sub: right-aligned at x + pre_w, lowered.
+    let sub_x = x + pre_w - sub_bbox.advance;
+    let (sub_e, _) = emit_expr(sub, sub_x, baseline_y + sub_shift, &s_ctx);
+    elems.extend(sub_e);
+
+    // Base after pre-scripts.
+    let base_x = x + pre_w;
+    let (base_elems, base_bbox) = emit_expr(base, base_x, baseline_y, ctx);
+    elems.extend(base_elems);
+
+    let bbox = MathBBox {
+        advance: pre_w + base_bbox.advance,
+        ascent: base_bbox.ascent.max(sup_shift + sup_bbox.ascent),
+        descent: base_bbox.descent.max(sub_shift + sub_bbox.descent),
+        italic_correction: base_bbox.italic_correction,
     };
     (elems, bbox)
 }
