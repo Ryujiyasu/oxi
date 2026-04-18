@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## 2026-04-18 — oxi-2 — phase-1-complete — attack matrix + master index; COM deferred
+
+- context: feat/comments-tracked-changes Phase 1 final tick (was Tick 7 in TASK.md)
+- deliverables:
+  - `docs/spec/comments_tracked_changes/attack_matrix.md` — 33-row priority matrix (12 parser + 4 IR + 13 renderer + 4 settings). Effort, blast radius, fixture coverage, COM-measurement dependency, baseline SSIM risk per row. Recommended execution order: P-01→P-12 → I-01→I-04 → R-01/R-03/R-04 first (cheapest renderer wins). Baseline risk = **none** for virtually every row (baseline has 0 comments / 5 lone dels) — Path B confidence-merge is natural.
+  - `docs/spec/comments_tracked_changes/INDEX.md` — canonical entry point. Indexes every Phase 1 asset (spec notes, attack matrix, inventory, fixtures, coordination files) + 3 dogfood lookup simulations ("implement w:ins parse", "render comment balloons", "worried about SSIM regression on w:del").
+- deferred: Tick 2-3 Word COM measurement (12-target checklist embedded in attack_matrix.md §"Tick 2-3 deferred COM checklist"). Must run in a dedicated session before starting renderer rows R-01+; parser rows (P-01…P-12) can begin without it.
+- handoff: Phase 2 can start immediately at any parser row. IR sketch in revisions_notes.md §8; renderer row R-02 (author-color palette) blocks R-10 (margin change bar) and wants COM data.
+- methodology: Phase C inventory→matrix→index re-application succeeded; validated pattern still generalises beyond yakumono/cell/footnote domains. No code changes in /loop per user directive; all 4 ticks = pure measurement + memo.
+
 ## 2026-04-18 — oxi-2 — spec-notes-written — ECMA-376 §17.13.1 + §17.13.5
 
 - context: feat/comments-tracked-changes Phase 1 Tick 4 (spec notes)
