@@ -41,6 +41,35 @@ Format:
   Stylistic fidelity is prerequisite for Path A landing.
 
 ---
+## 2026-04-18 — dedicated — iter2 progress — GDI PresetShape fill + invisible skip
+
+Follow-up to the iter1 entry above (commit f79c502 → b1a9edf on
+fix/gdi-preset-shapes branch).
+
+Changes in iter2:
+- IR LayoutContent::PresetShape gets new fill_color field (parser already
+  extracted shape.fill, now propagated through).
+- Renderer creates a solid fill brush when fill_color is present;
+  Rectangle/RoundRect/Ellipse paint fill behind stroke in a single call.
+- Renderer SKIPS shapes with neither stroke nor fill (Word draws nothing
+  for textbox-frame rects with <a:noFill/> on both). Previously these
+  were getting a default black stroke, polluting the output.
+
+Quick verify 5-doc diff (vs main baseline):
+  2ea81 p.1: 0.7829 -> 0.7829 (= FIXED from iter1 -0.0040)
+  2ea81 p.2: 0.6356 -> 0.6298 (-0.0058, iter1 was -0.0064)
+  b35 p.1:   0.6134 -> 0.6110 (-0.0024 unchanged from iter1)
+  29dc6e p.6: 0.9327 -> 0.9239 (-0.0088 unchanged)
+  1636d28 p.1: 0.7255 -> 0.7189 (-0.0066 unchanged)
+
+Residuals: roundRect callouts. Oxi's solid-pen stroke differs from
+Word's antialiased sub-pixel edge. Fixing requires GDI AA + sub-pixel
+pen setup, deferred to rendering-quality session.
+
+Still NOT MERGED to main (b35 rank 3 regresses -0.0024 per Ra §9).
+Branch fix/gdi-preset-shapes carries iter2 commit b1a9edf.
+
+
 
 ---
 
