@@ -158,6 +158,8 @@ impl OoxmlParser {
                     margin: section.properties.margin,
                     grid_line_pitch: section.properties.grid_line_pitch,
                     grid_char_pitch: section.properties.grid_char_pitch,
+                    grid_char_space_raw: section.properties.grid_char_space_raw,
+                    grid_char_cw_ratio: None,
                     doc_grid_no_type: section.properties.doc_grid_no_type,
                     header,
                     footer,
@@ -209,16 +211,26 @@ impl OoxmlParser {
                     // But we lost the charSpace value. Store it in SectionProperties.
                     // For now: if default != 10.5, redo with approximate raw_pitch
                     if (default_font_size - 10.5).abs() > 0.01 {
-                        // Approximate: old raw_pitch = old_pitch / ceil (which was just floor(cw/raw)/cw)
-                        // Actually, we stored pitch = cw/floor(cw/10.5). Just redo:
-                        let old_chars_line = (content_w / pitch).round();
-                        // The charSpace contribution: old raw = 10.5 + cs, new raw = default + cs
-                        // cs = content_w/old_chars_line - content_w/floor(content_w/(10.5)) ... no
-                        // Simplest: just use default_font_size as raw_pitch (no charSpace contribution)
-                        // This works when charSpace is absent (most common case for this bug)
-                        let raw_pitch = default_font_size;
-                        let chars_line = (content_w / raw_pitch).floor().max(1.0);
-                        page.grid_char_pitch = Some(content_w / chars_line);
+                        // 2026-04-18: Use saved charSpace to recompute correctly.
+                        // ECMA-376 §17.6.5: raw_pitch = default_font_size + charSpace/4096
+                        let char_space_pt = page.grid_char_space_raw
+                            .map(|cs| cs as f32 / 4096.0)
+                            .unwrap_or(0.0);
+                        let raw_pitch = default_font_size + char_space_pt;
+                        if raw_pitch > 0.0 {
+                            let chars_line = (content_w / raw_pitch).floor().max(1.0);
+                            page.grid_char_pitch = Some(content_w / chars_line);
+                        }
+                        let _ = pitch;
+                    }
+                }
+                // 2026-04-19: Compute per-fontsize char-width ratio.
+                // Word formula: cw(fs) = fs * pitch / default_font_size.
+                // Applies for all default_font_size (including 10.5).
+                // COM-verified on minimal repro (default=10.5) and b35 (default=12).
+                if let Some(p) = page.grid_char_pitch {
+                    if default_font_size > 0.0 {
+                        page.grid_char_cw_ratio = Some(p / default_font_size);
                     }
                 }
             }
@@ -850,6 +862,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         margin: Margin::default(),
         grid_line_pitch: None,
         grid_char_pitch: None,
+        grid_char_space_raw: None,
         doc_grid_no_type: false,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
@@ -4903,6 +4916,8 @@ struct SectionProperties {
     grid_line_pitch: Option<f32>,
     /// Character grid pitch in points (for linesAndChars mode)
     grid_char_pitch: Option<f32>,
+    /// Raw charSpace value (1/4096 point units) for post-process recompute
+    grid_char_space_raw: Option<i32>,
     /// docGrid exists but has no type attribute
     doc_grid_no_type: bool,
     /// Reference IDs for header parts (with type)
@@ -4935,6 +4950,7 @@ fn parse_section_properties(
     let mut margin = Margin::default();
     let mut grid_line_pitch: Option<f32> = None;
     let mut grid_char_pitch: Option<f32> = None;
+    let mut char_space_section: Option<i32> = None;
     let mut doc_grid_no_type = false;
     let mut header_refs: Vec<HdrFtrRef> = Vec::new();
     let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
@@ -5186,6 +5202,9 @@ fn parse_section_properties(
                                 let chars_line = (content_w / raw_pitch).floor().max(1.0);
                                 grid_char_pitch = Some(content_w / chars_line);
                             }
+                            // Save raw charSpace so the caller's post-process can recompute
+                            // with the correct default_font_size while preserving charSpace.
+                            char_space_section = char_space;
                         }
                     }
                     "headerReference" => {
@@ -5285,6 +5304,7 @@ fn parse_section_properties(
         margin,
         grid_line_pitch,
         grid_char_pitch,
+        grid_char_space_raw: char_space_section,
         doc_grid_no_type,
         header_refs,
         footer_refs,

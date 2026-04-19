@@ -46,6 +46,15 @@ pub struct Page {
     /// When set, character widths are expanded to align to this grid.
     #[serde(default)]
     pub grid_char_pitch: Option<f32>,
+    /// Raw charSpace value from docGrid (stored so post-process can recompute
+    /// grid_char_pitch with correct default_font_size). Unit: 1/4096 of a point.
+    #[serde(default)]
+    pub grid_char_space_raw: Option<i32>,
+    /// Character-width ratio = grid_char_pitch / default_font_size.
+    /// Word renders fullwidth CJK chars at `font_size × ratio` in LM2 mode.
+    /// COM-confirmed 2026-04-19 on b35 (fs=9, pitch=11.337, default=12): advance=8.5pt.
+    #[serde(default)]
+    pub grid_char_cw_ratio: Option<f32>,
     /// True when docGrid element exists but has NO type attribute.
     /// CJK 83/64 multiplier is NOT applied; COM-measured Single heights used instead.
     #[serde(default)]

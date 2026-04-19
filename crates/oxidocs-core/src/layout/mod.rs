@@ -75,6 +75,9 @@ pub enum LayoutContent {
         field_type: Option<FieldType>,
         /// Pixel-snapped character spacing in points (0.0 = no extra spacing)
         character_spacing: f32,
+        /// Horizontal font scale percentage (100 = default, <100 compresses glyphs)
+        /// OOXML w:w value. Renderer applies via CreateFontW lfWidth.
+        text_scale: f32,
     },
     Image {
         data: Vec<u8>,
@@ -440,6 +443,13 @@ impl LayoutEngine {
                 let char_count: usize = runs[start..i].iter()
                     .map(|r| r.text.chars().count()).sum();
                 if char_count == 0 { continue; }
+                // 2026-04-19: If docx already has explicit text_scale set for
+                // this fit group, trust Word's pre-computed values and skip the
+                // recomputation (which may disagree due to CJK pitch/yakumono
+                // differences, causing overflow on b35 事務処理体制 row).
+                if runs[start..i].iter().any(|r| r.style.text_scale.is_some()) {
+                    continue;
+                }
 
                 // Get ACTUAL natural width by calling break_into_lines with cs=0.
                 // This accounts for autoSpaceDE, yakumono, etc.
@@ -452,7 +462,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -1097,6 +1107,7 @@ impl LayoutEngine {
                         content_width,
                         grid_pitch,
                         page.grid_char_pitch,
+                        page.grid_char_cw_ratio,
                         start_y,
                         content_height,
                         page.size.width,
@@ -1765,6 +1776,7 @@ impl LayoutEngine {
                         inner_width,
                         None,
                         None,
+                        None,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut tb_pages, &mut tb_elems,
                         None,
@@ -1995,6 +2007,7 @@ impl LayoutEngine {
                     highlight: None,
                     field_type: None,
                     character_spacing: 0.0,
+                    text_scale: 100.0,
             }));
         }
 
@@ -2016,7 +2029,8 @@ impl LayoutEngine {
         // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
         // NOT shift start position. Text starts at margin, line is shorter.
         let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
-        let lines = self.break_into_lines(&fragments, available_width, effective_first_indent, &para.style, effective_char_pitch);
+        let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
+        let lines = self.break_into_lines(&fragments, available_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -2417,6 +2431,7 @@ impl LayoutEngine {
                         } else {
                             snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing
                         },
+                        text_scale: frag.style.text_scale.unwrap_or(100.0),
                 });
                 if let Some(pi) = body_para_index {
                     el.paragraph_index = Some(pi);
@@ -2452,6 +2467,7 @@ impl LayoutEngine {
                             highlight: None,
                             field_type: None,
                             character_spacing: 0.0,
+                            text_scale: 100.0,
                         },
                     );
                     el.paragraph_index = Some(pi);
@@ -2645,6 +2661,7 @@ impl LayoutEngine {
         first_line_indent: f32,
         para_style: &ParagraphStyle,
         grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -2837,15 +2854,35 @@ impl LayoutEngine {
                 //   '7'=9pt (6+autoSpaceDE), ' '=6pt (TNR space natural).
                 // Previous (buggy) behavior padded ALL chars, halving the
                 // chars/line and causing 177-doc max-error of 0.5366 SSIM.
-                let char_grid_extra = if let Some(pitch) = grid_char_pitch {
+                // 2026-04-19 (revised): cw = fs + charSpace_pt (absolute, not scaled).
+                // COM-measured b35 fs=9→8.3pt, fs=10.5→9.8pt: both = fs − 0.7pt.
+                // Previous fs*ratio formula over-compressed at small fs in docs
+                // where default_fs ≠ fs.
+                let char_grid_extra = if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
+                    if ratio > 0.0 && pitch > 0.0 && char_width > 0.0
+                        && ch != ' ' && ch != '\t' && ch != '\n'
+                        && crate::font::is_fullwidth(ch)
+                        && !yakumono_compressed[char_index]
+                    {
+                        let default_fs = pitch / ratio;
+                        let char_space_pt = pitch - default_fs;
+                        (font_size + char_space_pt) - char_width
+                    } else { 0.0 }
+                } else if let Some(pitch) = grid_char_pitch {
                     if pitch > 0.0 && char_width > 0.0
                         && ch != ' ' && ch != '\t' && ch != '\n'
                         && crate::font::is_fullwidth(ch)
                         && !yakumono_compressed[char_index]
                     {
-                        (pitch - char_width).max(0.0)
+                        pitch - char_width
                     } else { 0.0 }
                 } else { 0.0 };
+                // For negative extras, fold into char_width directly so fragment
+                // widths (positioning) reflect the shrink. For positive extras,
+                // keep the existing separate-accumulator model (padding for positioning).
+                if char_grid_extra < 0.0 {
+                    char_width += char_grid_extra;
+                }
 
                 if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0C' || ch == '\x0B' {
                     // Whitespace: flush word, then handle the whitespace
@@ -3585,6 +3622,7 @@ impl LayoutEngine {
         content_width: f32,
         grid_pitch: Option<f32>,
         grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
         page_top: f32,
         content_height: f32,
         page_width: f32,
@@ -3626,10 +3664,13 @@ impl LayoutEngine {
             // explicit indent is set (indent=0 means default positioning).
             let pad_l_default = table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(4.95);
             let border_w = table.style.border_width.unwrap_or(0.5);
-            let border_offset = if table.style.indent.unwrap_or(0.0).abs() < 0.01 {
-                pad_l_default + border_w / 2.0
-            } else {
-                0.0
+            // 2026-04-19: Apply margin-padding-border offset ONLY when indent is
+            // EXPLICITLY set to 0 (Some(0.0)). When absent (None), use plain margin.
+            // b35 measurement: Word table at margin+5.6 (= cell text start), border at
+            // margin. Prior formula subtracted 5.2pt from margin → 5.2pt left-shift bug.
+            let border_offset = match table.style.indent {
+                Some(v) if v.abs() < 0.01 => pad_l_default + border_w / 2.0,
+                _ => 0.0,
             };
             match table.style.alignment.as_deref() {
                 Some("center") => start_x + (content_width - table_width) / 2.0,
@@ -3862,8 +3903,11 @@ impl LayoutEngine {
                     }
                 }
 
-                // COM-confirmed: Word uses cell_w for text wrapping (text overflows into padding)
-                let inner_w = cell_w.max(0.0);
+                // 2026-04-19: Use content area (cell_w - padding) for wrap width.
+                // Previous comment claimed "Word uses cell_w" but b35 組織的管理措置
+                // cell wraps at 4 chars (= 4×10.5=42pt fits in 49.05pt inner-pad area)
+                // not 6 chars (which would require 59.85pt cell_w with overflow).
+                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
                 let mut cell_elements: Vec<LayoutElement> = Vec::new();
                 let mut content_h: f32 = 0.0;
 
@@ -3886,6 +3930,7 @@ impl LayoutEngine {
                     let nested_elements = self.layout_table(
                         nested, nested_x, &mut nested_y, nested_content_w, table_grid_pitch,
                         grid_char_pitch,
+                        grid_char_cw_ratio,
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut dummy_pages, &mut dummy_elems,
                         block_idx,
@@ -3969,10 +4014,23 @@ impl LayoutEngine {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
 
+                        // 2026-04-19: Render list marker (numPr) for cells too.
+                        // Body renders at mod.rs:1939; cells previously skipped it.
+                        // b35 p1 "事務処理体制を整備" row: numId=5 ilvl=0 → □ marker.
+                        let list_marker_info: Option<(String, f32, f32)> = para.style.list_marker.as_ref().map(|marker| {
+                            let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                            let marker_fs = self.resolve_font_size(&marker_style, &para.style);
+                            let marker_metrics = self.metrics_for(&marker_style, &para.style);
+                            let marker_width: f32 = marker.chars()
+                                .map(|c| self.registry.char_width_pt_with_fallback(c, marker_fs, marker_metrics))
+                                .sum();
+                            (marker.clone(), marker_fs, marker_width)
+                        });
+
                         // Collect runs into lines with greedy wrapping
-                        // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing)
-                        let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32)>> = Vec::new();
-                        let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32)> = Vec::new();
+                        // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing, text_scale)
+                        let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)>> = Vec::new();
+                        let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)> = Vec::new();
                         let mut line_x: f32 = 0.0;
                         let mut is_first_line = true;
 
@@ -3993,6 +4051,23 @@ impl LayoutEngine {
                             for ch in run.text.chars() {
                                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                                // 2026-04-19: Apply charSpace as ABSOLUTE delta (not fs-scaled).
+                                // COM-measured b35 fs=9 → 8.3pt, fs=10.5 → 9.8pt: both are
+                                // fs − |charSpace_pt| (0.663pt), NOT fs × ratio.
+                                // Previous formula (fs × pitch/default_fs) over-compressed
+                                // when fs<default_fs. Correct: cw = fs + charSpace_pt where
+                                // charSpace_pt = pitch − default_fs (negative for compressPunc).
+                                if run.style.fit_text.is_none() {
+                                    if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
+                                        if ratio > 0.0 && pitch > 0.0 && cw > 0.0
+                                            && crate::font::is_fullwidth(ch)
+                                        {
+                                            let default_fs = pitch / ratio;
+                                            let char_space_pt = pitch - default_fs;
+                                            cw = font_size + char_space_pt;
+                                        }
+                                    }
+                                }
                                 if let Some(scale) = run.style.text_scale {
                                     if (scale - 100.0).abs() > 0.01 {
                                         cw *= scale / 100.0;
@@ -4009,7 +4084,7 @@ impl LayoutEngine {
                                         buf.push(ch);
                                         buf_w += cw;
                                         if !buf.is_empty() {
-                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs));
+                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
                                             buf.clear();
                                             buf_w = 0.0;
                                         }
@@ -4020,7 +4095,7 @@ impl LayoutEngine {
                                     }
                                     // Flush buffer to current line, then wrap
                                     if !buf.is_empty() {
-                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs));
+                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
                                         buf.clear();
                                         buf_w = 0.0;
                                     }
@@ -4032,7 +4107,7 @@ impl LayoutEngine {
                                 buf_w += cw;
                             }
                             if !buf.is_empty() {
-                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone(), cs));
+                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
                                 line_x += buf_w;
                             }
                         }
@@ -4052,7 +4127,7 @@ impl LayoutEngine {
                                 break;
                             }
                             // Line height = max of all runs in line (in_table_cell=true: no default font minimum)
-                            let lh: f32 = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _)| {
+                            let lh: f32 = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
                                 let metrics = match font_family.as_deref() {
                                     Some(ff) => self.registry.get(ff),
                                     None => self.registry.default_metrics(),
@@ -4064,7 +4139,7 @@ impl LayoutEngine {
                             let line_indent = p_indent_left + if line_idx == 0 { p_first_line_indent } else { 0.0 };
 
                             // Calculate line total width for alignment
-                            let line_total_w: f32 = line.iter().map(|(_, _, tw, _, _, _, _, _, _, _, _, _)| tw).sum();
+                            let line_total_w: f32 = line.iter().map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _)| tw).sum();
                             let effective_wrap = if line_idx == 0 { first_line_wrap_w } else { wrap_w };
 
                             // Justify: non-last lines for jc=both, all lines for distribute
@@ -4073,9 +4148,10 @@ impl LayoutEngine {
                                 || para.alignment == Alignment::Distribute;
 
                             // Alignment within cell content area (cell_w - padding).
-                            // Wrapping uses cell_w (text can overflow into padding), but
-                            // center/right align relative to the padded content area.
-                            let align_avail = (effective_wrap - pad_l - pad_r).max(0.0);
+                            // 2026-04-19: effective_wrap already = cell_w - pad_l - pad_r (v9).
+                            // Previous code subtracted padding AGAIN → center off by ~5pt.
+                            // Fix: use effective_wrap directly as content area.
+                            let align_avail = effective_wrap.max(0.0);
                             let align_offset = if should_justify {
                                 0.0
                             } else {
@@ -4089,12 +4165,16 @@ impl LayoutEngine {
                             // Justify: CJK punctuation compression + space/gap distribution
                             let mut frag_width_adj: Vec<f32> = vec![0.0; line.len()];
                             let mut frag_spacing: Vec<f32> = vec![0.0; line.len()];
-                            if should_justify && line.len() > 1 {
+                            let mut justify_char_spacing: f32 = 0.0;
+                            // 2026-04-19: allow single-fragment justify for CJK content.
+                            // Word distributes chars within a single CJK run for jc=both
+                            // non-last lines (b35 "組織的管" row: 4 chars spread across cell).
+                            if should_justify && !line.is_empty() {
                                 let mut slack = effective_wrap - line_total_w;
 
                                 // Phase 1: CJK punctuation compression (only when overflowing)
                                 if slack < 0.0 {
-                                    for (fi, (text, fs, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                    for (fi, (text, fs, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
                                         for ch in text.chars() {
                                             if kinsoku::is_cjk_compressible(ch) {
                                                 let fm = self.registry.default_metrics();
@@ -4111,26 +4191,29 @@ impl LayoutEngine {
                                 if slack > 0.0 {
                                     let space_count = line.iter()
                                         .enumerate()
-                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
                                         .count();
                                     if space_count > 0 {
                                         let per_space = slack / space_count as f32;
-                                        for (fi, (text, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                        for (fi, (text, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
                                             if fi < line.len() - 1 && text.trim().is_empty() {
                                                 frag_spacing[fi] += per_space;
                                             }
                                         }
                                     } else {
                                         // No word spaces: distribute between ALL CJK character gaps
-                                        // (same as body paragraph justify: total_chars - 1 gaps)
-                                        let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
-                                        if has_cjk {
+                                        // Only activate when line is noticeably short (>10% slack);
+                                        // COM-confirmed 2026-04-19: for b35 "法令の理解" row with
+                                        // 4% slack Word does NOT distribute, showing natural widths.
+                                        let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
+                                        let slack_ratio = if effective_wrap > 0.0 { slack / effective_wrap } else { 0.0 };
+                                        if has_cjk && slack_ratio > 0.10 {
                                             let total_chars: usize = line.iter()
-                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
+                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
                                                 .sum();
                                             if total_chars > 1 {
                                                 let per_char_gap = slack / (total_chars - 1) as f32;
-                                                for (fi, (text, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                                for (fi, (text, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
                                                     let n = text.chars().count();
                                                     if n > 1 {
                                                         frag_width_adj[fi] += per_char_gap * (n - 1) as f32;
@@ -4139,6 +4222,8 @@ impl LayoutEngine {
                                                         frag_spacing[fi] += per_char_gap;
                                                     }
                                                 }
+                                                // Pass per-char gap to renderer for visual spread.
+                                                justify_char_spacing = per_char_gap;
                                             }
                                         }
                                     }
@@ -4150,7 +4235,7 @@ impl LayoutEngine {
                             // For grid-snapped cell lines (line_height = n*pitch), this centers
                             // the character cell; for exact spacing, bottom-aligns.
                             let cell_max_fs: f32 = line.iter()
-                                .map(|(_, fs, _, _, _, _, _, _, _, _, _, _)| *fs)
+                                .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                 .fold(0.0_f32, f32::max);
                             let cell_text_y_off = match (effective_line_rule, effective_line_spacing) {
                                 (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
@@ -4163,8 +4248,50 @@ impl LayoutEngine {
                                 }
                             };
                             let mut rx = 0.0_f32;
-                            for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs)) in line.iter().enumerate() {
+                            // Emit list marker on the first line of the paragraph.
+                            if line_idx == 0 {
+                                if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
+                                    let list_indent = para.style.list_indent.unwrap_or(18.0);
+                                    let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                                    let marker_el = LayoutElement::new(
+                                        cell_x + pad_l + line_indent - list_indent,
+                                        content_h + cell_text_y_off,
+                                        mk_w,
+                                        lh,
+                                        LayoutContent::Text {
+                                            text: mk_text.clone(),
+                                            font_size: mk_fs,
+                                            font_family: self.resolve_font_family_for_text(mk_text, &marker_style, &para.style).map(|s| s.to_string()),
+                                            bold: self.resolve_bold(&marker_style, &para.style),
+                                            italic: marker_style.italic,
+                                            underline: marker_style.underline,
+                                            underline_style: marker_style.underline_style.clone(),
+                                            strikethrough: marker_style.strikethrough,
+                                            color: self.resolve_color(&marker_style, &para.style).map(|s| s.to_string()),
+                                            highlight: marker_style.highlight.clone(),
+                                            character_spacing: 0.0,
+                                            field_type: None,
+                                            text_scale: 100.0,
+                                        },
+                                    );
+                                    cell_elements.push(marker_el);
+                                }
+                            }
+                            for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs, ts)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
+                                // 2026-04-19: Inject charSpace delta into GDI cs so TextOutW
+                                // renders at layout-correct advance (prevents glyph overlap
+                                // between fragments when pitch<natural).
+                                let grid_cs_adj = if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
+                                    if ratio > 0.0 && pitch > 0.0 {
+                                        let default_fs = pitch / ratio;
+                                        let char_space_pt = pitch - default_fs;
+                                        // Only apply to fullwidth CJK content (halfwidth chars render naturally)
+                                        if text.chars().any(|c| crate::font::is_fullwidth(c)) {
+                                            char_space_pt
+                                        } else { 0.0 }
+                                    } else { 0.0 }
+                                } else { 0.0 };
                                 let mut cell_el = LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h + cell_text_y_off, adj_w, lh, LayoutContent::Text {
                                         text: text.clone(),
                                         font_size: *fs,
@@ -4176,8 +4303,9 @@ impl LayoutEngine {
                                         strikethrough: *strikethrough,
                                         color: color.clone(),
                                         highlight: highlight.clone(),
-                                        character_spacing: *cs,
+                                        character_spacing: *cs + justify_char_spacing + grid_cs_adj,
                                         field_type: None,
+                                        text_scale: *ts,
                                 });
                                 // Attribute to the table's source block index so diff tools
                                 // can localize cell text. Without this, para_idx is None and
@@ -4665,7 +4793,7 @@ impl LayoutEngine {
             let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                 .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                 .collect();
-            let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None);
+            let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None);
             let line_count = lines.len().max(1);
 
             let mut max_line_height: f32 = 0.0;

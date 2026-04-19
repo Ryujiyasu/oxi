@@ -122,9 +122,14 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, text_scale, ..
                     } => {
                         let fs = (*font_size as f64 * scale).round() as i32;
+                        // 2026-04-19: Apply horizontal text scale (OOXML w:w).
+                        // CreateFontW lfWidth=0 → default aspect; positive value → specified glyph width.
+                        let lf_width = if (*text_scale - 100.0).abs() > 0.01 {
+                            (*font_size as f64 * (*text_scale as f64 / 100.0) * scale * 0.5).round() as i32
+                        } else { 0 };
                         let family = font_family.as_deref().unwrap_or("Calibri");
 
                         // Parse color
@@ -166,7 +171,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let ital = if *italic { 1u32 } else { 0u32 };
                         let family_wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
                         let font = CreateFontW(
-                            -fs, 0, 0, 0, weight,
+                            -fs, lf_width, 0, 0, weight,
                             ital, 0, 0,
                             1, // DEFAULT_CHARSET
                             0, 0,
@@ -289,6 +294,20 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     }
 
                     oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
+                        // Word optimizes out BoxRect with white fill and no border — they
+                        // paint white-over-white and are visually indistinguishable from
+                        // the page background. Oxi's naive paint obscures text beneath.
+                        // COM-confirmed on b35_tokumei_08_01 p1 textbox (白fill + noFill枠).
+                        let is_invisible_white = match fill.as_deref() {
+                            Some(f) => {
+                                let c = f.strip_prefix('#').unwrap_or(f);
+                                c.eq_ignore_ascii_case("ffffff") || c.eq_ignore_ascii_case("fff")
+                            }
+                            None => false,
+                        } && stroke_color.is_none();
+                        if is_invisible_white {
+                            continue;
+                        }
                         let cr = (*corner_radius as f64 * scale) as i32;
                         // Create fill brush
                         let fill_brush = if let Some(ref fill_hex) = fill {
