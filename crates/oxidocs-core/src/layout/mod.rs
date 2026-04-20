@@ -1414,9 +1414,15 @@ impl LayoutEngine {
                                 });
                             let line_nat = metrics.word_line_height_no_grid(line_fs).max(0.01);
                             let line_count = ((nat / line_nat).round() as usize).max(1);
+                            // Only grid-snap if the paragraph opts in (snapToGrid default=true).
+                            // b837's FootnoteText style has snapToGrid=0 → Word uses natural.
                             let height = if let Some(pitch) = grid_pitch {
-                                if pitch > 0.0 { line_count as f32 * pitch } else { nat }
-                            } else { nat };
+                                if pitch > 0.0 && p.style.snap_to_grid {
+                                    line_count as f32 * pitch
+                                } else {
+                                    line_count as f32 * line_nat
+                                }
+                            } else { line_count as f32 * line_nat };
                             (height, line_count)
                         };
                         let mut note_heights: Vec<f32> = Vec::new();
@@ -1438,25 +1444,30 @@ impl LayoutEngine {
                         let last_line_adjust: f32 = if let (Some(pitch), Some(last_note)) = (grid_pitch, notes.last()) {
                             if pitch > 0.0 {
                                 if let Some(Block::Paragraph(last_p)) = last_note.blocks.last() {
-                                    // Use the last run with real text for metrics
-                                    let text_run = last_p.runs.iter().rev().find(|r| !r.text.is_empty())
-                                        .or_else(|| last_p.runs.first());
-                                    let fs = self.resolve_font_size(
-                                        text_run.map(|r| &r.style).unwrap_or(&RunStyle::default()),
-                                        &last_p.style,
-                                    );
-                                    let metrics = text_run
-                                        .map(|r| self.metrics_for_text(&r.text, &r.style, &last_p.style))
-                                        .unwrap_or_else(|| {
-                                            let rpr = last_p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                                            self.metrics_for_para_mark(&rpr, &last_p.style)
-                                        });
-                                    let natural_last = metrics.word_line_height_no_grid(fs);
-                                    // Word centers the last footnote line in the grid-pitch
-                                    // overshoot: adjustment = (pitch - natural) / 2 — confirmed
-                                    // 2026-04-20 via 6 minimal repros (fn top at page_h -
-                                    // margin.bottom - 14.85pt = pitch - 3.15 for 9pt MS Mincho).
-                                    ((pitch - natural_last) * 0.5).max(0.0)
+                                    // Only applicable when the last paragraph grid-snaps.
+                                    // snapToGrid=0 footnote lines are already natural-height.
+                                    if !last_p.style.snap_to_grid {
+                                        0.0
+                                    } else {
+                                        let text_run = last_p.runs.iter().rev().find(|r| !r.text.is_empty())
+                                            .or_else(|| last_p.runs.first());
+                                        let fs = self.resolve_font_size(
+                                            text_run.map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                                            &last_p.style,
+                                        );
+                                        let metrics = text_run
+                                            .map(|r| self.metrics_for_text(&r.text, &r.style, &last_p.style))
+                                            .unwrap_or_else(|| {
+                                                let rpr = last_p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                                self.metrics_for_para_mark(&rpr, &last_p.style)
+                                            });
+                                        let natural_last = metrics.word_line_height_no_grid(fs);
+                                        // Word centers the last footnote line in the grid-pitch
+                                        // overshoot: adjustment = (pitch - natural) / 2 — confirmed
+                                        // 2026-04-20 via 6 minimal repros (fn top at page_h -
+                                        // margin.bottom - 14.85pt = pitch - 3.15 for 9pt MS Mincho).
+                                        ((pitch - natural_last) * 0.5).max(0.0)
+                                    }
                                 } else { 0.0 }
                             } else { 0.0 }
                         } else { 0.0 };
