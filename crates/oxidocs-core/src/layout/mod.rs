@@ -2718,6 +2718,7 @@ impl LayoutEngine {
         // together for line-break decisions.
         let mut word = String::new();
         let mut word_width: f32 = 0.0;
+        let mut word_natural_width: f32 = 0.0; // 2-pass wrap: natural (pre-compression) width
         let mut word_grid_extra: f32 = 0.0; // charGrid extra width for line-break
         let mut word_style: Option<RunStyle> = None;
         let mut word_field_type: Option<FieldType> = None;
@@ -2743,6 +2744,7 @@ impl LayoutEngine {
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
                         width: word_width,
+                        natural_width: word_natural_width,
                         style: ws,
                         tab_alignment: None,
                         tab_position: None,
@@ -2754,6 +2756,7 @@ impl LayoutEngine {
                     current_width_tw += word_width_tw;
                     current_grid_extra += word_grid_extra;
                     word_width = 0.0;
+                    word_natural_width = 0.0;
                     word_grid_extra = 0.0;
                 }
             };
@@ -2826,6 +2829,9 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
+                // 2-pass wrap (Stage 1): capture NATURAL char_width before any yakumono
+                // compression. Used later (Stage 2+) to detect tight vs loose lines.
+                let natural_char_width = char_width;
                 // Physical yakumono compression (COM-confirmed b837 2026-04-16):
                 //   Pair (both chars): 6pt (×0.5) — e.g., 。）→ 6+6pt
                 //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
@@ -2974,6 +2980,7 @@ impl LayoutEngine {
                             current_line.fragments.push(LineFragment {
                                 text: TAB_STRING.to_owned(),
                                 width: w,
+                                natural_width: w,
                                 style: style.clone(),
                                 tab_alignment: Some(tab_align),
                                 tab_position: Some(next_pos),
@@ -2987,6 +2994,7 @@ impl LayoutEngine {
                             current_line.fragments.push(LineFragment {
                                 text: SPACE_STRING.to_owned(),
                                 width: char_width,
+                                natural_width: char_width,
                                 style: style.clone(),
                                 tab_alignment: None,
                                 tab_position: None,
@@ -3008,6 +3016,7 @@ impl LayoutEngine {
                     }
                     word.push(ch);
                     word_width += char_width; word_grid_extra += char_grid_extra;
+                    word_natural_width += natural_char_width;
                     flush_word!(style);
                 } else if kinsoku::is_cjk(ch) && para_style.word_wrap {
                     // CJK characters can break at any point (when wordWrap=true, the default)
@@ -3084,6 +3093,7 @@ impl LayoutEngine {
                             current_line.fragments.push(LineFragment {
                                 text: char_to_string(ch),
                                 width: char_width,
+                                natural_width: char_width,
                                 style: style.clone(),
                                 tab_alignment: None,
                                 tab_position: None,
@@ -3128,6 +3138,7 @@ impl LayoutEngine {
                     current_line.fragments.push(LineFragment {
                         text: char_to_string(ch),
                         width: char_width,
+                        natural_width: char_width,
                         style: style.clone(),
                         tab_alignment: None,
                         tab_position: None,
@@ -3167,6 +3178,7 @@ impl LayoutEngine {
                     }
                     word.push(ch);
                     word_width += char_width; word_grid_extra += char_grid_extra;
+                    word_natural_width += natural_char_width;
                 }
                 char_pos_in_run += 1; // character index (not byte offset) for JS compatibility
             }
@@ -3186,6 +3198,7 @@ impl LayoutEngine {
             current_line.fragments.push(LineFragment {
                 text: word,
                 width: word_width,
+                natural_width: word_natural_width,
                 style: ws,
                 tab_alignment: None,
                 tab_position: None,
@@ -3204,6 +3217,16 @@ impl LayoutEngine {
         // Ensure at least one empty line for empty paragraphs
         if lines.is_empty() {
             lines.push(Line { fragments: vec![], ..Default::default() });
+        }
+
+        // 2-pass wrap (Stage 1): compute per-line natural_total_width and
+        // was_compressed flag. These are consumed by Stage 2+ for context-aware
+        // yakumono handling (loose vs tight line).
+        for line in &mut lines {
+            let nat: f32 = line.fragments.iter().map(|f| f.natural_width).sum();
+            let comp: f32 = line.fragments.iter().map(|f| f.width).sum();
+            line.natural_total_width = nat;
+            line.was_compressed = (nat - comp) > 0.5;
         }
 
         // Post-process: adjust tab fragment widths for Center/Right/Decimal alignment.
@@ -4888,6 +4911,12 @@ struct Line {
     fragments: Vec<LineFragment>,
     /// What kind of break follows this line (normal line break, page break, or column break)
     break_type: LineBreakType,
+    /// 2-pass wrap: sum of fragment.natural_width (un-compressed). Used to determine
+    /// if line was "tight" (needed compression to fit) or "loose" (fits naturally).
+    natural_total_width: f32,
+    /// 2-pass wrap: true if yakumono compression was actually applied to any fragment.
+    /// Used by render stage to decide 「 leading-gap direction (-3pt tight / +6pt loose).
+    was_compressed: bool,
 }
 
 impl Default for LineBreakType {
@@ -4900,6 +4929,9 @@ impl Default for LineBreakType {
 struct LineFragment {
     text: String,
     width: f32,
+    /// 2-pass wrap: width BEFORE yakumono compression (natural advance).
+    /// If no compression was applied, natural_width == width.
+    natural_width: f32,
     style: RunStyle,
     /// For tab fragments: the alignment type of the tab stop they target.
     /// None for non-tab fragments.
