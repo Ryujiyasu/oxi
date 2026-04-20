@@ -2398,6 +2398,27 @@ impl LayoutEngine {
                 }
             }
 
+            // 2-pass wrap Stage 4: tight-line 「 leading shift.
+            // When line is tight (yakumono compression applied) AND an opening
+            // bracket follows a CJK non-trigger char, shift bracket 3pt left.
+            // Measured: b837 p1 y=270 Word gap 6pt vs Oxi natural 9pt → -3pt match.
+            if line.was_compressed {
+                for fi in 1..line.fragments.len() {
+                    let first_ch = line.fragments[fi].text.chars().next();
+                    if !matches!(first_ch, Some('「'|'『'|'〔'|'【'|'《'|'〈'|'（'|'｛'|'［')) {
+                        continue;
+                    }
+                    let Some(pc) = line.fragments[fi-1].text.chars().last() else { continue };
+                    if kinsoku::is_yakumono_trigger(pc) || pc.is_ascii() {
+                        continue;
+                    }
+                    if !kinsoku::is_cjk(pc) {
+                        continue;
+                    }
+                    frag_spacing_after[fi-1] -= 3.0;
+                }
+            }
+
             let mut x = line_x + align_offset;
 
             // Matches Word output: exact/atLeast line spacing places text at BOTTOM of line box.
@@ -2829,9 +2850,8 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
-                // 2-pass wrap (Stage 1): capture NATURAL char_width before any yakumono
-                // compression. Used later (Stage 2+) to detect tight vs loose lines.
-                let natural_char_width = char_width;
+                // 2-pass wrap: remember pre-yakumono width to compute yakumono savings.
+                let pre_yakumono_width = char_width;
                 // Physical yakumono compression (COM-confirmed b837 2026-04-16):
                 //   Pair (both chars): 6pt (×0.5) — e.g., 。）→ 6+6pt
                 //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
@@ -2879,6 +2899,9 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // 2-pass wrap: compute yakumono savings (difference between pre-yakumono
+                // and post-yakumono width). Natural = final_char_width + yakumono_saved.
+                let yakumono_saved = (pre_yakumono_width - char_width).max(0.0);
                 // §4.6.3 CJK-adjacent space widening — COM-confirmed 2026-04-08.
                 // The Latin space (' ') is widened to ≈ font_size/2 (half-em) when:
                 //   1. The run's <w:rFonts> has an EXPLICIT w:eastAsia attribute
@@ -3016,7 +3039,7 @@ impl LayoutEngine {
                     }
                     word.push(ch);
                     word_width += char_width; word_grid_extra += char_grid_extra;
-                    word_natural_width += natural_char_width;
+                    word_natural_width += char_width + yakumono_saved;
                     flush_word!(style);
                 } else if kinsoku::is_cjk(ch) && para_style.word_wrap {
                     // CJK characters can break at any point (when wordWrap=true, the default)
@@ -3093,7 +3116,7 @@ impl LayoutEngine {
                             current_line.fragments.push(LineFragment {
                                 text: char_to_string(ch),
                                 width: char_width,
-                                natural_width: char_width,
+                                natural_width: char_width + yakumono_saved,
                                 style: style.clone(),
                                 tab_alignment: None,
                                 tab_position: None,
@@ -3138,7 +3161,7 @@ impl LayoutEngine {
                     current_line.fragments.push(LineFragment {
                         text: char_to_string(ch),
                         width: char_width,
-                        natural_width: char_width,
+                        natural_width: char_width + yakumono_saved,
                         style: style.clone(),
                         tab_alignment: None,
                         tab_position: None,
@@ -3178,7 +3201,7 @@ impl LayoutEngine {
                     }
                     word.push(ch);
                     word_width += char_width; word_grid_extra += char_grid_extra;
-                    word_natural_width += natural_char_width;
+                    word_natural_width += char_width + yakumono_saved;
                 }
                 char_pos_in_run += 1; // character index (not byte offset) for JS compatibility
             }
