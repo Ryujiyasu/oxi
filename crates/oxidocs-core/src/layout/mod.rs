@@ -432,7 +432,7 @@ impl LayoutEngine {
         }
     }
 
-    fn resolve_fit_text_runs(&self, runs: &mut [Run], para_style: &ParagraphStyle) {
+    fn resolve_fit_text_runs(&self, runs: &mut Vec<Run>, para_style: &ParagraphStyle) {
         let mut i = 0;
         while i < runs.len() {
             if let (Some(target_w), Some(group_id)) = (runs[i].style.fit_text, runs[i].style.fit_text_id) {
@@ -475,9 +475,34 @@ impl LayoutEngine {
 
                 if natural_w > 0.01 {
                     if natural_w <= target_w {
-                        let raw_extra = (target_w - natural_w) / char_count as f32;
+                        // 2026-04-20: Word's fitText spreads cs across (N-1) gaps
+                        // between chars, NOT N chars. Otherwise a trailing cs
+                        // remains after the last char, pushing the line past its
+                        // target right edge (b837 p1 meta block "平成29年5月30日"
+                        // showed ~11pt trailing space before the close bracket).
+                        // Implementation: apply cs to all runs, then SPLIT the
+                        // last run so its final char has cs=0 (no trail). For a
+                        // 1-char last run, just set cs=0 directly.
+                        let denom = ((char_count as f32) - 1.0).max(1.0);
+                        let raw_extra = (target_w - natural_w) / denom;
                         for run in &mut runs[start..i] {
                             run.style.character_spacing = Some(raw_extra);
+                        }
+                        // Split last run: the last char must carry cs=0 so no
+                        // trailing advance extends beyond the target right edge.
+                        let last_idx = i - 1;
+                        let last_chars: Vec<char> = runs[last_idx].text.chars().collect();
+                        if last_chars.len() > 1 {
+                            let body: String = last_chars[..last_chars.len()-1].iter().collect();
+                            let tail: String = last_chars[last_chars.len()-1..].iter().collect();
+                            runs[last_idx].text = body;
+                            let mut tail_run = runs[last_idx].clone();
+                            tail_run.text = tail;
+                            tail_run.style.character_spacing = Some(0.0);
+                            runs.insert(last_idx + 1, tail_run);
+                            i += 1;
+                        } else if last_chars.len() == 1 {
+                            runs[last_idx].style.character_spacing = Some(0.0);
                         }
                     } else {
                         let scale = target_w / natural_w * 100.0;
