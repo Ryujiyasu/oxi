@@ -2941,7 +2941,13 @@ impl LayoutEngine {
                 // COM-measured b35 fs=9→8.3pt, fs=10.5→9.8pt: both = fs − 0.7pt.
                 // Previous fs*ratio formula over-compressed at small fs in docs
                 // where default_fs ≠ fs.
-                let char_grid_extra = if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
+                // fit_text: skip charGrid padding. Word's fitText overrides docGrid's
+                // grid-snap — character_spacing computed by resolve_fit_text_runs must
+                // apply verbatim, otherwise the negative char_grid_extra swallows the
+                // cs for CJK chars and breaks uniform spread (b837 p1 meta block).
+                let char_grid_extra = if style.fit_text.is_some() {
+                    0.0
+                } else if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                     if ratio > 0.0 && pitch > 0.0 && char_width > 0.0
                         && ch != ' ' && ch != '\t' && ch != '\n'
                         && crate::font::is_fullwidth(ch)
