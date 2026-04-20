@@ -2291,13 +2291,33 @@ impl LayoutEngine {
                 // Phase 1: CJK punctuation compression (full-width -> half-width)
                 // Only compress when the line overflows (slack < 0).
                 // Matches Word output: TextBox content does NOT use punctuation compression.
+                // 2026-04-20 fix: Skip chars whose fragment.width is ALREADY smaller than
+                // natural (indicates break_into_lines already compressed them — applying
+                // Phase 1 again would DOUBLE-compress, crushing 「」 to w=0pt).
                 if slack < 0.0 && !in_textbox {
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {
                             if kinsoku::is_cjk_compressible(ch) {
+                                // Opening brackets have large ABC A-offset (glyph on
+                                // right side of cell). Compressing advance to 6pt
+                                // causes glyph to extend past cell, overwritten by
+                                // next char. Keep fullwidth advance for these.
+                                let is_opening_bracket = matches!(ch,
+                                    '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［'
+                                );
+                                if is_opening_bracket {
+                                    continue;
+                                }
                                 let fs = frag.style.font_size.unwrap_or(para_font_size);
                                 let fm = self.metrics_for(&frag.style, &para.style);
                                 let char_w = self.registry.char_width_pt_with_fallback(ch, fs, fm);
+                                // Skip if fragment.width is already below fullwidth
+                                // (break_into_lines already applied yakumono compression
+                                // 0.5x or 0.583x). Re-applying 0.5x here would
+                                // double-compress, crushing 」、 to near-zero.
+                                if frag.width + frag_width_adjustments[fi] < char_w * 0.95 {
+                                    continue;
+                                }
                                 let actual = char_w * 0.5;
                                 frag_width_adjustments[fi] -= actual;
                                 slack += actual; // reclaim freed space
@@ -2305,6 +2325,23 @@ impl LayoutEngine {
                         }
                     }
                 }
+
+                // 2026-04-20: Recompute slack after Phase 1.
+                // Grid-extra handling is branch-dependent:
+                //   - If Phase 1 compressed chars (had yakumono etc.): grid_extra is
+                //     already reclaimed; use post_phase1_ltw directly (no subtract).
+                //   - If NO compression happened (pure CJK line): natural widths
+                //     already match render; grid_extra is positioning padding that
+                //     shouldn't be distributed → subtract it.
+                let phase1_compressed = frag_width_adjustments.iter().any(|a| *a < -0.01);
+                let post_phase1_ltw: f32 = line.fragments.iter().enumerate()
+                    .map(|(i, f)| f.width + frag_width_adjustments[i])
+                    .sum();
+                slack = if phase1_compressed {
+                    render_width - extra_indent - post_phase1_ltw
+                } else {
+                    render_width - extra_indent - post_phase1_ltw - grid_extra_on_line
+                };
 
                 // Phase 2: Distribute remaining slack at word spaces (only if slack > 0 after compression)
                 if slack > 0.0 {
@@ -2794,7 +2831,16 @@ impl LayoutEngine {
                 //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
                 //   Other brackets: use native font width (bracket shapes vary widely by
                 //     context in Word — 6, 10.5, 11, 11.5, 12pt — no simple compression rule)
-                if yakumono_compressed[char_index] {
+                // 2026-04-20: Opening brackets have visible glyph at right side of
+                // cell (ABC A-offset = 7.5pt for 「, 11pt for （). Compressing advance
+                // to 6pt would place next char at 6pt offset, overwriting the bracket
+                // glyph at 7.5-11.25pt. Skip compression for these — keep fullwidth
+                // advance so glyph fits within its cell. Closing brackets (A=0) are
+                // unaffected and still compress fine.
+                let is_opening_bracket = matches!(ch,
+                    '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［'
+                );
+                if yakumono_compressed[char_index] && !is_opening_bracket {
                     char_width *= 0.5;
                 } else if yakumono_enabled {
                     // Expand pair rule: when yakumono_compressed[neighbor] = true AND
@@ -2809,11 +2855,14 @@ impl LayoutEngine {
                             && yakumono_compressed[char_index - 1];
                         let next_compressed = char_index + 1 < chars_vec.len()
                             && yakumono_compressed[char_index + 1];
-                        if prev_compressed || next_compressed {
+                        if (prev_compressed || next_compressed) && !is_opening_bracket {
                             // Adjacent to pair-compressed yakumono: also compress
+                            // (except opening brackets — see explanation above)
                             char_width *= 0.5;
                         } else if matches!(ch, '、' | '。' | '，' | '．') {
                             // Standalone 、 。 between non-triggers: compress to ≈7pt
+                            // (kept 0.583x for b837 p4 compatibility; v2 attempt to
+                            // remove compression regressed p4 -0.0347)
                             let prev_non_tr = char_index == 0
                                 || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
                             let next_non_tr = char_index + 1 >= chars_vec.len()
