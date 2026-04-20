@@ -3229,6 +3229,22 @@ impl LayoutEngine {
             line.was_compressed = (nat - comp) > 0.5;
         }
 
+        // 2-pass wrap (Stage 2): for lines where natural widths fit within
+        // available_width, revert yakumono compression to match Word's loose-line
+        // behavior (Word doesn't compress when line has slack). Tight lines keep
+        // their compression.
+        // NOTE: This may cause bottom-5 regression initially (Stage 3 will add
+        // proper 2-pass wrap to re-compress only when actual overflow occurs).
+        for line in &mut lines {
+            if !line.was_compressed { continue; }
+            if line.natural_total_width <= available_width + 0.5 {
+                for f in &mut line.fragments {
+                    f.width = f.natural_width;
+                }
+                line.was_compressed = false;
+            }
+        }
+
         // Post-process: adjust tab fragment widths for Center/Right/Decimal alignment.
         // ECMA-376 §17.3.1.38: Center tabs center the following segment on the tab position,
         // Right tabs right-align, Decimal tabs align at the decimal point.
