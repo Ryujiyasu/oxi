@@ -2462,6 +2462,44 @@ impl LayoutEngine {
                     render_width - extra_indent - post_phase1_ltw - grid_extra_on_line
                 };
 
+                // 2026-04-21: Stage 2b — de-compress pre-compressed 、。,．toward
+                // natural using positive slack. COM-proven (d77a + R19 + R6):
+                // Word variable 、 advance 9.5-12pt correlates with line overflow
+                // demand. Oxi's break-time 0.583× (= 7pt) is a wrap-budget knob,
+                // but at render Word restores 、 toward natural when slack allows.
+                // Safe because: only fires when slack > 0, only de-compresses
+                // (never over-extends).
+                if slack > 0.5 && !in_textbox {
+                    let mut compressed: Vec<(usize, f32, f32)> = Vec::new();
+                    for (fi, frag) in line.fragments.iter().enumerate() {
+                        for ch in frag.text.chars() {
+                            if !matches!(ch, '、' | '。' | '，' | '．') { continue; }
+                            let fs = frag.style.font_size.unwrap_or(para_font_size);
+                            // 、 is CJK punct — use CJK metrics if available.
+                            let fm_cjk = self.metrics_for_cjk(&frag.style, &para.style);
+                            let fm = fm_cjk.unwrap_or_else(|| self.metrics_for(&frag.style, &para.style));
+                            let natural = self.registry.char_width_pt_with_fallback(ch, fs, fm);
+                            let current = frag.width + frag_width_adjustments[fi];
+                            if current < natural * 0.95 {
+                                compressed.push((fi, natural, current));
+                            }
+                        }
+                    }
+                    if !compressed.is_empty() {
+                        let n = compressed.len() as f32;
+                        let per_comp_cap = compressed.iter()
+                            .map(|(_, nat, cur)| nat - cur)
+                            .fold(f32::INFINITY, f32::min);
+                        let per_comp = (slack / n).min(per_comp_cap);
+                        if per_comp > 0.0 {
+                            for (fi, _, _) in &compressed {
+                                frag_width_adjustments[*fi] += per_comp;
+                                slack -= per_comp;
+                            }
+                        }
+                    }
+                }
+
                 // Phase 2: Distribute remaining slack at word spaces (only if slack > 0 after compression)
                 if slack > 0.0 {
                     // Count ASCII word spaces only — CJK fullwidth spaces (U+3000) are NOT
