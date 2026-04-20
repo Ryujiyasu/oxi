@@ -2399,26 +2399,28 @@ impl LayoutEngine {
             }
 
             // 2-pass wrap Stage 4/5: context-aware 「 leading gap.
-            // Tight line (yakumono compression active): shift bracket 3pt LEFT
-            //   — measured b837 p1 y=270, Word gap 6pt vs Oxi natural 9pt.
-            // Loose line (no compression): shift bracket 6pt RIGHT (add leading)
-            //   — measured minimal repro B01 あ「い: Word 82.08 vs Oxi natural 76.2.
-            for fi in 1..line.fragments.len() {
-                let first_ch = line.fragments[fi].text.chars().next();
-                if !matches!(first_ch, Some('「'|'『'|'〔'|'【'|'《'|'〈'|'（'|'｛'|'［')) {
-                    continue;
-                }
-                let Some(pc) = line.fragments[fi-1].text.chars().last() else { continue };
-                if kinsoku::is_yakumono_trigger(pc) || pc.is_ascii() {
-                    continue;
-                }
-                if !kinsoku::is_cjk(pc) {
-                    continue;
-                }
-                if line.was_compressed {
-                    frag_spacing_after[fi-1] -= 3.0;
-                } else {
-                    frag_spacing_after[fi-1] += 6.0;
+            // Only applies to docs with compressPunctuation+compat15 (where Word's
+            // measured shifts originate). doNotCompress docs use Oxi's natural
+            // positioning (no shift) — tested 0e7a / 683f regression when S5
+            // applied unconditionally.
+            if self.compress_punctuation && self.compat_mode >= 15 {
+                for fi in 1..line.fragments.len() {
+                    let first_ch = line.fragments[fi].text.chars().next();
+                    if !matches!(first_ch, Some('「'|'『'|'〔'|'【'|'《'|'〈'|'（'|'｛'|'［')) {
+                        continue;
+                    }
+                    let Some(pc) = line.fragments[fi-1].text.chars().last() else { continue };
+                    if kinsoku::is_yakumono_trigger(pc) || pc.is_ascii() {
+                        continue;
+                    }
+                    if !kinsoku::is_cjk(pc) {
+                        continue;
+                    }
+                    if line.was_compressed {
+                        frag_spacing_after[fi-1] -= 3.0;
+                    } else {
+                        frag_spacing_after[fi-1] += 6.0;
+                    }
                 }
             }
 
