@@ -3198,6 +3198,7 @@ impl LayoutEngine {
                         let extra = ((font_size / 2.0) + 0.5).floor() * 0.5;
                         if let Some(last) = current_line.fragments.last_mut() {
                             last.width += extra;
+                            last.natural_width += extra;
                         }
                         current_width += extra;
                         current_width_tw += pt_to_tw(extra);
@@ -3323,6 +3324,7 @@ impl LayoutEngine {
                             let extra = ((font_size / 2.0) + 0.5).floor() * 0.5;
                             if let Some(last) = current_line.fragments.last_mut() {
                                 last.width += extra;
+                                last.natural_width += extra;
                             }
                             current_width += extra;
                             current_width_tw += pt_to_tw(extra);
