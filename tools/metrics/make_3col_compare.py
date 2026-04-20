@@ -33,11 +33,19 @@ def main(doc_stem, page_num, out_path, crop_box=None):
 
     wa = np.array(w)
     oa = np.array(o)
-    diff_mag = np.abs(wa.astype(int) - oa.astype(int)).sum(axis=2)
-    overlay = oa.copy()
-    mask = diff_mag > 40
-    overlay[mask] = [255, 120, 120]
-    d = Image.fromarray(overlay.astype(np.uint8))
+    # Overlay: Word ink = blue, Oxi ink = red, both match = black, neither = white.
+    w_gray = wa.mean(axis=2)
+    o_gray = oa.mean(axis=2)
+    w_ink = w_gray < 200
+    o_ink = o_gray < 200
+    both = w_ink & o_ink
+    only_w = w_ink & ~o_ink
+    only_o = o_ink & ~w_ink
+    overlay = np.full((*w_ink.shape, 3), 255, dtype=np.uint8)
+    overlay[both] = [0, 0, 0]
+    overlay[only_w] = [30, 80, 220]
+    overlay[only_o] = [220, 40, 40]
+    d = Image.fromarray(overlay)
 
     gap = 10
     W = w.width * 3 + gap * 2
@@ -54,7 +62,7 @@ def main(doc_stem, page_num, out_path, crop_box=None):
         font = None
     draw.text((5, 4), "Word", fill="black", font=font)
     draw.text((w.width + gap + 5, 4), "Oxi", fill="black", font=font)
-    draw.text((w.width * 2 + gap * 2 + 5, 4), "Diff (red=mismatch)", fill="red", font=font)
+    draw.text((w.width * 2 + gap * 2 + 5, 4), "Overlay: Word=blue, Oxi=red, match=black", fill="black", font=font)
 
     canvas.save(out_path)
     print(f"Saved {out_path}")
