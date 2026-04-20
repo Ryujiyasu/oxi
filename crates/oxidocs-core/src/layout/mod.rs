@@ -1392,18 +1392,75 @@ impl LayoutEngine {
                             .map(|e| e.y + e.height)
                             .fold(0.0_f32, f32::max);
 
-                        // Calculate footnote heights and only include notes that fit
-                        // above the body content. Notes that don't fit are deferred.
+                        // Calculate footnote heights — grid-snap per paragraph to
+                        // match actual render (layout_paragraph stacks lines at
+                        // grid pitch when grid_pitch is Some). estimate_para_height
+                        // returns natural height which diverges from the render.
+                        // COM-derived 2026-04-20 from 6 minimal repros: render uses
+                        // grid_pitch × line_count per paragraph.
+                        let grid_snap_para = |p: &Paragraph| -> (f32, usize) {
+                            // Natural estimated height (may include space_before/after)
+                            let nat = self.estimate_para_height(p, hdr_width, grid_pitch, None);
+                            // Per-line natural height (used to derive line_count)
+                            let line_fs = self.resolve_font_size(
+                                p.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                                &p.style,
+                            );
+                            let metrics = p.runs.first()
+                                .map(|r| self.metrics_for_text(&r.text, &r.style, &p.style))
+                                .unwrap_or_else(|| {
+                                    let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                    self.metrics_for_para_mark(&rpr, &p.style)
+                                });
+                            let line_nat = metrics.word_line_height_no_grid(line_fs).max(0.01);
+                            let line_count = ((nat / line_nat).round() as usize).max(1);
+                            let height = if let Some(pitch) = grid_pitch {
+                                if pitch > 0.0 { line_count as f32 * pitch } else { nat }
+                            } else { nat };
+                            (height, line_count)
+                        };
                         let mut note_heights: Vec<f32> = Vec::new();
                         for note in &notes {
                             let mut nh: f32 = 0.0;
                             for nb in &note.blocks {
                                 if let Block::Paragraph(p) = nb {
-                                    nh += self.estimate_para_height(p, hdr_width, grid_pitch, None);
+                                    let (h, _) = grid_snap_para(p);
+                                    nh += h;
                                 }
                             }
                             note_heights.push(nh);
                         }
+                        // Word anchors the LAST footnote line's BOTTOM to
+                        // page_h - margin.bottom (derived 2026-04-20 from 6 minimal
+                        // repros). Only INNER lines stack at grid pitch; the last
+                        // line's height is natural (word_line_height_no_grid).
+                        // Subtract (grid_pitch - natural_last) once to compensate.
+                        let last_line_adjust: f32 = if let (Some(pitch), Some(last_note)) = (grid_pitch, notes.last()) {
+                            if pitch > 0.0 {
+                                if let Some(Block::Paragraph(last_p)) = last_note.blocks.last() {
+                                    // Use the last run with real text for metrics
+                                    let text_run = last_p.runs.iter().rev().find(|r| !r.text.is_empty())
+                                        .or_else(|| last_p.runs.first());
+                                    let fs = self.resolve_font_size(
+                                        text_run.map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                                        &last_p.style,
+                                    );
+                                    let metrics = text_run
+                                        .map(|r| self.metrics_for_text(&r.text, &r.style, &last_p.style))
+                                        .unwrap_or_else(|| {
+                                            let rpr = last_p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                            self.metrics_for_para_mark(&rpr, &last_p.style)
+                                        });
+                                    let natural_last = metrics.word_line_height_no_grid(fs);
+                                    // Word centers the last footnote line in the grid-pitch
+                                    // overshoot: adjustment = (pitch - natural) / 2 — confirmed
+                                    // 2026-04-20 via 6 minimal repros (fn top at page_h -
+                                    // margin.bottom - 14.85pt = pitch - 3.15 for 9pt MS Mincho).
+                                    ((pitch - natural_last) * 0.5).max(0.0)
+                                } else { 0.0 }
+                            } else { 0.0 }
+                        } else { 0.0 };
+
                         let separator_h_pre: f32 = 2.0;
                         let separator_pad_pre: f32 = 4.0;
                         // Determine how many notes fit: add notes one by one from the
@@ -1424,7 +1481,7 @@ impl LayoutEngine {
                         // Separator: short horizontal line above the footnotes.
                         let separator_h: f32 = 2.0;
                         let separator_pad: f32 = 4.0;
-                        let area_top = footnote_bottom - total_h - separator_pad - separator_h;
+                        let area_top = footnote_bottom - total_h - separator_pad - separator_h + last_line_adjust;
 
                         // Draw the footnote separator line: ~1/3 of content width
                         // (Word default), 1pt thick, black, anchored at the left margin.
