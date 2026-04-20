@@ -475,27 +475,53 @@ impl LayoutEngine {
 
                 if natural_w > 0.01 {
                     if natural_w <= target_w {
-                        // 2026-04-20: Word's fitText spreads cs across (N-1) gaps
-                        // between chars, NOT N chars. Otherwise a trailing cs
-                        // remains after the last char, pushing the line past its
-                        // target right edge (b837 p1 meta block "平成29年5月30日"
-                        // showed ~11pt trailing space before the close bracket).
-                        // Implementation: apply cs to all runs, then SPLIT the
-                        // last run so its final char has cs=0 (no trail). For a
-                        // 1-char last run, just set cs=0 directly.
-                        let denom = ((char_count as f32) - 1.0).max(1.0);
-                        let raw_extra = (target_w - natural_w) / denom;
+                        // 2026-04-20: Word's fitText distributes expansion
+                        // proportional to char fullwidth/halfwidth (a fullwidth CJK
+                        // char gets ~2× the cs that a halfwidth ASCII digit gets).
+                        // Per-char cs = per_em_cs × char_em_width where
+                        //   per_em_cs = (target − natural) / total_em
+                        //   char_em_width = 1.0 for fullwidth, 0.5 for halfwidth
+                        // N-1 semantics preserved by setting last char's cs=0.
+                        // b837 p1 meta "平成29年5月30日" required uniform cs first
+                        // (af3c790) to fix non-uniform spread, then N-1 (ae609ef)
+                        // for trailing space. Per-char proportional refines '2'/'3'
+                        // position at CJK→halfwidth-digit boundaries.
+                        let total_em: f32 = runs[start..i].iter()
+                            .flat_map(|r| r.text.chars())
+                            .map(|c| if crate::font::is_fullwidth(c) { 1.0 } else { 0.5 })
+                            .sum();
+                        let denom_em = (total_em - runs[start..i].iter()
+                            .flat_map(|r| r.text.chars()).last()
+                            .map(|c| if crate::font::is_fullwidth(c) { 1.0 } else { 0.5 })
+                            .unwrap_or(0.0)).max(0.5);
+                        let per_em_cs = (target_w - natural_w) / denom_em;
                         for run in &mut runs[start..i] {
-                            run.style.character_spacing = Some(raw_extra);
+                            // cs applies per-char in break_into_lines. For a mixed run
+                            // (e.g. "平成2"), we need per-char variable cs which isn't
+                            // directly representable. Compromise: set cs to the AVERAGE
+                            // per-char cs for this run's own em mix.
+                            let run_chars: Vec<char> = run.text.chars().collect();
+                            if run_chars.is_empty() { continue; }
+                            let run_em: f32 = run_chars.iter()
+                                .map(|&c| if crate::font::is_fullwidth(c) { 1.0 } else { 0.5 })
+                                .sum();
+                            let avg_cs = per_em_cs * run_em / run_chars.len() as f32;
+                            run.style.character_spacing = Some(avg_cs);
                         }
-                        // Split last run: the last char must carry cs=0 so no
-                        // trailing advance extends beyond the target right edge.
+                        // Split last run: last char carries cs=0 so no trailing advance.
                         let last_idx = i - 1;
                         let last_chars: Vec<char> = runs[last_idx].text.chars().collect();
                         if last_chars.len() > 1 {
                             let body: String = last_chars[..last_chars.len()-1].iter().collect();
                             let tail: String = last_chars[last_chars.len()-1..].iter().collect();
                             runs[last_idx].text = body;
+                            // Recompute body's avg_cs based on its own em mix
+                            let body_chars: Vec<char> = runs[last_idx].text.chars().collect();
+                            let body_em: f32 = body_chars.iter()
+                                .map(|&c| if crate::font::is_fullwidth(c) { 1.0 } else { 0.5 })
+                                .sum();
+                            let body_avg_cs = per_em_cs * body_em / body_chars.len() as f32;
+                            runs[last_idx].style.character_spacing = Some(body_avg_cs);
                             let mut tail_run = runs[last_idx].clone();
                             tail_run.text = tail;
                             tail_run.style.character_spacing = Some(0.0);
@@ -2966,11 +2992,16 @@ impl LayoutEngine {
                 // COM-measured b35 fs=9→8.3pt, fs=10.5→9.8pt: both = fs − 0.7pt.
                 // Previous fs*ratio formula over-compressed at small fs in docs
                 // where default_fs ≠ fs.
-                // fit_text: skip charGrid padding. Word's fitText overrides docGrid's
-                // grid-snap — character_spacing computed by resolve_fit_text_runs must
-                // apply verbatim, otherwise the negative char_grid_extra swallows the
-                // cs for CJK chars and breaks uniform spread (b837 p1 meta block).
-                let char_grid_extra = if style.fit_text.is_some() {
+                // fit_text EXPAND mode (natural ≤ target, character_spacing>0): skip
+                // charGrid padding so Word's fitText cs applies verbatim. Without this,
+                // the negative char_grid_extra swallows the cs for CJK chars and breaks
+                // uniform spread (b837 p1 meta block).
+                // fit_text SCALE mode (natural > target, text_scale<100) keeps charGrid
+                // padding — otherwise scaled CJK chars in table cells become narrower
+                // than the grid pitch, shifting downstream content (3a4f regression).
+                let fit_text_expand = style.fit_text.is_some()
+                    && style.character_spacing.map_or(false, |cs| cs > 0.01);
+                let char_grid_extra = if fit_text_expand {
                     0.0
                 } else if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                     if ratio > 0.0 && pitch > 0.0 && char_width > 0.0
