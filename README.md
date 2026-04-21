@@ -195,9 +195,9 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (177 docs, 352 pages)"
-  x-axis ["03-28", "04-01", "04-06", "04-10", "04-13", "04-14", "04-18"]
+  x-axis ["03-28", "04-01", "04-06", "04-10", "04-13", "04-14", "04-18", "04-21"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8191, 0.8430, 0.8520, 0.8567, 0.8584, 0.8597]
+  line [0.7884, 0.8191, 0.8430, 0.8520, 0.8567, 0.8584, 0.8597, 0.8625]
 ```
 
 | Date | avg SSIM | bottom-5 sum | Key Changes |
@@ -207,6 +207,7 @@ xychart-beta
 | 2026-04-10 | **0.8520** | — | leftChars indent, fullwidth symbols, font unification |
 | 2026-04-14 | **0.8584** | 2.8035 | 12 new OOXML elements, 10tw char width, cumulative raw model |
 | 2026-04-18 | **0.8597** | **3.0597** | 4-agent parallel session: CJK wrap strict overflow, empty-br stub, hanging-indent, row-height, yakumono compat15 gate, additive-primary methodology established (+0.2562 bottom-5) |
+| 2026-04-21 | **0.8625** | **3.2451** | LM0 first-line centering (Bug A, `(line_h - fontSize)/2` offset scales with font size — 46 gen2_* Title docs no longer -4.32pt shifted); footer first-type phantom fix; auto-multiplier formula derivation. 0e7a p.2 (0.5768 rank 1) and 683f p.2 (0.6329 rank 3) both drop out of bottom-8 (+0.1170 bottom-5) |
 
 **Bottom-5 floor sum** (Σ of 5 lowest per-doc min(page SSIM)) is the merge gate — it protects against whack-a-mole regressions that average SSIM misses. Each fix must strictly raise the bottom-5 floor.
 
