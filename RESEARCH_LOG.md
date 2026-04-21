@@ -465,6 +465,43 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-21 — Stage 4/5 「-leading +6pt removed (post-wrap → overshoot bug)
+
+**Bug**: `mod.rs:2563-2581` Stage 4/5 added +6pt to `frag_spacing_after[fi-1]`
+after a CJK char and before an opening bracket fragment (「『〔【《〈（｛［) for
+compat>=15+cP docs. This was applied POST-wrap (added after break_into_lines
+completed), so wrap-time `current_width` never accounted for it. Result: lines
+that fit at wrap time would overshoot the right margin by 6-12pt at render.
+
+**User insight 2026-04-21**: "Wordが右端のはみだしが１つもない — 平均的な右端ラインから、はみ出しているものが一つもない"
+Word strictly enforces no-overshoot. Oxi's overshoots break this invariant.
+
+**Evidence**:
+- d77a P2 (page 3) line measurement: 2 lines overshoot exactly +12pt (-12 gap):
+  - y=435 "この部分は、別紙の「公共データ利用規約（第1.0版）に関する重要情報」に記載"
+  - y=579 "「公共データ利用規約（第1.0版）」の採用を想定しているのは、国の府省（施設"
+  Both contain "（第1.0版）" with 2 mid-line opening brackets ((+6pt) × 2 = +12pt).
+- Test: disabling Stage 4/5 entirely: both overshoots → gap=0 (perfectly aligned).
+  3 short lines (gap=+3) also resolved to gap=0.
+
+**Fix**: remove the Stage 4/5 +6pt block at `mod.rs:2563-2581`.
+
+**Impact**:
+- Bottom-5: 3.2451 → 3.2463 (+0.0012, d77a p9 +0.0012).
+- Full baseline: 19 improvements / 3 regressions across 177 docs / 352 pages.
+  Net +0.1253. Top improvements: d77a p1 +0.0028, p4 +0.0011, p5 +0.0028, p8
+  +0.0050, p9 +0.0012; e8caed +0.0047; c7b923 +0.0035; 3a4f +0.0033.
+  Regressions outside bottom-5: b837 p1 -0.0026, d77a p6 -0.0019, d77a p12
+  -0.0015 (max -0.0026, all minor).
+- Path A bottom-N floor strict increase → merge gate PASS.
+
+**Open question**: the original Stage 4/5 was added per "Word's measured shifts
+originate" comment. Removing it works for current baseline — but Word may
+actually have demand-driven「-leading gap that varies based on line fullness
+(per `project_yakumono_demand_driven`). The current removal is a simplification
+that aligns Oxi with Word for the common case. Demand-driven implementation is
+the proper long-term fix.
+
 ### 2026-04-21 — Yakumono compression gate flip (compat=14+cP enabled)
 
 **Bug**: `mod.rs:2975` gated yakumono pair compression with

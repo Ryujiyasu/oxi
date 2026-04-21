@@ -2560,26 +2560,24 @@ impl LayoutEngine {
             // measured shifts originate). doNotCompress docs use Oxi's natural
             // positioning (no shift) — tested 0e7a / 683f regression when S5
             // applied unconditionally.
-            if self.compress_punctuation && self.compat_mode >= 15 {
-                for fi in 1..line.fragments.len() {
-                    let first_ch = line.fragments[fi].text.chars().next();
-                    if !matches!(first_ch, Some('「'|'『'|'〔'|'【'|'《'|'〈'|'（'|'｛'|'［')) {
-                        continue;
-                    }
-                    let Some(pc) = line.fragments[fi-1].text.chars().last() else { continue };
-                    if kinsoku::is_yakumono_trigger(pc) || pc.is_ascii() {
-                        continue;
-                    }
-                    if !kinsoku::is_cjk(pc) {
-                        continue;
-                    }
-                    if line.was_compressed {
-                        frag_spacing_after[fi-1] -= 3.0;
-                    } else {
-                        frag_spacing_after[fi-1] += 6.0;
-                    }
-                }
-            }
+            // 2026-04-21: Stage 4/5 「-leading +6pt removed.
+            //
+            // The previous implementation added +6pt to frag_spacing_after[fi-1]
+            // when fragment fi started with an opening bracket and fi-1 ended
+            // with CJK. This was POST-wrap (added after break_into_lines), so
+            // wrap-time current_width never accounted for it. Result: lines
+            // that fit at wrap time would overshoot the right margin by 6-12pt
+            // at render time (1 char beyond margin per +6pt extra).
+            //
+            // User observation 2026-04-21: Word never overshoots the right
+            // margin (strict invariant). Disabling this gap brings Oxi closer
+            // to Word's no-overshoot behavior.
+            //
+            // Full baseline verify: bottom-5 sum 3.2451 → 3.2464 (+0.0013,
+            // d77a p9 +0.0012). 53 pages improved (d77a p1 +0.0028, p4 +0.0011,
+            // p5 +0.0028, p8 +0.0050; e8caed +0.0047; c7b923 +0.0035 etc).
+            // 3 minor regressions outside bottom-5 (b837 p1 -0.0026, d77a p6
+            // -0.0019, d77a p12 -0.0015). Net +0.1253.
 
             let mut x = line_x + align_offset;
 
