@@ -465,6 +465,55 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
-(none yet — first one will land here)
+### 2026-04-21 — Ignore `type="first"` header/footer without `titlePg`
+
+**Spec**: ECMA-376 Part 1 §17.10.2 — `type="first"` header/footer references
+are active only when `titlePg` is set in the section properties. Without
+`titlePg`, the reference is ignored and the default header/footer is used
+instead; if no default exists, no header/footer is rendered.
+
+**Bug**: `ooxml.rs` fallback at section header/footer resolution called
+`parse_header_footer_blocks(effective_footer_refs, ...)` (passing ALL refs
+including `type="first"`) when neither type-matched nor default-matched refs
+existed. User reported a phantom "1 / 7" page-number footer on 34140 p.1;
+Word renders nothing there because the doc's sole `type="first"` ref is not
+gated by `titlePg`.
+
+**Scope of fix**: only drop `type="first"` from the legacy all-refs fallback.
+`type="even"` is left in the fallback pool because some baseline docs reference
+it without the `evenAndOddHeaders` setting and rely on the reserved footer
+space for body pagination; removing that reservation regressed 6514 p.6 by
+−0.1037 in a trial run, so the narrower scope is retained.
+
+**Evidence**:
+- COM / Word render: 34140 p.1 (real doc) + 4 self-authored minimal repros
+  (`pipeline_data/_ftrspec_V{1..4}_*.docx`). V1 (first-only, no titlePg) is
+  the reproducing case; V2/V3/V4 confirm Word's behavior on the surrounding
+  matrix (V2 still shows a separate page-level footer-switch limitation
+  tracked elsewhere, but orthogonal to this fix).
+- Baseline grep: only 34140 in 184 docs has `type="first"`-only without
+  `titlePg` (others have a `default` footer that absorbs the fallback).
+- Spec: ECMA-376 §17.10.2.
+
+**Bottom-5 floor**: pre 3.1280 → post 3.1374 (+0.0094). 34140 p.5 remains
+the doc's min at rank 5; all other bottom-5 entries unchanged.
+
+**Results (34140 only; all other docs unchanged)**:
+- p.2: 0.6802 → 0.7393 (+0.0591)
+- p.3: 0.6953 → 0.7105 (+0.0152)
+- p.5: 0.6608 → 0.6702 (+0.0094)
+- p.4: 0.7127 → 0.7022 (−0.0105) — body cascade from removed footer reserve
+- p.6: 0.7676 → 0.7643 (−0.0033) — same cascade
+- Net on 34140: +0.0699
+
+**Rationale for same-doc regressions (p.4, p.6)**: removing the phantom
+footer also removes the ~20pt footer-area reservation. Word doesn't reserve
+that space either (no footer is rendered), but Oxi's body layout now extends
+into the area differently and the pagination shifts slightly. Pixel-level
+alignment on p.4/p.6 is marginally worse; bottom-5 floor improves.
+
+**Minimal repro**: `tools/metrics/build_footer_firsttype_repros.py` generates
+V1–V4. `tools/metrics/grep_first_footer_no_titlepg.py` identifies
+baseline-affected docs.
 
 ---

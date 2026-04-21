@@ -92,28 +92,42 @@ impl OoxmlParser {
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
-            // Fall back: if no matching type, try any available reference
-            let header = if use_headers.is_empty() {
-                let fallback: Vec<HdrFtrRef> = effective_header_refs.iter()
+            // Fall back: if no type-matched reference, try "default"; if none, choose the
+            // fallback carefully. ECMA-376 §17.10.2: `type="first"` is only active when
+            // titlePg is set. Without titlePg, falling back to a `first` reference produces
+            // phantom headers/footers (observed on 34140). `type="even"` is gated by the
+            // global `evenAndOddHeaders` flag, but legacy docs reference it without the flag
+            // and relied on Oxi's prior all-refs fallback for body-area reservation — keep
+            // that fallback for "even" to avoid pagination regressions.
+            fn pick_fallback(refs: &[HdrFtrRef]) -> Vec<HdrFtrRef> {
+                let defaults: Vec<HdrFtrRef> = refs.iter()
                     .filter(|r| r.ref_type == "default").cloned().collect();
-                if fallback.is_empty() {
-                    self.parse_header_footer_blocks(effective_header_refs, &ctx, &styles)
-                } else {
-                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                if !defaults.is_empty() {
+                    return defaults;
                 }
-            } else {
+                // Keep "even" refs as a last-resort fallback (legacy behavior).
+                // Drop "first" refs when titlePg is absent (spec §17.10.2).
+                refs.iter().filter(|r| r.ref_type != "first").cloned().collect()
+            }
+            let header = if !use_headers.is_empty() {
                 self.parse_header_footer_blocks(&use_headers, &ctx, &styles)
-            };
-            let footer = if use_footers.is_empty() {
-                let fallback: Vec<HdrFtrRef> = effective_footer_refs.iter()
-                    .filter(|r| r.ref_type == "default").cloned().collect();
-                if fallback.is_empty() {
-                    self.parse_header_footer_blocks(effective_footer_refs, &ctx, &styles)
-                } else {
-                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
-                }
             } else {
+                let fallback = pick_fallback(effective_header_refs);
+                if !fallback.is_empty() {
+                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                } else {
+                    Vec::new()
+                }
+            };
+            let footer = if !use_footers.is_empty() {
                 self.parse_header_footer_blocks(&use_footers, &ctx, &styles)
+            } else {
+                let fallback = pick_fallback(effective_footer_refs);
+                if !fallback.is_empty() {
+                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                } else {
+                    Vec::new()
+                }
             };
 
             // Collect referenced footnotes and endnotes for this section
