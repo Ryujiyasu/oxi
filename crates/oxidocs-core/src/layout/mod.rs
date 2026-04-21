@@ -855,7 +855,7 @@ impl LayoutEngine {
                     // Helper closure: commit this paragraph's footnotes to the
                     // current page's running reservation (called once we've
                     // decided which page the paragraph lands on).
-                    let commit_para_footnotes = |reserve: &mut f32, ids: &mut Vec<u32>| {
+                    let commit_para_footnotes = |reserve: &mut f32, ids: &mut Vec<u32>, page_i: usize, blk_i: usize| {
                         if page.footnotes.is_empty() { return; }
                         for r in &para.runs {
                             if let Some(id) = r.footnote_ref {
@@ -870,7 +870,12 @@ impl LayoutEngine {
                                     // not captured by estimate_para_height)
                                     // Per-note overhead accounts for superscript marker
                                     // vertical space in actual rendering vs estimate
-                                    *reserve += estimate_footnote_h(id);
+                                    let h = estimate_footnote_h(id);
+                                    *reserve += h;
+                                    if std::env::var("OXI_FN_PROBE").is_ok() {
+                                        eprintln!("[FN_COMMIT] page_idx={} block_idx={} id={} h={:.1} reserve_now={:.1}",
+                                            page_i, blk_i, id, h, *reserve);
+                                    }
                                 }
                             }
                         }
@@ -891,7 +896,7 @@ impl LayoutEngine {
                         lm2_cells = 0; // Reset cumul line index for new page
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
-                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
+                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
                     } else {
@@ -900,7 +905,7 @@ impl LayoutEngine {
                         // its footnote contributions; later, if a page break
                         // happens (keepLines/keepNext/etc.), we'll reset and
                         // re-commit on the new page.
-                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
+                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                     }
 
                     // keepLines: if doesn't fit, advance column or page
@@ -928,7 +933,7 @@ impl LayoutEngine {
                                 // its footnote refs) to the new page.
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
-                                commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
+                                commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             *block_y_positions.last_mut().unwrap() = cursor_y;
@@ -964,7 +969,7 @@ impl LayoutEngine {
                                     lm2_cells = 0; current_page_idx += 1;
                                     footnote_reserve_current = 0.0;
                                     footnote_ids_current_page.clear();
-                                    commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
+                                    commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                                 }
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 *block_y_positions.last_mut().unwrap() = cursor_y;
@@ -995,7 +1000,7 @@ impl LayoutEngine {
                                 lm2_cells = 0; current_page_idx += 1;
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
-                                commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page);
+                                commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             *block_y_positions.last_mut().unwrap() = cursor_y;
@@ -1033,6 +1038,9 @@ impl LayoutEngine {
                         && is_content_para(&page.blocks[block_idx + 3]);
                     let adjacent_to_empty_run = !this_empty && (prev_2_empty || next_2_empty);
 
+                    // Step 0: bucket for per-page fn refs actually rendered by this
+                    // paragraph. Used by the post-layout reserve-correction (Step 1).
+                    let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
                     let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
@@ -1050,9 +1058,17 @@ impl LayoutEngine {
                         lm2_param,
                         Some(&mut mult_cumul_raw),
                         adjacent_to_empty_run,
+                        Some(&mut para_fn_refs_per_page),
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
+                    if std::env::var("OXI_FN_PROBE").is_ok() && !para_fn_refs_per_page.is_empty() {
+                        let any_ref = para_fn_refs_per_page.iter().any(|v| !v.is_empty());
+                        if any_ref {
+                            eprintln!("[FN_LINE_REFS] block_idx={} per_page={:?}",
+                                block_idx, para_fn_refs_per_page);
+                        }
+                    }
 
                     // Track page/column breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
@@ -1080,6 +1096,11 @@ impl LayoutEngine {
                         // to the new page (no elements left on the old page), update
                         // the index so footnote rendering assigns to the correct page.
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                            eprintln!("[FN_MID_BREAK] block_idx={} pages_added={} now_page={} reserve_before_clear={:.1} ids={:?}",
+                                block_idx, pages_added, current_page_idx,
+                                footnote_reserve_current, footnote_ids_current_page);
+                        }
                         // Refs were committed pre-layout to the OLD page's reserve;
                         // don't re-add to NEW page or they double-count.
                         footnote_reserve_current = 0.0;
@@ -1289,7 +1310,7 @@ impl LayoutEngine {
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
-                            false,
+                            false, None,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -1312,7 +1333,7 @@ impl LayoutEngine {
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
-                            false,
+                            false, None,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -1488,6 +1509,13 @@ impl LayoutEngine {
                             }
                             total_h += note_heights[i];
                         }
+                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                            eprintln!("[FN_PLACE] page_idx={} n_req={} fit={} body_bot={:.1} fn_bot={:.1} total_h={:.1} area_top={:.1} gap={:.1} heights={:?}",
+                                page_idx, notes.len(), fit_count, body_bottom_y, footnote_bottom, total_h,
+                                footnote_bottom - total_h - separator_pad_pre - separator_h_pre,
+                                (footnote_bottom - total_h - separator_pad_pre - separator_h_pre) - body_bottom_y,
+                                note_heights);
+                        }
                         let notes: Vec<&Footnote> = notes[..fit_count].to_vec();
                         // Separator: short horizontal line above the footnotes.
                         let separator_h: f32 = 2.0;
@@ -1586,7 +1614,7 @@ impl LayoutEngine {
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
                                         false, 0.0, None, None, None,
-                                        false,
+                                        false, None,
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -1843,7 +1871,7 @@ impl LayoutEngine {
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
                         0.0, None, None, None,
-                        false,
+                        false, None,
                     );
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
@@ -1986,7 +2014,16 @@ impl LayoutEngine {
         mut lm2_grid_cells: Option<&mut usize>,
         mut mult_cumul_raw: Option<&mut f32>,
         adjacent_to_empty_run: bool,
+        // Step 0 (Option B fn reserve fix): per-page bucket of unique fn_ref
+        // ids attributed to the lines rendered on each page offset.
+        // line_fn_refs_out[0] = ids on current page; [i>0] = ids moved to
+        // i-th new page pushed during this paragraph. Does NOT alter
+        // behavior; exists so caller can redistribute fn reserves correctly.
+        mut line_fn_refs_out: Option<&mut Vec<Vec<u32>>>,
     ) -> (Vec<LayoutElement>, f32) {
+        if let Some(v) = line_fn_refs_out.as_deref_mut() {
+            if v.is_empty() { v.push(Vec::new()); }
+        }
         let mut elements = Vec::new();
 
         // Apply paragraph spacing (space_before).
@@ -2329,6 +2366,15 @@ impl LayoutEngine {
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
+                // Step 0: widow/orphan moves all earlier lines (if any) of
+                // this paragraph to the new page. Re-slot any refs already
+                // attributed to page 0 into page 1, then open a new bucket
+                // for subsequent lines.
+                if let Some(v) = line_fn_refs_out.as_deref_mut() {
+                    let carry = v.pop().unwrap_or_default();
+                    v.push(Vec::new()); // OLD page — nothing of this para stays
+                    v.push(carry);       // NEW page — earlier lines' refs move here
+                }
             } else if needs_page_break {
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
                 // only the overflowing line (and subsequent) go to the next page.
@@ -2339,6 +2385,30 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
                 *cursor_y = page_top;
+                // Step 0: lines [0, line_idx) stay on OLD page (their refs
+                // already accumulated in current bucket); open a fresh
+                // bucket so line_idx and beyond register on the NEW page.
+                if let Some(v) = line_fn_refs_out.as_deref_mut() {
+                    v.push(Vec::new());
+                }
+            }
+
+            // Step 0: record fn refs rendered on this line's final page
+            // (after any pre-line page push above). A run with footnote_ref
+            // maps its marker to this line if any fragment here references
+            // that run_index.
+            if let Some(v) = line_fn_refs_out.as_deref_mut() {
+                let bucket = v.last_mut().unwrap();
+                let mut seen: Vec<usize> = Vec::new();
+                for f in &line.fragments {
+                    if seen.contains(&f.run_index) { continue; }
+                    seen.push(f.run_index);
+                    if let Some(run) = para.runs.get(f.run_index) {
+                        if let Some(id) = run.footnote_ref {
+                            if !bucket.contains(&id) { bucket.push(id); }
+                        }
+                    }
+                }
             }
 
             let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
