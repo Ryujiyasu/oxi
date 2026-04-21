@@ -3853,9 +3853,15 @@ impl LayoutEngine {
                         if des > max_descent { max_descent = des; }
                     }
                 }
-                // Only apply text_y_offset when document grid is active.
-                // Without grid, GDI TextOutW places text at cursor_y (no offset).
-                // COM-confirmed: test_line_height.docx all fonts show y = cursor_y (no offset).
+                // Apply vertical centering offset in the line box.
+                // - LM1/LM2 (has_grid): center GDI cell (= fontSize) within grid cell.
+                // - LM0 (no grid): still center the GDI cell within line_height.
+                //   Measured 2026-04-21 via `bugA_size_sweep.py` (27 font×size combos):
+                //   Word places first-line glyph top at margin + ~(line_height - fontSize)/2,
+                //   NOT at cursor_y. Previous "no offset for LM0" assumption was based on a
+                //   single test doc (test_line_heights with 11pt) where the effect is ~0.3pt
+                //   and visually masked; larger fonts (26pt) show a -3.84pt glyph-top shift
+                //   that cascades through gen2_* series (46 docs).
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
                     // COM-confirmed (2026-04-04/16): text is vertically centered within
@@ -3894,7 +3900,14 @@ impl LayoutEngine {
                         0.0
                     }
                 } else {
-                    0.0
+                    // LM0: same centering formula as LM1/LM2 single cell.
+                    let font_size = if !line.fragments.is_empty() {
+                        line.fragments.iter()
+                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .fold(0.0_f32, f32::max)
+                    } else { para_font_size };
+                    let raw = (line_height - font_size).max(0.0) / 2.0;
+                    (raw * 2.0 + 0.5).floor() / 2.0
                 }
             }
         }
