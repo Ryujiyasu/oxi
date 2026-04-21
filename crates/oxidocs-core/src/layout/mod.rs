@@ -3067,6 +3067,24 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // Line-start yakumono demand-driven compression (COM-verified 2026-04-21
+                // on d77a pi=24-27 + 3a4f pi=300 + 1ec1/e3c5 no-overflow):
+                // Word compresses ・/、/。 at line start by ~2.5pt at 12pt when the
+                // line would otherwise overflow. Apply the compression speculatively;
+                // Stage 2 revert (below) undoes it on short lines where
+                // natural_total_width ≤ available_width (loose-line rule).
+                // Compression: font_size × 5/24 = 2.5pt at 12pt, 2.1875pt at 10.5pt.
+                // Gated on compress_punctuation + compat_mode>=15 to match Word 2016+.
+                if yakumono_enabled
+                    && self.compat_mode >= 15
+                    && matches!(ch, '・' | '、' | '。' | '，' | '．')
+                    && current_line.fragments.is_empty()
+                    && word.is_empty()
+                {
+                    let reduction = font_size * 5.0 / 24.0;
+                    let floor = char_width * 0.5;
+                    char_width = (char_width - reduction).max(floor);
+                }
                 // 2-pass wrap: compute yakumono savings (difference between pre-yakumono
                 // and post-yakumono width). Natural = final_char_width + yakumono_saved.
                 let yakumono_saved = (pre_yakumono_width - char_width).max(0.0);
@@ -3266,6 +3284,14 @@ impl LayoutEngine {
                         .collect::<Vec<_>>()
                         .windows(2)
                         .any(|w| kinsoku::is_yakumono_trigger(w[0]) && kinsoku::is_yakumono_trigger(w[1]));
+                    // 2026-04-21: allow absorb when line starts with narrow yakumono
+                    // (・/、/。/，/．). COM-verified on d77a pi=24-27 — single-yakumono
+                    // line-start needs -2.5pt compression to fit +1 char/line. Without
+                    // this extension the compression applied above still leaves ~0.1pt
+                    // residual tw overflow that breaks the line 1 char early.
+                    let has_linestart_narrow_yakumono = current_line.fragments.first()
+                        .and_then(|f| f.text.chars().next())
+                        .map_or(false, |c| matches!(c, '・' | '、' | '。' | '，' | '．'));
                     // Threshold raised 10→50tw (2026-04-18) per
                     // project_wrap_overflow_analyzer_e3c545.md analysis:
                     // e3c545 idx=29 at +18tw triggers 20.5pt cascade; 4 of its
@@ -3273,7 +3299,8 @@ impl LayoutEngine {
                     // has_pair so d77a over-wraps (has_pair=false) remain
                     // unaffected.
                     let absorb = if overflow_tw > 0 && overflow_tw <= 50
-                        && self.compress_punctuation && self.compat_mode >= 15 && has_pair
+                        && self.compress_punctuation && self.compat_mode >= 15
+                        && (has_pair || has_linestart_narrow_yakumono)
                     { true } else { false };
                     let _ = line_compress_count;
                     if absorb {
