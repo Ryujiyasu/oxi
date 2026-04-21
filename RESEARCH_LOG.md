@@ -465,6 +465,36 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-21 — Yakumono compression gate flip (compat=14+cP enabled)
+
+**Bug**: `mod.rs:2975` gated yakumono pair compression with
+`self.compress_punctuation && self.compat_mode >= 15`. COM evidence on 4
+distinct compat=14+`compressPunctuation` docs (04b88, 7f272a, fded68, 34140)
+showed Word fits +1 to +3 more chars on line 1 of yakumono+indent paragraphs
+than Oxi. Minimal repro `idx46_real` with compat=14 confirmed Word=43 / Oxi=42.
+The `compat>=15` gate excluded the very docs Word DOES compress.
+
+**Fix**: drop the compat gate — `let yakumono_enabled = self.compress_punctuation;`.
+
+**Evidence**:
+- COM: 04b88 (+2 chars), 7f272a (+2), fded68 (+3), 34140 (+1) on line 1 of
+  hanging-indent + yakumono paragraphs. Word vs Oxi line-1 char count.
+- Minimal repro: `tools/metrics/bisect_34140_settings.py` — S0..S5 toggle compat
+  14↔15 + flag bisection. `pipeline_data/_settings_*.docx`. With compat=15: Oxi
+  43 / Word 42. With compat=14: Oxi 42 / Word 43. Oxi gate is reversed vs Word.
+- Spec: undocumented Word quirk. `compressPunctuation` in `<w:characterSpacingControl>`
+  enables yakumono pair compression in Word at compat=14, but compat=15 disables it.
+  COM-confirmed across 6 compat=14+cP docs and minimal repros at both compat values.
+- Bottom-5: 3.2451 → 3.2451 (unchanged — none of d77a/b837/e3c545/29dc6/2ea81 are
+  compat=14+cP)
+- Full baseline: **7 improvements / 0 regressions across 177 docs / 352 pages**.
+  Net +0.0720. All 6 compat=14+cP docs improved on at least one page; 34140 p1
+  +0.0096 + p2 +0.0110, 7f272a p1 +0.0256, fded68/04b88/09390503/6d6dc4 p1 +0.003-0.009.
+- Rationale: changing the gate to `cP only` enables compression for compat=14
+  (matching Word) while leaving compat=15 path identical (no change to 56 docs
+  in compat=15+cP class). Conservative scope; the long-debated compat=15
+  yakumono question is a separate investigation.
+
 ### 2026-04-21 — Ignore `type="first"` header/footer without `titlePg`
 
 **Spec**: ECMA-376 Part 1 §17.10.2 — `type="first"` header/footer references

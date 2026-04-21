@@ -2972,7 +2972,15 @@ impl LayoutEngine {
             //   - cSC alone: NO compression (minimal repro confirmed)
             //   - cSC + compat15: yakumono pair compression applies
             // Most modern docs use "doNotCompress" → no compression regardless of compat.
-            let yakumono_enabled = self.compress_punctuation && self.compat_mode >= 15;
+            //
+            // 2026-04-21 update: COM evidence on 4 distinct compat=14+cP docs
+            // (04b88, 7f272a, fded68, 34140) showed Word fits +1 to +3 more chars
+            // on line 1 of yakumono+indent paragraphs vs Oxi. Minimal repro
+            // (idx46_real with compat=14) confirmed Word=43 / Oxi=42. The
+            // `compat>=15` gate excluded compat=14 docs that Word DOES compress.
+            // Drop the compat gate — `compress_punctuation` alone matches
+            // Word's behavior for both compat 14 and compat 15.
+            let yakumono_enabled = self.compress_punctuation;
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
             let yakumono_compressed: Vec<bool> = if yakumono_enabled {
