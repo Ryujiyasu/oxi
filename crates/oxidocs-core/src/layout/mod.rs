@@ -3460,19 +3460,38 @@ impl LayoutEngine {
             line.was_compressed = (nat - comp) > 0.5;
         }
 
-        // 2-pass wrap (Stage 2): for lines where natural widths fit within
-        // available_width, revert yakumono compression to match Word's loose-line
-        // behavior (Word doesn't compress when line has slack). Tight lines keep
-        // their compression.
-        // NOTE: This may cause bottom-5 regression initially (Stage 3 will add
-        // proper 2-pass wrap to re-compress only when actual overflow occurs).
+        // 2-pass wrap (Stage 2): demand-scaled compression revert.
+        //   - Full revert: natural fits within available → revert all compression
+        //     (Word's loose-line rule: no compression when line has slack)
+        //   - Partial revert: natural slightly exceeds available → keep just enough
+        //     compression to make line fit, scale rest back toward natural
+        //     (Word's demand-driven rule: compression amount matches actual overflow)
+        //   - No revert: natural greatly exceeds available (demand ≥ total savings) →
+        //     keep full compression
         for line in &mut lines {
             if !line.was_compressed { continue; }
-            if line.natural_total_width <= available_width + 0.5 {
+            let savings: f32 = line.fragments.iter()
+                .map(|f| (f.natural_width - f.width).max(0.0)).sum();
+            if savings <= 0.5 { continue; }
+            let demand = (line.natural_total_width - available_width).max(0.0);
+            if demand <= 0.5 {
+                // Full revert: loose line, no compression needed
                 for f in &mut line.fragments {
                     f.width = f.natural_width;
                 }
                 line.was_compressed = false;
+            } else if demand < savings {
+                // Partial revert: demand-scaled. Release (savings - demand) back to
+                // compressed fragments proportionally, matching Word's per-line
+                // demand-driven compression on line-start yakumono (d77a pi=24-27
+                // COM: ・ compresses -0.5 to -2.5pt based on line overflow demand).
+                let keep_ratio = demand / savings;
+                for f in &mut line.fragments {
+                    let f_saving = (f.natural_width - f.width).max(0.0);
+                    if f_saving > 0.0 {
+                        f.width = f.natural_width - f_saving * keep_ratio;
+                    }
+                }
             }
         }
 
