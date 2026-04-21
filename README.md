@@ -42,6 +42,20 @@ Oxi doesn't reject Microsoft Word — it observes Word's behavior, reproduces it
 
 ---
 
+## Why Now
+
+Europe is actively dismantling its Microsoft Office dependency in 2026:
+
+- **France** — DINUM directive (2026-04-08) mandates that 2.5M public-sector PCs migrate to free-software stacks by 2027; each ministry submits a roadmap by autumn 2026; Microsoft Teams and Zoom are already blocked on the inter-ministerial network (RIE). 20 years of Gendarmerie Nationale GendBuntu (97% of 103,164 PCs migrated) is the reference model.
+- **Switzerland** — The Federal Chancellery (Bundeskanzlei) officially announced (2026-04-18) a phased, long-term reduction of Microsoft 365 dependency. The BOSS (Büroautomation durch Einsatz von Open-Source-Software) feasibility study delivers mid-2026. Germany's ZenDiS OpenDesk is the named reference implementation.
+- **Germany** — ZenDiS OpenDesk is already in production at Schleswig-Holstein, Thüringen, Baden-Württemberg, and — after US sanctions blocked Microsoft access earlier this year — the International Criminal Court.
+
+Every one of these transitions is missing the same piece: **a rendering engine that opens existing .docx files identically to Microsoft Word**, so that "migration" stops being a project and becomes indistinguishable from switching applications. LibreOffice's 20-year struggle in public-sector rollouts is well-documented — not because its features are weak, but because per-document visual divergence forces every organization into a per-file audit it cannot staff.
+
+Oxi's Ra loop is a mechanical convergence toward SSIM = 1.0 against Microsoft Word. Not a better migration tool — the dissolution of the migration problem.
+
+---
+
 ## Landscape — Why Not Use ...?
 
 | Solution | Approach | Limitation |
