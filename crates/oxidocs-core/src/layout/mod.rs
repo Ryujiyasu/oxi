@@ -5057,6 +5057,91 @@ impl LayoutEngine {
                     }
                 }
 
+                // Step 3 (2026-04-23): On continuation page, re-close the box
+                // to match actual overflow content. The shifted row_bottom lands
+                // at a position that doesn't reflect the continuation line's
+                // actual bottom (Oxi's row_height undersizes by one overflow line).
+                // Word draws (a) top horizontal border at page_top AND (b) bottom
+                // border at continuation content bottom. COM-verified on d77a p.7:
+                // top=71.04 (=page_top), bottom=89.28 (=line_top 71 + line_height 18).
+                {
+                    let max_cont_text_bottom = next_page_elems.iter()
+                        .filter_map(|e| match &e.content {
+                            LayoutContent::Text { .. } => Some(e.y + e.height),
+                            _ => None,
+                        })
+                        .fold(f32::NEG_INFINITY, f32::max);
+
+                    // Find a horizontal bottom border in next_page_elems (the
+                    // shifted row_bottom from the split row).
+                    let bot_border_idx = next_page_elems.iter().position(|e| {
+                        matches!(&e.content,
+                            LayoutContent::TableBorder { y1, y2, .. }
+                                if (*y1 - *y2).abs() < 0.1)
+                    });
+
+                    // Template for new top border (from any vertical border).
+                    let vertical_template = next_page_elems.iter().find_map(|e| match &e.content {
+                        LayoutContent::TableBorder { y1, y2, x1, x2, color, width }
+                            if (*y1 - *y2).abs() >= 0.1 => {
+                            Some((*x1, *x2, color.clone(), *width))
+                        }
+                        _ => None,
+                    });
+
+                    if let (Some(bi), Some((_, _, color, vw))) =
+                        (bot_border_idx, vertical_template.clone()) {
+                        if max_cont_text_bottom.is_finite() {
+                            // Only apply when border is above content bottom
+                            // (the broken-box-top-of-page case).
+                            let cur_border_y = match &next_page_elems[bi].content {
+                                LayoutContent::TableBorder { y1, .. } => *y1,
+                                _ => f32::INFINITY,
+                            };
+                            if cur_border_y < max_cont_text_bottom - 0.5 {
+                                // Move bottom horizontal border down to content bottom.
+                                if let LayoutContent::TableBorder { y1, y2, .. } =
+                                    &mut next_page_elems[bi].content {
+                                    *y1 = max_cont_text_bottom;
+                                    *y2 = max_cont_text_bottom;
+                                }
+                                next_page_elems[bi].y = max_cont_text_bottom;
+
+                                // Collect vertical border x1/x2 range, extend y2.
+                                let mut min_vx = f32::INFINITY;
+                                let mut max_vx = f32::NEG_INFINITY;
+                                for e in next_page_elems.iter_mut() {
+                                    if let LayoutContent::TableBorder { y1, y2, x1, x2, .. } =
+                                        &mut e.content {
+                                        if (*y1 - *y2).abs() >= 0.1 {
+                                            if *y2 < max_cont_text_bottom {
+                                                *y2 = max_cont_text_bottom;
+                                                e.height = *y2 - *y1;
+                                            }
+                                            if *x1 < min_vx { min_vx = *x1; }
+                                            if *x2 < min_vx { min_vx = *x2; }
+                                            if *x1 > max_vx { max_vx = *x1; }
+                                            if *x2 > max_vx { max_vx = *x2; }
+                                        }
+                                    }
+                                }
+
+                                // Add top horizontal border at page_top.
+                                if min_vx.is_finite() && max_vx.is_finite() {
+                                    next_page_elems.push(LayoutElement::new(
+                                        min_vx, page_top, max_vx - min_vx, 0.0,
+                                        LayoutContent::TableBorder {
+                                            x1: min_vx, y1: page_top,
+                                            x2: max_vx, y2: page_top,
+                                            color, width: vw,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Step 2 v9 (2026-04-23): close_y = last_line.y + natural_height,
                 // gated by `close_y <= split_y - 10pt` (skip if content packs too
                 // close to page_bottom). COM-derived from 11 minimal repros
