@@ -670,7 +670,7 @@ impl LayoutEngine {
                             metrics.word_line_height_no_grid(empty_fs)
                         }
                     } else {
-                        self.estimate_para_height(p, cw, gp, None)
+                        self.estimate_para_height(p, cw, gp, None, false, None, None)
                     };
                     footer_h += h;
                 }
@@ -713,14 +713,14 @@ impl LayoutEngine {
                                     first_run.text = format!("{}{}", prefix, first_run.text);
                                 }
                             }
-                            let ph = self.estimate_para_height(&p2, cw, None, None);
+                            let ph = self.estimate_para_height(&p2, cw, None, None, false, None, None);
                             // The footnote marker (superscript number) renders
                             // at a different Y position, effectively adding
                             // ~half a line of extra height per footnote.
                             h += ph + 2.0;
                             first_para = false;
                         } else {
-                            h += self.estimate_para_height(p, cw, None, None);
+                            h += self.estimate_para_height(p, cw, None, None, false, None, None);
                         }
                     }
                 }
@@ -920,7 +920,7 @@ impl LayoutEngine {
 
                     // keepLines: if doesn't fit, advance column or page
                     if para.style.keep_lines && !elements.is_empty() {
-                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
+                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                         let remaining = (start_y + effective_content_h) - cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
                             if num_columns > 1 && current_column + 1 < num_columns {
@@ -957,8 +957,8 @@ impl LayoutEngine {
                     // the heading itself doesn't fit.
                     if para.style.keep_next && !elements.is_empty() {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
-                            let this_h = self.estimate_para_height(para, content_width, grid_pitch, None);
-                            let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None);
+                            let this_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
+                            let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None, false, None, None);
                             let remaining = (start_y + effective_content_h) - cursor_y;
                             if this_h + next_h > remaining && this_h > remaining && this_h + next_h <= effective_content_h {
                                 if num_columns > 1 && current_column + 1 < num_columns {
@@ -989,7 +989,7 @@ impl LayoutEngine {
 
                     // Multi-column pre-check: advance column if paragraph won't fit
                     if num_columns > 1 {
-                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None);
+                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                         let remaining = (start_y + effective_content_h) - cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
                             if current_column + 1 < num_columns {
@@ -1345,7 +1345,7 @@ impl LayoutEngine {
                 let mut footer_h: f32 = 0.0;
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
-                        footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None);
+                        footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
                     }
                 }
                 let footer_top = page.size.height - footer_dist - footer_h;
@@ -1429,7 +1429,7 @@ impl LayoutEngine {
                             let mut footer_h: f32 = 0.0;
                             for block in &page.footer {
                                 if let Block::Paragraph(para) = block {
-                                    footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None);
+                                    footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
                                 }
                             }
                             page.size.height - footer_dist - footer_h - 4.0
@@ -1450,7 +1450,7 @@ impl LayoutEngine {
                         // grid_pitch × line_count per paragraph.
                         let grid_snap_para = |p: &Paragraph| -> (f32, usize) {
                             // Natural estimated height (may include space_before/after)
-                            let nat = self.estimate_para_height(p, hdr_width, grid_pitch, None);
+                            let nat = self.estimate_para_height(p, hdr_width, grid_pitch, None, false, None, None);
                             // Per-line natural height (used to derive line_count)
                             let line_fs = self.resolve_font_size(
                                 p.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
@@ -4199,7 +4199,7 @@ impl LayoutEngine {
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
-                            let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref());
+                            let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
                             cell_content_h += para_h;
                         }
                         Block::Table(nested) => {
@@ -4212,7 +4212,7 @@ impl LayoutEngine {
                                     let mut nc_h = 0.0_f32;
                                     for nb in &nc.blocks {
                                         if let Block::Paragraph(np) = nb {
-                                            nc_h += self.estimate_para_height(np, nested_w / 2.0, table_grid_pitch, nested.style.para_style.as_ref());
+                                            nc_h += self.estimate_para_height(np, nested_w / 2.0, table_grid_pitch, nested.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
                                         }
                                     }
                                     nr_h = nr_h.max(nc_h);
@@ -5185,7 +5185,111 @@ impl LayoutEngine {
     }
 
     /// Estimate paragraph height for table cell height calculation.
-    fn estimate_para_height(&self, para: &Paragraph, available_width: f32, grid_pitch: Option<f32>, table_para_style: Option<&ParagraphStyle>) -> f32 {
+    /// Count lines in a cell paragraph using the same wrap logic as the cell renderer
+    /// (mod.rs:4480-4566). Char-by-char, kinsoku line-start prohibited, fullwidth
+    /// grid pitch via grid_char_cw_ratio. No yakumono compression, no 2-pass wrap.
+    ///
+    /// Fix C: estimate_para_height previously used break_into_lines (with yakumono
+    /// compression) which fit more chars per line than the cell renderer actually
+    /// produces. estimate under-counted → render overflowed → page cascade.
+    fn count_cell_lines(
+        &self,
+        para: &Paragraph,
+        wrap_w: f32,
+        first_line_wrap_w: f32,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> usize {
+        if para.runs.is_empty() {
+            return 1;
+        }
+        let mut lines: usize = 0;
+        let mut line_x: f32 = 0.0;
+        let mut buf_w: f32 = 0.0;
+        let mut buf_nonempty = false;
+        let mut line_nonempty = false;
+        let mut is_first_line = true;
+
+        for run in &para.runs {
+            let font_size = self.resolve_font_size(&run.style, &para.style);
+            let cs = if run.style.fit_text.is_some() {
+                run.style.character_spacing.unwrap_or(0.0)
+            } else {
+                snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
+            };
+            for ch in run.text.chars() {
+                let cm = self.metrics_for_char(ch, &run.style, &para.style);
+                let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                if run.style.fit_text.is_none() {
+                    if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
+                        if ratio > 0.0 && pitch > 0.0 && cw > 0.0
+                            && crate::font::is_fullwidth(ch)
+                        {
+                            let default_fs = pitch / ratio;
+                            let char_space_pt = pitch - default_fs;
+                            cw = font_size + char_space_pt;
+                        }
+                    }
+                }
+                if let Some(scale) = run.style.text_scale {
+                    if (scale - 100.0).abs() > 0.01 {
+                        cw *= scale / 100.0;
+                    }
+                }
+                let cw = cw + cs;
+                let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
+                let is_space = ch == ' ' || ch == '\u{3000}';
+                if !is_space && line_x + buf_w + cw > effective_wrap && !(!line_nonempty && !buf_nonempty) {
+                    if kinsoku::is_line_start_prohibited(ch) {
+                        buf_w += cw;
+                        buf_nonempty = true;
+                        line_x += buf_w;
+                        line_nonempty = true;
+                        lines += 1;
+                        line_x = 0.0;
+                        buf_w = 0.0;
+                        buf_nonempty = false;
+                        line_nonempty = false;
+                        is_first_line = false;
+                        continue;
+                    }
+                    if buf_nonempty {
+                        line_x += buf_w;
+                        line_nonempty = true;
+                        buf_w = 0.0;
+                        buf_nonempty = false;
+                    }
+                    lines += 1;
+                    line_x = 0.0;
+                    line_nonempty = false;
+                    is_first_line = false;
+                }
+                buf_w += cw;
+                buf_nonempty = true;
+            }
+            if buf_nonempty {
+                line_x += buf_w;
+                line_nonempty = true;
+                buf_w = 0.0;
+                buf_nonempty = false;
+            }
+        }
+        if line_nonempty {
+            lines += 1;
+        }
+        lines.max(1)
+    }
+
+    fn estimate_para_height(
+        &self,
+        para: &Paragraph,
+        available_width: f32,
+        grid_pitch: Option<f32>,
+        table_para_style: Option<&ParagraphStyle>,
+        in_cell: bool,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> f32 {
         let mut height = 0.0;
         // Table cells snap to grid in default Word mode
         let snap = para.style.snap_to_grid;
@@ -5240,11 +5344,25 @@ impl LayoutEngine {
                 .unwrap_or(0.0);
             let effective_width = (available_width - indent_l - indent_r).max(1.0);
 
-            let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
-                .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
-                .collect();
-            let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None);
-            let line_count = lines.len().max(1);
+            // Fix C (2026-04-22): in cell context, count lines using the same
+            // char-by-char wrap as the cell renderer (mod.rs:4480+). break_into_lines
+            // applies yakumono compression that the cell renderer does not, so it
+            // under-counts lines → estimate < render → overflow cascade.
+            let line_count = if in_cell {
+                // first line wrap width: same indent math as render (mod.rs:4461)
+                let first_line_wrap_w = if first_indent < 0.0 {
+                    (available_width - (indent_l + first_indent).max(0.0) - indent_r).max(0.0)
+                } else {
+                    (effective_width - first_indent).max(0.0)
+                };
+                self.count_cell_lines(para, effective_width, first_line_wrap_w, grid_char_pitch, grid_char_cw_ratio)
+            } else {
+                let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
+                    .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
+                    .collect();
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None);
+                lines.len().max(1)
+            };
 
             let mut max_line_height: f32 = 0.0;
             for run in &para.runs {

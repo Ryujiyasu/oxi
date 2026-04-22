@@ -459,6 +459,51 @@ reached same conclusion via independent path (scratch+jc=both test).
 
 ---
 
+## Consistency merges (Path D — internal divergence unification)
+
+Merges that landed because two Oxi code paths computing the same thing were
+diverging, and unifying them improved overall SSIM (net strict >) without
+regressing the bottom-5 floor. See CLAUDE.md §9 Path D for the rules.
+
+### 2026-04-22 — Fix C: estimate_para_height cell path unified with cell renderer
+
+**Divergence**:
+- Path A (`estimate_para_height` via `break_into_lines`, mod.rs:5246): word-buffer
+  wrap with yakumono compression and 2-pass re-wrap.
+- Path B (cell render loop, mod.rs:4480+): char-by-char greedy wrap with kinsoku
+  line-start prohibited handling and fullwidth grid pitch (`grid_char_cw_ratio`),
+  NO yakumono compression.
+- Example mismatch: for ed025cbecffb_index-23 cell paragraphs, estimate sees
+  fewer lines than render actually produces (compression fits more chars per
+  line at estimate time), causing downstream page-break/keepLines decisions to
+  be made against the wrong height → cascade page drift.
+
+**Fix**: Added `count_cell_lines` helper replicating the cell renderer's wrap
+loop. `estimate_para_height` now accepts `in_cell: bool, grid_char_pitch,
+grid_char_cw_ratio`; when called from cell contexts it uses `count_cell_lines`
+instead of `break_into_lines`. 12 callsites updated (2 cell: pass real values;
+10 body: pass `false, None, None` — body path unchanged).
+
+**Results (177 docs, 352 pages)**:
+- Bottom-5: 3.2598 → 3.2598 (equal, within Path D allowance)
+- Net Δ: +0.1025
+- Max improvement: ed025 p.7 +0.1295
+- Max regression: ed025 p.8 -0.1110 (within |max_regression| ≤ |max_improvement|)
+- Improvements: 11 (ed025 × 9, de6e32 × 1, 6514f2 × 1)
+- Regressions: 8 (ed025 × 7 internal whack-a-mole, 15076df × 1)
+
+**Why this is correct regardless of bottom-5 floor**: estimate is supposed to
+be a cheap preview of render. When they disagree, either estimate is wrong
+(under/over-counting) or render is. Since we cannot change render without
+affecting actual visual output, we align estimate to match render. The
+alternative (letting them drift) means any estimate-driven decision
+(keepLines, keepNext, multi-column pre-check) operates on fiction.
+
+**Prior attempt**: FALSIFIED 2026-04-22 before Step 1 partial (157bc22). That
+run had b837 p5 -0.042 crash as a consequence of fn reserve over-pack being
+exposed by better estimates. Step 1 partial fixed fn_render attribution, which
+removed the crash pattern. Fix C v2 (this merge) sees no b837 p5 crash.
+
 ## Confidence merges (Path B — correct regardless of SSIM)
 
 Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
