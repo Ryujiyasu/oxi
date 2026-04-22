@@ -4997,8 +4997,15 @@ impl LayoutEngine {
                             }
                         }
                         _ => {
-                            // Text and other elements
-                            if elem_top < split_y {
+                            // Text and other elements. Step 1 (2026-04-22):
+                            // use element BOTTOM vs split_y, not top. A line at
+                            // y=761 with lh=18 has bottom=779; if split_y=771,
+                            // the line's bottom overflows and must move to the
+                            // next page. Previously used elem_top < split_y,
+                            // which kept the overflow-bottom line on current
+                            // page. This matches d77a p6/p7 cell-paragraph split.
+                            let elem_bottom = elem.y + elem.height;
+                            if elem_bottom <= split_y + 0.1 {
                                 current_page_elems.push(elem);
                             } else {
                                 let shift = split_y - page_top;
@@ -5006,6 +5013,28 @@ impl LayoutEngine {
                                 e.y -= shift;
                                 next_page_elems.push(e);
                             }
+                        }
+                    }
+                }
+
+                // Step 1 (2026-04-22): re-anchor overflow text so the FIRST
+                // overflow line lands at page_top, preserving relative spacing
+                // between subsequent lines. The original `shift = split_y -
+                // page_top` assumed overflow starts exactly at split_y, which
+                // is wrong when the line's top is below split_y but its bottom
+                // straddles. Compute the actual minimum y of overflow text and
+                // re-shift.
+                let min_overflow_text_y = next_page_elems.iter()
+                    .filter(|e| matches!(e.content, LayoutContent::Text { .. }))
+                    .map(|e| e.y)
+                    .fold(f32::INFINITY, f32::min);
+                if min_overflow_text_y.is_finite() {
+                    let original_shift = split_y - page_top;
+                    let correct_shift = (min_overflow_text_y + original_shift) - page_top;
+                    let adjust = correct_shift - original_shift;
+                    for e in next_page_elems.iter_mut() {
+                        if matches!(e.content, LayoutContent::Text { .. }) {
+                            e.y -= adjust;
                         }
                     }
                 }
