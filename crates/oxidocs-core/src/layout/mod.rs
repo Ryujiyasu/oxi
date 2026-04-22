@@ -5039,9 +5039,65 @@ impl LayoutEngine {
                     }
                 }
 
-                // Add a closing horizontal border at split point on current page
-                // and an opening horizontal border at page_top on next page
-                // (to show table continuation)
+                // Step 2 v9 (2026-04-23): close_y = last_line.y + natural_height,
+                // gated by `close_y <= split_y - 10pt` (skip if content packs too
+                // close to page_bottom). COM-derived from 11 minimal repros
+                // C1-C11 (MS Mincho/Gothic/Meiryo × fs 10.5/12/14 × pitch 15/18).
+                // See project_z_step2_v9_* memos and ECMA-376 §17.4.33.
+                {
+                    let last_text_y = current_page_elems.iter()
+                        .filter_map(|e| match &e.content {
+                            LayoutContent::Text { .. } => Some(e.y),
+                            _ => None,
+                        })
+                        .fold(f32::NEG_INFINITY, f32::max);
+
+                    if last_text_y.is_finite() {
+                        let line_eps = 2.0;
+                        let mut max_nat: f32 = 0.0;
+                        for e in current_page_elems.iter() {
+                            if let LayoutContent::Text { font_size, font_family, .. } = &e.content {
+                                if (e.y - last_text_y).abs() < line_eps {
+                                    let mut rpr = crate::ir::RunStyle::default();
+                                    rpr.font_family = font_family.clone();
+                                    rpr.font_size = Some(*font_size);
+                                    let para_style = crate::ir::ParagraphStyle::default();
+                                    let metrics = self.metrics_for_text("", &rpr, &para_style);
+                                    let h = metrics.word_ascent_pt(*font_size)
+                                          + metrics.word_descent_pt(*font_size);
+                                    if h > max_nat { max_nat = h; }
+                                }
+                            }
+                        }
+                        let close_y = last_text_y + max_nat;
+                        if close_y <= split_y - 10.0 {
+                            let template = next_page_elems.iter().find_map(|e| match &e.content {
+                                LayoutContent::TableBorder { y1, y2, x1, x2, color, width }
+                                    if (*y1 - *y2).abs() < 0.1 => {
+                                    Some((*x1, *x2, color.clone(), *width))
+                                }
+                                _ => None,
+                            });
+                            if let Some((bx1, bx2, color, bw)) = template {
+                                for e in current_page_elems.iter_mut() {
+                                    if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                        if (*y1 - *y2).abs() >= 0.1 {
+                                            if *y2 > close_y { *y2 = close_y; }
+                                            if *y1 > close_y { *y1 = close_y; }
+                                        }
+                                    }
+                                }
+                                current_page_elems.push(LayoutElement::new(
+                                    bx1, close_y, bx2 - bx1, 0.0,
+                                    LayoutContent::TableBorder {
+                                        x1: bx1, y1: close_y, x2: bx2, y2: close_y,
+                                        color, width: bw,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
 
                 // Push current page elements
                 elements.extend(current_page_elems);

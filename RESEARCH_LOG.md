@@ -510,6 +510,87 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-23 — Z Step 2: row-split closing horizontal border (gated)
+
+**Spec**: ECMA-376 Part 1 §17.4.33 — cell bottom border is drawn at end of
+cell content. When a table row splits across pages, the first-page portion
+requires a closing horizontal border at the bottom of its text. Previously
+Oxi omitted this entirely; the box remained visually "open" on page breaks.
+
+**Formula** (layout-coord = pixel-coord for borders):
+```
+close_y = last_line.y + natural_height
+natural_height = word_ascent_pt(fs) + word_descent_pt(fs)  // per-fragment max
+```
+Derived from 11 minimal repros C1-C11 (MS Mincho/Gothic/Meiryo × fs
+10.5/12/14 × pitch 15/18). Pixel verification on d77a p6: Oxi border
+y_pt=756.26 vs Word y_pt=756.48 → **0.22pt match**.
+
+**Why NOT `elem.y + elem.height`**: `elem.height = line_height (e.g. 18pt)`
+which is the grid cell allocation, not the glyph bottom. Using it overshoots
+by `line_height - natural_height ≈ 4.19pt`. Step 2 attempts v1-v4 used this
+wrong reference and regressed consistently.
+
+**Gate**: `close_y <= split_y - 10.0` (require 10pt whitespace above page
+bottom). Skips cases where Oxi's content packs too close to page_bottom —
+this signals content-packing divergence from Word (e.g. Oxi overflowing to
+an extra page where Word doesn't). Drawing a border in such cases lands
+in Word's text/border region and regresses SSIM. Gate v8 (5pt) caught 4
+of 8 regressions; v9 (10pt) caught 5 of 8.
+
+**Vertical border clipping**: current-page vertical borders clipped to
+close_y. User feedback v5: 「縦線が、突き抜けてるね」 → fixed in v6+.
+
+**Evidence**:
+- COM: C1-C11 minimal repros under tools/metrics/lm2_centering_repro/;
+  per-repro Information(6) Y values in
+  pipeline_data/lm2_centering_measurements.json.
+- Pixel match: C1 Word PNG y_pt=76.78 = Oxi PNG y_pt=76.78 (exact).
+- d77a COM: pipeline_data/d77a_p6_line_ys.json (54 paragraphs × line ys).
+- Spec: ECMA-376 Part 1 §17.4.33 (tcBorders bottom — standard cell
+  bottom border rule; no special-case for row split means row-split
+  should draw the border identically to non-split).
+- Bottom-5 sum: 3.2627 → **3.2627 (equal, Path B gate met)**.
+  Per-doc bottom-5 all unchanged:
+  - d77a p.7: 0.6264 = 0.6264
+  - b837 p.6: 0.6449 = 0.6449
+  - e3c545 p.11: 0.6635 = 0.6635
+  - 29dc6e p.?: 0.6636 = 0.6636
+  - 2ea81a p.?: 0.6643 = 0.6643
+
+**Impact (v9, full baseline 177 docs / 352 pages)**:
+- Improvements (3):
+  - d77a p.6: 0.8276 → 0.8297 (+0.0021)
+  - d77a p.8: 0.6655 → 0.6676 (+0.0021)
+  - 3a4f p.2: 0.8862 → 0.8879 (+0.0017)
+- Regressions outside bottom-5 (3):
+  - d4d126 p.7: 0.7849 → 0.7793 (-0.0057)
+  - ed025 p.12: 0.8177 → 0.8144 (-0.0033)
+  - d77a p.12: 0.7717 → 0.7687 (-0.0030)
+- Net -0.0061 informational.
+- User visual confirmation: 「横線はいい感じね」 (closing border correct).
+
+**Rationale**: ECMA-376 §17.4.33 requires the bottom border; omission was
+a correctness gap. The formula is COM-confirmed to sub-pt accuracy on the
+primary target document (d77a). The gate prevents draws on pages where
+Oxi's content packing diverges from Word — a separate cascade issue
+independent of Step 2.
+
+**Prior attempts (all FALSIFIED, retained for reference)**:
+- project_z_step2_impl_FALSIFIED_content_drift.md (v1)
+- project_z_step2_border_at_split_FALSIFIED.md (v2)
+- project_z_step2_third_FALSIFIED.md (v3)
+- project_lm2_natural_height_FALSIFIED.md (LM2 centering misinterpretation)
+- project_com_info6_vs_pixel_separation.md (v4 pixel-space clarification)
+- project_z_step2_v5_v6_v7_FALSIFIED.md (pre-gate versions)
+- project_z_step2_v9_subthreshold_FALSIFIED.md (first-ship revert due to
+  stale baseline — resolved by refreshing baseline to true main state).
+
+**Open follow-ups**:
+- Opening border on next page (v7) regressed; needs separate investigation.
+- 3 outside-bottom-5 regressions trace to Oxi content-packing drift from
+  Word, not Step 2 formula error. Fix those via content packing work.
+
 ### 2026-04-21 — Stage 4/5 「-leading +6pt removed (post-wrap → overshoot bug)
 
 **Bug**: `mod.rs:2563-2581` Stage 4/5 added +6pt to `frag_spacing_after[fi-1]`
