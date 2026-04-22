@@ -2405,6 +2405,24 @@ impl LayoutEngine {
                     v.push(carry);       // NEW page — earlier lines' refs move here
                 }
             } else if needs_page_break {
+                // Phantom-blank-page fix (2026-04-23): when an empty paragraph
+                // with page_break_after overflows and would produce an empty
+                // stub alone on a new page, followed by ANOTHER page break,
+                // skip the stub entirely. Push the current page and return —
+                // caller's page_break_after path is a no-op on empty elements,
+                // so the next block renders on the fresh page directly.
+                // d77a p.11 case: block 127 is just <w:br w:type="page"/>.
+                // See project_d77a_phantom_page_11.md.
+                if para.runs.is_empty() && para.style.page_break_after {
+                    current_elements.extend(std::mem::take(&mut elements));
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: std::mem::take(current_elements),
+                    });
+                    *cursor_y = page_top;
+                    return (Vec::new(), 0.0);
+                }
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
                 // only the overflowing line (and subsequent) go to the next page.
                 current_elements.extend(std::mem::take(&mut elements));

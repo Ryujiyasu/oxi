@@ -465,6 +465,68 @@ Merges that landed because two Oxi code paths computing the same thing were
 diverging, and unifying them improved overall SSIM (net strict >) without
 regressing the bottom-5 floor. See CLAUDE.md §9 Path D for the rules.
 
+### 2026-04-23 — Phantom blank page fix: empty-br paragraph overflow cascade
+
+**Divergence**: Two Oxi rules compound incorrectly in an edge case:
+- **Rule A (`project_empty_br_para_stub.md`, 2026-04-17)**: Empty paragraph
+  whose single run is `<w:br w:type="page"/>` (converted to `\x0C`) sets
+  `page_break_after=true` after removing the run. Layout renders the
+  paragraph mark as a stub on the CURRENT page, then forces a new page.
+- **Rule B (overflow check)**: When a line doesn't fit on current page
+  (`cursor_y + line_height > page_bottom`), push current page and
+  continue on new page.
+
+**Divergence**: When Rule A's empty paragraph OVERFLOWS (can't fit stub
+on current page), Rule B moves the stub to a new page. THEN Rule A
+pushes ANOTHER page break. Result: **two consecutive page breaks** →
+phantom blank page between them.
+
+**Example** (d77a block 127):
+- Block 126 fills p.10 near bottom (y=742)
+- Block 127 is empty + `<w:br w:type="page"/>`; stub line_height=18pt
+  doesn't fit on p.10 (742+18=760 > 771)
+- Rule B pushes p.10, stub renders on p.11 at y=75 (alone)
+- Rule A pushes p.11 (now with empty stub), advances to p.12
+- Block 128 "別紙の例" renders on p.12
+- Word renders this as 2 pages (block 126 end of p.10, block 128 start
+  of p.11); Oxi renders as 3 pages (p.10, blank p.11, p.12)
+
+**Fix** (crates/oxidocs-core/src/layout/mod.rs:2407): when Rule B
+overflow triggers AND the paragraph is empty AND has
+`page_break_after=true`, skip rendering the stub entirely. Push current
+page and return — the next paragraph renders on the fresh page directly,
+without an intervening blank page.
+
+**Results**:
+- Bottom-5 sum: 3.2627 → **3.2627 (equal, Path D gate met)**.
+- d77a total page count: 13 → **12** (matches Word).
+- d77a p.12 SSIM: 0.7687 → **0.9673 (+0.1986)** — content realigns with Word p.12.
+- d77a p.11 SSIM: 0.7891 → 0.7623 (-0.0268). The baseline 0.7891 was
+  artificially inflated because Oxi p.11 was BLANK vs Word p.11 with
+  content (SSIM rewards regional similarity; mostly-white pages match
+  mostly-white pages on luminance/variance components). Post-fix Oxi
+  p.11 has real content similar to Word but not pixel-perfect; 0.7623
+  reflects the honest SSIM of content-vs-content comparison.
+- Net +0.1717. Max improvement +0.1986 ≥ |max regression| 0.0268 ✓.
+
+**Evidence section**:
+- Before/after concrete: d77a block 127 phantom page confirmed via
+  layout_json --structure dump (rendered p.11 had only PARA 127 at
+  y=75 with 0 LINE entries). Oxi PNG p.11 total_dark_pixels=0
+  (completely blank). Word PNG p.11 total_dark_pixels=127407.
+- Bottom-5: 3.2627 → 3.2627 (equal).
+- Net Δ: +0.1717.
+- Max improvement: +0.1986 (d77a p.12).
+- Max regression: -0.0268 (d77a p.11, explained above).
+- Improvements / regressions: 1 / 1 (net positive, both in same doc).
+
+**Rationale**: the fix is a correctness-restoring unification. Rule A
+and Rule B in isolation are correct; their compound effect in the
+overflow edge case produces a result that violates the spec (one
+page break element → one page break, not two). Path D applies because
+this is an internal consistency fix for Oxi's own rule interaction,
+not a Word-behavior claim.
+
 ### 2026-04-22 — Fix C: estimate_para_height cell path unified with cell renderer
 
 **Divergence**:
