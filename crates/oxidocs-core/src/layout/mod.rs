@@ -787,6 +787,16 @@ impl LayoutEngine {
         // effective content_height in overflow checks below.
         let mut footnote_reserve_current: f32 = 0.0;
         let mut footnote_ids_current_page: Vec<u32> = Vec::new();
+        // Step 1 partial (Option B, 2026-04-22): per-page accumulation of
+        // fn_ref ids whose markers actually render on each page, built from
+        // layout_paragraph's per-line attribution (Step 0, e347cdf). Replaces
+        // the block_page_indices-based collect_footnote_refs call in fn_area
+        // render — block-level attribution mis-assigns mid-break refs (e.g.
+        // b837 block 48 ref 15 marker on p3 but block_page_indices=p4).
+        // NOTE: reserve seeding on NEW page (Step 1 full) was FALSIFIED on
+        // b837 (-0.0828 net) due to body cascade; see
+        // project_fn_reserve_option_b_step1_FALSIFIED.md.
+        let mut page_fn_refs: Vec<Vec<u32>> = Vec::new();
 
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
@@ -1072,6 +1082,20 @@ impl LayoutEngine {
 
                     // Track page/column breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
+                    // Step 1 partial: attribute per-line fn refs to the page each
+                    // line actually rendered on. para_fn_refs_per_page[i] holds
+                    // the ids on the (start_page + i)-th page. Always runs —
+                    // pages_added==0 has 1 bucket == current page's slot.
+                    let start_page_for_para = current_page_idx;
+                    for (offset, refs) in para_fn_refs_per_page.iter().enumerate() {
+                        let page_i = start_page_for_para + offset;
+                        while page_fn_refs.len() <= page_i { page_fn_refs.push(Vec::new()); }
+                        for id in refs {
+                            if !page_fn_refs[page_i].contains(id) {
+                                page_fn_refs[page_i].push(*id);
+                            }
+                        }
+                    }
                     if pages_added > 0 {
                         // Multi-column: a "page break" inside layout_paragraph may actually
                         // be a column break. Check if we can advance to the next column.
@@ -1373,18 +1397,23 @@ impl LayoutEngine {
                     }
                 }
 
-                // Gather paragraphs/tables that landed on this layout page.
-                let mut page_blocks: Vec<&Block> = Vec::new();
-                for (i, b) in page.blocks.iter().enumerate() {
-                    if block_page_indices.get(i).copied().unwrap_or(0) == page_idx {
-                        page_blocks.push(b);
+                // Step 1 partial (2026-04-22): per-line paragraph fn refs
+                // (accurate across mid-para page breaks) + table cell fn refs
+                // via block-level attribution (tables not yet instrumented to
+                // return per-line data).
+                let mut referenced_ids: Vec<u32> = Vec::new();
+                if let Some(p_ids) = page_fn_refs.get(page_idx) {
+                    for id in p_ids {
+                        if !referenced_ids.contains(id) { referenced_ids.push(*id); }
                     }
                 }
-                let mut referenced_ids: Vec<u32> = Vec::new();
-                collect_footnote_refs(
-                    &page_blocks.iter().map(|&b| b.clone()).collect::<Vec<_>>(),
-                    &mut referenced_ids,
-                );
+                for (i, b) in page.blocks.iter().enumerate() {
+                    if block_page_indices.get(i).copied().unwrap_or(0) == page_idx {
+                        if let Block::Table(_) = b {
+                            collect_footnote_refs(std::slice::from_ref(b), &mut referenced_ids);
+                        }
+                    }
+                }
 
                 if !referenced_ids.is_empty() {
                     // Resolve referenced footnotes (preserve order, dedup already done).
