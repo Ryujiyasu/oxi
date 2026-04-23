@@ -394,60 +394,126 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         }
                     }
                     oxidocs_core::layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width } => {
-                        if shape_type == "bracketPair" {
-                            let (sr, sg, sb) = if let Some(ref sc) = stroke_color {
-                                let c = sc.strip_prefix('#').unwrap_or(sc);
-                                if c.len() == 6 {
-                                    (
-                                        u8::from_str_radix(&c[0..2], 16).unwrap_or(0),
-                                        u8::from_str_radix(&c[2..4], 16).unwrap_or(0),
-                                        u8::from_str_radix(&c[4..6], 16).unwrap_or(0),
-                                    )
-                                } else { (0, 0, 0) }
-                            } else { (0, 0, 0) };
-                            let sw = (*stroke_width as f64 * scale).round().max(1.0) as i32;
-                            let pen = CreatePen(PS_SOLID, sw, COLORREF((sr as u32) | ((sg as u32) << 8) | ((sb as u32) << 16)));
-                            let old_pen = SelectObject(mem_dc, pen);
-                            let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
-                            // OOXML bracketPair: corner radius = 8.387% of min(w,h)
-                            let r = ((ew.min(eh) as f64) * 0.08387).round().max(2.0) as i32;
-                            let k = 0.5522847;
-                            let kr = (r as f64 * k).round() as i32;
-                            // Left bracket
-                            {
-                                let pts = [
-                                    POINT { x: x + r, y },
-                                    POINT { x: x + r - kr, y },
-                                    POINT { x: x, y: y + r - kr },
-                                    POINT { x: x, y: y + r },
-                                    POINT { x: x, y: y + eh - r },
-                                    POINT { x: x, y: y + eh - r },
-                                    POINT { x: x, y: y + eh - r },
-                                    POINT { x: x, y: y + eh - r + kr },
-                                    POINT { x: x + r - kr, y: y + eh },
-                                    POINT { x: x + r, y: y + eh },
-                                ];
-                                PolyBezier(mem_dc, &pts);
+                        // Parse stroke color once — used by all shape branches.
+                        let (sr, sg, sb) = if let Some(ref sc) = stroke_color {
+                            let c = sc.strip_prefix('#').unwrap_or(sc);
+                            if c.len() == 6 {
+                                (
+                                    u8::from_str_radix(&c[0..2], 16).unwrap_or(0),
+                                    u8::from_str_radix(&c[2..4], 16).unwrap_or(0),
+                                    u8::from_str_radix(&c[4..6], 16).unwrap_or(0),
+                                )
+                            } else { (0, 0, 0) }
+                        } else { (0, 0, 0) };
+                        let color_ref = COLORREF((sr as u32) | ((sg as u32) << 8) | ((sb as u32) << 16));
+                        let sw_px = (*stroke_width as f64 * scale).round().max(1.0) as i32;
+
+                        match shape_type.as_str() {
+                            "bracketPair" => {
+                                let pen = CreatePen(PS_SOLID, sw_px, color_ref);
+                                let old_pen = SelectObject(mem_dc, pen);
+                                let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                // OOXML bracketPair: corner radius = 8.387% of min(w,h)
+                                let r = ((ew.min(eh) as f64) * 0.08387).round().max(2.0) as i32;
+                                let k = 0.5522847;
+                                let kr = (r as f64 * k).round() as i32;
+                                // Left bracket
+                                {
+                                    let pts = [
+                                        POINT { x: x + r, y },
+                                        POINT { x: x + r - kr, y },
+                                        POINT { x: x, y: y + r - kr },
+                                        POINT { x: x, y: y + r },
+                                        POINT { x: x, y: y + eh - r },
+                                        POINT { x: x, y: y + eh - r },
+                                        POINT { x: x, y: y + eh - r },
+                                        POINT { x: x, y: y + eh - r + kr },
+                                        POINT { x: x + r - kr, y: y + eh },
+                                        POINT { x: x + r, y: y + eh },
+                                    ];
+                                    PolyBezier(mem_dc, &pts);
+                                }
+                                // Right bracket
+                                {
+                                    let pts = [
+                                        POINT { x: x + ew - r, y },
+                                        POINT { x: x + ew - r + kr, y },
+                                        POINT { x: x + ew, y: y + r - kr },
+                                        POINT { x: x + ew, y: y + r },
+                                        POINT { x: x + ew, y: y + eh - r },
+                                        POINT { x: x + ew, y: y + eh - r },
+                                        POINT { x: x + ew, y: y + eh - r },
+                                        POINT { x: x + ew, y: y + eh - r + kr },
+                                        POINT { x: x + ew - r + kr, y: y + eh },
+                                        POINT { x: x + ew - r, y: y + eh },
+                                    ];
+                                    PolyBezier(mem_dc, &pts);
+                                }
+                                SelectObject(mem_dc, old_brush);
+                                SelectObject(mem_dc, old_pen);
+                                let _ = DeleteObject(pen);
                             }
-                            // Right bracket
-                            {
+                            // OOXML prstGeom prst="line": diagonal line from top-left to
+                            // bottom-right of the bounding box. With width=0 → vertical;
+                            // with height=0 → horizontal. Used as divider/separator.
+                            // 3a4f9fbe1a83 uses 27 of these (24 inside textboxes).
+                            "line" => {
+                                let pen = CreatePen(PS_SOLID, sw_px, color_ref);
+                                let old_pen = SelectObject(mem_dc, pen);
                                 let pts = [
-                                    POINT { x: x + ew - r, y },
-                                    POINT { x: x + ew - r + kr, y },
-                                    POINT { x: x + ew, y: y + r - kr },
-                                    POINT { x: x + ew, y: y + r },
-                                    POINT { x: x + ew, y: y + eh - r },
-                                    POINT { x: x + ew, y: y + eh - r },
-                                    POINT { x: x + ew, y: y + eh - r },
-                                    POINT { x: x + ew, y: y + eh - r + kr },
-                                    POINT { x: x + ew - r + kr, y: y + eh },
-                                    POINT { x: x + ew - r, y: y + eh },
+                                    POINT { x, y },
+                                    POINT { x: x + ew, y: y + eh },
                                 ];
-                                PolyBezier(mem_dc, &pts);
+                                Polyline(mem_dc, &pts);
+                                SelectObject(mem_dc, old_pen);
+                                let _ = DeleteObject(pen);
                             }
-                            SelectObject(mem_dc, old_brush);
-                            SelectObject(mem_dc, old_pen);
-                            let _ = DeleteObject(pen);
+                            // OOXML prstGeom prst="leftBracket" | "rightBracket":
+                            // single "[" or "]" shape, outline-only (no fill),
+                            // drawn as rounded-corner path along one side of the bbox.
+                            // Shape adj default = 8.387% corner radius (same as bracketPair).
+                            "leftBracket" | "rightBracket" => {
+                                let pen = CreatePen(PS_SOLID, sw_px, color_ref);
+                                let old_pen = SelectObject(mem_dc, pen);
+                                let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                let r = ((ew.min(eh) as f64) * 0.08387).round().max(2.0) as i32;
+                                let k = 0.5522847;
+                                let kr = (r as f64 * k).round() as i32;
+                                let pts = if shape_type == "leftBracket" {
+                                    // "[" — curves at top-left + bottom-left of bbox
+                                    [
+                                        POINT { x: x + r, y },                       // top start (a bit right of corner)
+                                        POINT { x: x + r - kr, y },                   // cubic handle 1
+                                        POINT { x, y: y + r - kr },                    // cubic handle 2
+                                        POINT { x, y: y + r },                          // top-left curve end
+                                        POINT { x, y: y + eh - r },                    // straight down
+                                        POINT { x, y: y + eh - r },                    // (duplicate for cubic)
+                                        POINT { x, y: y + eh - r },                    //
+                                        POINT { x, y: y + eh - r + kr },               // cubic handle
+                                        POINT { x: x + r - kr, y: y + eh },            // cubic handle
+                                        POINT { x: x + r, y: y + eh },                // bottom end
+                                    ]
+                                } else {
+                                    // "]" — curves at top-right + bottom-right of bbox
+                                    [
+                                        POINT { x: x + ew - r, y },
+                                        POINT { x: x + ew - r + kr, y },
+                                        POINT { x: x + ew, y: y + r - kr },
+                                        POINT { x: x + ew, y: y + r },
+                                        POINT { x: x + ew, y: y + eh - r },
+                                        POINT { x: x + ew, y: y + eh - r },
+                                        POINT { x: x + ew, y: y + eh - r },
+                                        POINT { x: x + ew, y: y + eh - r + kr },
+                                        POINT { x: x + ew - r + kr, y: y + eh },
+                                        POINT { x: x + ew - r, y: y + eh },
+                                    ]
+                                };
+                                PolyBezier(mem_dc, &pts);
+                                SelectObject(mem_dc, old_brush);
+                                SelectObject(mem_dc, old_pen);
+                                let _ = DeleteObject(pen);
+                            }
+                            _ => {}
                         }
                     }
                 }

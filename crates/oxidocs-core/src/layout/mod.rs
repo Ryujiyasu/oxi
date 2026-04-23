@@ -1885,6 +1885,9 @@ impl LayoutEngine {
             match block {
                 Block::Paragraph(para) => {
                     let clip_bottom = abs_y + text_box.height;
+                    // Capture para start Y before layout_paragraph advances cursor_y.
+                    // Used below to anchor inner-paragraph shapes at their declared offset.
+                    let para_start_y = cursor_y;
                     let (para_elements, _) = self.layout_paragraph(
                         para,
                         inner_x,
@@ -1902,6 +1905,26 @@ impl LayoutEngine {
                         0.0, None, None, None,
                         false, None,
                     );
+                    // Emit PresetShape elements for shapes attached to this inner
+                    // paragraph. Without this, floating shapes (e.g. DML:line
+                    // dividers, brackets) declared inside <w:txbxContent> never
+                    // render. The shape anchor uses the inner paragraph's start Y
+                    // plus the shape's own pos.y (relative offset from paragraph).
+                    // Found via 3a4f9fbe1a83 baseline scan 2026-04-23.
+                    for shape in &para.shapes {
+                        if let Some(ref pos) = shape.position {
+                            let sx = inner_x + pos.x;
+                            let sy = para_start_y + pos.y;
+                            elements.push(LayoutElement::new(
+                                sx, sy, shape.width, shape.height,
+                                LayoutContent::PresetShape {
+                                    shape_type: shape.shape_type.clone(),
+                                    stroke_color: shape.stroke_color.clone(),
+                                    stroke_width: shape.stroke_width.unwrap_or(0.75),
+                                },
+                            ));
+                        }
+                    }
                     // Word behavior: TextBox overflow text is not rendered.
                     // Filter: (1) Y overflow, (2) in dark-filled TextBox, skip text with no explicit color.
                     // Word PDF omits runs without color attribute inside colored TextBoxes —
