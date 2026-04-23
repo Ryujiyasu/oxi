@@ -1,0 +1,968 @@
+{
+  "S1_sa87_sb87_2p.docx": {
+    "rows": [
+      {
+        "row": 1,
+        "first_para_y_pt": 61.5
+      },
+      {
+        "row": 2,
+        "first_para_y_pt": 94.5
+      },
+      {
+        "row": 3,
+        "first_para_y_pt": 108.5
+      },
+      {
+        "row": 4,
+        "first_para_y_pt": 123.0
+      },
+      {
+        "row": 5,
+        "first_para_y_pt": 137.0
+      },
+      {
+        "row": 6,
+        "first_para_y_pt": 151.0
+      },
+      {
+        "row": 7,
+        "first_para_y_pt": 165.0
+      },
+      {
+        "row": 8,
+        "first_para_y_pt": 179.5
+      },
+      {
+        "row": 9,
+        "first_para_y_pt": 193.5
+      }
+    ],
+    "first_20_paras": [
+      {
+        "idx": 1,
+        "page": 1,
+        "y_pt": 61.5,
+        "text": "para1"
+      },
+      {
+        "idx": 2,
+        "page": 1,
+        "y_pt": 61.5,
+        "text": "para2"
+      },
+      {
+        "idx": 3,
+        "page": 1,
+        "y_pt": 61.5,
+        "text": ""
+      },
+      {
+        "idx": 4,
+        "page": 1,
+        "y_pt": 94.5,
+        "text": "ref row 1"
+      },
+      {
+        "idx": 5,
+        "page": 1,
+        "y_pt": 94.5,
+        "text": ""
+      },
+      {
+        "idx": 6,
+        "page": 1,
+        "y_pt": 108.5,
+        "text": "ref row 2"
+      },
+      {
+        "idx": 7,
+        "page": 1,
+        "y_pt": 108.5,
+        "text": ""
+      },
+      {
+        "idx": 8,
+        "page": 1,
+        "y_pt": 123.0,
+        "text": "ref row 3"
+      },
+      {
+        "idx": 9,
+        "page": 1,
+        "y_pt": 123.0,
+        "text": ""
+      },
+      {
+        "idx": 10,
+        "page": 1,
+        "y_pt": 137.0,
+        "text": "ref row 4"
+      },
+      {
+        "idx": 11,
+        "page": 1,
+        "y_pt": 137.0,
+        "text": ""
+      },
+      {
+        "idx": 12,
+        "page": 1,
+        "y_pt": 151.0,
+        "text": "ref row 5"
+      },
+      {
+        "idx": 13,
+        "page": 1,
+        "y_pt": 151.0,
+        "text": ""
+      },
+      {
+        "idx": 14,
+        "page": 1,
+        "y_pt": 165.0,
+        "text": "ref row 6"
+      },
+      {
+        "idx": 15,
+        "page": 1,
+        "y_pt": 165.0,
+        "text": ""
+      },
+      {
+        "idx": 16,
+        "page": 1,
+        "y_pt": 179.5,
+        "text": "ref row 7"
+      },
+      {
+        "idx": 17,
+        "page": 1,
+        "y_pt": 179.5,
+        "text": ""
+      },
+      {
+        "idx": 18,
+        "page": 1,
+        "y_pt": 193.5,
+        "text": "ref row 8"
+      },
+      {
+        "idx": 19,
+        "page": 1,
+        "y_pt": 193.5,
+        "text": ""
+      },
+      {
+        "idx": 20,
+        "page": 1,
+        "y_pt": 207.5,
+        "text": ""
+      }
+    ]
+  },
+  "S2_sa60_sb120_2p.docx": {
+    "rows": [
+      {
+        "row": 1,
+        "first_para_y_pt": 63.0
+      },
+      {
+        "row": 2,
+        "first_para_y_pt": 96.5
+      },
+      {
+        "row": 3,
+        "first_para_y_pt": 110.5
+      },
+      {
+        "row": 4,
+        "first_para_y_pt": 124.5
+      },
+      {
+        "row": 5,
+        "first_para_y_pt": 139.0
+      },
+      {
+        "row": 6,
+        "first_para_y_pt": 153.0
+      },
+      {
+        "row": 7,
+        "first_para_y_pt": 167.0
+      },
+      {
+        "row": 8,
+        "first_para_y_pt": 181.0
+      },
+      {
+        "row": 9,
+        "first_para_y_pt": 195.5
+      }
+    ],
+    "first_20_paras": [
+      {
+        "idx": 1,
+        "page": 1,
+        "y_pt": 63.0,
+        "text": "para1"
+      },
+      {
+        "idx": 2,
+        "page": 1,
+        "y_pt": 63.0,
+        "text": "para2"
+      },
+      {
+        "idx": 3,
+        "page": 1,
+        "y_pt": 63.0,
+        "text": ""
+      },
+      {
+        "idx": 4,
+        "page": 1,
+        "y_pt": 96.5,
+        "text": "ref row 1"
+      },
+      {
+        "idx": 5,
+        "page": 1,
+        "y_pt": 96.5,
+        "text": ""
+      },
+      {
+        "idx": 6,
+        "page": 1,
+        "y_pt": 110.5,
+        "text": "ref row 2"
+      },
+      {
+        "idx": 7,
+        "page": 1,
+        "y_pt": 110.5,
+        "text": ""
+      },
+      {
+        "idx": 8,
+        "page": 1,
+        "y_pt": 124.5,
+        "text": "ref row 3"
+      },
+      {
+        "idx": 9,
+        "page": 1,
+        "y_pt": 124.5,
+        "text": ""
+      },
+      {
+        "idx": 10,
+        "page": 1,
+        "y_pt": 139.0,
+        "text": "ref row 4"
+      },
+      {
+        "idx": 11,
+        "page": 1,
+        "y_pt": 139.0,
+        "text": ""
+      },
+      {
+        "idx": 12,
+        "page": 1,
+        "y_pt": 153.0,
+        "text": "ref row 5"
+      },
+      {
+        "idx": 13,
+        "page": 1,
+        "y_pt": 153.0,
+        "text": ""
+      },
+      {
+        "idx": 14,
+        "page": 1,
+        "y_pt": 167.0,
+        "text": "ref row 6"
+      },
+      {
+        "idx": 15,
+        "page": 1,
+        "y_pt": 167.0,
+        "text": ""
+      },
+      {
+        "idx": 16,
+        "page": 1,
+        "y_pt": 181.0,
+        "text": "ref row 7"
+      },
+      {
+        "idx": 17,
+        "page": 1,
+        "y_pt": 181.0,
+        "text": ""
+      },
+      {
+        "idx": 18,
+        "page": 1,
+        "y_pt": 195.5,
+        "text": "ref row 8"
+      },
+      {
+        "idx": 19,
+        "page": 1,
+        "y_pt": 195.5,
+        "text": ""
+      },
+      {
+        "idx": 20,
+        "page": 1,
+        "y_pt": 209.5,
+        "text": ""
+      }
+    ]
+  },
+  "S3_sa0_sb120_2p.docx": {
+    "rows": [
+      {
+        "row": 1,
+        "first_para_y_pt": 63.0
+      },
+      {
+        "row": 2,
+        "first_para_y_pt": 93.5
+      },
+      {
+        "row": 3,
+        "first_para_y_pt": 107.5
+      },
+      {
+        "row": 4,
+        "first_para_y_pt": 121.5
+      },
+      {
+        "row": 5,
+        "first_para_y_pt": 136.0
+      },
+      {
+        "row": 6,
+        "first_para_y_pt": 150.0
+      },
+      {
+        "row": 7,
+        "first_para_y_pt": 164.0
+      },
+      {
+        "row": 8,
+        "first_para_y_pt": 178.0
+      },
+      {
+        "row": 9,
+        "first_para_y_pt": 192.5
+      }
+    ],
+    "first_20_paras": [
+      {
+        "idx": 1,
+        "page": 1,
+        "y_pt": 63.0,
+        "text": "para1"
+      },
+      {
+        "idx": 2,
+        "page": 1,
+        "y_pt": 63.0,
+        "text": "para2"
+      },
+      {
+        "idx": 3,
+        "page": 1,
+        "y_pt": 63.0,
+        "text": ""
+      },
+      {
+        "idx": 4,
+        "page": 1,
+        "y_pt": 93.5,
+        "text": "ref row 1"
+      },
+      {
+        "idx": 5,
+        "page": 1,
+        "y_pt": 93.5,
+        "text": ""
+      },
+      {
+        "idx": 6,
+        "page": 1,
+        "y_pt": 107.5,
+        "text": "ref row 2"
+      },
+      {
+        "idx": 7,
+        "page": 1,
+        "y_pt": 107.5,
+        "text": ""
+      },
+      {
+        "idx": 8,
+        "page": 1,
+        "y_pt": 121.5,
+        "text": "ref row 3"
+      },
+      {
+        "idx": 9,
+        "page": 1,
+        "y_pt": 121.5,
+        "text": ""
+      },
+      {
+        "idx": 10,
+        "page": 1,
+        "y_pt": 136.0,
+        "text": "ref row 4"
+      },
+      {
+        "idx": 11,
+        "page": 1,
+        "y_pt": 136.0,
+        "text": ""
+      },
+      {
+        "idx": 12,
+        "page": 1,
+        "y_pt": 150.0,
+        "text": "ref row 5"
+      },
+      {
+        "idx": 13,
+        "page": 1,
+        "y_pt": 150.0,
+        "text": ""
+      },
+      {
+        "idx": 14,
+        "page": 1,
+        "y_pt": 164.0,
+        "text": "ref row 6"
+      },
+      {
+        "idx": 15,
+        "page": 1,
+        "y_pt": 164.0,
+        "text": ""
+      },
+      {
+        "idx": 16,
+        "page": 1,
+        "y_pt": 178.0,
+        "text": "ref row 7"
+      },
+      {
+        "idx": 17,
+        "page": 1,
+        "y_pt": 178.0,
+        "text": ""
+      },
+      {
+        "idx": 18,
+        "page": 1,
+        "y_pt": 192.5,
+        "text": "ref row 8"
+      },
+      {
+        "idx": 19,
+        "page": 1,
+        "y_pt": 192.5,
+        "text": ""
+      },
+      {
+        "idx": 20,
+        "page": 1,
+        "y_pt": 206.5,
+        "text": ""
+      }
+    ]
+  },
+  "S4_sa100_sb100_3p.docx": {
+    "rows": [
+      {
+        "row": 1,
+        "first_para_y_pt": 62.0
+      },
+      {
+        "row": 2,
+        "first_para_y_pt": 113.5
+      },
+      {
+        "row": 3,
+        "first_para_y_pt": 127.5
+      },
+      {
+        "row": 4,
+        "first_para_y_pt": 141.5
+      },
+      {
+        "row": 5,
+        "first_para_y_pt": 156.0
+      },
+      {
+        "row": 6,
+        "first_para_y_pt": 170.0
+      },
+      {
+        "row": 7,
+        "first_para_y_pt": 184.0
+      },
+      {
+        "row": 8,
+        "first_para_y_pt": 198.0
+      },
+      {
+        "row": 9,
+        "first_para_y_pt": 212.5
+      }
+    ],
+    "first_20_paras": [
+      {
+        "idx": 1,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": "para1"
+      },
+      {
+        "idx": 2,
+        "page": 1,
+        "y_pt": 79.0,
+        "text": "para2"
+      },
+      {
+        "idx": 3,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": "para3"
+      },
+      {
+        "idx": 4,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": ""
+      },
+      {
+        "idx": 5,
+        "page": 1,
+        "y_pt": 113.5,
+        "text": "ref row 1"
+      },
+      {
+        "idx": 6,
+        "page": 1,
+        "y_pt": 113.5,
+        "text": ""
+      },
+      {
+        "idx": 7,
+        "page": 1,
+        "y_pt": 127.5,
+        "text": "ref row 2"
+      },
+      {
+        "idx": 8,
+        "page": 1,
+        "y_pt": 127.5,
+        "text": ""
+      },
+      {
+        "idx": 9,
+        "page": 1,
+        "y_pt": 141.5,
+        "text": "ref row 3"
+      },
+      {
+        "idx": 10,
+        "page": 1,
+        "y_pt": 141.5,
+        "text": ""
+      },
+      {
+        "idx": 11,
+        "page": 1,
+        "y_pt": 156.0,
+        "text": "ref row 4"
+      },
+      {
+        "idx": 12,
+        "page": 1,
+        "y_pt": 156.0,
+        "text": ""
+      },
+      {
+        "idx": 13,
+        "page": 1,
+        "y_pt": 170.0,
+        "text": "ref row 5"
+      },
+      {
+        "idx": 14,
+        "page": 1,
+        "y_pt": 170.0,
+        "text": ""
+      },
+      {
+        "idx": 15,
+        "page": 1,
+        "y_pt": 184.0,
+        "text": "ref row 6"
+      },
+      {
+        "idx": 16,
+        "page": 1,
+        "y_pt": 184.0,
+        "text": ""
+      },
+      {
+        "idx": 17,
+        "page": 1,
+        "y_pt": 198.0,
+        "text": "ref row 7"
+      },
+      {
+        "idx": 18,
+        "page": 1,
+        "y_pt": 198.0,
+        "text": ""
+      },
+      {
+        "idx": 19,
+        "page": 1,
+        "y_pt": 212.5,
+        "text": "ref row 8"
+      },
+      {
+        "idx": 20,
+        "page": 1,
+        "y_pt": 212.5,
+        "text": ""
+      }
+    ]
+  },
+  "S5_sa200_sb100_2p.docx": {
+    "rows": [
+      {
+        "row": 1,
+        "first_para_y_pt": 62.0
+      },
+      {
+        "row": 2,
+        "first_para_y_pt": 106.5
+      },
+      {
+        "row": 3,
+        "first_para_y_pt": 120.5
+      },
+      {
+        "row": 4,
+        "first_para_y_pt": 134.5
+      },
+      {
+        "row": 5,
+        "first_para_y_pt": 149.0
+      },
+      {
+        "row": 6,
+        "first_para_y_pt": 163.0
+      },
+      {
+        "row": 7,
+        "first_para_y_pt": 177.0
+      },
+      {
+        "row": 8,
+        "first_para_y_pt": 191.0
+      },
+      {
+        "row": 9,
+        "first_para_y_pt": 205.5
+      }
+    ],
+    "first_20_paras": [
+      {
+        "idx": 1,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": "para1"
+      },
+      {
+        "idx": 2,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": "para2"
+      },
+      {
+        "idx": 3,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": ""
+      },
+      {
+        "idx": 4,
+        "page": 1,
+        "y_pt": 106.5,
+        "text": "ref row 1"
+      },
+      {
+        "idx": 5,
+        "page": 1,
+        "y_pt": 106.5,
+        "text": ""
+      },
+      {
+        "idx": 6,
+        "page": 1,
+        "y_pt": 120.5,
+        "text": "ref row 2"
+      },
+      {
+        "idx": 7,
+        "page": 1,
+        "y_pt": 120.5,
+        "text": ""
+      },
+      {
+        "idx": 8,
+        "page": 1,
+        "y_pt": 134.5,
+        "text": "ref row 3"
+      },
+      {
+        "idx": 9,
+        "page": 1,
+        "y_pt": 134.5,
+        "text": ""
+      },
+      {
+        "idx": 10,
+        "page": 1,
+        "y_pt": 149.0,
+        "text": "ref row 4"
+      },
+      {
+        "idx": 11,
+        "page": 1,
+        "y_pt": 149.0,
+        "text": ""
+      },
+      {
+        "idx": 12,
+        "page": 1,
+        "y_pt": 163.0,
+        "text": "ref row 5"
+      },
+      {
+        "idx": 13,
+        "page": 1,
+        "y_pt": 163.0,
+        "text": ""
+      },
+      {
+        "idx": 14,
+        "page": 1,
+        "y_pt": 177.0,
+        "text": "ref row 6"
+      },
+      {
+        "idx": 15,
+        "page": 1,
+        "y_pt": 177.0,
+        "text": ""
+      },
+      {
+        "idx": 16,
+        "page": 1,
+        "y_pt": 191.0,
+        "text": "ref row 7"
+      },
+      {
+        "idx": 17,
+        "page": 1,
+        "y_pt": 191.0,
+        "text": ""
+      },
+      {
+        "idx": 18,
+        "page": 1,
+        "y_pt": 205.5,
+        "text": "ref row 8"
+      },
+      {
+        "idx": 19,
+        "page": 1,
+        "y_pt": 205.5,
+        "text": ""
+      },
+      {
+        "idx": 20,
+        "page": 1,
+        "y_pt": 219.5,
+        "text": ""
+      }
+    ]
+  },
+  "S6_single_para.docx": {
+    "rows": [
+      {
+        "row": 1,
+        "first_para_y_pt": 62.0
+      },
+      {
+        "row": 2,
+        "first_para_y_pt": 79.5
+      },
+      {
+        "row": 3,
+        "first_para_y_pt": 93.5
+      },
+      {
+        "row": 4,
+        "first_para_y_pt": 107.5
+      },
+      {
+        "row": 5,
+        "first_para_y_pt": 122.0
+      },
+      {
+        "row": 6,
+        "first_para_y_pt": 136.0
+      },
+      {
+        "row": 7,
+        "first_para_y_pt": 150.0
+      },
+      {
+        "row": 8,
+        "first_para_y_pt": 164.0
+      },
+      {
+        "row": 9,
+        "first_para_y_pt": 178.5
+      }
+    ],
+    "first_20_paras": [
+      {
+        "idx": 1,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": "soloPara"
+      },
+      {
+        "idx": 2,
+        "page": 1,
+        "y_pt": 62.0,
+        "text": ""
+      },
+      {
+        "idx": 3,
+        "page": 1,
+        "y_pt": 79.5,
+        "text": "ref row 1"
+      },
+      {
+        "idx": 4,
+        "page": 1,
+        "y_pt": 79.5,
+        "text": ""
+      },
+      {
+        "idx": 5,
+        "page": 1,
+        "y_pt": 93.5,
+        "text": "ref row 2"
+      },
+      {
+        "idx": 6,
+        "page": 1,
+        "y_pt": 93.5,
+        "text": ""
+      },
+      {
+        "idx": 7,
+        "page": 1,
+        "y_pt": 107.5,
+        "text": "ref row 3"
+      },
+      {
+        "idx": 8,
+        "page": 1,
+        "y_pt": 107.5,
+        "text": ""
+      },
+      {
+        "idx": 9,
+        "page": 1,
+        "y_pt": 122.0,
+        "text": "ref row 4"
+      },
+      {
+        "idx": 10,
+        "page": 1,
+        "y_pt": 122.0,
+        "text": ""
+      },
+      {
+        "idx": 11,
+        "page": 1,
+        "y_pt": 136.0,
+        "text": "ref row 5"
+      },
+      {
+        "idx": 12,
+        "page": 1,
+        "y_pt": 136.0,
+        "text": ""
+      },
+      {
+        "idx": 13,
+        "page": 1,
+        "y_pt": 150.0,
+        "text": "ref row 6"
+      },
+      {
+        "idx": 14,
+        "page": 1,
+        "y_pt": 150.0,
+        "text": ""
+      },
+      {
+        "idx": 15,
+        "page": 1,
+        "y_pt": 164.0,
+        "text": "ref row 7"
+      },
+      {
+        "idx": 16,
+        "page": 1,
+        "y_pt": 164.0,
+        "text": ""
+      },
+      {
+        "idx": 17,
+        "page": 1,
+        "y_pt": 178.5,
+        "text": "ref row 8"
+      },
+      {
+        "idx": 18,
+        "page": 1,
+        "y_pt": 178.5,
+        "text": ""
+      },
+      {
+        "idx": 19,
+        "page": 1,
+        "y_pt": 192.5,
+        "text": ""
+      }
+    ]
+  }
+}

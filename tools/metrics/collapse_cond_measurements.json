@@ -1,0 +1,37 @@
+{
+  "C1_baseline.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  },
+  "C2_widowCtrl0.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  },
+  "C3_wordWrap0.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  },
+  "C4_autoSpaceDE0.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  },
+  "C5_autoSpaceDN0.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  },
+  "C6_jcBoth.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  },
+  "C7_all_acstyle.docx": {
+    "row1_y": 61.5,
+    "row2_y": 94.5,
+    "row1_h": 33.0
+  }
+}
