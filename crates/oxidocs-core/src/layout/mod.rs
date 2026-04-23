@@ -101,11 +101,17 @@ pub enum LayoutContent {
         stroke_width: f32,
         corner_radius: f32,
     },
-    /// A preset shape outline (e.g. bracketPair, brace, etc.)
+    /// A preset shape outline (e.g. bracketPair, brace, straightConnector, bentConnector3, etc.)
     PresetShape {
         shape_type: String,
         stroke_color: Option<String>,
         stroke_width: f32,
+        /// End-arrow style for VML connectors ("block", "classic", etc.). None = no arrowhead.
+        end_arrow: Option<String>,
+        /// Horizontal flip (mirrors across vertical center line).
+        flip_x: bool,
+        /// Vertical flip (mirrors across horizontal center line).
+        flip_y: bool,
     },
     /// Begin a clipping region. All subsequent elements until ClipEnd are clipped to this rect.
     ClipStart,
@@ -1151,6 +1157,9 @@ impl LayoutEngine {
                                     shape_type: shape.shape_type.clone(),
                                     stroke_color: shape.stroke_color.clone(),
                                     stroke_width: shape.stroke_width.unwrap_or(0.75),
+                                    end_arrow: shape.end_arrow.clone(),
+                                    flip_x: shape.flip_x,
+                                    flip_y: shape.flip_y,
                                 },
                             ));
                         }
@@ -1670,6 +1679,9 @@ impl LayoutEngine {
                                 shape_type: shape.shape_type.clone(),
                                 stroke_color: shape.stroke_color.clone(),
                                 stroke_width: shape.stroke_width.unwrap_or(0.75),
+                                end_arrow: shape.end_arrow.clone(),
+                                flip_x: shape.flip_x,
+                                flip_y: shape.flip_y,
                         }));
                     }
                 }
@@ -4794,6 +4806,9 @@ impl LayoutEngine {
                                         shape_type: shape.shape_type.clone(),
                                         stroke_color: shape.stroke_color.clone(),
                                         stroke_width: shape.stroke_width.unwrap_or(0.5),
+                                        end_arrow: shape.end_arrow.clone(),
+                                        flip_x: shape.flip_x,
+                                        flip_y: shape.flip_y,
                                 }));
                             }
                         }

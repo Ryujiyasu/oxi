@@ -58,7 +58,11 @@ fn output_flat(result: &layout::LayoutResult, out: &mut impl Write) {
                     writeln!(out, "BOX\t{:.3}\t{:.3}\t{:.1}\t{:.3}\t{}\t{}\t{}\t{}", elem.x, elem.y, elem.width, elem.height, f, s, stroke_width, corner_radius).unwrap();
                 }
                 layout::LayoutContent::ClipStart | layout::LayoutContent::ClipEnd => {}
-                layout::LayoutContent::PresetShape { .. } => {}
+                layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, end_arrow, flip_x, flip_y } => {
+                    let sc = stroke_color.as_deref().unwrap_or("");
+                    let ea = end_arrow.as_deref().unwrap_or("");
+                    writeln!(out, "PRESET\t{:.3}\t{:.3}\t{:.1}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}", elem.x, elem.y, elem.width, elem.height, shape_type, sc, stroke_width, ea, *flip_x as u8, *flip_y as u8).unwrap();
+                }
             }
         }
     }
