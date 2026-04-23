@@ -573,15 +573,6 @@ pub struct Shape {
     /// Vertical text anchor: "top" (default), "middle", "bottom"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v_text_anchor: Option<String>,
-    /// End-arrow style for VML connectors (t32/t34): "block", "classic", etc.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_arrow: Option<String>,
-    /// Horizontal flip (VML connectors: style="flip:x")
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub flip_x: bool,
-    /// Vertical flip (VML connectors: style="flip:y")
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub flip_y: bool,
 }
 
 /// A gradient color stop

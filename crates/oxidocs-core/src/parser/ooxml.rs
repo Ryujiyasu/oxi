@@ -2586,11 +2586,6 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut text_inset_top: Option<f32> = None;
     let mut text_inset_bottom: Option<f32> = None;
     let mut text_body_anchor: Option<String> = None;
-    // Connector end-arrow style (from <a:tailEnd type="triangle|open|..."/>)
-    // Connector flip flags (from <a:xfrm flipH="1" flipV="1">)
-    let mut end_arrow: Option<String> = None;
-    let mut flip_x: bool = false;
-    let mut flip_y: bool = false;
 
     loop {
         match reader.read_event()? {
@@ -2688,16 +2683,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         }
                                     } else if sl == "noFill" {
                                         has_no_stroke = true;
-                                    } else if sl == "tailEnd" {
-                                        // Connector end-arrow: <a:tailEnd type="triangle"/>
-                                        for attr in se.attributes().flatten() {
-                                            if local_name(attr.key.as_ref()) == "type" {
-                                                end_arrow = Some(String::from_utf8_lossy(&attr.value).to_string());
-                                            }
-                                        }
                                     }
                                 }
-                                Ok(Event::End(_se)) => {
+                                Ok(Event::End(se)) => {
                                     ln_depth -= 1;
                                     if ln_depth == 0 {
                                         break;
@@ -2823,16 +2811,12 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         depth -= 1;
                     }
                     // Shape transform rotation (xfrm rot attribute in 60000ths of a degree)
-                    // Plus flipH/flipV flags for connectors.
                     "xfrm" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            let val = String::from_utf8_lossy(&attr.value);
-                            match key.as_str() {
-                                "rot" => rotation = val.parse::<f32>().ok().map(|v| v / 60000.0),
-                                "flipH" => flip_x = val == "1" || val == "true",
-                                "flipV" => flip_y = val == "1" || val == "true",
-                                _ => {}
+                            if key == "rot" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                rotation = val.parse::<f32>().ok().map(|v| v / 60000.0);
                             }
                         }
                     }
@@ -3026,14 +3010,6 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     "wrapSquare" => { wrap_type = Some(WrapType::Square); }
                     "wrapTight" => { wrap_type = Some(WrapType::Tight); }
                     "wrapTopAndBottom" => { wrap_type = Some(WrapType::TopAndBottom); }
-                    // Connector end-arrow (<a:tailEnd type="triangle"/>, etc.)
-                    "tailEnd" => {
-                        for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "type" {
-                                end_arrow = Some(String::from_utf8_lossy(&attr.value).to_string());
-                            }
-                        }
-                    }
                     "extent" => {
                         // wp:extent cx/cy are in EMUs (English Metric Units)
                         // 1 inch = 914400 EMUs, 1 point = 12700 EMUs
@@ -3278,9 +3254,6 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             gradient_angle,
             anchor_block_index: 0,
             v_text_anchor: None,
-            end_arrow: end_arrow.clone(),
-            flip_x,
-            flip_y,
         })
     } else {
         None
@@ -3344,9 +3317,6 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut margin_left: f32 = 0.0;
     let mut margin_top: f32 = 0.0;
     let mut is_absolute = false;
-    let mut flip_x = false;
-    let mut flip_y = false;
-    let mut end_arrow: Option<String> = None;
     let mut depth = 0;
 
     loop {
@@ -3385,13 +3355,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             .map(|a| String::from_utf8_lossy(&a.value).to_string());
                         shape_type = Some(match local.as_str() {
                             "shape" => {
-                                // Map VML shapetype IDs to OOXML preset names.
-                                // t32 = StraightConnector, t34 = BentConnector3
-                                // (user-observed in 2ea81a 2026-04-23)
+                                // Map VML shapetype IDs to OOXML preset names
                                 match vml_type_attr.as_deref() {
                                     Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
-                                    Some(t) if t.contains("t32") => "straightConnector",
-                                    Some(t) if t.contains("t34") => "bentConnector3",
                                     _ => "rect",
                                 }
                             }
@@ -3418,12 +3384,6 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                             margin_top = parse_css_length(mt.trim());
                                         } else if part.starts_with("position:absolute") {
                                             is_absolute = true;
-                                        } else if let Some(f) = part.strip_prefix("flip:") {
-                                            // VML flip can be "x", "y", or "x y"
-                                            for axis in f.trim().split_whitespace() {
-                                                if axis == "x" { flip_x = true; }
-                                                else if axis == "y" { flip_y = true; }
-                                            }
                                         }
                                     }
                                 }
@@ -3465,7 +3425,6 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                 "color" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
                                 "weight" => stroke_width_val = parse_css_length_opt(&val),
                                 "on" => { if val == "f" || val == "false" { no_stroke = true; } }
-                                "endarrow" => end_arrow = Some(val),
                                 _ => {}
                             }
                         }
@@ -3533,9 +3492,6 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         gradient_angle: None,
         anchor_block_index: 0,
         v_text_anchor,
-        end_arrow,
-        flip_x,
-        flip_y,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })

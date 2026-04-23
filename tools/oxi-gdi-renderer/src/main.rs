@@ -393,95 +393,20 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             }
                         }
                     }
-                    oxidocs_core::layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, end_arrow, flip_x, flip_y } => {
-                        // Resolve stroke color once (used by all branches)
-                        let (sr, sg, sb) = if let Some(ref sc) = stroke_color {
-                            let c = sc.strip_prefix('#').unwrap_or(sc);
-                            if c.len() == 6 {
-                                (
-                                    u8::from_str_radix(&c[0..2], 16).unwrap_or(0),
-                                    u8::from_str_radix(&c[2..4], 16).unwrap_or(0),
-                                    u8::from_str_radix(&c[4..6], 16).unwrap_or(0),
-                                )
-                            } else { (0, 0, 0) }
-                        } else { (0, 0, 0) };
-                        let color_ref = COLORREF((sr as u32) | ((sg as u32) << 8) | ((sb as u32) << 16));
-                        let sw_px = (*stroke_width as f64 * scale).round().max(1.0) as i32;
-                        let is_straight = shape_type == "straightConnector" || shape_type == "straightConnector1";
-                        let is_bent = shape_type == "bentConnector3";
-                        if is_straight || is_bent {
-                            let pen = CreatePen(PS_SOLID, sw_px, color_ref);
-                            let old_pen = SelectObject(mem_dc, pen);
-                            // Line endpoints depending on shape_type + flips.
-                            // VML t32 (straightConnector) path m,l21600,21600e:
-                            //   default line: (0,0) → (w,h); flip_x/y mirrors.
-                            // VML t34 (bentConnector3) path m,l@0,0@0,21600,21600,21600e with adj=10800:
-                            //   default: (0,0) → (w/2,0) → (w/2,h) → (w,h); flip_x/y mirrors.
-                            let (p1x, p1y) = {
-                                let (fx, fy) = (*flip_x, *flip_y);
-                                (if fx { x + ew } else { x }, if fy { y + eh } else { y })
-                            };
-                            let (p4x, p4y) = {
-                                let (fx, fy) = (*flip_x, *flip_y);
-                                (if fx { x } else { x + ew }, if fy { y } else { y + eh })
-                            };
-                            let (prev_px, prev_py, last_px, last_py);
-                            if is_straight {
-                                let pts = [POINT { x: p1x, y: p1y }, POINT { x: p4x, y: p4y }];
-                                Polyline(mem_dc, &pts);
-                                prev_px = p1x; prev_py = p1y;
-                                last_px = p4x; last_py = p4y;
-                            } else {
-                                // bentConnector3: insert bend points at horizontal midpoint.
-                                let bend_x = ew / 2;
-                                let (b_x_default, b_x_flipped) = (x + bend_x, x + ew - bend_x);
-                                let bx = if *flip_x { b_x_flipped } else { b_x_default };
-                                let pts = [
-                                    POINT { x: p1x, y: p1y },
-                                    POINT { x: bx,  y: p1y },
-                                    POINT { x: bx,  y: p4y },
-                                    POINT { x: p4x, y: p4y },
-                                ];
-                                Polyline(mem_dc, &pts);
-                                prev_px = bx; prev_py = p4y;
-                                last_px = p4x; last_py = p4y;
-                            }
-                            SelectObject(mem_dc, old_pen);
-                            let _ = DeleteObject(pen);
-                            // Arrow head at last endpoint.
-                            if end_arrow.is_some() {
-                                // Direction vector
-                                let dx = (last_px - prev_px) as f64;
-                                let dy = (last_py - prev_py) as f64;
-                                let len = (dx * dx + dy * dy).sqrt().max(1.0);
-                                let ux = dx / len;
-                                let uy = dy / len;
-                                // Arrow dimensions: Word 'block medium medium' ≈ 4pt length × 4pt width.
-                                // Scale by stroke_width to visually grow with line weight.
-                                let arrow_len = (4.0 * scale).max(4.0);
-                                let arrow_half = (2.5 * scale).max(2.5);
-                                let bx = last_px as f64 - ux * arrow_len;
-                                let by = last_py as f64 - uy * arrow_len;
-                                // Perpendicular
-                                let px = -uy;
-                                let py = ux;
-                                let tri = [
-                                    POINT { x: last_px, y: last_py },
-                                    POINT { x: (bx + px * arrow_half).round() as i32, y: (by + py * arrow_half).round() as i32 },
-                                    POINT { x: (bx - px * arrow_half).round() as i32, y: (by - py * arrow_half).round() as i32 },
-                                ];
-                                let brush = CreateSolidBrush(color_ref);
-                                let old_brush = SelectObject(mem_dc, brush);
-                                let arrow_pen = CreatePen(PS_SOLID, 1, color_ref);
-                                let old_pen2 = SelectObject(mem_dc, arrow_pen);
-                                Polygon(mem_dc, &tri);
-                                SelectObject(mem_dc, old_pen2);
-                                SelectObject(mem_dc, old_brush);
-                                let _ = DeleteObject(arrow_pen);
-                                let _ = DeleteObject(brush);
-                            }
-                        } else if shape_type == "bracketPair" {
-                            let pen = CreatePen(PS_SOLID, sw_px, color_ref);
+                    oxidocs_core::layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width } => {
+                        if shape_type == "bracketPair" {
+                            let (sr, sg, sb) = if let Some(ref sc) = stroke_color {
+                                let c = sc.strip_prefix('#').unwrap_or(sc);
+                                if c.len() == 6 {
+                                    (
+                                        u8::from_str_radix(&c[0..2], 16).unwrap_or(0),
+                                        u8::from_str_radix(&c[2..4], 16).unwrap_or(0),
+                                        u8::from_str_radix(&c[4..6], 16).unwrap_or(0),
+                                    )
+                                } else { (0, 0, 0) }
+                            } else { (0, 0, 0) };
+                            let sw = (*stroke_width as f64 * scale).round().max(1.0) as i32;
+                            let pen = CreatePen(PS_SOLID, sw, COLORREF((sr as u32) | ((sg as u32) << 8) | ((sb as u32) << 16)));
                             let old_pen = SelectObject(mem_dc, pen);
                             let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                             // OOXML bracketPair: corner radius = 8.387% of min(w,h)
