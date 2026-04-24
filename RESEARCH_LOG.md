@@ -15,6 +15,18 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-03/P-04 ins+del locked down + P-05 moveFrom/moveTo
+
+- context: feat/comments-tracked-changes Phase 2 parser rows — the tracked-change quartet
+- P-03/P-04 (verification): `<w:ins>` / `<w:del>` were pre-existing, emitting `Run::tracked_change{change_type: "insert"|"delete", author, date}` and preserving `<w:delText>` as `Run::text`. Locked down with 3 integration tests on fixtures 05, 06, 07 (including XML-order preservation in mixed case).
+- P-05 (new): `<w:moveFrom>` / `<w:moveTo>` wrap runs identically to ins/del. Added `change_type="moveFrom"|"moveTo"` plus a new `pair_id: Option<String>` field on `TrackedChange` (the wrapper's `w:id`).
+- important finding — pairing is NOT via wrapper `w:id`: fixture 08 shows `moveFrom w:id="201"`, `moveTo w:id="202"`. The actual from↔to pairing lives on `moveFromRangeStart` / `moveToRangeStart` (both carrying `w:id="200"` + `w:name="move1"`). Revisions_notes.md §1.2 is correct; the attack-matrix row note saying "Pair via shared w:id on the Range markers" was accurate. Phase 2 parser surfaces the wrapper id only; R-11 will walk range markers when it needs the from↔to linkage.
+- refactor: the four ins/del/moveFrom/moveTo branches collapsed into a single `"ins"|"del"|"moveFrom"|"moveTo"` arm mapped to `change_type` strings; `parse_tracked_change_runs` receives the element name as end_tag.
+- tests:
+  - integration (4 new): fixture_05_single_ins, fixture_06_single_del, fixture_07_mixed_ins_del, fixture_08_move_from_to_pair
+- baseline risk: none. 184 baseline docs have 5 lone `w:del`s (already handled pre-change) and 0 w:ins/moveFrom/moveTo.
+- path: Path B `[confidence-merge]`.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-12 people.xml reviewer list
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-12

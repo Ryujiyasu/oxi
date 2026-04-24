@@ -97,6 +97,124 @@ fn fixture_02_comments_extended_reply_threaded() {
     assert!(!reply.resolved);
 }
 
+fn collect_runs(doc: &oxidocs_core::Document) -> Vec<&oxidocs_core::ir::Run> {
+    let mut runs = Vec::new();
+    for page in &doc.pages {
+        for block in &page.blocks {
+            if let oxidocs_core::ir::Block::Paragraph(p) = block {
+                for run in &p.runs {
+                    runs.push(run);
+                }
+            }
+        }
+    }
+    runs
+}
+
+/// P-03: `<w:ins>` runs carry `tracked_change.change_type == "insert"` with
+/// author + date preserved. Deleted text from `<w:delText>` is preserved (not
+/// dropped) per attack-matrix P-04 notes.
+#[test]
+fn fixture_05_single_ins() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+    let ins_runs: Vec<_> = collect_runs(&doc)
+        .into_iter()
+        .filter(|r| r.tracked_change.as_ref().map(|t| t.change_type.as_str()) == Some("insert"))
+        .collect();
+    assert_eq!(ins_runs.len(), 1, "one <w:ins> run expected");
+    let run = ins_runs[0];
+    assert_eq!(run.text, "INSERTED TEXT ");
+    let tc = run.tracked_change.as_ref().unwrap();
+    assert!(tc.author.is_some(), "w:author must survive");
+    assert!(tc.date.is_some(), "w:date must survive");
+}
+
+/// P-04: `<w:del>` runs carry `tracked_change.change_type == "delete"` and the
+/// deleted text (from `<w:delText>`) is preserved verbatim.
+#[test]
+fn fixture_06_single_del() {
+    let Some(bytes) = read_fixture("fixture_06_single_del.docx") else {
+        eprintln!("skipping: fixture_06 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_06");
+    let del_runs: Vec<_> = collect_runs(&doc)
+        .into_iter()
+        .filter(|r| r.tracked_change.as_ref().map(|t| t.change_type.as_str()) == Some("delete"))
+        .collect();
+    assert_eq!(del_runs.len(), 1);
+    assert_eq!(del_runs[0].text, "DELETED TEXT ");
+}
+
+/// P-03+P-04: mixed ins/del in one paragraph preserves XML order.
+#[test]
+fn fixture_07_mixed_ins_del() {
+    let Some(bytes) = read_fixture("fixture_07_mixed_ins_del.docx") else {
+        eprintln!("skipping: fixture_07 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_07");
+    let revisions: Vec<_> = collect_runs(&doc)
+        .into_iter()
+        .filter_map(|r| {
+            r.tracked_change
+                .as_ref()
+                .map(|t| (t.change_type.clone(), r.text.clone()))
+        })
+        .collect();
+    assert_eq!(
+        revisions,
+        vec![
+            ("insert".to_string(), "ins1 ".to_string()),
+            ("delete".to_string(), "del1 ".to_string()),
+            ("insert".to_string(), "ins2".to_string()),
+        ],
+        "three revisions must preserve authoring (XML) order"
+    );
+}
+
+/// P-05: `<w:moveFrom>` and `<w:moveTo>` wrap runs the same way ins/del do.
+/// Both sides share `w:id`, which becomes `tracked_change.pair_id` so the
+/// renderer can draw move arrows between the two halves.
+#[test]
+fn fixture_08_move_from_to_pair() {
+    let Some(bytes) = read_fixture("fixture_08_move_from_to.docx") else {
+        eprintln!("skipping: fixture_08 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_08");
+    let moves: Vec<_> = collect_runs(&doc)
+        .into_iter()
+        .filter_map(|r| {
+            r.tracked_change.as_ref().and_then(|t| match t.change_type.as_str() {
+                "moveFrom" | "moveTo" => Some((t.change_type.clone(), t.pair_id.clone(), r.text.clone())),
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(moves.len(), 2, "one moveFrom + one moveTo expected");
+    // Both sides carry the same text "moved clause".
+    for (_, _, text) in &moves {
+        assert_eq!(text, "moved clause");
+    }
+    let kinds: Vec<_> = moves.iter().map(|(k, _, _)| k.as_str()).collect();
+    assert!(kinds.contains(&"moveFrom"));
+    assert!(kinds.contains(&"moveTo"));
+    // Note: `<w:moveFrom>` / `<w:moveTo>` wrappers each carry their *own*
+    // `w:id`; the actual from↔to pairing lives on the surrounding
+    // `moveFromRangeStart` / `moveToRangeStart` pair via `w:name`
+    // (revisions_notes.md §1.2). For Phase 2 parser we preserve the wrapper
+    // id per-run; R-11 walks the range markers to draw the arrow.
+    let from_id = moves.iter().find(|(k, _, _)| k == "moveFrom").and_then(|(_, id, _)| id.clone());
+    let to_id = moves.iter().find(|(k, _, _)| k == "moveTo").and_then(|(_, id, _)| id.clone());
+    assert!(from_id.is_some(), "moveFrom wrapper w:id must be captured");
+    assert!(to_id.is_some(), "moveTo wrapper w:id must be captured");
+}
+
 /// P-12: people.xml populates Document.people with two reviewers.
 #[test]
 fn fixture_10_people_two_reviewers() {

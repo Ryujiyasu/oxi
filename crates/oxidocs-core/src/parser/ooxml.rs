@@ -1011,38 +1011,39 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url)?;
                         runs.extend(hyperlink_runs);
                     }
-                    // Track changes: inserted content
-                    "ins" if depth == 0 => {
+                    // Track changes: inserted / deleted / moved content.
+                    // ECMA-376 §17.13.5. Each element wraps runs; w:author, w:date,
+                    // w:id are attributes on the wrapper. For moves, w:id pairs a
+                    // moveFrom with its companion moveTo.
+                    "ins" | "del" | "moveFrom" | "moveTo" if depth == 0 => {
+                        let change_type = match local.as_str() {
+                            "ins" => "insert",
+                            "del" => "delete",
+                            "moveFrom" => "moveFrom",
+                            "moveTo" => "moveTo",
+                            _ => unreachable!(),
+                        };
                         let mut author = None;
                         let mut date = None;
+                        let mut pair_id = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "author" => author = Some(val),
                                 "date" => date = Some(val),
+                                "id" => pair_id = Some(val),
                                 _ => {}
                             }
                         }
-                        let tc = TrackedChange { change_type: "insert".into(), author, date };
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "ins", tc)?;
-                        runs.extend(tracked_runs);
-                    }
-                    // Track changes: deleted content
-                    "del" if depth == 0 => {
-                        let mut author = None;
-                        let mut date = None;
-                        for attr in e.attributes().flatten() {
-                            let key = local_name(attr.key.as_ref());
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
-                            match key.as_str() {
-                                "author" => author = Some(val),
-                                "date" => date = Some(val),
-                                _ => {}
-                            }
-                        }
-                        let tc = TrackedChange { change_type: "delete".into(), author, date };
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "del", tc)?;
+                        let tc = TrackedChange {
+                            change_type: change_type.into(),
+                            author,
+                            date,
+                            pair_id,
+                        };
+                        let end_tag = local.clone();
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, &end_tag, tc)?;
                         runs.extend(tracked_runs);
                     }
                     // mc:AlternateContent at paragraph level

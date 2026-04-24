@@ -633,15 +633,24 @@ pub struct Person {
     pub user_id: Option<String>,
 }
 
-/// A tracked change (insertion or deletion)
+/// A tracked change (insertion, deletion, or move).
+///
+/// `change_type` is one of: `"insert"` (`<w:ins>`), `"delete"` (`<w:del>`),
+/// `"moveFrom"` (`<w:moveFrom>`), `"moveTo"` (`<w:moveTo>`). `pair_id` is
+/// the `w:id` attribute, used by the renderer to pair a `moveFrom` with its
+/// `moveTo` across paragraphs (ECMA-376 §17.13.5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedChange {
-    /// "insert" or "delete"
+    /// "insert" | "delete" | "moveFrom" | "moveTo"
     pub change_type: String,
     /// Author of the change
     pub author: Option<String>,
     /// Date of the change
     pub date: Option<String>,
+    /// Document-local `w:id` of the revision. For moves, `pair_id` on a
+    /// `moveFrom` matches the `pair_id` on its partner `moveTo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_id: Option<String>,
 }
 
 /// Ruby (furigana) annotation
