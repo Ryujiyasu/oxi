@@ -13,6 +13,13 @@ pub struct Document {
     /// Seeds the renderer's author-color palette (attack-matrix row R-02).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub people: Vec<Person>,
+    /// Author palette derived from people.xml + Comment.author + Run.tracked_change.author.
+    /// Order is first-seen across the document, with `people.xml` honoured first
+    /// (Word writes people.xml in reviewer-first-seen order). Each entry's
+    /// `color_index` is its position in this Vec, so the renderer can map
+    /// `color_index` → RGB through any palette without a separate join step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<Author>,
     /// Compatibility: adjustLineHeightInTable (compat65).
     /// true = adjust line height in table cells (disable grid snap in cells).
     /// false (default) = table cells snap to document grid like normal paragraphs.
@@ -675,6 +682,38 @@ pub struct PropertyChange {
     /// same reason as `prior_run_style`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prior_paragraph_style: Option<Box<ParagraphStyle>>,
+}
+
+/// Resolved author palette entry — `display` is the join key, `color_index` is
+/// the position the renderer uses to look up an RGB swatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Author {
+    /// Display name (matches `<w:author>` attributes verbatim).
+    pub display: String,
+    /// 0-based palette index. Stable for a given document — derived from first-seen
+    /// order across people.xml + comments + tracked changes.
+    pub color_index: usize,
+}
+
+/// Reveal mode for revisions, mirroring Word's "Show Markup" / "Display for
+/// Review" dropdown. Set on the render config; the renderer uses it to decide
+/// which revisions to draw and how (attack-matrix row S-02).
+///
+/// - `All` — every revision is rendered with markup (default).
+/// - `Simple` — vertical change bar in the margin only; in-line text shows
+///   the post-edit document.
+/// - `Original` — pre-edit document: insertions are hidden, deletions appear
+///   as normal text, prior `*PrChange` styles are applied.
+/// - `Final` — post-edit document: deletions are hidden, insertions are
+///   normal text, `*PrChange` keeps the current style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowRevisions {
+    #[default]
+    All,
+    Simple,
+    Original,
+    Final,
 }
 
 /// A tracked change (insertion, deletion, or move).

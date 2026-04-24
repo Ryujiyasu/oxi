@@ -15,6 +15,29 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — I-03 author palette + I-04 ShowRevisions
+
+- context: feat/comments-tracked-changes Phase 2 IR rows. After Phase 2 parser COMPLETE, build the IR scaffolding renderer rows depend on.
+- I-03 — author palette:
+  - new `ir::Author { display: String, color_index: usize }`
+  - `Document.authors: Vec<Author>` derived from 3 sources, first-seen order:
+    1. `Document.people` (people.xml — Word writes reviewer-first-seen order)
+    2. `Comment.author`
+    3. tracked-change authors via `walk_block_authors` (run.tracked_change, run.rpr_change, paragraph.ppr_change, paragraph.paragraph_mark_revision; recurses into Block::Table)
+  - color_index = position in the palette → renderer maps to RGB through any palette without a separate join.
+- I-04 — show-revisions toggle:
+  - `ir::ShowRevisions::{All (default), Simple, Original, Final}`
+  - serde `rename_all = "snake_case"` so JSON-API consumers see `"all"|"simple"|"original"|"final"`.
+  - not wired into a render config struct yet — added as IR plumbing for S-02.
+- I-01 closeout: covered incrementally by P-01 + P-10 + P-11. Comment struct already has all required fields and is surfaced on Document.comments.
+- I-02 deferred: keeping the current `Run.tracked_change: Option<TrackedChange>` + `Run.rpr_change: Option<PropertyChange>` shape. Multiple-revisions-per-run is rare and unused in baseline; SmallVec refactor blast-radius is high. Revisit only if a renderer needs it.
+- evidence:
+  - 2 unit tests: `show_revisions_default_is_all_and_round_trips_json`, `build_author_palette_dedupes_in_first_seen_order`
+  - 1 integration extension: `fixture_10_people_two_reviewers` extended to assert `Document.authors` palette ordering
+  - 1 new integration: `fixture_05_authors_palette_from_tracked_changes_only` — palette falls back to tracked-change authors when people.xml is absent
+- baseline risk: none.
+- path: Path B `[confidence-merge]`.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-08 *PrChange silent-drain (6 variants) — Phase 2 parser COMPLETE
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-08 — final row

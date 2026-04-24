@@ -238,6 +238,7 @@ fn fixture_09_rpr_change_bold() {
 }
 
 /// P-12: people.xml populates Document.people with two reviewers.
+/// I-03: the same reviewers populate Document.authors with stable color_indices.
 #[test]
 fn fixture_10_people_two_reviewers() {
     let Some(bytes) = read_fixture("fixture_10_multiple_reviewers.docx") else {
@@ -245,15 +246,35 @@ fn fixture_10_people_two_reviewers() {
         return;
     };
     let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_10");
-    // Word COM: fixture fails Documents.Open for a validator defect, but the
-    // underlying people.xml is syntactically valid and our parser must surface
-    // both reviewers so R-02 (author palette) has the list it needs.
+    // P-12: people.xml content is preserved verbatim.
     assert_eq!(doc.people.len(), 2, "expected exactly two reviewers");
-    let authors: Vec<_> = doc.people.iter().map(|p| p.author.as_str()).collect();
-    assert_eq!(authors, vec!["Alice Reviewer", "Bob Reviewer"]);
-    // presenceInfo merges onto each Person.
+    let people_authors: Vec<_> = doc.people.iter().map(|p| p.author.as_str()).collect();
+    assert_eq!(people_authors, vec!["Alice Reviewer", "Bob Reviewer"]);
     assert_eq!(doc.people[0].user_id.as_deref(), Some("Alice Reviewer"));
     assert_eq!(doc.people[1].user_id.as_deref(), Some("Bob Reviewer"));
+
+    // I-03: authors palette is derived in first-seen order. people.xml seeds
+    // it, so Alice gets color_index=0 and Bob gets color_index=1 even if Bob's
+    // <w:del> appears in the document body before Alice's <w:ins>.
+    assert_eq!(doc.authors.len(), 2, "expected exactly two palette entries");
+    assert_eq!(doc.authors[0].display, "Alice Reviewer");
+    assert_eq!(doc.authors[0].color_index, 0);
+    assert_eq!(doc.authors[1].display, "Bob Reviewer");
+    assert_eq!(doc.authors[1].color_index, 1);
+}
+
+/// I-03: when people.xml is absent, the palette falls back to first-seen
+/// order across tracked changes. Fixture 05 has only Alice's <w:ins>.
+#[test]
+fn fixture_05_authors_palette_from_tracked_changes_only() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+    assert!(doc.people.is_empty(), "fixture 05 has no people.xml");
+    assert_eq!(doc.authors.len(), 1, "single insert author");
+    assert_eq!(doc.authors[0].color_index, 0);
 }
 
 #[test]

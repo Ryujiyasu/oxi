@@ -228,12 +228,18 @@ impl OoxmlParser {
         // Collect all comments referenced in the document
         let all_comments: Vec<Comment> = ctx.comments.values().cloned().collect();
 
+        // Build the author palette: people.xml first (Word writes reviewer-
+        // first-seen order), then any author surfaced by comments or tracked
+        // changes. Color index = position in this Vec.
+        let authors = build_author_palette(&people, &all_comments, &pages);
+
         Ok(Document {
             pages,
             styles,
             metadata,
             comments: all_comments,
             people,
+            authors,
             adjust_line_height_in_table,
             default_tab_stop,
             compat_mode,
@@ -5949,6 +5955,85 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     Ok(comments)
 }
 
+/// Build the document-level author palette in deterministic first-seen order.
+///
+/// Sources, in priority:
+/// 1. `Document.people` (people.xml — Word writes reviewer-first-seen order)
+/// 2. Each `Comment.author`
+/// 3. Each `Run.tracked_change.author` (walked in document order, plus
+///    rpr_change.author, ppr_change.author, paragraph_mark_revision.author)
+///
+/// Authors that already appear earlier in the list are skipped, so a single
+/// reviewer always gets the same `color_index` regardless of how many times
+/// they appear.
+fn build_author_palette(
+    people: &[Person],
+    comments: &[Comment],
+    pages: &[Page],
+) -> Vec<Author> {
+    fn push_unique(seen: &mut Vec<String>, name: &str) {
+        if !name.is_empty() && !seen.iter().any(|s| s == name) {
+            seen.push(name.to_string());
+        }
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for p in people {
+        push_unique(&mut seen, &p.author);
+    }
+    for c in comments {
+        if let Some(a) = c.author.as_deref() {
+            push_unique(&mut seen, a);
+        }
+    }
+    for page in pages {
+        for block in &page.blocks {
+            walk_block_authors(block, &mut seen);
+        }
+    }
+    seen.into_iter()
+        .enumerate()
+        .map(|(color_index, display)| Author { display, color_index })
+        .collect()
+}
+
+fn walk_block_authors(block: &Block, seen: &mut Vec<String>) {
+    fn push(seen: &mut Vec<String>, a: Option<&str>) {
+        if let Some(a) = a {
+            if !a.is_empty() && !seen.iter().any(|s| s == a) {
+                seen.push(a.to_string());
+            }
+        }
+    }
+    match block {
+        Block::Paragraph(p) => {
+            for r in &p.runs {
+                if let Some(tc) = r.tracked_change.as_ref() {
+                    push(seen, tc.author.as_deref());
+                }
+                if let Some(pc) = r.rpr_change.as_ref() {
+                    push(seen, pc.author.as_deref());
+                }
+            }
+            if let Some(pc) = p.ppr_change.as_ref() {
+                push(seen, pc.author.as_deref());
+            }
+            if let Some(pmark) = p.paragraph_mark_revision.as_ref() {
+                push(seen, pmark.author.as_deref());
+            }
+        }
+        Block::Table(t) => {
+            for row in &t.rows {
+                for cell in &row.cells {
+                    for inner in &cell.blocks {
+                        walk_block_authors(inner, seen);
+                    }
+                }
+            }
+        }
+        Block::Image(_) | Block::UnsupportedElement(_) => {}
+    }
+}
+
 /// Parse `word/people.xml` (MS-DOCX w15).
 ///
 /// Produces one [`Person`] per `<w15:person>`. Preserves document order so
@@ -6211,6 +6296,64 @@ mod tests {
         assert_eq!(pc.id.as_deref(), Some("42"));
         assert_eq!(pc.author.as_deref(), Some("A"));
         assert!(pc.prior_paragraph_style.is_some(), "prior style must be captured");
+    }
+
+    #[test]
+    fn show_revisions_default_is_all_and_round_trips_json() {
+        use crate::ir::ShowRevisions;
+        // I-04: default = All; serde uses snake_case rename.
+        assert_eq!(ShowRevisions::default(), ShowRevisions::All);
+        assert_eq!(serde_json::to_string(&ShowRevisions::All).unwrap(), "\"all\"");
+        assert_eq!(serde_json::to_string(&ShowRevisions::Simple).unwrap(), "\"simple\"");
+        assert_eq!(serde_json::to_string(&ShowRevisions::Original).unwrap(), "\"original\"");
+        assert_eq!(serde_json::to_string(&ShowRevisions::Final).unwrap(), "\"final\"");
+        let parsed: ShowRevisions = serde_json::from_str("\"original\"").unwrap();
+        assert_eq!(parsed, ShowRevisions::Original);
+    }
+
+    #[test]
+    fn build_author_palette_dedupes_in_first_seen_order() {
+        let people = vec![Person {
+            author: "Alice".into(),
+            provider_id: None,
+            user_id: None,
+        }];
+        // Comments add a new author Bob (after Alice from people).
+        let comments = vec![Comment {
+            id: "0".into(),
+            author: Some("Bob".into()),
+            date: None,
+            initials: None,
+            para_id: None,
+            parent_para_id: None,
+            resolved: false,
+            durable_id: None,
+            blocks: vec![],
+        }];
+        let pages: Vec<Page> = Vec::new();
+        let palette = build_author_palette(&people, &comments, &pages);
+        assert_eq!(palette.len(), 2);
+        assert_eq!(palette[0].display, "Alice");
+        assert_eq!(palette[0].color_index, 0);
+        assert_eq!(palette[1].display, "Bob");
+        assert_eq!(palette[1].color_index, 1);
+
+        // Re-seen author keeps original index — duplicates suppressed.
+        let comments_dup = vec![Comment {
+            id: "0".into(),
+            author: Some("Alice".into()),
+            date: None,
+            initials: None,
+            para_id: None,
+            parent_para_id: None,
+            resolved: false,
+            durable_id: None,
+            blocks: vec![],
+        }];
+        let palette2 = build_author_palette(&people, &comments_dup, &pages);
+        assert_eq!(palette2.len(), 1);
+        assert_eq!(palette2[0].display, "Alice");
+        assert_eq!(palette2[0].color_index, 0);
     }
 
     #[test]
