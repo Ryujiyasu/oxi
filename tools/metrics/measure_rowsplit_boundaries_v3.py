@@ -24,8 +24,7 @@ OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\rowsplit_boundaries_v3.json")
 TARGETS = [
     "d77a58485f16_20240705_resources_data_outline_08.docx",
     "e3c545fac7a7_LOD_Handbook.docx",
-    "b5f706e9f6ad_kyodokenkyuyoushiki_bessi.docx",
-    "1636d28e2c46_tokumei_08_04.docx",
+    "ed025cbecffb_index-23.docx",
 ]
 
 
