@@ -583,6 +583,26 @@ impl FontMetricsRegistry {
         // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly.
         // EXCEPTION: MS PGothic / MS PMincho are proportional (see char_width_pt_with_gdi_map).
         let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
+
+        // PGothic-specific override: COM-measured v4 widths (same-char
+        // repetition, no autoSpaceDE contamination) take priority over
+        // compact.json UPM=256 widths, which are systematically -1 to -2pt
+        // too narrow vs Word's actual advance widths. Without this override,
+        // d77a tbl8 カ paragraph (45 chars) fits in 1 line at Oxi 418pt
+        // instead of wrapping to 2 lines matching Word's ~480pt.
+        // COM-confirmed via measure_mspgothic_widths4.py (2026-04-24).
+        if is_pgothic_family {
+            let size_key = format_size_key(font_size);
+            if let Some(size_map) = self.com_twips_widths
+                .get(&metrics.family)
+                .and_then(|fm| fm.get(&size_key))
+            {
+                if let Some(&tw) = size_map.get(&(c as u32)) {
+                    return tw / 20.0;
+                }
+            }
+        }
+
         if metrics.units_per_em == 256 && !is_pgothic_family {
             if is_fullwidth(c) { return font_size; }
             let advance_em = metrics.char_width_em(c);
