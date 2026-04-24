@@ -97,6 +97,25 @@ fn fixture_02_comments_extended_reply_threaded() {
     assert!(!reply.resolved);
 }
 
+/// P-12: people.xml populates Document.people with two reviewers.
+#[test]
+fn fixture_10_people_two_reviewers() {
+    let Some(bytes) = read_fixture("fixture_10_multiple_reviewers.docx") else {
+        eprintln!("skipping: fixture_10 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_10");
+    // Word COM: fixture fails Documents.Open for a validator defect, but the
+    // underlying people.xml is syntactically valid and our parser must surface
+    // both reviewers so R-02 (author palette) has the list it needs.
+    assert_eq!(doc.people.len(), 2, "expected exactly two reviewers");
+    let authors: Vec<_> = doc.people.iter().map(|p| p.author.as_str()).collect();
+    assert_eq!(authors, vec!["Alice Reviewer", "Bob Reviewer"]);
+    // presenceInfo merges onto each Person.
+    assert_eq!(doc.people[0].user_id.as_deref(), Some("Alice Reviewer"));
+    assert_eq!(doc.people[1].user_id.as_deref(), Some("Bob Reviewer"));
+}
+
 #[test]
 fn fixture_03_comments_extended_resolved_flag() {
     let Some(bytes) = read_fixture("fixture_03_resolved_comment.docx") else {

@@ -15,6 +15,22 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-12 people.xml reviewer list
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-12
+- scope: MS-DOCX w15 — `<w15:people>/<w15:person w15:author="..."><w15:presenceInfo providerId userId/>`
+- change:
+  - new `ir::Person{author, provider_id, user_id}` type, re-exported from `ir::*`
+  - `Document.people: Vec<Person>` (document order preserved — Word writes reviewer-first-seen, so this seeds R-02 palette without re-sort)
+  - `OoxmlParser::parse_people()` + `parse_people_xml` free function; missing part → empty list
+  - handles both `<w15:person>…</w15:person>` (with nested presenceInfo) and self-closing `<w15:person/>` (no presence data)
+  - drops malformed `<w15:person>` entries missing `w15:author`
+- evidence:
+  - 3 unit tests: two-reviewer shape (fixture 10 mirror), missing-presenceInfo, blank-author dropped
+  - 1 integration test: `fixture_10_people_two_reviewers` runs full parse_docx pipeline, confirms `Document.people == [Alice Reviewer, Bob Reviewer]` with provider/userId attached
+- baseline risk: none (184 baseline docs have 0 people.xml).
+- path: Path B `[confidence-merge]`. Completes the Phase-2 parser quartet needed before I-03/R-02 (author-colour palette) can start.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-10 commentsExtended.xml (reply threading + resolved)
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-10

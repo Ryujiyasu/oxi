@@ -64,6 +64,7 @@ impl OoxmlParser {
         let compat_mode = self.parse_compat_mode();
         let compress_punctuation = self.parse_compress_punctuation();
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
+        let people = self.parse_people();
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
@@ -232,12 +233,21 @@ impl OoxmlParser {
             styles,
             metadata,
             comments: all_comments,
+            people,
             adjust_line_height_in_table,
             default_tab_stop,
             compat_mode,
             compress_punctuation,
             do_not_expand_shift_return,
         })
+    }
+
+    /// Parse `word/people.xml` (MS-DOCX w15). Missing part → empty list.
+    fn parse_people(&mut self) -> Vec<Person> {
+        match self.read_part("word/people.xml") {
+            Ok(xml) => parse_people_xml(&xml).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Parse header or footer XML parts referenced by relationship IDs
@@ -5726,6 +5736,76 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     Ok(comments)
 }
 
+/// Parse `word/people.xml` (MS-DOCX w15).
+///
+/// Produces one [`Person`] per `<w15:person>`. Preserves document order so
+/// downstream code can assign author colours deterministically without a
+/// separate sort (Word writes people.xml in reviewer-first-seen order).
+fn parse_people_xml(xml: &str) -> Result<Vec<Person>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut people: Vec<Person> = Vec::new();
+    let mut current: Option<Person> = None;
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "person" {
+                    let mut author = String::new();
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "author" {
+                            author = String::from_utf8_lossy(&attr.value).to_string();
+                        }
+                    }
+                    current = Some(Person { author, provider_id: None, user_id: None });
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    // Self-closing <w15:person w15:author="..."/> with no presenceInfo.
+                    "person" => {
+                        let mut author = String::new();
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "author" {
+                                author = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                        if !author.is_empty() {
+                            people.push(Person { author, provider_id: None, user_id: None });
+                        }
+                    }
+                    "presenceInfo" => {
+                        if let Some(p) = current.as_mut() {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                match key.as_str() {
+                                    "providerId" => p.provider_id = Some(val),
+                                    "userId" => p.user_id = Some(val),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "person" {
+                    if let Some(p) = current.take() {
+                        if !p.author.is_empty() {
+                            people.push(p);
+                        }
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(people)
+}
+
 /// Metadata merged onto a [`Comment`] from `word/commentsExtended.xml`.
 ///
 /// The join key is the `w14:paraId` of the comment body's first paragraph.
@@ -5891,6 +5971,54 @@ mod tests {
         assert!(!reply.resolved);
         let resolved = ext.get("00000020").expect("resolved");
         assert!(resolved.resolved);
+    }
+
+    #[test]
+    fn parse_people_xml_two_reviewers_preserves_order() {
+        // Mirrors fixture_10_multiple_reviewers.docx
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"
+            xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w15:person w15:author="Alice Reviewer">
+    <w15:presenceInfo w15:providerId="None" w15:userId="Alice Reviewer"/>
+  </w15:person>
+  <w15:person w15:author="Bob Reviewer">
+    <w15:presenceInfo w15:providerId="None" w15:userId="Bob Reviewer"/>
+  </w15:person>
+</w15:people>"#;
+        let people = parse_people_xml(xml).expect("parse");
+        assert_eq!(people.len(), 2);
+        assert_eq!(people[0].author, "Alice Reviewer");
+        assert_eq!(people[0].provider_id.as_deref(), Some("None"));
+        assert_eq!(people[0].user_id.as_deref(), Some("Alice Reviewer"));
+        assert_eq!(people[1].author, "Bob Reviewer");
+        assert_eq!(people[1].user_id.as_deref(), Some("Bob Reviewer"));
+    }
+
+    #[test]
+    fn parse_people_xml_without_presence_info() {
+        // <w15:person> without a nested <w15:presenceInfo> — provider_id and
+        // user_id must be None, not empty strings.
+        let xml = r#"<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:person w15:author="Charlie"/>
+</w15:people>"#;
+        let people = parse_people_xml(xml).expect("parse");
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].author, "Charlie");
+        assert!(people[0].provider_id.is_none());
+        assert!(people[0].user_id.is_none());
+    }
+
+    #[test]
+    fn parse_people_xml_drops_blank_author() {
+        // Malformed: <w15:person> without w15:author — must not appear in output.
+        let xml = r#"<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:person><w15:presenceInfo w15:providerId="None" w15:userId="x"/></w15:person>
+  <w15:person w15:author="OK"><w15:presenceInfo w15:providerId="None" w15:userId="OK"/></w15:person>
+</w15:people>"#;
+        let people = parse_people_xml(xml).expect("parse");
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].author, "OK");
     }
 
     #[test]

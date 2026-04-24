@@ -9,6 +9,10 @@ pub struct Document {
     /// Comments referenced in the document
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Authors known to the document (from `word/people.xml`, MS-DOCX w15).
+    /// Seeds the renderer's author-color palette (attack-matrix row R-02).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub people: Vec<Person>,
     /// Compatibility: adjustLineHeightInTable (compat65).
     /// true = adjust line height in table cells (disable grid snap in cells).
     /// false (default) = table cells snap to document grid like normal paragraphs.
@@ -606,6 +610,27 @@ pub struct Comment {
     pub resolved: bool,
     /// Comment text paragraphs
     pub blocks: Vec<Block>,
+}
+
+/// Author entry from `word/people.xml` (MS-DOCX w15 extension).
+///
+/// Word writes one `<w15:person>` per distinct reviewer. `author` is the
+/// display name used as the join key to `<w:comment w:author>`, `<w:ins
+/// w:author>`, etc. `provider_id` + `user_id` come from the nested
+/// `<w15:presenceInfo>` and identify the reviewer across sessions — Word
+/// uses the pair to colour-code revisions even when two authors share a
+/// display name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Person {
+    /// Display name (`w15:author`).
+    pub author: String,
+    /// Presence provider id (e.g., "AD" for Active Directory, "None" when absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// Provider-specific user id (often an email or the display name again when
+    /// `provider_id == "None"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 /// A tracked change (insertion or deletion)
