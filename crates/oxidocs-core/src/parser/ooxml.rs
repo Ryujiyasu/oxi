@@ -5595,6 +5595,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     let mut current_id = String::new();
     let mut current_author: Option<String> = None;
     let mut current_date: Option<String> = None;
+    let mut current_initials: Option<String> = None;
     let mut current_blocks: Vec<Block> = Vec::new();
 
     let note_ctx = ParseContext {
@@ -5623,6 +5624,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                         current_id.clear();
                         current_author = None;
                         current_date = None;
+                        current_initials = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
@@ -5630,6 +5632,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                                 "id" => current_id = val,
                                 "author" => current_author = Some(val),
                                 "date" => current_date = Some(val),
+                                "initials" => current_initials = Some(val),
                                 _ => {}
                             }
                         }
@@ -5653,6 +5656,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                             id: current_id.clone(),
                             author: current_author.take(),
                             date: current_date.take(),
+                            initials: current_initials.take(),
                             blocks: std::mem::take(&mut current_blocks),
                         });
                     }
@@ -5675,5 +5679,58 @@ fn local_name(name: &[u8]) -> String {
     match s.rfind(':') {
         Some(pos) => s[pos + 1..].to_string(),
         None => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Block;
+
+    #[test]
+    fn parse_comments_xml_captures_initials_and_metadata() {
+        // Mirrors tools/fixtures/comments_samples/fixture_01_single_comment.docx.
+        // Word COM-validated 2026-04-18: Comments.Count=1, Author="Alice Reviewer",
+        // Initial="AR", Scope.Text="brown fox".
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+  <w:comment w:id="0" w:author="Alice Reviewer" w:date="2026-04-18T10:00:00Z" w:initials="AR">
+    <w:p w14:paraId="00000010">
+      <w:r><w:t>Is 'brown' needed here?</w:t></w:r>
+    </w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments = parse_comments_xml(xml).expect("parse");
+        assert_eq!(comments.len(), 1);
+        let c = comments.get("0").expect("id=0 present");
+        assert_eq!(c.id, "0");
+        assert_eq!(c.author.as_deref(), Some("Alice Reviewer"));
+        assert_eq!(c.date.as_deref(), Some("2026-04-18T10:00:00Z"));
+        assert_eq!(c.initials.as_deref(), Some("AR"));
+        assert_eq!(c.blocks.len(), 1);
+        match &c.blocks[0] {
+            Block::Paragraph(p) => {
+                let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+                assert_eq!(text, "Is 'brown' needed here?");
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_comments_xml_missing_initials_is_none() {
+        // Older Word versions sometimes omit w:initials; it must parse as None,
+        // not empty string.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="5" w:author="Bob" w:date="2026-04-18T10:00:00Z">
+    <w:p><w:r><w:t>No initials set</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments = parse_comments_xml(xml).expect("parse");
+        let c = comments.get("5").expect("id=5 present");
+        assert!(c.initials.is_none(), "initials should be None when absent");
+        assert_eq!(c.author.as_deref(), Some("Bob"));
     }
 }

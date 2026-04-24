@@ -15,6 +15,18 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-01 comments.xml parse complete (initials field)
+
+- context: feat/comments-tracked-changes Phase 2 — first parser row from attack matrix
+- scope: `Comment{ id, author, date, initials, runs }` per ECMA-376 §17.13.4.2
+- change: added `initials: Option<String>` to `oxidocs_core::ir::Comment`; `parse_comments_xml` now captures the `w:initials` attribute. No renderer impact.
+- evidence:
+  - unit tests (inline XML) — `parse_comments_xml_captures_initials_and_metadata` (fixture 01 shape, initials="AR") and `parse_comments_xml_missing_initials_is_none` (older Word docs omit `w:initials`).
+  - integration test — `crates/oxidocs-core/tests/comments_fixtures.rs::fixture_01_comment_fields_roundtrip` runs the full `parse_docx` pipeline on `fixture_01_single_comment.docx`; confirms `Document.comments[0]` has `id="0"`, `author="Alice Reviewer"`, `initials="AR"`, `date="2026-04-18T10:00:00Z"`, plus `commentRangeStart`/`End` markers surface on runs (P-02 shadow coverage).
+  - COM ground truth: `docs/spec/comments_tracked_changes/com_measurements/comments_tracked_changes_com.json` (2026-04-18, Word 16.0) — fixture 01 `Comments(1).Initial == "AR"`.
+- baseline risk: none. 184-doc baseline has 0 comments.xml (see `inventory/README.md`).
+- path: Path B `[confidence-merge]` — spec-referenced + COM-validated + fixture-backed + baseline-neutral by construction.
+
 ## 2026-04-18 — oxi-2 — partial — Tick 2-3 Word COM pass, 7/10 fixtures validated
 
 - context: feat/comments-tracked-changes Phase 1 Tick 2-3 (previously deferred; Word 16.0 turned out to be available on this box)

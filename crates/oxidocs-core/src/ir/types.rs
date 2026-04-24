@@ -584,6 +584,8 @@ pub struct Comment {
     pub author: Option<String>,
     /// Date string
     pub date: Option<String>,
+    /// Author initials (1–6 glyphs; ECMA-376 §17.13.4.2 w:initials)
+    pub initials: Option<String>,
     /// Comment text paragraphs
     pub blocks: Vec<Block>,
 }
