@@ -465,6 +465,45 @@ Merges that landed because two Oxi code paths computing the same thing were
 diverging, and unifying them improved overall SSIM (net strict >) without
 regressing the bottom-5 floor. See CLAUDE.md §9 Path D for the rules.
 
+### 2026-04-24 — textAlignment=baseline (§17.3.1.35) body path
+
+**Divergence** (4-layer parse → layout incomplete):
+- Parser path A: `parser/ooxml.rs:1901` parses per-paragraph `w:textAlignment`
+  attribute into `ParagraphStyle.text_alignment` (Option<String>)
+- Parser path B: `parser/styles.rs:apply_para_property_empty` did NOT handle
+  textAlignment → pPrDefault's textAlignment="baseline" discarded
+- Layout path: `layout/mod.rs:4024+` (body `text_y_offset_for_line`) applied
+  centering offset `(lh-fs)/2` unconditionally, ignoring text_alignment field
+- Inheritance path: `parser/ooxml.rs:1344+` (docDefaults fallback) did NOT
+  copy text_alignment from doc_para defaults
+
+**Example input**: e3c545_LOD_Handbook.docx pPrDefault has
+`<w:textAlignment w:val="baseline"/>`. Per ECMA-376 §17.3.1.35, "baseline"
+means glyph baseline sits at line box bottom (no upper centering offset).
+Oxi applied +5.8pt offset for Meiryo default → body paragraphs drift
++5.76pt pixel-space below Word (pixel-diff confirmed on p.1 and p.11).
+
+**Fix** (3 layers, 21 LOC):
+1. `parser/styles.rs` add textAlignment case to apply_para_property_empty
+2. `parser/ooxml.rs:1392` inherit text_alignment from docDefaults
+3. `layout/mod.rs:4024` early-return 0.0 for "baseline"/"top" alignment
+
+**Results**:
+- Bottom-5 sum (per-doc min): 3.2631 → **3.2645 (+0.0014, improves)** ✓
+- Net Δ: **+0.0229 strict**
+- Max improvement: +0.0135 (e3c545 p.1) ≥ max regression 0.0042 ✓
+- Improvements: 7 (all e3c545 + ed025 p.9)
+- Regressions: 2 (e3c545 p.6 -0.0042, p.10 -0.0037 — body-cell misalignment
+  residual on table-heavy pages; cell-path fix deferred due to separate
+  crash observed in gen2_055 when cell_text_y_off was modified)
+
+**Rationale**: body path now respects §17.3.1.35. Cell path unchanged
+pending investigation of why gen2_055 render crashed when same match-guard
+was added to cell_text_y_off at `mod.rs:4739` (cell path has edge case
+not visible from body path — needs dedicated debug next session).
+
+Commit: 550787a.
+
 ### 2026-04-23 — Phantom blank page fix: empty-br paragraph overflow cascade
 
 **Divergence**: Two Oxi rules compound incorrectly in an edge case:
