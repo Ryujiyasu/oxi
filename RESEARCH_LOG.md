@@ -15,6 +15,23 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-07 pPrChange + silent-bug fix
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-07
+- scope: ECMA-376 §17.13.5 `<w:pPrChange>` carries a full prior `<w:pPr>` body for paragraph-level revisions
+- silent-bug fix (mirrors P-06): `parse_paragraph_properties`'s Empty handlers (jc, pStyle, spacing attrs, etc.) don't gate on depth. An inner `<w:jc val="right"/>` inside `<w:pPrChange>/<w:pPr>` would silently overwrite the current paragraph alignment. Same class of defect as rPrChange, resolved the same way: explicit drain before the fallback.
+- change:
+  - extend `PropertyChange` with `prior_paragraph_style: Option<Box<ParagraphStyle>>`
+  - `Paragraph.ppr_change: Option<PropertyChange>`
+  - `parse_paragraph_properties` return: 5-tuple → 6-tuple (added `Option<PropertyChange>`)
+  - explicit `pPrChange` branch: captures id/author/date, recursively reparses inner `<w:pPr>` via `parse_paragraph_properties`, drains to `</w:pPrChange>`, handles self-closing `<w:pPr/>`
+  - 3 Paragraph constructors updated with `ppr_change: None` (empty-para fallback×2 + main)
+- evidence:
+  - unit (1): `parse_pprchange_stores_prior_style_without_merging_into_current` — current=Left, prior pPr=Right, both captured without cross-contamination.
+- no integration fixture: attack_matrix notes P-07 has no fixture in the 10-doc set. Defer until a dedicated pPrChange fixture is authored (or P-08 gets one).
+- baseline risk: none (0 pPrChange in 184 baseline docs).
+- path: Path B `[confidence-merge]`.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-06 rPrChange + silent-bug fix
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-06

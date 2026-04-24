@@ -864,6 +864,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             style,
                             alignment: Alignment::default(),
                             shapes: vec![],
+                            ppr_change: None,
                         }));
                     }
                     _ => {}
@@ -913,6 +914,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                 style: ParagraphStyle::default(),
                 alignment: Alignment::Left,
                 shapes: Vec::new(),
+                ppr_change: None,
             }));
         }
     }
@@ -942,6 +944,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut style_id: Option<String> = None;
     let mut num_pr_ref: Option<NumPrRef> = None;
     let mut para_sect_pr: Option<SectionProperties> = None;
+    let mut ppr_change: Option<PropertyChange> = None;
     let mut depth = 0;
     // Field state: tracks fldChar begin/separate/end across runs.
     // Runs between "separate" and "end" contain cached field results
@@ -954,7 +957,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, explicit_align, sid, npr, spr) = parse_paragraph_properties(reader)?;
+                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed) = parse_paragraph_properties(reader)?;
                         style = s;
                         if let Some(a) = explicit_align {
                             alignment = a;
@@ -962,6 +965,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         style_id = sid;
                         num_pr_ref = npr;
                         para_sect_pr = spr;
+                        ppr_change = ppr_change_parsed;
                     }
                     "r" if depth == 0 => {
                         let (mut run, dr) = parse_run(reader, ctx, styles, None)?;
@@ -1489,6 +1493,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             style,
             alignment,
             shapes: found_shapes.clone(),
+            ppr_change,
         },
         sect_pr: para_sect_pr,
         shapes: Vec::new(), // shapes are now in Paragraph.shapes, not page-level
@@ -1508,12 +1513,23 @@ struct NumPrRef {
 /// Returns: (style, alignment, style_id, numPr, optional section properties for section break)
 fn parse_paragraph_properties(
     reader: &mut Reader<&[u8]>,
-) -> Result<(ParagraphStyle, Option<Alignment>, Option<String>, Option<NumPrRef>, Option<SectionProperties>), ParseError> {
+) -> Result<
+    (
+        ParagraphStyle,
+        Option<Alignment>,
+        Option<String>,
+        Option<NumPrRef>,
+        Option<SectionProperties>,
+        Option<PropertyChange>,
+    ),
+    ParseError,
+> {
     let mut style = ParagraphStyle::default();
     let mut alignment: Option<Alignment> = None;
     let mut style_id: Option<String> = None;
     let mut num_pr: Option<NumPrRef> = None;
     let mut sect_pr: Option<SectionProperties> = None;
+    let mut ppr_change: Option<PropertyChange> = None;
     let mut has_explicit_widow_control = false;
     let mut depth = 0;
 
@@ -1620,6 +1636,51 @@ fn parse_paragraph_properties(
                     }
                     "sectPr" if depth == 0 => {
                         sect_pr = Some(parse_section_properties(reader)?);
+                    }
+                    // Paragraph-property change (`<w:pPrChange>`): body contains
+                    // a prior `<w:pPr>` with the pre-edit paragraph style.
+                    // Drain it explicitly so its inner Empty children (jc, ind,
+                    // spacing…) don't silently overwrite the current style —
+                    // the outer handlers don't gate on depth for Empty events.
+                    "pPrChange" if depth == 0 => {
+                        let mut pc = PropertyChange::default();
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "id" => pc.id = Some(val),
+                                "author" => pc.author = Some(val),
+                                "date" => pc.date = Some(val),
+                                _ => {}
+                            }
+                        }
+                        loop {
+                            match reader.read_event()? {
+                                Event::Start(inner) => {
+                                    if local_name(inner.name().as_ref()) == "pPr" {
+                                        let (prior, _a, _sid, _npr, _spr, _nested) =
+                                            parse_paragraph_properties(reader)?;
+                                        pc.prior_paragraph_style = Some(Box::new(prior));
+                                    }
+                                }
+                                Event::Empty(inner) => {
+                                    if local_name(inner.name().as_ref()) == "pPr"
+                                        && pc.prior_paragraph_style.is_none()
+                                    {
+                                        pc.prior_paragraph_style =
+                                            Some(Box::new(ParagraphStyle::default()));
+                                    }
+                                }
+                                Event::End(inner) => {
+                                    if local_name(inner.name().as_ref()) == "pPrChange" {
+                                        break;
+                                    }
+                                }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
+                        ppr_change = Some(pc);
                     }
                     _ => {
                         depth += 1;
@@ -1931,7 +1992,7 @@ fn parse_paragraph_properties(
     }
 
     style.has_explicit_widow_control = has_explicit_widow_control;
-    Ok((style, alignment, style_id, num_pr, sect_pr))
+    Ok((style, alignment, style_id, num_pr, sect_pr, ppr_change))
 }
 
 /// Parse w:numPr element
@@ -5957,6 +6018,42 @@ mod tests {
             }
             other => panic!("expected paragraph, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_pprchange_stores_prior_style_without_merging_into_current() {
+        // `<w:pPr>` carries current alignment=left, and a `<w:pPrChange>` with
+        // prior alignment=right. Without the explicit drain, the inner `<w:jc
+        // val="right"/>` would silently overwrite the current alignment via
+        // the outer Empty handler (which doesn't gate on depth).
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:jc w:val="left"/>
+  <w:pPrChange w:id="42" w:author="A" w:date="2026-04-18T10:00:00Z">
+    <w:pPr>
+      <w:jc w:val="right"/>
+    </w:pPr>
+  </w:pPrChange>
+</w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance to the outer <w:pPr> Start.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "pPr" => break,
+                Event::Eof => panic!("no <w:pPr>"),
+                _ => continue,
+            }
+        }
+        let (_style, alignment, _sid, _npr, _spr, ppr_change) =
+            parse_paragraph_properties(&mut reader).expect("parse");
+        assert_eq!(
+            alignment,
+            Some(crate::ir::Alignment::Left),
+            "current alignment must stay Left; pPrChange body must not leak"
+        );
+        let pc = ppr_change.expect("ppr_change populated");
+        assert_eq!(pc.id.as_deref(), Some("42"));
+        assert_eq!(pc.author.as_deref(), Some("A"));
+        assert!(pc.prior_paragraph_style.is_some(), "prior style must be captured");
     }
 
     #[test]

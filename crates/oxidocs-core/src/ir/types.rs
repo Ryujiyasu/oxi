@@ -135,6 +135,10 @@ pub struct Paragraph {
     /// Inline/anchor shapes attached to this paragraph (e.g. bracketPair)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shapes: Vec<Shape>,
+    /// Paragraph-property change (`<w:pPrChange>`): carries the prior pPr so
+    /// the renderer can reconstruct "Original" views (attack-matrix R-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ppr_change: Option<PropertyChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -657,6 +661,10 @@ pub struct PropertyChange {
     /// small in the common (no-change) case.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prior_run_style: Option<Box<RunStyle>>,
+    /// Prior paragraph style (body of `<w:pPrChange>/<w:pPr>`). Boxed for the
+    /// same reason as `prior_run_style`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_paragraph_style: Option<Box<ParagraphStyle>>,
 }
 
 /// A tracked change (insertion, deletion, or move).
