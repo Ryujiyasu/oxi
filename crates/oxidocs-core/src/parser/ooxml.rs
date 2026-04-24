@@ -1389,6 +1389,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         if !style.has_explicit_widow_control && doc_para.has_explicit_widow_control {
             style.widow_control = doc_para.widow_control;
         }
+        // textAlignment (§17.3.1.35) inheritance from pPrDefault.
+        if style.text_alignment.is_none() {
+            style.text_alignment = doc_para.text_alignment.clone();
+        }
     }
     // Inherit alignment from docDefaults pPrDefault (jc)
     if alignment == Alignment::default() {

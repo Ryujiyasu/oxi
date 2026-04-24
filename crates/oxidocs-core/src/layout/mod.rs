@@ -4022,6 +4022,15 @@ impl LayoutEngine {
                 (line_height - max_font_size).max(0.0)
             }
             _ => {
+                // ECMA-376 §17.3.1.35 textAlignment: "baseline" / "top" place
+                // glyph at line top (no centering offset above). COM behavior
+                // confirmed 2026-04-24 on e3c545_LOD_Handbook: pPrDefault
+                // textAlignment="baseline" → Word P1 at top_margin + 0pt, not
+                // + (lh-fs)/2. Without this, all body paragraphs drift +5-6pt
+                // below Word.
+                if matches!(para_style.text_alignment.as_deref(), Some("baseline") | Some("top")) {
+                    return 0.0;
+                }
                 // Grid-snapped lines: text is vertically centered within the grid cell.
                 // COM-confirmed: P1 20pt in 35.7pt grid cell → 4.9pt offset above text.
                 // Compute natural height and center within line_height.

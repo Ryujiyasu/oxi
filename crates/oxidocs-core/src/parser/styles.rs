@@ -796,6 +796,14 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
             }
             style.bidi = enabled;
         }
+        "textAlignment" => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    style.text_alignment = Some(val);
+                }
+            }
+        }
         _ => {}
     }
 }
