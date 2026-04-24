@@ -15,6 +15,21 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-11 commentsIds.xml durable ids
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-11
+- scope: Word 2019+ `word/commentsIds.xml` (w16cid namespace) — carries durable ids that survive save-as roundtrips (local `w:id` is renumbered freely)
+- change:
+  - `Comment.durable_id: Option<String>`
+  - new `parse_comments_ids_xml` free function, returns `paraId → durableId` map
+  - merged into Comments in `build_context_with_theme` after commentsExtended merge
+  - accepts both `w16cid:durableId` (canonical) and `w16cid:id` (older draft spelling)
+- evidence:
+  - 2 unit tests: standard durableId map + legacy id attribute acceptance
+  - no fixture in the 10-doc set has commentsIds.xml (scanned all 10 → 0 hits)
+- baseline risk: none (184 baseline docs have 0 commentsIds.xml).
+- path: Path B `[confidence-merge]`.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-07 pPrChange + silent-bug fix
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-07

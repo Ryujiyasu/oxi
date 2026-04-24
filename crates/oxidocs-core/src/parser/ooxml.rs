@@ -395,6 +395,23 @@ impl OoxmlParser {
                 Err(ParseError::MissingPart(_)) => {}
                 Err(e) => return Err(e),
             }
+
+            // Parse commentsIds.xml (Word 2019+, optional) and merge durable
+            // ids onto Comments via paraId.
+            match self.read_part("word/commentsIds.xml") {
+                Ok(xml) => {
+                    let ids = parse_comments_ids_xml(&xml)?;
+                    for c in comments.values_mut() {
+                        if let Some(pid) = c.para_id.as_deref() {
+                            if let Some(did) = ids.get(pid) {
+                                c.durable_id = Some(did.clone());
+                            }
+                        }
+                    }
+                }
+                Err(ParseError::MissingPart(_)) => {}
+                Err(e) => return Err(e),
+            }
         }
 
         // Theme already parsed and passed in
@@ -5840,6 +5857,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                             para_id: current_para_id.take(),
                             parent_para_id: None,
                             resolved: false,
+                            durable_id: None,
                             blocks: std::mem::take(&mut current_blocks),
                         });
                     }
@@ -5924,6 +5942,45 @@ fn parse_people_xml(xml: &str) -> Result<Vec<Person>, ParseError> {
         }
     }
     Ok(people)
+}
+
+/// Parse `word/commentsIds.xml` (Word 2019+ w16cid extension).
+///
+/// Returns a `paraId → durableId` map. The durable id survives save-as
+/// roundtrips and is the stable key to use across sessions (the local
+/// `w:id` is renumbered freely on save — see `comments_notes.md` §7).
+///
+/// Accepts `w16cid:durableId` (canonical) and `w16cid:id` (older draft
+/// spelling). Namespace stripped via `local_name`.
+fn parse_comments_ids_xml(xml: &str) -> Result<HashMap<String, String>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut map: HashMap<String, String> = HashMap::new();
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) | Event::Empty(e) => {
+                if local_name(e.name().as_ref()) != "commentId" {
+                    continue;
+                }
+                let mut para_id: Option<String> = None;
+                let mut durable_id: Option<String> = None;
+                for attr in e.attributes().flatten() {
+                    let key = local_name(attr.key.as_ref());
+                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    match key.as_str() {
+                        "paraId" => para_id = Some(val),
+                        "durableId" | "id" => durable_id = Some(val),
+                        _ => {}
+                    }
+                }
+                if let (Some(p), Some(d)) = (para_id, durable_id) {
+                    map.insert(p, d);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(map)
 }
 
 /// Metadata merged onto a [`Comment`] from `word/commentsExtended.xml`.
@@ -6175,6 +6232,29 @@ mod tests {
         let people = parse_people_xml(xml).expect("parse");
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].author, "OK");
+    }
+
+    #[test]
+    fn parse_comments_ids_durable_id_mapping() {
+        let xml = r#"<?xml version="1.0"?>
+<w16cid:commentsIds xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                    xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">
+  <w16cid:commentId w16cid:paraId="00000010" w16cid:durableId="12345"/>
+  <w16cid:commentId w16cid:paraId="00000011" w16cid:durableId="67890"/>
+</w16cid:commentsIds>"#;
+        let map = parse_comments_ids_xml(xml).expect("parse");
+        assert_eq!(map.get("00000010").map(String::as_str), Some("12345"));
+        assert_eq!(map.get("00000011").map(String::as_str), Some("67890"));
+    }
+
+    #[test]
+    fn parse_comments_ids_accepts_legacy_id_attribute() {
+        // Older drafts used `w16cid:id` before settling on `w16cid:durableId`.
+        let xml = r#"<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">
+  <w16cid:commentId w16cid:paraId="00000020" w16cid:id="AAA"/>
+</w16cid:commentsIds>"#;
+        let map = parse_comments_ids_xml(xml).expect("parse");
+        assert_eq!(map.get("00000020").map(String::as_str), Some("AAA"));
     }
 
     #[test]

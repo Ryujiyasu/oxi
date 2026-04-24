@@ -616,6 +616,10 @@ pub struct Comment {
     /// `w15:done="1"` from commentsExtended.xml — Word 2013+ resolved state.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub resolved: bool,
+    /// `w16cid:durableId` from `word/commentsIds.xml` — Word 2019+ identifier
+    /// that survives save-as round-trips (local `w:id` is freely renumbered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable_id: Option<String>,
     /// Comment text paragraphs
     pub blocks: Vec<Block>,
 }
