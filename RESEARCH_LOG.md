@@ -13,6 +13,36 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
+
+- context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".
+- hypothesis: Word body_y after a split table row = `last_new_page_y +
+  cell_line_height + (trailing_empty_lh if TE)`. Fixing Oxi's `cursor_y`
+  at `mod.rs:~5355` via a monotonic min-guard
+  (`cursor_y = max(cursor_y, max_cont_text_bottom)`) should close the
+  gap without depending on Oxi's under-sized `row_height`.
+- spec evidence (CONFIRMED, §5.4b added): 2 real docs + 5 minimal
+  repros SB_A..E all agree within ±1.5pt. d77a tbl#5/8/10 residuals
+  -0.5pt, e3c545 tbl#2/3 residuals +1.0/+1.5pt.
+- implementation evidence (FALSIFIED): verify result 79 pages regressed,
+  net **-71.1192**. Local effect on d77a p.7 +0.1338 and p.8 +0.1653
+  confirms the spec for TE=0, but d77a page count goes 12→14 →
+  Oxi-Word page alignment breaks on p.9-p.12 (d77a p.12 collapses
+  0.9656→0.7721) AND gen2_* docs SSIM drops to 0.0000 from cascade.
+  Bottom-5 floor 3.2645 → ~3.2367 (strict decrease). Revert.
+- outcome: **5th cursor_y FALSIFIED with identical cascade pattern**.
+  spec-correct ≠ Oxi-shippable as long as upstream line-count diverges
+  from Word. Memory `project_split_box_padding_5th_FALSIFIED`.
+  Artifacts kept for re-attempt after upstream fix:
+  - `tools/metrics/build_split_box_padding_repros.py` (SB_A-F builder)
+  - `tools/metrics/split_box_padding_repro/SB_A..F.docx`
+  - `tools/metrics/measure_split_box_padding.py`
+  - `pipeline_data/split_box_padding_measurements.json`
+- Ra §9 decision: do not re-attempt cursor_y-only fix. Work must
+  address the upstream cell wrap line-count divergence first.
+
+---
+
 ## 2026-04-18 — dedicated — partial-implementation — GDI PresetShape 5 primitives
 
 - branch: fix/gdi-preset-shapes (commit f79c502) — NOT merged
