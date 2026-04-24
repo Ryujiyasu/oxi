@@ -166,6 +166,10 @@ pub struct Run {
     /// Tracked change info (insertion/deletion)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracked_change: Option<TrackedChange>,
+    /// Run-property change (`<w:rPrChange>`): carries the prior rPr so the
+    /// renderer can emit "formatting changed" annotations (attack-matrix R-12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpr_change: Option<PropertyChange>,
     /// Ruby (furigana) annotation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruby: Option<Ruby>,
@@ -631,6 +635,28 @@ pub struct Person {
     /// `provider_id == "None"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+}
+
+/// A property-change revision (`<w:rPrChange>`, `<w:pPrChange>`, etc.).
+///
+/// `prior_run_style` stores the run's style as it was before the change, so
+/// "Original" / "Simple markup" views can reconstruct the pre-edit document
+/// without needing the original XML.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PropertyChange {
+    /// `w:id` attribute on the change element (document-local, not durable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// `w:author` attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// `w:date` attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// Prior run style (body of `<w:rPrChange>/<w:rPr>`). Boxed to keep `Run`
+    /// small in the common (no-change) case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_run_style: Option<Box<RunStyle>>,
 }
 
 /// A tracked change (insertion, deletion, or move).

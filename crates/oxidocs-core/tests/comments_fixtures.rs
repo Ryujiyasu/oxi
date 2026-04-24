@@ -215,6 +215,28 @@ fn fixture_08_move_from_to_pair() {
     assert!(to_id.is_some(), "moveTo wrapper w:id must be captured");
 }
 
+/// P-06: `<w:rPrChange>` carries the prior rPr so the renderer can annotate
+/// "formatting changed". Fixture 09 toggles a run from plain to bold.
+#[test]
+fn fixture_09_rpr_change_bold() {
+    let Some(bytes) = read_fixture("fixture_09_rPrChange_bold.docx") else {
+        eprintln!("skipping: fixture_09 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_09");
+    let run = collect_runs(&doc)
+        .into_iter()
+        .find(|r| r.text == "Now bold (was plain).")
+        .expect("bold run present");
+    assert!(run.style.bold, "current state is bold");
+    let pc = run.rpr_change.as_ref().expect("rpr_change must be populated");
+    assert_eq!(pc.id.as_deref(), Some("300"));
+    assert!(pc.author.is_some());
+    assert!(pc.date.is_some());
+    let prior = pc.prior_run_style.as_ref().expect("prior_run_style must be populated");
+    assert!(!prior.bold, "prior state was plain (not bold)");
+}
+
 /// P-12: people.xml populates Document.people with two reviewers.
 #[test]
 fn fixture_10_people_two_reviewers() {

@@ -1434,6 +1434,7 @@ impl LayoutEngine {
                                                 comment_range_end: Vec::new(),
                                                 comment_references: Vec::new(),
                                                 tracked_change: None,
+                                                rpr_change: None,
                                                 ruby: None,
                                                 bookmark_name: None,
                                                 is_math: false,

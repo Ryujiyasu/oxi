@@ -15,6 +15,22 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-06 rPrChange + silent-bug fix
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-06
+- scope: ECMA-376 §17.13.5 `<w:rPrChange>` carries a full prior `<w:rPr>` body to record run-property revisions
+- silent-bug noticed while scoping: the pre-existing `parse_run_properties` had no `rPrChange` branch. Its depth counter increments on every Start but its property handlers (b/i/u/color/font) don't gate on depth. Result: the prior `<w:rPr>` inside `<w:rPrChange>` would silently merge into the *current* style — `<w:b/>` in the prior would set the current run bold. This is latent today (baseline 184 docs have 0 rPrChange) but would corrupt formatting on any future doc with rPrChange. The new explicit branch drains rPrChange before it reaches those handlers.
+- change:
+  - new `ir::PropertyChange { id, author, date, prior_run_style: Option<Box<RunStyle>> }`
+  - new `Run.rpr_change: Option<PropertyChange>`
+  - `parse_run_properties` return type: `RunStyle` → `(RunStyle, Option<PropertyChange>)`. Only one caller (parse_run) updated.
+  - inline handler in parse_run_properties: captures rPrChange attrs, recursively reparses the inner `<w:rPr>` as the prior RunStyle, consumes up to `</w:rPrChange>` without touching the current style. Handles self-closing `<w:rPr/>` (prior = RunStyle::default()).
+  - 3 Run constructors updated with `rpr_change: None` (layout empty-para-prefix, parser omml-math, parser bookmark-anchor)
+- evidence:
+  - integration: `fixture_09_rpr_change_bold` — verifies current bold + prior plain + id=300 + author/date populated
+- baseline risk: none (new field, empty in 184 baseline docs).
+- path: Path B `[confidence-merge]` — the silent-bug fix is a free correctness win.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-03/P-04 ins+del locked down + P-05 moveFrom/moveTo
 
 - context: feat/comments-tracked-changes Phase 2 parser rows — the tracked-change quartet

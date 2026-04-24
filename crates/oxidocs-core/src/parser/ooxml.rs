@@ -1164,6 +1164,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 comment_range_start: Vec::new(),
                                 comment_range_end: Vec::new(),
                                 comment_references: Vec::new(),
+                                rpr_change: None,
                                 tracked_change: None,
                                 ruby: None,
                                 bookmark_name: None,
@@ -1227,6 +1228,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     comment_range_end: Vec::new(),
                                     comment_references: Vec::new(),
                                     tracked_change: None,
+                                    rpr_change: None,
                                     ruby: None,
                                     bookmark_name: Some(name),
                                     is_math: false,
@@ -2130,6 +2132,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
     let mut endnote_ref: Option<u32> = None;
     let mut ruby: Option<Ruby> = None;
     let mut comment_references: Vec<String> = Vec::new();
+    let mut rpr_change: Option<PropertyChange> = None;
 
     loop {
         match reader.read_event()? {
@@ -2137,7 +2140,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "rPr" if depth == 0 => {
-                        style = parse_run_properties(reader, ctx, styles)?;
+                        let (s, c) = parse_run_properties(reader, ctx, styles)?;
+                        style = s;
+                        rpr_change = c;
                     }
                     "t" | "delText" if depth == 0 => {
                         in_text = true;
@@ -2320,6 +2325,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         comment_range_end: Vec::new(),
         comment_references,
         tracked_change: None,
+        rpr_change,
         ruby,
         bookmark_name: None,
         is_math: false,
@@ -3800,16 +3806,68 @@ fn parse_omml(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<String, Parse
 }
 
 /// Parse w:rPr (run properties)
-fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<RunStyle, ParseError> {
+fn parse_run_properties(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<(RunStyle, Option<PropertyChange>), ParseError> {
     let mut style = RunStyle::default();
     let mut depth = 0;
     let mut rstyle_id: Option<String> = None;
+    let mut rpr_change: Option<PropertyChange> = None;
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
-                depth += 1;
                 let local = local_name(e.name().as_ref());
+                // rPrChange carries a full prior <w:rPr> body. If we fell through
+                // to the normal handlers, every prior property (bold, italic,
+                // color, font) would silently merge into the *current* style.
+                // Handle it inline: capture attrs, recursively parse the nested
+                // <w:rPr> to get the prior RunStyle, then consume the close tag.
+                if depth == 0 && local == "rPrChange" {
+                    let mut pc = PropertyChange::default();
+                    for attr in e.attributes().flatten() {
+                        let key = local_name(attr.key.as_ref());
+                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        match key.as_str() {
+                            "id" => pc.id = Some(val),
+                            "author" => pc.author = Some(val),
+                            "date" => pc.date = Some(val),
+                            _ => {}
+                        }
+                    }
+                    // Drain until </w:rPrChange>, recursing into inner <w:rPr>.
+                    loop {
+                        match reader.read_event()? {
+                            Event::Start(inner) => {
+                                if local_name(inner.name().as_ref()) == "rPr" {
+                                    let (prior, _nested) =
+                                        parse_run_properties(reader, ctx, styles)?;
+                                    pc.prior_run_style = Some(Box::new(prior));
+                                }
+                            }
+                            Event::Empty(inner) => {
+                                // <w:rPr/> with no children — prior style is default.
+                                if local_name(inner.name().as_ref()) == "rPr"
+                                    && pc.prior_run_style.is_none()
+                                {
+                                    pc.prior_run_style = Some(Box::new(RunStyle::default()));
+                                }
+                            }
+                            Event::End(inner) => {
+                                if local_name(inner.name().as_ref()) == "rPrChange" {
+                                    break;
+                                }
+                            }
+                            Event::Eof => break,
+                            _ => {}
+                        }
+                    }
+                    rpr_change = Some(pc);
+                    continue;
+                }
+                depth += 1;
                 if local == "rFonts" {
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
@@ -4123,7 +4181,7 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
         }
     }
 
-    Ok(style)
+    Ok((style, rpr_change))
 }
 
 /// Parse a w:tbl element (table)
