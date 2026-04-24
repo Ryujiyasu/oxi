@@ -15,6 +15,29 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-08 *PrChange silent-drain (6 variants) — Phase 2 parser COMPLETE
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-08 — final row
+- scope: ECMA-376 §17.13.5 — six revision-history wrappers, each containing a *prior* copy of the same property element they sit inside:
+  - `<w:tblPrChange>` inside `<w:tblPr>`
+  - `<w:trPrChange>` inside `<w:trPr>`
+  - `<w:tcPrChange>` inside `<w:tcPr>`
+  - `<w:sectPrChange>` inside `<w:sectPr>`
+  - `<w:tblGridChange>` inside `<w:tblGrid>`
+  - `<w:numberingChange>` inside `<w:numPr>`
+- silent-bug class: each owning property parser uses the same depth-doesn't-gate-Empty-handlers pattern as parse_run_properties / parse_paragraph_properties. Without the drain, the prior property body would silently leak — most concretely:
+  - `parse_table_grid` would APPEND prior `<w:gridCol>` widths to the column list (column count corruption)
+  - `parse_num_pr` would OVERWRITE current numId/ilvl with the prior values
+  - `parse_table_properties`, `parse_table_row`, `parse_cell_properties`, `parse_section_properties` would all leak prior style/border/margin into current state
+- change:
+  - new `drain_element(reader, tag_name)` helper — reads to the matching End regardless of nesting
+  - 6 explicit drain branches added at the top of each respective parser's Start arm
+- evidence:
+  - 3 unit tests covering the helper, tblGridChange, and numberingChange (the most demonstrable corruption cases)
+- IR emission deferred: attack_matrix says "Rare in practice; emit to IR for completeness, no renderer work yet". Since the renderer doesn't yet consume these, the silent-drain is the highest-value minimum. When a renderer needs them, the next iteration adds typed PropertyChange fields like P-06/P-07 did.
+- baseline risk: none.
+- path: Path B `[confidence-merge]`. **Phase 2 parser quartet (P-01..P-12, except deferred renderer rows) COMPLETE — 12/12 rows landed.**
+
 ## 2026-04-25 — oxi-2 — confirmed — P-09 paragraph-mark ins/del
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-09

@@ -2053,7 +2053,11 @@ fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
 
     loop {
         match reader.read_event()? {
-            Event::Start(_) => {
+            Event::Start(e) => {
+                if local_name(e.name().as_ref()) == "numberingChange" {
+                    drain_element(reader, "numberingChange")?;
+                    continue;
+                }
                 depth += 1;
             }
             Event::Empty(e) => {
@@ -4474,7 +4478,27 @@ fn parse_table_grid(reader: &mut Reader<&[u8]>) -> Result<Vec<f32>, ParseError> 
     let mut columns = Vec::new();
     loop {
         match reader.read_event()? {
-            Event::Empty(e) | Event::Start(e) => {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "tblGridChange" {
+                    drain_element(reader, "tblGridChange")?;
+                    continue;
+                }
+                // gridCol Start (rare but legal) — handled in next branch by also matching Start.
+                if local == "gridCol" {
+                    for attr in e.attributes().flatten() {
+                        let key = local_name(attr.key.as_ref());
+                        if key == "w" {
+                            if let Ok(val) = std::str::from_utf8(&attr.value) {
+                                if let Ok(twips) = val.parse::<f32>() {
+                                    columns.push(twips / 20.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "gridCol" {
                     for attr in e.attributes().flatten() {
@@ -4512,6 +4536,12 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "tblPrChange" {
+                    // Revision history — drain so the prior tblPr inside
+                    // doesn't leak into the current style.
+                    drain_element(reader, "tblPrChange")?;
+                    continue;
+                }
                 if local == "tblBorders" {
                     // Don't set border=true here; individual border elements check val!=none
                     in_borders = true;
@@ -4775,6 +4805,10 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "trPrChange" => {
+                        drain_element(reader, "trPrChange")?;
+                        continue;
+                    }
                     "tc" if depth == 0 => {
                         let cell = parse_table_cell(reader, ctx, styles)?;
                         cells.push(cell);
@@ -4952,6 +4986,10 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "tcPrChange" => {
+                        drain_element(reader, "tcPrChange")?;
+                        continue;
+                    }
                     "vMerge" => {
                         let mut val = "continue".to_string();
                         for attr in e.attributes().flatten() {
@@ -5169,6 +5207,10 @@ fn parse_section_properties(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "sectPrChange" {
+                    drain_element(reader, "sectPrChange")?;
+                    continue;
+                }
                 if local == "pgBorders" && depth == 0 {
                     // Parse page borders - child elements: top, bottom, left, right
                     let mut pb = PageBorders { top: None, bottom: None, left: None, right: None };
@@ -6065,6 +6107,31 @@ fn parse_comments_extended_xml(
     Ok(map)
 }
 
+/// Read and discard XML events up to and including the matching End tag for
+/// `tag_name`. Used to drain `*PrChange` revision-history bodies (tblPrChange,
+/// trPrChange, tcPrChange, sectPrChange, tblGridChange, numberingChange) so
+/// their inner property elements don't silently leak into the current parse
+/// state — every such body contains a *prior* copy of the same property
+/// element it sits inside (e.g. tcPrChange contains a prior tcPr).
+fn drain_element(reader: &mut Reader<&[u8]>, tag_name: &str) -> Result<(), ParseError> {
+    let mut depth = 0u32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(_) => depth += 1,
+            Event::End(e) => {
+                if depth == 0 && local_name(e.name().as_ref()) == tag_name {
+                    return Ok(());
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
 /// Extract local name from a potentially namespaced XML tag
 fn local_name(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");
@@ -6144,6 +6211,87 @@ mod tests {
         assert_eq!(pc.id.as_deref(), Some("42"));
         assert_eq!(pc.author.as_deref(), Some("A"));
         assert!(pc.prior_paragraph_style.is_some(), "prior style must be captured");
+    }
+
+    #[test]
+    fn drain_element_skips_nested_body() {
+        let xml = r#"<w:trPrChange xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:id="1">
+  <w:trPr>
+    <w:trHeight w:val="500"/>
+    <w:cantSplit/>
+  </w:trPr>
+</w:trPrChange><w:after/>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance past the opening tag.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "trPrChange" => break,
+                Event::Eof => panic!("no trPrChange"),
+                _ => continue,
+            }
+        }
+        drain_element(&mut reader, "trPrChange").expect("drain");
+        // After drain, the next event must be `<w:after/>` Empty — proves we
+        // consumed exactly the trPrChange body and its closing tag.
+        let next = reader.read_event().expect("read after drain");
+        match next {
+            Event::Empty(e) => assert_eq!(local_name(e.name().as_ref()), "after"),
+            other => panic!("expected <w:after/> Empty, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_table_grid_ignores_tblGridChange_prior_columns() {
+        // Without the drain, the prior <w:gridCol w="999"/> inside tblGridChange
+        // would be appended to the columns vector. With the drain, only the
+        // current columns are emitted.
+        let xml = r#"<w:tblGrid xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:gridCol w:w="2880"/>
+  <w:gridCol w:w="2880"/>
+  <w:tblGridChange w:id="1">
+    <w:tblGrid>
+      <w:gridCol w:w="9999"/>
+    </w:tblGrid>
+  </w:tblGridChange>
+</w:tblGrid>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance to tblGrid Start.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "tblGrid" => break,
+                Event::Eof => panic!("no tblGrid"),
+                _ => continue,
+            }
+        }
+        let columns = parse_table_grid(&mut reader).expect("parse");
+        assert_eq!(columns.len(), 2, "prior gridCol must not leak");
+        assert_eq!(columns, vec![144.0, 144.0]); // 2880 twips → 144 pt
+    }
+
+    #[test]
+    fn parse_num_pr_ignores_numberingChange_prior_values() {
+        // Without the drain, prior <w:numId val="999"/> inside numberingChange
+        // would silently overwrite the current numId.
+        let xml = r#"<w:numPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:ilvl w:val="0"/>
+  <w:numId w:val="5"/>
+  <w:numberingChange w:id="1" w:author="A" w:date="2026-04-18T10:00:00Z">
+    <w:numPr>
+      <w:numId w:val="999"/>
+    </w:numPr>
+  </w:numberingChange>
+</w:numPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "numPr" => break,
+                Event::Eof => panic!("no numPr"),
+                _ => continue,
+            }
+        }
+        let np = parse_num_pr(&mut reader).expect("parse");
+        assert_eq!(np.num_id, "5", "prior numId must not leak");
+        assert_eq!(np.ilvl, 0);
     }
 
     #[test]
