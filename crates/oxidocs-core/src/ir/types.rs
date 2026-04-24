@@ -593,6 +593,17 @@ pub struct Comment {
     pub date: Option<String>,
     /// Author initials (1–6 glyphs; ECMA-376 §17.13.4.2 w:initials)
     pub initials: Option<String>,
+    /// `w14:paraId` of the comment body's first paragraph — join key used by
+    /// `word/commentsExtended.xml` (ECMA-376 §17.13.1 + MS-DOCX w15 extensions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub para_id: Option<String>,
+    /// `w15:paraIdParent` from commentsExtended.xml — set when this comment is a
+    /// reply; points to the `para_id` of the parent comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_para_id: Option<String>,
+    /// `w15:done="1"` from commentsExtended.xml — Word 2013+ resolved state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
     /// Comment text paragraphs
     pub blocks: Vec<Block>,
 }

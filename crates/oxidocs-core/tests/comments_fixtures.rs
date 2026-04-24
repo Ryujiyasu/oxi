@@ -65,3 +65,48 @@ fn fixture_01_comment_fields_roundtrip() {
     assert!(found_range_end, "commentRangeEnd id=0 must survive to a run");
     assert!(found_reference, "commentReference id=0 must survive to a run");
 }
+
+/// P-10: comments_extended.xml merges onto Comment (reply + resolved fields).
+///
+/// Even though fixture_02 fails `Documents.Open` in Word (validator rejects it
+/// for a still-unidentified schema defect), the XML is syntactically valid and
+/// the Oxi parser must still extract the reply pointer and resolved flag, so
+/// that when the fixture is repaired the renderer work needs no adjustments.
+#[test]
+fn fixture_02_comments_extended_reply_threaded() {
+    let Some(bytes) = read_fixture("fixture_02_comment_with_reply.docx") else {
+        eprintln!("skipping: fixture_02 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_02");
+    assert_eq!(doc.comments.len(), 2, "expected 2 comments");
+
+    let by_id: std::collections::HashMap<_, _> =
+        doc.comments.iter().map(|c| (c.id.as_str(), c)).collect();
+    let parent = by_id.get("0").expect("parent comment id=0");
+    let reply = by_id.get("1").expect("reply comment id=1");
+
+    // Parent paragraph id is captured from the body's first w:p@w14:paraId.
+    assert_eq!(parent.para_id.as_deref(), Some("00000010"));
+    assert!(parent.parent_para_id.is_none(), "parent has no grandparent");
+    assert!(!parent.resolved);
+
+    // Reply points back at parent via parent_para_id.
+    assert_eq!(reply.para_id.as_deref(), Some("00000011"));
+    assert_eq!(reply.parent_para_id.as_deref(), Some("00000010"));
+    assert!(!reply.resolved);
+}
+
+#[test]
+fn fixture_03_comments_extended_resolved_flag() {
+    let Some(bytes) = read_fixture("fixture_03_resolved_comment.docx") else {
+        eprintln!("skipping: fixture_03 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_03");
+    assert_eq!(doc.comments.len(), 1);
+    let c = &doc.comments[0];
+    assert_eq!(c.id, "0");
+    assert_eq!(c.para_id.as_deref(), Some("00000010"));
+    assert!(c.resolved, "w15:done='1' must land on Comment.resolved");
+}

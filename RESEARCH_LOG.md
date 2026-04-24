@@ -15,6 +15,21 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-10 commentsExtended.xml (reply threading + resolved)
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-10
+- scope: MS-DOCX w15 extension — `<w15:commentEx paraId="..." paraIdParent="..." done="..."/>`
+- change:
+  - new fields on `ir::Comment`: `para_id: Option<String>`, `parent_para_id: Option<String>`, `resolved: bool`
+  - `parse_comments_xml` grabs the first `w14:paraId` off the comment body's first `<w:p>` (the commentsExtended join key)
+  - new `parse_comments_extended_xml` function + merge step in `build_context_with_theme`. Accepts both canonical `w15:paraIdParent` and legacy `w15:parentParaId` per comments_notes.md §4
+- evidence:
+  - 3 new unit tests: `parse_comments_xml_captures_first_para_id`, `parse_comments_extended_reply_and_resolved`, `parse_comments_extended_accepts_legacy_parent_para_id_spelling`
+  - 2 new integration tests: `fixture_02_comments_extended_reply_threaded` (parent/reply `paraIdParent` = "00000010"), `fixture_03_comments_extended_resolved_flag` (`w15:done="1"` → `resolved==true`)
+  - NB: fixtures 02/03 fail `Documents.Open` in Word (validator defect to fix in a separate tick) but are valid enough for python-docx + our scanner + our parser; the tests cover the parser contract regardless.
+- baseline risk: none — 184 baseline docs have 0 commentsExtended.xml.
+- path: Path B `[confidence-merge]`.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-02 commentReference wired to Run
 
 - context: feat/comments-tracked-changes Phase 2, second parser row

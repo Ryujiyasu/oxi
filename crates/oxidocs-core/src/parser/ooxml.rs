@@ -361,11 +361,31 @@ impl OoxmlParser {
         };
 
         // Parse comments
-        let comments = match self.read_part("word/comments.xml") {
+        let mut comments = match self.read_part("word/comments.xml") {
             Ok(xml) => parse_comments_xml(&xml)?,
             Err(ParseError::MissingPart(_)) => HashMap::new(),
             Err(e) => return Err(e),
         };
+
+        // Parse commentsExtended.xml (optional) and merge parent-pointer +
+        // resolved flag onto the already-parsed Comment objects via paraId.
+        if !comments.is_empty() {
+            match self.read_part("word/commentsExtended.xml") {
+                Ok(xml) => {
+                    let ext = parse_comments_extended_xml(&xml)?;
+                    for c in comments.values_mut() {
+                        if let Some(pid) = c.para_id.as_deref() {
+                            if let Some(info) = ext.get(pid) {
+                                c.parent_para_id = info.parent_para_id.clone();
+                                c.resolved = info.resolved;
+                            }
+                        }
+                    }
+                }
+                Err(ParseError::MissingPart(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
 
         // Theme already parsed and passed in
         Ok(ParseContext {
@@ -5613,6 +5633,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     let mut current_author: Option<String> = None;
     let mut current_date: Option<String> = None;
     let mut current_initials: Option<String> = None;
+    let mut current_para_id: Option<String> = None;
     let mut current_blocks: Vec<Block> = Vec::new();
 
     let note_ctx = ParseContext {
@@ -5642,6 +5663,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                         current_author = None;
                         current_date = None;
                         current_initials = None;
+                        current_para_id = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
@@ -5655,6 +5677,17 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                         }
                     }
                     "p" if in_comment && depth == 0 => {
+                        // The first paragraph's w14:paraId is the join key used
+                        // by commentsExtended.xml (MS-DOCX w15).
+                        if current_para_id.is_none() {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "paraId" {
+                                    current_para_id =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    break;
+                                }
+                            }
+                        }
                         let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
@@ -5674,6 +5707,9 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                             author: current_author.take(),
                             date: current_date.take(),
                             initials: current_initials.take(),
+                            para_id: current_para_id.take(),
+                            parent_para_id: None,
+                            resolved: false,
                             blocks: std::mem::take(&mut current_blocks),
                         });
                     }
@@ -5688,6 +5724,55 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     }
 
     Ok(comments)
+}
+
+/// Metadata merged onto a [`Comment`] from `word/commentsExtended.xml`.
+///
+/// The join key is the `w14:paraId` of the comment body's first paragraph.
+#[derive(Debug, Default, Clone)]
+struct CommentExtendedInfo {
+    parent_para_id: Option<String>,
+    resolved: bool,
+}
+
+/// Parse `word/commentsExtended.xml` (MS-DOCX w15 extension).
+///
+/// Each `<w15:commentEx>` carries the paraId of a comment body paragraph plus
+/// optional `w15:paraIdParent` (reply threading) and `w15:done` (resolved
+/// state). Accept both `w15:paraIdParent` (canonical) and `w15:parentParaId`
+/// (legacy variant) — see `comments_notes.md` §4.
+fn parse_comments_extended_xml(
+    xml: &str,
+) -> Result<HashMap<String, CommentExtendedInfo>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut map: HashMap<String, CommentExtendedInfo> = HashMap::new();
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) | Event::Empty(e) => {
+                if local_name(e.name().as_ref()) != "commentEx" {
+                    continue;
+                }
+                let mut para_id: Option<String> = None;
+                let mut info = CommentExtendedInfo::default();
+                for attr in e.attributes().flatten() {
+                    let key = local_name(attr.key.as_ref());
+                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    match key.as_str() {
+                        "paraId" => para_id = Some(val),
+                        "paraIdParent" | "parentParaId" => info.parent_para_id = Some(val),
+                        "done" => info.resolved = val == "1" || val == "true",
+                        _ => {}
+                    }
+                }
+                if let Some(pid) = para_id {
+                    map.insert(pid, info);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(map)
 }
 
 /// Extract local name from a potentially namespaced XML tag
@@ -5769,6 +5854,57 @@ mod tests {
         let _ = start;
         let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None).expect("parse_run");
         assert_eq!(run.comment_references, vec!["0".to_string()]);
+    }
+
+    #[test]
+    fn parse_comments_xml_captures_first_para_id() {
+        // w14:paraId on the comment body's first <w:p> is the join key used by
+        // commentsExtended.xml. Must land on Comment.para_id.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+  <w:comment w:id="0" w:author="A" w:date="2026-04-18T10:00:00Z" w:initials="A">
+    <w:p w14:paraId="00000010"><w:r><w:t>body</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments = parse_comments_xml(xml).expect("parse");
+        assert_eq!(comments.get("0").and_then(|c| c.para_id.as_deref()), Some("00000010"));
+    }
+
+    #[test]
+    fn parse_comments_extended_reply_and_resolved() {
+        // Mirrors fixture_02/03: paraIdParent marks a reply, done="1" marks resolved.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"
+                xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w15:commentEx w15:paraId="00000010" w15:done="0"/>
+  <w15:commentEx w15:paraId="00000011" w15:paraIdParent="00000010" w15:done="0"/>
+  <w15:commentEx w15:paraId="00000020" w15:done="1"/>
+</w15:commentsEx>"#;
+        let ext = parse_comments_extended_xml(xml).expect("parse");
+        assert_eq!(ext.len(), 3);
+        let root = ext.get("00000010").expect("root");
+        assert!(root.parent_para_id.is_none());
+        assert!(!root.resolved);
+        let reply = ext.get("00000011").expect("reply");
+        assert_eq!(reply.parent_para_id.as_deref(), Some("00000010"));
+        assert!(!reply.resolved);
+        let resolved = ext.get("00000020").expect("resolved");
+        assert!(resolved.resolved);
+    }
+
+    #[test]
+    fn parse_comments_extended_accepts_legacy_parent_para_id_spelling() {
+        // comments_notes.md §4 — some Word versions emit w15:parentParaId.
+        let xml = r#"<?xml version="1.0"?>
+<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:commentEx w15:paraId="00000002" w15:parentParaId="00000001" w15:done="0"/>
+</w15:commentsEx>"#;
+        let ext = parse_comments_extended_xml(xml).expect("parse");
+        assert_eq!(
+            ext.get("00000002").and_then(|i| i.parent_para_id.as_deref()),
+            Some("00000001")
+        );
     }
 
     #[test]
