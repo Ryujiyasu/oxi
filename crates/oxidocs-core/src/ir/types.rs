@@ -152,6 +152,13 @@ pub struct Run {
     /// Comment IDs that end at this run
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comment_range_end: Vec<String>,
+    /// Comment IDs whose balloon anchor (`<w:commentReference>`) sits in this run.
+    /// Typically the enclosing run carries rStyle="CommentReference"; the reference
+    /// marker is zero-width but the renderer projects the Y of this run to the
+    /// right margin to position the balloon (ECMA-376 §22.1.2.56 + §17.13.1 Word
+    /// display rules).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_references: Vec<String>,
     /// Tracked change info (insertion/deletion)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracked_change: Option<TrackedChange>,

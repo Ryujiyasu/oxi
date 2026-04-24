@@ -1432,6 +1432,7 @@ impl LayoutEngine {
                                                 endnote_ref: None,
                                                 comment_range_start: Vec::new(),
                                                 comment_range_end: Vec::new(),
+                                                comment_references: Vec::new(),
                                                 tracked_change: None,
                                                 ruby: None,
                                                 bookmark_name: None,

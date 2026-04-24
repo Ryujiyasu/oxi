@@ -15,6 +15,18 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-02 commentReference wired to Run
+
+- context: feat/comments-tracked-changes Phase 2, second parser row
+- scope: balloon anchor marker `<w:commentReference w:id="N"/>` inside `<w:r>`
+- change: added `comment_references: Vec<String>` to `oxidocs_core::ir::Run`; `parse_run` captures the id inside the enclosing run. `commentRangeStart/End` parsing was pre-existing (run-level `Vec<String>`).
+- rationale: the enclosing run is the glyph the renderer projects to the right margin to position the balloon (ECMA-376 §22.1.2.56 + comments_notes.md §2.2). One run may legally carry multiple refs.
+- evidence:
+  - unit: `parse_run_captures_comment_reference` — synthesized `<w:r>` with `commentReference id="0"` yields `run.comment_references == ["0"]`.
+  - integration: `fixture_01_comment_fields_roundtrip` extended — `commentReference` id="0" found on exactly one run in the body.
+- touched Run constructors (4 sites): `ir::types::Run`, `layout::mod::<empty para prefix>`, `parser::ooxml::<omml run>`, `parser::ooxml::<bookmarkStart anchor>` — each now initialises `comment_references: Vec::new()`.
+- baseline risk: none (new field is empty in all 184 baseline docs).
+
 ## 2026-04-25 — oxi-2 — confirmed — P-01 comments.xml parse complete (initials field)
 
 - context: feat/comments-tracked-changes Phase 2 — first parser row from attack matrix

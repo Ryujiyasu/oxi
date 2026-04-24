@@ -1132,6 +1132,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 endnote_ref: None,
                                 comment_range_start: Vec::new(),
                                 comment_range_end: Vec::new(),
+                                comment_references: Vec::new(),
                                 tracked_change: None,
                                 ruby: None,
                                 bookmark_name: None,
@@ -1193,6 +1194,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     endnote_ref: None,
                                     comment_range_start: Vec::new(),
                                     comment_range_end: Vec::new(),
+                                    comment_references: Vec::new(),
                                     tracked_change: None,
                                     ruby: None,
                                     bookmark_name: Some(name),
@@ -2096,6 +2098,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
     let mut footnote_ref: Option<u32> = None;
     let mut endnote_ref: Option<u32> = None;
     let mut ruby: Option<Ruby> = None;
+    let mut comment_references: Vec<String> = Vec::new();
 
     loop {
         match reader.read_event()? {
@@ -2225,6 +2228,19 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             }
                         }
                     }
+                    // Comment balloon anchor — zero-width marker inside the run.
+                    // The enclosing run is what the renderer projects to the right
+                    // margin; one run may legally carry multiple references.
+                    "commentReference" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "id" {
+                                let id = String::from_utf8_lossy(&attr.value).to_string();
+                                if !id.is_empty() {
+                                    comment_references.push(id);
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2271,6 +2287,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         text, style, url, footnote_ref, endnote_ref,
         comment_range_start: Vec::new(),
         comment_range_end: Vec::new(),
+        comment_references,
         tracked_change: None,
         ruby,
         bookmark_name: None,
@@ -5716,6 +5733,42 @@ mod tests {
             }
             other => panic!("expected paragraph, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_run_captures_comment_reference() {
+        // ECMA-376: <w:commentReference w:id="N"/> is a zero-width marker inside
+        // a <w:r>. The enclosing run is what the renderer projects to the right
+        // margin — the id must survive to Run::comment_references.
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
+  <w:commentReference w:id="0"/>
+</w:r>"#;
+        let ctx = ParseContext {
+            _rels: HashMap::new(),
+            media: HashMap::new(),
+            media_types: HashMap::new(),
+            hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            footnotes: HashMap::new(),
+            endnotes: HashMap::new(),
+            comments: HashMap::new(),
+            theme: ThemeColors::default(),
+        };
+        let styles = StyleSheet::default();
+        let mut reader = Reader::from_str(xml);
+        // Advance to the <w:r> start tag the way parse_paragraph does.
+        let start = loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "r" => break e,
+                Event::Eof => panic!("no <w:r> in test fixture"),
+                _ => continue,
+            }
+        };
+        let _ = start;
+        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None).expect("parse_run");
+        assert_eq!(run.comment_references, vec!["0".to_string()]);
     }
 
     #[test]

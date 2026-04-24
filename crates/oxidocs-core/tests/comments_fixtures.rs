@@ -39,30 +39,29 @@ fn fixture_01_comment_fields_roundtrip() {
     assert_eq!(c.initials.as_deref(), Some("AR"));
     assert_eq!(c.date.as_deref(), Some("2026-04-18T10:00:00Z"));
 
-    // P-02 (partial): commentRangeStart/End are preserved on runs so the
-    // renderer can locate highlight boundaries after layout.
+    // P-02: commentRangeStart/End AND commentReference are preserved on runs so
+    // the renderer can locate highlight boundaries + balloon anchor after layout.
     let mut found_range_start = false;
     let mut found_range_end = false;
+    let mut found_reference = false;
     for page in &doc.pages {
         for block in &page.blocks {
             if let oxidocs_core::ir::Block::Paragraph(p) = block {
                 for run in &p.runs {
-                    if !run.comment_range_start.is_empty() {
+                    if run.comment_range_start.iter().any(|id| id == "0") {
                         found_range_start = true;
                     }
-                    if !run.comment_range_end.is_empty() {
+                    if run.comment_range_end.iter().any(|id| id == "0") {
                         found_range_end = true;
+                    }
+                    if run.comment_references.iter().any(|id| id == "0") {
+                        found_reference = true;
                     }
                 }
             }
         }
     }
-    assert!(
-        found_range_start,
-        "commentRangeStart marker must survive to a run"
-    );
-    assert!(
-        found_range_end,
-        "commentRangeEnd marker must survive to a run"
-    );
+    assert!(found_range_start, "commentRangeStart id=0 must survive to a run");
+    assert!(found_range_end, "commentRangeEnd id=0 must survive to a run");
+    assert!(found_reference, "commentReference id=0 must survive to a run");
 }
