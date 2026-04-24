@@ -882,6 +882,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             alignment: Alignment::default(),
                             shapes: vec![],
                             ppr_change: None,
+                            paragraph_mark_revision: None,
                         }));
                     }
                     _ => {}
@@ -932,6 +933,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                 alignment: Alignment::Left,
                 shapes: Vec::new(),
                 ppr_change: None,
+                paragraph_mark_revision: None,
             }));
         }
     }
@@ -962,6 +964,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut num_pr_ref: Option<NumPrRef> = None;
     let mut para_sect_pr: Option<SectionProperties> = None;
     let mut ppr_change: Option<PropertyChange> = None;
+    let mut paragraph_mark_revision: Option<TrackedChange> = None;
     let mut depth = 0;
     // Field state: tracks fldChar begin/separate/end across runs.
     // Runs between "separate" and "end" contain cached field results
@@ -974,7 +977,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed) = parse_paragraph_properties(reader)?;
+                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) = parse_paragraph_properties(reader)?;
                         style = s;
                         if let Some(a) = explicit_align {
                             alignment = a;
@@ -983,6 +986,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         num_pr_ref = npr;
                         para_sect_pr = spr;
                         ppr_change = ppr_change_parsed;
+                        paragraph_mark_revision = pmark_rev;
                     }
                     "r" if depth == 0 => {
                         let (mut run, dr) = parse_run(reader, ctx, styles, None)?;
@@ -1511,6 +1515,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             alignment,
             shapes: found_shapes.clone(),
             ppr_change,
+            paragraph_mark_revision,
         },
         sect_pr: para_sect_pr,
         shapes: Vec::new(), // shapes are now in Paragraph.shapes, not page-level
@@ -1538,6 +1543,7 @@ fn parse_paragraph_properties(
         Option<NumPrRef>,
         Option<SectionProperties>,
         Option<PropertyChange>,
+        Option<TrackedChange>,
     ),
     ParseError,
 > {
@@ -1547,6 +1553,7 @@ fn parse_paragraph_properties(
     let mut num_pr: Option<NumPrRef> = None;
     let mut sect_pr: Option<SectionProperties> = None;
     let mut ppr_change: Option<PropertyChange> = None;
+    let mut paragraph_mark_revision: Option<TrackedChange> = None;
     let mut has_explicit_widow_control = false;
     let mut depth = 0;
 
@@ -1585,6 +1592,32 @@ fn parse_paragraph_properties(
                                             }
                                         }
                                     } else if l == "b" { ppr_rpr.bold = true; }
+                                    else if (l == "ins" || l == "del") && paragraph_mark_revision.is_none() {
+                                        // Paragraph-mark revision: `<w:pPr>/<w:rPr>/<w:ins>` or
+                                        // `<w:pPr>/<w:rPr>/<w:del>` marks the pilcrow (¶) itself
+                                        // as inserted or deleted (revisions_notes.md §2). Empty
+                                        // element, attrs only.
+                                        let change_type = if l == "ins" { "insert" } else { "delete" };
+                                        let mut author = None;
+                                        let mut date = None;
+                                        let mut pair_id = None;
+                                        for a in e2.attributes().flatten() {
+                                            let k = local_name(a.key.as_ref());
+                                            let v = String::from_utf8_lossy(&a.value).to_string();
+                                            match k.as_str() {
+                                                "author" => author = Some(v),
+                                                "date" => date = Some(v),
+                                                "id" => pair_id = Some(v),
+                                                _ => {}
+                                            }
+                                        }
+                                        paragraph_mark_revision = Some(TrackedChange {
+                                            change_type: change_type.into(),
+                                            author,
+                                            date,
+                                            pair_id,
+                                        });
+                                    }
                                 }
                                 Event::Start(_) => { rd += 1; }
                                 Event::End(_) => { if rd == 0 { break; } rd -= 1; }
@@ -1675,7 +1708,7 @@ fn parse_paragraph_properties(
                             match reader.read_event()? {
                                 Event::Start(inner) => {
                                     if local_name(inner.name().as_ref()) == "pPr" {
-                                        let (prior, _a, _sid, _npr, _spr, _nested) =
+                                        let (prior, _a, _sid, _npr, _spr, _nested, _pmr) =
                                             parse_paragraph_properties(reader)?;
                                         pc.prior_paragraph_style = Some(Box::new(prior));
                                     }
@@ -2009,7 +2042,7 @@ fn parse_paragraph_properties(
     }
 
     style.has_explicit_widow_control = has_explicit_widow_control;
-    Ok((style, alignment, style_id, num_pr, sect_pr, ppr_change))
+    Ok((style, alignment, style_id, num_pr, sect_pr, ppr_change, paragraph_mark_revision))
 }
 
 /// Parse w:numPr element
@@ -6100,7 +6133,7 @@ mod tests {
                 _ => continue,
             }
         }
-        let (_style, alignment, _sid, _npr, _spr, ppr_change) =
+        let (_style, alignment, _sid, _npr, _spr, ppr_change, _pmark) =
             parse_paragraph_properties(&mut reader).expect("parse");
         assert_eq!(
             alignment,
@@ -6111,6 +6144,55 @@ mod tests {
         assert_eq!(pc.id.as_deref(), Some("42"));
         assert_eq!(pc.author.as_deref(), Some("A"));
         assert!(pc.prior_paragraph_style.is_some(), "prior style must be captured");
+    }
+
+    #[test]
+    fn parse_pmark_ins_via_ppr_rpr() {
+        // `<w:pPr>/<w:rPr>/<w:ins>` flags the paragraph-mark (¶) as inserted.
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rPr>
+    <w:ins w:id="77" w:author="Alice" w:date="2026-04-18T10:00:00Z"/>
+  </w:rPr>
+</w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "pPr" => break,
+                Event::Eof => panic!("no pPr"),
+                _ => continue,
+            }
+        }
+        let (_s, _a, _sid, _npr, _spr, _pc, pmark) =
+            parse_paragraph_properties(&mut reader).expect("parse");
+        let tc = pmark.expect("paragraph_mark_revision populated");
+        assert_eq!(tc.change_type, "insert");
+        assert_eq!(tc.pair_id.as_deref(), Some("77"));
+        assert_eq!(tc.author.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn parse_pmark_del_via_ppr_rpr() {
+        // `<w:pPr>/<w:rPr>/<w:del>` flags the pilcrow as deleted — the
+        // paragraph has been merged with the next one.
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rPr>
+    <w:del w:id="88" w:author="Bob" w:date="2026-04-18T10:00:00Z"/>
+  </w:rPr>
+</w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "pPr" => break,
+                Event::Eof => panic!("no pPr"),
+                _ => continue,
+            }
+        }
+        let (_s, _a, _sid, _npr, _spr, _pc, pmark) =
+            parse_paragraph_properties(&mut reader).expect("parse");
+        let tc = pmark.expect("paragraph_mark_revision populated");
+        assert_eq!(tc.change_type, "delete");
+        assert_eq!(tc.pair_id.as_deref(), Some("88"));
+        assert_eq!(tc.author.as_deref(), Some("Bob"));
     }
 
     #[test]

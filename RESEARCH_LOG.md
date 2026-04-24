@@ -15,6 +15,19 @@ Format:
 
 ---
 
+## 2026-04-25 — oxi-2 — confirmed — P-09 paragraph-mark ins/del
+
+- context: feat/comments-tracked-changes Phase 2 parser row P-09
+- scope: ECMA-376 §17.13.5 — `<w:pPr>/<w:rPr>/<w:ins>` or `/<w:del>` marks the paragraph's pilcrow (¶) itself as inserted (new split) or deleted (paragraph merged with next). revisions_notes.md §2.
+- change:
+  - `Paragraph.paragraph_mark_revision: Option<TrackedChange>`
+  - ins/del Empty detection added inside the pPr/rPr sub-loop in parse_paragraph_properties (where ppr_rpr is already being built). Captures change_type/author/date/pair_id.
+  - parse_paragraph_properties return: 6-tuple → 7-tuple. Updated caller + 3 Paragraph constructors.
+- evidence:
+  - 2 unit tests: parse_pmark_ins_via_ppr_rpr + parse_pmark_del_via_ppr_rpr (inline XML; no fixture in 10-doc set, per attack_matrix note)
+- baseline risk: none (0 pPr/rPr/ins or /del in 184 baseline docs).
+- path: Path B `[confidence-merge]`.
+
 ## 2026-04-25 — oxi-2 — confirmed — P-11 commentsIds.xml durable ids
 
 - context: feat/comments-tracked-changes Phase 2 parser row P-11

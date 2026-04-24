@@ -139,6 +139,12 @@ pub struct Paragraph {
     /// the renderer can reconstruct "Original" views (attack-matrix R-13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ppr_change: Option<PropertyChange>,
+    /// Revision on the paragraph-mark itself (`<w:pPr>/<w:rPr>/<w:ins>` or
+    /// `<w:pPr>/<w:rPr>/<w:del>`). An inserted mark means the ¶ split is
+    /// new; a deleted mark means the ¶ was removed (paragraph merged with
+    /// the next). See revisions_notes.md §2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_mark_revision: Option<TrackedChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
