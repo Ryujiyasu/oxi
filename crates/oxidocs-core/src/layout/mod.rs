@@ -2122,9 +2122,19 @@ impl LayoutEngine {
         let indent_right = para.style.indent_right
             .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
             .unwrap_or(0.0);
-        let first_line_indent = para.style.indent_first_line
+        let first_line_indent_raw = para.style.indent_first_line
             .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
             .unwrap_or(0.0);
+        // COM-confirmed (2026-04-25, e3c545 P1 "3．基本的な考え方" + 3a4f + NH_A..F
+        // repros): for numbered list paragraphs with hanging indent and tab suffix
+        // (default), Word places the marker at `left - hanging` and the first-text
+        // character at `left` — the hanging area is consumed by the marker+tab,
+        // not used to pull the first line leftward. Treating `first_line_indent`
+        // as 0 here prevents the marker and text from overlapping.
+        let list_consumes_hanging = para.style.list_marker.is_some()
+            && first_line_indent_raw < 0.0
+            && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
+        let first_line_indent = if list_consumes_hanging { 0.0 } else { first_line_indent_raw };
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
         // data_guideline: indent=12pt but x0=71 (margin), 38ch/line (=charsLine+1 kinsoku).
@@ -4500,9 +4510,15 @@ impl LayoutEngine {
                             .unwrap_or(0.0);
                         // When both firstLine (twip) and firstLineChars exist,
                         // twip value is authoritative (pre-computed by Word).
-                        let p_first_line_indent = para.style.indent_first_line
+                        let p_first_line_indent_raw = para.style.indent_first_line
                             .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
                             .unwrap_or(0.0);
+                        // COM-confirmed (2026-04-25): numbered list + hanging + suff=tab/default
+                        // => marker consumes hanging, text starts at `left`. See body path.
+                        let p_list_consumes_hanging = para.style.list_marker.is_some()
+                            && p_first_line_indent_raw < 0.0
+                            && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
+                        let p_first_line_indent = if p_list_consumes_hanging { 0.0 } else { p_first_line_indent_raw };
                         let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
                         // Hanging indent (firstLineIndent < 0): first line starts further LEFT,
                         // so it has MORE available width, not less.
@@ -5559,9 +5575,15 @@ impl LayoutEngine {
             let indent_r = para.style.indent_right
                 .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
                 .unwrap_or(0.0);
-            let first_indent = para.style.indent_first_line
+            let first_indent_raw = para.style.indent_first_line
                 .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
                 .unwrap_or(0.0);
+            // COM-confirmed (2026-04-25): numbered list + hanging + suff=tab/default
+            // => marker consumes hanging, text starts at `left`. See body path.
+            let est_list_consumes_hanging = para.style.list_marker.is_some()
+                && first_indent_raw < 0.0
+                && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
+            let first_indent = if est_list_consumes_hanging { 0.0 } else { first_indent_raw };
             let effective_width = (available_width - indent_l - indent_r).max(1.0);
 
             // Fix C (2026-04-22): in cell context, count lines using the same

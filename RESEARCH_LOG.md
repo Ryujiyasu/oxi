@@ -641,6 +641,66 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-25 — numbered-list hanging: first-line text at `left` (not `left-hanging`)
+
+**Spec**: ECMA-376 Part 1 §17.9.24 `lvl/suff` (tab|space|nothing) and
+§17.3.1.14 `firstLine`/`hanging`. For a numbered paragraph with hanging
+indent and `suff=tab` (default), Word places the list marker at
+`left - hanging` and the first TEXT character at `left` — the hanging
+area is consumed by the marker + tab, not used to pull the first line
+leftward. Oxi was applying `first_line_indent` to first-line x even for
+list paragraphs, causing the marker and body text to render at the same
+x (e3c545 p.1 "3．基本的な考え方" with 基 overlapping the "3．" glyphs —
+reported by user as「文字がダブってる」).
+
+**Evidence (COM Range.Characters(1).Information(7)):**
+- e3c545 LOD_Handbook: 17+ paragraphs. left∈{18.00, 21.30, 57.00}, fli∈
+  {-18.00, -21.30, -21.00}. char1.x delta from `left` = +0.00 to +0.20pt
+  (CJK glyph bearing).
+- 3a4f_001620506: 8+ paragraphs. left=36.00, fli=-36.00. char1.x delta
+  from `left` = +0.00pt (halfwidth Latin char bearing 0).
+- Minimal repros NH_A…NH_F (6 variants: decimalFullWidth, decimal,
+  bullet, suff=space, varying left/hanging): all suff=tab|default
+  variants show char1.x = left (±0.2 bearing). Only `NH_C` (suff=space)
+  shows char1.x = 31.5 (left-4.5) which is marker+space end — the code
+  correctly excludes the space/nothing case.
+
+**Pixel verification (e3c545 p.1):**
+- Word "基" at 78.2pt (= margin 56.7 + left 21.3). Oxi now matches.
+- Before fix: both marker and 基 rendered at margin 56.7pt, overlapping.
+
+**Implementation**: `crates/oxidocs-core/src/layout/mod.rs`
+- Body path (~line 2125): compute `first_line_indent_raw`, then set
+  `first_line_indent = 0.0` when `list_marker.is_some() && raw < 0.0 &&
+  suff ∈ {None, Some("tab")}`.
+- Cell path (~line 4513): same guard with `p_` prefix.
+- Estimate path (~line 5578): same guard with `est_` prefix.
+
+**Full-baseline verify**:
+- 1 improvement (e3c545 p.1: 0.8316 → 0.8326, +0.0010)
+- 351 unchanged, **0 regressed**
+- Bottom-5 floor: 3.2645 → **3.2645 (equal, Path B gate met)**
+  - d77a p.7: 0.6268 = 0.6268
+  - b837 p.?: 0.6449 = 0.6449
+  - 29dc6e: 0.6636 = 0.6636
+  - 2ea81a: 0.6643 = 0.6643
+  - e3c545 p.11: 0.6649 = 0.6649 (rank 5 doc unchanged; p.1 was not
+    in bottom-5)
+
+**Artifacts**:
+- `tools/metrics/measure_numid_hanging_text_x.py` (COM measurement
+  tool, scans real docs auto-detecting numId+hanging paragraphs).
+- `tools/metrics/build_numid_hanging_repros.py` (NH_A–F builder).
+- `tools/metrics/measure_numid_hanging_repros.py` (repro measurement).
+- `tools/metrics/numid_hanging_repro/NH_*.docx` (6 minimal repros).
+- `pipeline_data/numid_hanging_text_x.json` (e3c545 + 3a4f measurements).
+- `pipeline_data/numid_hanging_repro_measurements.json` (repro data).
+
+**Scope**: Fix only applies when `suff=tab` (or unset, defaulting to
+tab). `suff=space` and `suff=nothing` retain existing behavior because
+the NH_C measurement showed text position depends on marker+space width
+for those cases — a different formula.
+
 ### 2026-04-23 — Z Step 2: row-split closing horizontal border (gated)
 
 **Spec**: ECMA-376 Part 1 §17.4.33 — cell bottom border is drawn at end of
