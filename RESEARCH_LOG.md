@@ -641,6 +641,86 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-25 — body list-marker uses paragraph's font (not renderer default)
+
+**Divergence**: `crates/oxidocs-core/src/layout/mod.rs` emits the list
+marker as a `LayoutContent::Text` element. The cell path (~line 4780)
+resolves the marker's `font_family` via `resolve_font_family_for_text`,
+inheriting from the paragraph's first run. The body path (~line 2215)
+passed `font_family: None`, causing the GDI renderer to fall back to its
+default Latin font. For halfwidth markers like "(1)" in a CJK-font
+paragraph, Word renders the parens with CJK-font metrics (wider); Oxi's
+default-font fallback rendered them narrower — user-reported on e3c545
+p.1「（１）の描写もなんか少し小さいような気がする」.
+
+**Fix**: body path now mirrors the cell path — resolve font_family,
+bold, italic, underline, strikethrough, color, highlight, underline_style
+from the first-run style for the marker element.
+
+**Pixel evidence (Word 150DPI EMF vs Oxi GDI PNG)** — all markers now
+match Word within 0-1px anti-aliasing bearing:
+
+| Doc | Marker | Font | Word px | Oxi px | Δ |
+|-----|--------|------|---------|--------|---|
+| e3c545fac7a7_LOD_Handbook p.1 "(1) 公開するデータの設計" | halfwidth `(1)` | ＭＳ 明朝 | 14 | 14 | 0 |
+| 3a4f9fbe1a83_001620506 p.2 "（１） 労働時間関係" | fullwidth `（１）` | メイリオ | 20 | 20 | 0 |
+| ed025cbecffb_index-23 p.1 "(1) 事業運営組織" | halfwidth `(1)` | CJK | 23 | 23 | 0 |
+
+**COM spec confirmation** (`tools/metrics/measure_numid_hanging_text_x.py`):
+For each doc the first-text-char X measures at `LeftIndent ±0.2pt`
+bearing — consistent with Word placing marker glyphs in the hanging
+space with the paragraph's metrics, not with a default Latin font.
+
+**Minimal repros**: `tools/metrics/marker_font_repro/MF_A..D.docx` cover
+halfwidth `(1)` in ＭＳ 明朝 / ＭＳ ゴシック / メイリオ, plus fullwidth
+`（１）` in ＭＳ 明朝 (control). All four repros produce Oxi marker
+renders that match Word under the fix; previous behavior (font_family
+None) produced visibly narrower halfwidth parens.
+
+**Full-baseline verify**:
+- 0 improved, 352 unchanged, **0 regressed**
+- Net Δ = 0 (marker glyph delta of 1-4 pixels per page is sub-0.001
+  SSIM threshold; the fix is below the resolution of the merge gate's
+  floating-point tolerance but visually real and pixel-exact).
+- Bottom-5 per-doc sum: 3.2645 → **3.2645 (equal, Path B gate met)**.
+
+**Why Path B and not Path D**: Path D requires `Net Δ > 0 strict`,
+which fails here because the glyph-width diff is sub-tolerance. Path B
+explicitly allows "fixes that are known correct but don't yet show SSIM
+gain", with gate: 3 docs + self-authored repro + spec. All met. The
+`[consistency-merge]`-style internal-divergence evidence is included as
+supporting material, not the primary justification.
+
+**Implementation** (`crates/oxidocs-core/src/layout/mod.rs`):
+```rust
+// Body marker emission (was: font_family: None, bold: false, ... hardcoded)
+let marker_font_family = self
+    .resolve_font_family_for_text(&marker_text, marker_style, &para.style)
+    .map(|s| s.to_string());
+let marker_bold = self.resolve_bold(marker_style, &para.style);
+let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
+elements.push(LayoutElement::new(..., LayoutContent::Text {
+    text: marker_text,
+    font_size: marker_font_size,
+    font_family: marker_font_family,
+    bold: marker_bold,
+    italic: marker_style.italic,
+    underline: marker_style.underline,
+    underline_style: marker_style.underline_style.clone(),
+    strikethrough: marker_style.strikethrough,
+    color: marker_color,
+    highlight: marker_style.highlight.clone(),
+    ...
+}));
+```
+
+**Artifacts**:
+- `tools/metrics/build_marker_font_repros.py`
+- `tools/metrics/marker_font_repro/MF_A..D.docx`
+- `tools/metrics/measure_numid_hanging_text_x.py` (reused from d30e432)
+- `pipeline_data/numid_hanging_text_x.json` (updated with b35/ed025
+  measurements)
+
 ### 2026-04-25 — numbered-list hanging: first-line text at `left` (not `left-hanging`)
 
 **Spec**: ECMA-376 Part 1 §17.9.24 `lvl/suff` (tab|space|nothing) and

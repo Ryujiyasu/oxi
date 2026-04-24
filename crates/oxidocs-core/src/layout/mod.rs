@@ -2212,17 +2212,27 @@ impl LayoutEngine {
             } else {
                 0.0
             };
+            // Resolve marker font from the paragraph's first-run style, matching
+            // the cell renderer (mod.rs:~4780). Without this the GDI renderer
+            // falls back to its default font and halfwidth markers like "(1)"
+            // render narrower than Word (user-reported on e3c545 p.1 "(1)
+            // 公開するデータの設計" — Word 14px vs Oxi 10px marker width).
+            let marker_font_family = self
+                .resolve_font_family_for_text(&marker_text, marker_style, &para.style)
+                .map(|s| s.to_string());
+            let marker_bold = self.resolve_bold(marker_style, &para.style);
+            let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
             elements.push(LayoutElement::new(marker_x, *cursor_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
                     text: marker_text,
                     font_size: marker_font_size,
-                    font_family: None,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                    underline_style: None,
-                    strikethrough: false,
-                    color: None,
-                    highlight: None,
+                    font_family: marker_font_family,
+                    bold: marker_bold,
+                    italic: marker_style.italic,
+                    underline: marker_style.underline,
+                    underline_style: marker_style.underline_style.clone(),
+                    strikethrough: marker_style.strikethrough,
+                    color: marker_color,
+                    highlight: marker_style.highlight.clone(),
                     field_type: None,
                     character_spacing: 0.0,
                     text_scale: 100.0,
