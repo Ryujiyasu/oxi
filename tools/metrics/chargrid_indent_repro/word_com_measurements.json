@@ -1,0 +1,92 @@
+{
+  "L2A_0.docx": {
+    "text_len": 51,
+    "line1_last_char": 43,
+    "line1_chars": 43,
+    "line2_first_char": 44,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2A_1.docx": {
+    "text_len": 51,
+    "line1_last_char": 42,
+    "line1_chars": 42,
+    "line2_first_char": 43,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2A_2.docx": {
+    "text_len": 51,
+    "line1_last_char": 41,
+    "line1_chars": 41,
+    "line2_first_char": 42,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2A_3.docx": {
+    "text_len": 51,
+    "line1_last_char": 40,
+    "line1_chars": 40,
+    "line2_first_char": 41,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2B_1.docx": {
+    "text_len": 51,
+    "line1_last_char": 42,
+    "line1_chars": 42,
+    "line2_first_char": 43,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2B_2.docx": {
+    "text_len": 51,
+    "line1_last_char": 41,
+    "line1_chars": 41,
+    "line2_first_char": 42,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2C_20.docx": {
+    "text_len": 51,
+    "line1_last_char": 41,
+    "line1_chars": 41,
+    "line2_first_char": 42,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2C_21.docx": {
+    "text_len": 51,
+    "line1_last_char": 40,
+    "line1_chars": 40,
+    "line2_first_char": 41,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2C_22.docx": {
+    "text_len": 51,
+    "line1_last_char": 39,
+    "line1_chars": 39,
+    "line2_first_char": 40,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  },
+  "L2D_inconsist.docx": {
+    "text_len": 51,
+    "line1_last_char": 41,
+    "line1_chars": 41,
+    "line2_first_char": 42,
+    "line1_x_left_pt": 0.05,
+    "line1_x_right_pt": 0.05,
+    "line_count": 2
+  }
+}
