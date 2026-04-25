@@ -1201,6 +1201,12 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                         }
                     }
                 }
+                // R-05a: balloon variants are layout-only stubs until R-05g
+                // wires the PDF rendering. Skipping is correct for now;
+                // PDF output omits comment balloons entirely (matches the
+                // pre-R-05 state).
+                oxidocs_core::layout::LayoutContent::Balloon { .. } => {}
+                oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => {}
             }
         }
 

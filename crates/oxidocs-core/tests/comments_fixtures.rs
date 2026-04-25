@@ -290,3 +290,957 @@ fn fixture_03_comments_extended_resolved_flag() {
     assert_eq!(c.para_id.as_deref(), Some("00000010"));
     assert!(c.resolved, "w15:done='1' must land on Comment.resolved");
 }
+
+// ---------------------------------------------------------------------------
+// R-01 / R-03 / R-11 — Layout-level integration tests.
+//
+// These run the full parse → layout pipeline and inspect emitted
+// `LayoutContent::Text` properties. Ground truth (author RGB, hard-coded green
+// for moves) is captured in
+// `docs/spec/comments_tracked_changes/com_measurements/PIXEL_PASS_README.md`.
+// ---------------------------------------------------------------------------
+
+fn layout_doc(doc: &oxidocs_core::Document) -> oxidocs_core::layout::LayoutResult {
+    let engine = oxidocs_core::layout::LayoutEngine::for_document(doc);
+    engine.layout(doc)
+}
+
+fn collect_text_elements_with(
+    res: &oxidocs_core::layout::LayoutResult,
+    needle: &str,
+) -> Vec<(bool, bool, Option<String>)> {
+    let mut out = Vec::new();
+    for page in &res.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text {
+                text,
+                underline,
+                strikethrough,
+                color,
+                ..
+            } = &el.content
+            {
+                if text.contains(needle) {
+                    out.push((*underline, *strikethrough, color.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// R-01: a `<w:ins>` run lays out as underlined text in the author's palette
+/// color. For Alice (palette slot 0), Word renders #D03337 (COM-confirmed
+/// 2026-04-25 in fixture_05).
+#[test]
+fn fixture_05_layout_ins_underline_in_author_color() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+    let result = layout_doc(&doc);
+
+    // Layout splits text at word boundaries — match a single word from the
+    // ins range to find at least one underlined element.
+    let ins_hits = collect_text_elements_with(&result, "INSERTED");
+    assert!(!ins_hits.is_empty(), "INSERTED must be laid out");
+    for (underline, strike, color) in &ins_hits {
+        assert!(*underline, "ins run must render underlined");
+        assert!(!strike, "ins run must NOT render strikethrough");
+        assert_eq!(
+            color.as_deref(),
+            Some("#D03337"),
+            "Alice's ins must use palette slot 0 (#D03337)"
+        );
+    }
+
+    // Adjacent normal runs MUST NOT be touched by the revision pre-pass.
+    // "Before" comes from the leading non-revision run.
+    let normal_hits = collect_text_elements_with(&result, "Before");
+    assert!(!normal_hits.is_empty());
+    for (underline, strike, _color) in &normal_hits {
+        assert!(!*underline, "normal text must not be underlined");
+        assert!(!*strike, "normal text must not be struck");
+    }
+}
+
+/// R-03: a `<w:del>` run lays out with strikethrough in the author's palette
+/// color. The text itself is preserved (Word's default "All Markup" view).
+#[test]
+fn fixture_06_layout_del_strikethrough_in_author_color() {
+    let Some(bytes) = read_fixture("fixture_06_single_del.docx") else {
+        eprintln!("skipping: fixture_06 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_06");
+    let result = layout_doc(&doc);
+
+    let del_hits = collect_text_elements_with(&result, "DELETED");
+    assert!(!del_hits.is_empty(), "DELETED TEXT must be laid out");
+    for (underline, strike, color) in &del_hits {
+        assert!(!*underline, "del run must NOT be underlined");
+        assert!(*strike, "del run must render strikethrough");
+        assert_eq!(color.as_deref(), Some("#D03337"));
+    }
+}
+
+/// R-02: two distinct authors get the first two palette slots. Alice (slot 0)
+/// → #D03337, Bob (slot 1) → #5B2C90. Both are COM-confirmed against Word
+/// 16.0 in fixture_10.
+#[test]
+fn fixture_10_layout_two_authors_get_distinct_colors() {
+    let Some(bytes) = read_fixture("fixture_10_multiple_reviewers.docx") else {
+        eprintln!("skipping: fixture_10 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_10");
+    let result = layout_doc(&doc);
+
+    let alice_ins = collect_text_elements_with(&result, "ALICE");
+    assert!(!alice_ins.is_empty(), "Alice's ins missing from layout");
+    for (underline, _, color) in &alice_ins {
+        assert!(*underline);
+        assert_eq!(color.as_deref(), Some("#D03337"), "Alice = palette slot 0");
+    }
+
+    let bob_del = collect_text_elements_with(&result, "REMOVE");
+    assert!(!bob_del.is_empty(), "Bob's del missing from layout");
+    for (_, strike, color) in &bob_del {
+        assert!(*strike);
+        assert_eq!(color.as_deref(), Some("#5B2C90"), "Bob = palette slot 1");
+    }
+}
+
+/// S-03: `revisions::accept_all` permanently bakes accepted state into the
+/// IR. After the call, `<w:ins>` runs are normal text and `<w:del>` runs are
+/// gone. Idempotent: layout output identical to running with
+/// `ShowRevisions::All` on the post-accept doc (which now has 0 tracked
+/// changes).
+#[test]
+fn s03_accept_all_drops_deletions_and_clears_tracked_changes() {
+    let Some(bytes) = read_fixture("fixture_07_mixed_ins_del.docx") else {
+        eprintln!("skipping: fixture_07 missing");
+        return;
+    };
+    let mut doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_07");
+
+    // Sanity: pre-accept doc has 3 revisions.
+    let pre_count = collect_runs(&doc)
+        .iter()
+        .filter(|r| r.tracked_change.is_some())
+        .count();
+    assert_eq!(pre_count, 3, "fixture_07 starts with 3 revisions");
+
+    oxidocs_core::revisions::accept_all(&mut doc);
+
+    let post_count = collect_runs(&doc)
+        .iter()
+        .filter(|r| r.tracked_change.is_some())
+        .count();
+    assert_eq!(post_count, 0, "after accept_all, no run carries tracked_change");
+
+    let texts: Vec<String> = collect_runs(&doc).iter().map(|r| r.text.clone()).collect();
+    let joined = texts.join("|");
+    assert!(!joined.contains("del1"), "accepted del must be removed; got {joined}");
+    assert!(joined.contains("ins1"), "accepted ins survives as normal text");
+    assert!(joined.contains("ins2"), "accepted ins2 survives");
+}
+
+/// S-03: `reject_all` is the mirror of `accept_all` — keeps deletions,
+/// drops insertions.
+#[test]
+fn s03_reject_all_drops_insertions_keeps_deletions() {
+    let Some(bytes) = read_fixture("fixture_07_mixed_ins_del.docx") else {
+        eprintln!("skipping: fixture_07 missing");
+        return;
+    };
+    let mut doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_07");
+    oxidocs_core::revisions::reject_all(&mut doc);
+
+    let texts: Vec<String> = collect_runs(&doc).iter().map(|r| r.text.clone()).collect();
+    let joined = texts.join("|");
+    assert!(joined.contains("del1"), "rejected del survives");
+    assert!(!joined.contains("ins1"), "rejected ins removed; got {joined}");
+    assert!(!joined.contains("ins2"), "rejected ins2 removed");
+}
+
+/// S-03: per-id targeting. `accept_revision(id)` only touches the
+/// revision whose `pair_id` matches.
+#[test]
+fn s03_accept_revision_by_id_leaves_others_untouched() {
+    let Some(bytes) = read_fixture("fixture_07_mixed_ins_del.docx") else {
+        eprintln!("skipping: fixture_07 missing");
+        return;
+    };
+    let mut doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_07");
+
+    // fixture_07 builder uses w:id="100" for ins1, "101" for del1, "102" for ins2.
+    oxidocs_core::revisions::accept_revision(&mut doc, "101");
+
+    let runs = collect_runs(&doc);
+    let texts: Vec<String> = runs.iter().map(|r| r.text.clone()).collect();
+    let joined = texts.join("|");
+    // del1 (id=101) is gone (accepted = removed)
+    assert!(!joined.contains("del1"), "id=101 (del) must be accepted away");
+    // ins1 / ins2 still carry tracked_change (untouched)
+    let with_tc: Vec<&str> = runs.iter()
+        .filter(|r| r.tracked_change.is_some())
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(
+        with_tc.iter().any(|t| t.contains("ins1")),
+        "ins1 should still be tracked; with_tc={with_tc:?}"
+    );
+    assert!(
+        with_tc.iter().any(|t| t.contains("ins2")),
+        "ins2 should still be tracked"
+    );
+}
+
+/// S-02: `ShowRevisions::Final` drops `<w:del>` runs and renders surviving
+/// `<w:ins>` runs without underline or color (post-edit / accepted view).
+#[test]
+fn s02_show_revisions_final_drops_del_and_strips_ins_styling() {
+    let Some(bytes) = read_fixture("fixture_07_mixed_ins_del.docx") else {
+        eprintln!("skipping: fixture_07 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_07");
+    let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc)
+        .with_show_revisions(oxidocs_core::ir::ShowRevisions::Final);
+    let result = engine.layout(&doc);
+
+    let mut texts: Vec<String> = Vec::new();
+    let mut underlined: Vec<bool> = Vec::new();
+    let mut struck: Vec<bool> = Vec::new();
+    let mut colors: Vec<Option<String>> = Vec::new();
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text {
+                text, underline, strikethrough, color, ..
+            } = &el.content
+            {
+                if !text.trim().is_empty() {
+                    texts.push(text.clone());
+                    underlined.push(*underline);
+                    struck.push(*strikethrough);
+                    colors.push(color.clone());
+                }
+            }
+        }
+    }
+
+    let joined = texts.join("|");
+    // del1 must be gone
+    assert!(
+        !joined.contains("del1"),
+        "Final view should drop <w:del>; got texts={joined}"
+    );
+    // ins1 / ins2 must still be present (as normal text).
+    assert!(joined.contains("ins1"), "Final view keeps ins; got {joined}");
+    assert!(joined.contains("ins2"), "Final view keeps ins2; got {joined}");
+    // No element should have underline=true under Final (revision styling stripped).
+    assert!(
+        underlined.iter().all(|&u| !u),
+        "Final view: ins runs should not be underlined"
+    );
+    // No element should be struck under Final (no del runs survive).
+    assert!(struck.iter().all(|&s| !s));
+    // No element should carry the Alice author color.
+    assert!(
+        colors.iter().all(|c| c.as_deref() != Some("#D03337")),
+        "Final view should not author-tint surviving ins runs"
+    );
+}
+
+/// S-02: `ShowRevisions::Original` drops `<w:ins>` runs and renders
+/// surviving `<w:del>` runs as normal (pre-edit / rejected view).
+#[test]
+fn s02_show_revisions_original_drops_ins_and_strips_del_styling() {
+    let Some(bytes) = read_fixture("fixture_07_mixed_ins_del.docx") else {
+        eprintln!("skipping: fixture_07 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_07");
+    let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc)
+        .with_show_revisions(oxidocs_core::ir::ShowRevisions::Original);
+    let result = engine.layout(&doc);
+
+    let mut texts: Vec<String> = Vec::new();
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { text, .. } = &el.content {
+                if !text.trim().is_empty() {
+                    texts.push(text.clone());
+                }
+            }
+        }
+    }
+    let joined = texts.join("|");
+    assert!(!joined.contains("ins1"), "Original: ins1 must be dropped");
+    assert!(!joined.contains("ins2"), "Original: ins2 must be dropped");
+    assert!(joined.contains("del1"), "Original: del must survive");
+}
+
+/// S-02: `ShowRevisions::Simple` keeps all runs visible as normal text but
+/// the per-line margin change bar (R-10) still fires for revision-bearing
+/// lines.
+#[test]
+fn s02_show_revisions_simple_skips_color_keeps_margin_bar() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+    let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc)
+        .with_show_revisions(oxidocs_core::ir::ShowRevisions::Simple);
+    let result = engine.layout(&doc);
+
+    let mut underlined_with_color = 0;
+    let mut margin_bars = 0;
+    for page in &result.pages {
+        for el in &page.elements {
+            match &el.content {
+                oxidocs_core::layout::LayoutContent::Text { underline, color, .. } => {
+                    if *underline && color.as_deref() == Some("#D03337") {
+                        underlined_with_color += 1;
+                    }
+                }
+                oxidocs_core::layout::LayoutContent::BoxRect { fill, .. }
+                    if el.width <= 2.0 && fill.as_deref() == Some("#424242") =>
+                {
+                    margin_bars += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        underlined_with_color, 0,
+        "Simple view: ins runs must NOT be author-tinted-underlined"
+    );
+    assert!(
+        margin_bars >= 1,
+        "Simple view: at least one margin change bar should still fire"
+    );
+}
+
+/// S-01: `show_comments=false` suppresses every comment-related visual:
+/// balloons, connectors, in-line range highlight, and body-width compression.
+/// Tracked-change rendering (R-01/R-03/etc.) is independent and stays on —
+/// that's what S-02 controls.
+#[test]
+fn s01_show_comments_false_suppresses_all_comment_visuals() {
+    let Some(bytes) = read_fixture("fixture_01_single_comment.docx") else {
+        eprintln!("skipping: fixture_01 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_01");
+
+    // With show_comments=false: no balloons, no connectors, no range highlight,
+    // and the body uses full width (1 line instead of 2).
+    let engine_off = oxidocs_core::layout::LayoutEngine::for_document(&doc).with_show_comments(false);
+    let result_off = engine_off.layout(&doc);
+
+    let mut balloons = 0;
+    let mut connectors = 0;
+    let mut highlighted = 0;
+    let mut text_y_set = std::collections::BTreeSet::new();
+    for page in &result_off.pages {
+        for el in &page.elements {
+            match &el.content {
+                oxidocs_core::layout::LayoutContent::Balloon { .. } => balloons += 1,
+                oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => connectors += 1,
+                oxidocs_core::layout::LayoutContent::Text { text, highlight, .. } => {
+                    if !text.is_empty() {
+                        text_y_set.insert(el.y.round() as i32);
+                    }
+                    if highlight.is_some() {
+                        highlighted += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(balloons, 0, "show_comments=false should suppress balloons");
+    assert_eq!(connectors, 0, "show_comments=false should suppress connectors");
+    assert_eq!(
+        highlighted, 0,
+        "show_comments=false should suppress inline range highlight"
+    );
+    assert_eq!(
+        text_y_set.len(),
+        1,
+        "with show_comments=false body uses full width — fixture_01 fits on 1 line"
+    );
+
+    // Sanity — with the default (show_comments=true), all three are present.
+    let engine_on = oxidocs_core::layout::LayoutEngine::for_document(&doc);
+    let result_on = engine_on.layout(&doc);
+    let mut on_balloons = 0;
+    for page in &result_on.pages {
+        for el in &page.elements {
+            if matches!(&el.content, oxidocs_core::layout::LayoutContent::Balloon { .. }) {
+                on_balloons += 1;
+            }
+        }
+    }
+    assert_eq!(on_balloons, 1, "default behavior emits 1 balloon");
+}
+
+/// R-05f: when a comment has a reply (Comment.parent_para_id set), the
+/// reply's body folds into the parent's `Balloon.replies` Vec rather than
+/// emitting as a standalone balloon. Word renders the reply indented inside
+/// the same balloon (single physical balloon for the parent + child thread).
+#[test]
+fn fixture_02_reply_folds_into_parent_balloon_replies_vec() {
+    let Some(bytes) = read_fixture("fixture_02_comment_with_reply.docx") else {
+        eprintln!("skipping: fixture_02 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_02");
+    let result = layout_doc(&doc);
+
+    let mut balloons = 0_usize;
+    let mut found_reply_body: Option<String> = None;
+    let mut found_reply_author: Option<String> = None;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon { replies, body, .. } = &el.content {
+                balloons += 1;
+                assert!(body.contains("Why?"), "parent body should contain 'Why?'; got {body:?}");
+                if !replies.is_empty() {
+                    let r = &replies[0];
+                    found_reply_body = Some(r.body.clone());
+                    found_reply_author = Some(r.author.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloons, 1,
+        "expected 1 standalone balloon (reply must fold into parent); got {balloons}"
+    );
+    assert_eq!(
+        found_reply_body.as_deref(),
+        Some("Following up."),
+        "reply body must be exposed via Balloon.replies"
+    );
+    assert_eq!(found_reply_author.as_deref(), Some("Alice Reviewer"));
+}
+
+/// R-05e: alongside every Balloon LayoutElement, one `BalloonConnector`
+/// element is emitted. Connector starts at the inline anchor coordinates
+/// (commentReference X/Y on the body) and ends at the balloon's left edge,
+/// ~5pt below the balloon's top.
+#[test]
+fn fixture_01_emits_balloon_connector_paired_with_balloon() {
+    let Some(bytes) = read_fixture("fixture_01_single_comment.docx") else {
+        eprintln!("skipping: fixture_01 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_01");
+    let result = layout_doc(&doc);
+
+    let mut connectors: Vec<(f32, f32, f32, f32, String)> = Vec::new();
+    let mut balloon_left: Option<f32> = None;
+    let mut balloon_top: Option<f32> = None;
+    for page in &result.pages {
+        for el in &page.elements {
+            match &el.content {
+                oxidocs_core::layout::LayoutContent::BalloonConnector {
+                    from_x, from_y, to_x, to_y, color_hex,
+                } => {
+                    connectors.push((*from_x, *from_y, *to_x, *to_y, color_hex.clone()));
+                }
+                oxidocs_core::layout::LayoutContent::Balloon { .. } => {
+                    balloon_left = Some(el.x);
+                    balloon_top = Some(el.y);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    assert_eq!(connectors.len(), 1, "expected exactly 1 BalloonConnector");
+    let (from_x, from_y, to_x, to_y, color) = &connectors[0];
+    let bl = balloon_left.expect("balloon must also be emitted");
+    let bt = balloon_top.expect("balloon must also be emitted");
+
+    // Connector ends at the balloon's left edge.
+    assert!(
+        (*to_x - bl).abs() < 0.01,
+        "connector to_x={to_x} should equal balloon_left={bl}"
+    );
+    // Ends 5pt below the balloon's top.
+    assert!(
+        (*to_y - (bt + 5.0)).abs() < 0.01,
+        "connector to_y={to_y} should equal balloon_top+5={}",
+        bt + 5.0
+    );
+    // Starts at the body — the anchor X must be smaller than the balloon's left edge.
+    assert!(
+        *from_x < bl,
+        "anchor x={from_x} must be left of balloon (left={bl})"
+    );
+    // Color = Alice slot 0 unresolved tint.
+    assert_eq!(color, "#FAE6E7", "connector color should be Alice's tint");
+    // Sanity on from_y: should be on the body (positive, but well above balloon's top).
+    assert!(*from_y > 0.0 && *from_y <= bt + 5.0);
+}
+
+/// R-05c: each visible comment emits one `LayoutContent::Balloon` element on
+/// the page where its scope begins. Width is 293.8pt (unresolved) or 190.1pt
+/// (resolved); right edge sits ~4pt from the page edge; anchor Y matches the
+/// rendered Y of the `commentRangeStart` line.
+#[test]
+fn fixture_01_emits_one_balloon_for_single_comment() {
+    let Some(bytes) = read_fixture("fixture_01_single_comment.docx") else {
+        eprintln!("skipping: fixture_01 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_01");
+    let result = layout_doc(&doc);
+
+    let mut balloons: Vec<(String, String, bool, f32, f32, f32, f32)> = Vec::new();
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, author, resolved, ..
+            } = &el.content
+            {
+                balloons.push((
+                    comment_id.clone(),
+                    author.clone(),
+                    *resolved,
+                    el.x,
+                    el.y,
+                    el.width,
+                    el.height,
+                ));
+            }
+        }
+    }
+
+    assert_eq!(balloons.len(), 1, "fixture_01 should emit exactly 1 balloon");
+    let (cid, author, resolved, x, _y, w, h) = &balloons[0];
+    assert_eq!(cid, "0");
+    assert_eq!(author, "Alice Reviewer");
+    assert!(!resolved);
+    // unresolved width = 293.8pt.
+    assert!(
+        (*w - 293.8).abs() < 0.01,
+        "unresolved balloon width should be 293.8pt; got {w}"
+    );
+    // Right edge ≈ page_width − 4pt → for A4 (595.3pt): right = 591.4pt; left = 591.4 − 293.8 = 297.6pt.
+    assert!(
+        (*x - 297.5).abs() < 0.5,
+        "balloon x should be ~297.6pt for default A4; got {x}"
+    );
+    assert!(*h > 8.0, "balloon should have nonzero height; got {h}");
+}
+
+/// R-05c: a resolved comment emits a narrower balloon (190.1pt vs 293.8pt).
+#[test]
+fn fixture_03_emits_resolved_balloon_with_narrower_width() {
+    let Some(bytes) = read_fixture("fixture_03_resolved_comment.docx") else {
+        eprintln!("skipping: fixture_03 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_03");
+    let result = layout_doc(&doc);
+
+    let mut found = false;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon { resolved, .. } = &el.content {
+                assert!(*resolved, "fixture_03's balloon must carry resolved=true");
+                assert!(
+                    (el.width - 190.1).abs() < 0.01,
+                    "resolved balloon width should be 190.1pt; got {}",
+                    el.width
+                );
+                found = true;
+            }
+        }
+    }
+    assert!(found, "fixture_03 should emit one resolved balloon");
+}
+
+/// R-05b: when the document has any comments, the body content width is
+/// reduced by the balloon column width (293.8pt + buffer). The text "The
+/// quick brown fox jumps over the lazy dog." (~245pt at 11pt Calibri) wraps
+/// to 2 lines instead of fitting on one line.
+#[test]
+fn fixture_01_body_width_compresses_when_comments_present() {
+    fn distinct_text_line_count(result: &oxidocs_core::layout::LayoutResult) -> usize {
+        let mut ys: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+        for page in &result.pages {
+            for el in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text { text, .. } = &el.content {
+                    if !text.is_empty() {
+                        // Quantize y to nearest pt to merge same-line fragments.
+                        ys.insert(el.y.round() as i32);
+                    }
+                }
+            }
+        }
+        ys.len()
+    }
+
+    let bytes_with = match read_fixture("fixture_01_single_comment.docx") {
+        Some(b) => b,
+        None => {
+            eprintln!("skipping: fixture_01 missing");
+            return;
+        }
+    };
+    let with_doc = oxidocs_core::parse_docx(&bytes_with).expect("parse fixture_01");
+    let with_result = layout_doc(&with_doc);
+
+    // fixture_01's body sentence is ~245pt at default 11pt Calibri. Without
+    // compression body width = 451pt → fits on 1 line. With R-05b's 317.8pt
+    // balloon column reservation, body width drops to ~133pt → text wraps to
+    // ≥2 lines.
+    let lines = distinct_text_line_count(&with_result);
+    assert!(
+        lines >= 2,
+        "comment-bearing fixture_01 should wrap to ≥2 lines under R-05b body compression; got {lines} lines"
+    );
+
+    // Sanity: same fixture parsed without comments would still produce 1 line.
+    // Build by stripping the comments from the doc and re-laying out, to
+    // isolate the compression effect from text content.
+    let mut without = with_doc.clone();
+    without.comments.clear();
+    let without_result = layout_doc(&without);
+    let without_lines = distinct_text_line_count(&without_result);
+    assert_eq!(
+        without_lines, 1,
+        "with comments cleared, fixture_01 should fit on 1 line; got {without_lines}"
+    );
+}
+
+/// R-10: a paragraph-mark insert/delete (`<w:pPr>/<w:rPr>/<w:ins>` or
+/// `<w:pPr>/<w:rPr>/<w:del>` — P-09's `paragraph_mark_revision` field)
+/// fires the change bar even when no run carries `tracked_change` /
+/// `rpr_change` and there is no `pPrChange` either. Verifies the second
+/// half of the paragraph-level R-10 path.
+#[test]
+fn r10_fires_for_paragraph_mark_revision() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let mut doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+
+    for page in &mut doc.pages {
+        for block in &mut page.blocks {
+            if let oxidocs_core::ir::Block::Paragraph(p) = block {
+                for run in &mut p.runs {
+                    run.tracked_change = None;
+                    run.rpr_change = None;
+                }
+                p.ppr_change = None;
+                p.paragraph_mark_revision = Some(oxidocs_core::ir::TrackedChange {
+                    change_type: "insert".into(),
+                    author: Some("Alice Reviewer".into()),
+                    date: None,
+                    pair_id: Some("777".into()),
+                });
+            }
+        }
+    }
+
+    let result = layout_doc(&doc);
+    let bars = result
+        .pages
+        .iter()
+        .flat_map(|p| p.elements.iter())
+        .filter(|el| {
+            matches!(&el.content, oxidocs_core::layout::LayoutContent::BoxRect { fill, .. }
+                if el.width <= 2.0 && fill.as_deref() == Some("#424242"))
+        })
+        .count();
+    assert!(
+        bars >= 1,
+        "paragraph_mark_revision alone must fire ≥1 margin change bar; got {bars}"
+    );
+}
+
+/// R-10: paragraph-level revision (`pPrChange`) fires the change bar even
+/// when no run on the line carries `tracked_change` / `rpr_change`. Verified
+/// by mutating fixture_05's parsed IR to strip run-level revisions and
+/// install a synthetic `ppr_change` instead.
+#[test]
+fn r10_fires_for_paragraph_level_ppr_change() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let mut doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+
+    // Strip every run-level revision so only the synthetic ppr_change can
+    // trigger R-10. This isolates the paragraph-level code path.
+    for page in &mut doc.pages {
+        for block in &mut page.blocks {
+            if let oxidocs_core::ir::Block::Paragraph(p) = block {
+                for run in &mut p.runs {
+                    run.tracked_change = None;
+                    run.rpr_change = None;
+                }
+                p.ppr_change = Some(oxidocs_core::ir::PropertyChange {
+                    id: Some("999".into()),
+                    author: Some("Alice Reviewer".into()),
+                    date: None,
+                    prior_run_style: None,
+                    prior_paragraph_style: None,
+                });
+            }
+        }
+    }
+
+    let result = layout_doc(&doc);
+    let mut bars = 0;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::BoxRect { fill, .. } = &el.content {
+                if el.width <= 2.0 && fill.as_deref() == Some("#424242") {
+                    bars += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        bars >= 1,
+        "ppr_change alone must fire ≥1 margin change bar; got {bars}"
+    );
+}
+
+/// R-10: every line containing a revision-bearing run gets a single dark-grey
+/// margin change bar (1.5pt thick) emitted as `LayoutContent::BoxRect`. Lines
+/// without revisions get no bar.
+#[test]
+fn fixture_05_layout_emits_revision_change_bar() {
+    let Some(bytes) = read_fixture("fixture_05_single_ins.docx") else {
+        eprintln!("skipping: fixture_05 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_05");
+    let result = layout_doc(&doc);
+
+    let mut bars: Vec<(f32, f32, f32, f32, Option<String>)> = Vec::new();
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::BoxRect { fill, .. } = &el.content {
+                // Filter to thin (≤2pt wide) bars to exclude any unrelated
+                // BoxRects (e.g., box outlines).
+                if el.width <= 2.0 {
+                    bars.push((el.x, el.y, el.width, el.height, fill.clone()));
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        bars.len(),
+        1,
+        "fixture_05 has one revision-bearing line, expected exactly 1 change bar; got {} ({:?})",
+        bars.len(),
+        bars
+    );
+    let (x, _y, w, h, fill) = &bars[0];
+    assert_eq!(fill.as_deref(), Some("#424242"), "change bar fill");
+    assert!(*w <= 2.0, "change bar should be thin");
+    assert!(*h > 8.0, "change bar should span the line height");
+    assert!(
+        *x >= 0.0 && *x < 72.0,
+        "change bar should sit in the left margin (0..72pt for 1in margin), got x={x}"
+    );
+}
+
+/// R-04: in-line comment-range highlight. Runs strictly BETWEEN
+/// `commentRangeStart` and `commentRangeEnd` carry a background highlight
+/// matching the author's tint. Runs outside the range must NOT be highlighted.
+#[test]
+fn fixture_01_layout_comment_range_highlight_inline() {
+    let Some(bytes) = read_fixture("fixture_01_single_comment.docx") else {
+        eprintln!("skipping: fixture_01 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_01");
+    let result = layout_doc(&doc);
+
+    fn highlights_for(
+        result: &oxidocs_core::layout::LayoutResult,
+        needle: &str,
+    ) -> Vec<Option<String>> {
+        let mut out = Vec::new();
+        for page in &result.pages {
+            for el in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text { text, highlight, .. } =
+                    &el.content
+                {
+                    if text.contains(needle) {
+                        out.push(highlight.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    // "brown" is inside the range "brown fox" — must be tinted.
+    let brown = highlights_for(&result, "brown");
+    assert!(!brown.is_empty(), "'brown' element missing from layout");
+    for h in &brown {
+        assert_eq!(
+            h.as_deref(),
+            Some("#FAE6E7"),
+            "Alice's unresolved range highlight must use slot-0 tint"
+        );
+    }
+
+    // "The" (before the range) must NOT be tinted.
+    let leading = highlights_for(&result, "The");
+    assert!(!leading.is_empty());
+    for h in &leading {
+        assert!(
+            h.is_none(),
+            "pre-range text must not be highlighted, got {h:?}"
+        );
+    }
+
+    // "jumps" (after the range) must NOT be tinted.
+    let trailing = highlights_for(&result, "jumps");
+    assert!(!trailing.is_empty());
+    for h in &trailing {
+        assert!(
+            h.is_none(),
+            "post-range text must not be highlighted, got {h:?}"
+        );
+    }
+}
+
+/// R-09 (in-line half): a resolved comment (`<w15:done="1"/>`) uses the
+/// desaturated tint palette instead of the unresolved palette. Slot 0 drops
+/// from #FAE6E7 to #F1EDEC — chroma falls to near-grey while lightness is
+/// preserved (COM-confirmed 2026-04-25 from fixture_03 balloon background).
+#[test]
+fn fixture_03_layout_resolved_comment_uses_desaturated_tint() {
+    let Some(bytes) = read_fixture("fixture_03_resolved_comment.docx") else {
+        eprintln!("skipping: fixture_03 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_03");
+    let result = layout_doc(&doc);
+
+    fn highlight_for(
+        result: &oxidocs_core::layout::LayoutResult,
+        needle: &str,
+    ) -> Option<String> {
+        for page in &result.pages {
+            for el in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text { text, highlight, .. } =
+                    &el.content
+                {
+                    if text.contains(needle) {
+                        return highlight.clone();
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // "reviewed" is inside the resolved range "has been reviewed" — must be
+    // tinted with the *resolved* palette, not the unresolved one.
+    let h = highlight_for(&result, "reviewed");
+    assert_eq!(
+        h.as_deref(),
+        Some("#F1EDEC"),
+        "resolved range must use the desaturated tint, not #FAE6E7"
+    );
+}
+
+/// R-04: multi-paragraph range. The comment covers 3 paragraphs; all three
+/// must be highlighted. Verifies the state machine carries `open` across
+/// paragraph boundaries, and that the parser's new anchor-run fallback (for
+/// `<w:commentRangeStart>` as the first child of a paragraph) still emits the
+/// id onto the IR.
+#[test]
+fn fixture_04_layout_multi_paragraph_range_highlight() {
+    let Some(bytes) = read_fixture("fixture_04_multi_para_range.docx") else {
+        eprintln!("skipping: fixture_04 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_04");
+    let result = layout_doc(&doc);
+
+    fn first_highlight_for(
+        result: &oxidocs_core::layout::LayoutResult,
+        needle: &str,
+    ) -> Option<Option<String>> {
+        for page in &result.pages {
+            for el in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text { text, highlight, .. } =
+                    &el.content
+                {
+                    if text.contains(needle) {
+                        return Some(highlight.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    for para_marker in &["First", "Second", "Third"] {
+        let h = first_highlight_for(&result, para_marker).unwrap_or_else(|| {
+            panic!("'{para_marker}' not found in layout output")
+        });
+        assert_eq!(
+            h.as_deref(),
+            Some("#FAE6E7"),
+            "{para_marker} must be inside the range and get Alice's tint"
+        );
+    }
+}
+
+/// R-11: `<w:moveFrom>` and `<w:moveTo>` always render in green (#2B6033)
+/// regardless of the author's palette slot — Word's hard-coded behavior
+/// (COM-confirmed 2026-04-25 in fixture_08).
+#[test]
+fn fixture_08_layout_moves_render_in_green() {
+    let Some(bytes) = read_fixture("fixture_08_move_from_to.docx") else {
+        eprintln!("skipping: fixture_08 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_08");
+    let result = layout_doc(&doc);
+
+    // Each occurrence of "moved" appears twice — once in the moveFrom and once
+    // in the moveTo (same text).
+    let move_hits = collect_text_elements_with(&result, "moved");
+    assert!(
+        move_hits.len() >= 2,
+        "expected ≥2 'moved' fragments (one moveFrom + one moveTo); got {}",
+        move_hits.len()
+    );
+    for (_, _, color) in &move_hits {
+        assert_eq!(
+            color.as_deref(),
+            Some("#2B6033"),
+            "moveFrom/moveTo render in fixed green regardless of author"
+        );
+    }
+
+    // moveFrom should render strikethrough (no underline); moveTo should render
+    // underline (no strikethrough). Find at least one of each.
+    let any_struck = move_hits.iter().any(|(u, s, _)| *s && !*u);
+    let any_underlined = move_hits.iter().any(|(u, s, _)| *u && !*s);
+    assert!(any_struck, "at least one moveFrom fragment must be strikethrough");
+    assert!(any_underlined, "at least one moveTo fragment must be underlined");
+}

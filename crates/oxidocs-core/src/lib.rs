@@ -3,6 +3,7 @@ pub mod font;
 pub mod ir;
 pub mod layout;
 pub mod parser;
+pub mod revisions;
 
 pub use editor::DocxEditor;
 pub use ir::Document;
