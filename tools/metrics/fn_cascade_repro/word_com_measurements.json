@@ -1,0 +1,176 @@
+{
+  "FN_CASCADE_A.docx": {
+    "pages": 3,
+    "paragraphs": [
+      {
+        "idx": 1,
+        "chars": 3507,
+        "first_page": 1,
+        "last_page": 3,
+        "first_line": 1,
+        "last_line": 11,
+        "y_first_pt": 75.5
+      }
+    ],
+    "footnotes": [
+      {
+        "id": 1,
+        "marker_page": 1,
+        "marker_y_pt": 282.5,
+        "body_text": "脚注 1 の本文：簡潔な注釈テキストです。"
+      },
+      {
+        "id": 2,
+        "marker_page": 1,
+        "marker_y_pt": 489.5,
+        "body_text": "脚注 2 の本文：簡潔な注釈テキストです。"
+      },
+      {
+        "id": 3,
+        "marker_page": 2,
+        "marker_y_pt": 75.5,
+        "body_text": "脚注 3 の本文：簡潔な注釈テキストです。"
+      },
+      {
+        "id": 4,
+        "marker_page": 2,
+        "marker_y_pt": 282.5,
+        "body_text": "脚注 4 の本文：簡潔な注釈テキストです。"
+      },
+      {
+        "id": 5,
+        "marker_page": 2,
+        "marker_y_pt": 489.5,
+        "body_text": "脚注 5 の本文：簡潔な注釈テキストです。"
+      },
+      {
+        "id": 6,
+        "marker_page": 3,
+        "marker_y_pt": 75.5,
+        "body_text": "脚注 6 の本文：簡潔な注釈テキストです。"
+      }
+    ]
+  },
+  "FN_CASCADE_B.docx": {
+    "pages": 4,
+    "paragraphs": [
+      {
+        "idx": 1,
+        "chars": 2255,
+        "first_page": 1,
+        "last_page": 2,
+        "first_line": 1,
+        "last_line": 15,
+        "y_first_pt": 75.5
+      },
+      {
+        "idx": 2,
+        "chars": 81,
+        "first_page": 2,
+        "last_page": 2,
+        "first_line": 16,
+        "last_line": 17,
+        "y_first_pt": 386.0
+      },
+      {
+        "idx": 3,
+        "chars": 2255,
+        "first_page": 2,
+        "last_page": 4,
+        "first_line": 18,
+        "last_line": 2,
+        "y_first_pt": 427.5
+      }
+    ],
+    "footnotes": [
+      {
+        "id": 1,
+        "marker_page": 1,
+        "marker_y_pt": 241.0,
+        "body_text": "脚注 1 の本文：注釈 #1。"
+      },
+      {
+        "id": 2,
+        "marker_page": 1,
+        "marker_y_pt": 427.5,
+        "body_text": "脚注 2 の本文：注釈 #2。"
+      },
+      {
+        "id": 3,
+        "marker_page": 1,
+        "marker_y_pt": 613.5,
+        "body_text": "脚注 3 の本文：注釈 #3。"
+      },
+      {
+        "id": 4,
+        "marker_page": 2,
+        "marker_y_pt": 179.0,
+        "body_text": "脚注 4 の本文：注釈 #4。"
+      },
+      {
+        "id": 5,
+        "marker_page": 2,
+        "marker_y_pt": 593.0,
+        "body_text": "脚注 5 の本文：注釈 #5。"
+      },
+      {
+        "id": 6,
+        "marker_page": 3,
+        "marker_y_pt": 137.5,
+        "body_text": "脚注 6 の本文：注釈 #6。"
+      },
+      {
+        "id": 7,
+        "marker_page": 3,
+        "marker_y_pt": 324.0,
+        "body_text": "脚注 7 の本文：注釈 #7。"
+      },
+      {
+        "id": 8,
+        "marker_page": 3,
+        "marker_y_pt": 510.0,
+        "body_text": "脚注 8 の本文：注釈 #8。"
+      }
+    ]
+  },
+  "FN_CASCADE_C.docx": {
+    "pages": 2,
+    "paragraphs": [
+      {
+        "idx": 1,
+        "chars": 2505,
+        "first_page": 1,
+        "last_page": 2,
+        "first_line": 1,
+        "last_line": 18,
+        "y_first_pt": 75.5
+      }
+    ],
+    "footnotes": [
+      {
+        "id": 1,
+        "marker_page": 1,
+        "marker_y_pt": 262.0,
+        "body_text": "脚注 1 注釈本文。"
+      },
+      {
+        "id": 2,
+        "marker_page": 1,
+        "marker_y_pt": 448.0,
+        "body_text": "脚注 2 注釈本文。"
+      },
+      {
+        "id": 3,
+        "marker_page": 1,
+        "marker_y_pt": 655.0,
+        "body_text": "脚注 3 注釈本文。"
+      },
+      {
+        "id": 4,
+        "marker_page": 2,
+        "marker_y_pt": 220.5,
+        "body_text": "脚注 4 注釈本文。"
+      }
+    ]
+  }
+}
