@@ -1152,66 +1152,6 @@ Merges that landed because two Oxi code paths computing the same thing were
 diverging, and unifying them improved overall SSIM (net strict >) without
 regressing the bottom-5 floor. See CLAUDE.md §9 Path D for the rules.
 
-### 2026-04-26 — fn ref re-commit on mid-paragraph page break
-
-**Divergence** (`page_fn_refs` vs `footnote_reserve_current` after MID_BREAK):
-- Path A (`page_fn_refs`, populated by `para_fn_refs_per_page` at
-  `mod.rs:1090-1098`, established by 157bc22): per-line attribution of
-  fn refs to the page each line actually rendered on. Used by post-layout
-  loop at `mod.rs:1418+` to decide which fn bodies to emit on each page.
-- Path B (`footnote_reserve_current`, scalar): running reservation used to
-  reduce `effective_content_h` (`mod.rs:861`) for body wrap decisions of
-  subsequent paragraphs on the current page.
-
-**Divergence cause**: When a paragraph spans pages internally (mid-para break),
-6d4fbe0 cleared `footnote_reserve_current = 0` and `footnote_ids.clear()` to
-avoid double-counting the OLD-page commit. But it never re-committed the
-fn refs that *landed* on the NEW page after the break. So Path A correctly
-attributes those refs to NEW page (will emit bodies post-layout), while Path
-B sees zero reserve on NEW page → subsequent body paragraphs use full
-`content_h` → body overflows into the area where Path A's bodies will render.
-
-**Concrete example** (b837 block 59, refs 20-24):
-- `para_fn_refs_per_page = [[], [20,21,22,23,24]]` after layout — refs all
-  land on NEW page (offset=1)
-- Pre-fix `page_fn_refs[4] = [20,21,22,23,24,25]` (correct via per-line attr),
-  `footnote_reserve_current = 0` for NEW page → block 67 (next para, ref 25)
-  layouts with full content_h → body extends to y=756.5pt
-- Post-layout fn area emission tries to fit 6 fns in remaining space:
-  `[FN_PLACE] page_idx=4 n_req=6 fit=0 body_bot=756.5 total_h=0.0` — **bodies
-  dropped entirely because no space left**
-- With this fix: NEW page reserve = 204.5pt → block 67 wraps with reduced
-  content_h → body capped at 558.5pt → fn area fits:
-  `[FN_PLACE] page_idx=4 n_req=6 fit=6 body_bot=558.5 total_h=199.7`
-
-**Fix** (`mod.rs:1132-1146`, 14 LOC): after MID_BREAK clears, re-commit
-`para_fn_refs_per_page[pages_added]` (refs on the FINAL/current page after
-break) to `footnote_reserve_current`.
-
-**Results**:
-- Bottom-5: 3.2645 → 3.2645 (b837 worst page p.6=0.6449 unchanged) ✓ equal
-- Net Δ: **+0.0006 strict** (b837 p.2 +0.0003, p.5 +0.0003, others 0.0000)
-- Max improvement: +0.0003 ≥ max regression 0 ✓
-- Improvements / regressions: 2 / 0
-- Scope: provably no-op for non-fn docs (`para_fn_refs_per_page.get()`
-  returns None when paragraph has no fn refs); b837 is the only baseline
-  doc with `<w:footnoteReference>` (1/177 docs)
-
-**Rationale**: page_fn_refs is the source of truth for fn body emission;
-footnote_reserve_current must agree, otherwise body wrap diverges from fn
-emission and mid-break paragraphs produce body-over-fn-area overlap or
-fn-bodies-dropped on the new page. SSIM gain is small because the dropped-bodies
-configuration coincidentally produces similar-density pixels to Word's correct
-fn area, but the fix is correctness-driven and unifies two divergent paths.
-
-**Note on session 30**: an earlier session attempted the same fix and reported
-−0.0911 SSIM regression. This was **not reproduced** on 2026-04-26 with the
-same patch text and same b837 baseline. Likely confound: stale cache or
-in-flight changes during session 30. Mechanical effect (FN_PLACE p.5 fit=0/6
-→ 6/6, body_bot 756.5 → 558.5) reproduces identically.
-
-Commit: e4b8734.
-
 ### 2026-04-24 — textAlignment=baseline (§17.3.1.35) body path
 
 **Divergence** (4-layer parse → layout incomplete):
