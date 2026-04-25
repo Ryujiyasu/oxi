@@ -56,8 +56,12 @@ CONTENT_TYPES_BASE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 """
 
 COMMENTS_OVERRIDE = '  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>\n'
-COMMENTS_EXT_OVERRIDE = '  <Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.ms-word.commentsExtended+xml"/>\n'
-PEOPLE_OVERRIDE = '  <Override PartName="/word/people.xml" ContentType="application/vnd.ms-word.people+xml"/>\n'
+# Word 16.0 strict-open rejects the historical "application/vnd.ms-word.*" content
+# types for these parts; only the openxmlformats-officedocument flavor is accepted.
+# Confirmed 2026-04-25 by comparing fixture build output to Word's OpenAndRepair
+# output (which always rewrites the content types to the form below).
+COMMENTS_EXT_OVERRIDE = '  <Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>\n'
+PEOPLE_OVERRIDE = '  <Override PartName="/word/people.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"/>\n'
 
 ROOT_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">

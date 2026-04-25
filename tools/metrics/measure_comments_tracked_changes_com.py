@@ -175,14 +175,16 @@ def main() -> int:
             all_results.append(r)
 
         payload = {
-            "generated": "2026-04-18",
+            "generated": "2026-04-25",
             "word_version": safe(lambda: app.Version, "?"),
             "fixtures_dir": str(FIXTURES_DIR),
             "note": (
                 "Tick 2-3 pragmatic measurement: validates that Word parses "
                 "the hand-written fixtures correctly and dumps object-model "
-                "view of Revisions + Comments. Balloon geometry and author "
-                "RGB are deferred to a UIA / pixel-sampling pass."
+                "view of Revisions + Comments. All 10/10 fixtures now Word-OK "
+                "after fixing commentsExtended/people content types (2026-04-25). "
+                "Balloon geometry and author RGB are deferred to a UIA / "
+                "pixel-sampling pass."
             ),
             "results": all_results,
         }
