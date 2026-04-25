@@ -641,6 +641,44 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-25 — textbox line-count-aware overflow filter (commit 61833e2)
+
+**Divergence**: `crates/oxidocs-core/src/layout/mod.rs:1944` filter
+`pe.y + pe.height > clip_bottom` dropped valid text in tight-fit single-line
+textboxes where textbox height = `inset_t + line_height + inset_b` exactly.
+Line slot bottom (next-line baseline-top) extends past clip_bottom by the
+leading portion of line_height, but visible glyph fully fits within textbox.
+
+**Fix**: line-count-aware cutoff. Compute `available_lines =
+floor(inner_height / line_height)` and drop only text elements whose Y is
+past `abs_y + inset_t + available_lines * line_height`. Non-text elements
+(BoxRect inside textbox) keep original bounds check.
+
+**Evidence**:
+- COM: 459f05 (kyodokenkyuyoushiki01) p.1 「様式１」 textbox (h=27.2pt =
+  3.6+20+3.6 exactly). Word renders text visibly; pre-fix Oxi dropped all
+  3 chars (TBX_DEBUG: pe.y=36.25 + pe.height=20 = 56.25 > clip_bottom=50.85).
+- Minimal repro: tools/metrics/textbox_tight_fit_repro/TF_A.docx through
+  TF_D.docx — Word renders text in all variants per
+  `tools/metrics/measure_textbox_tight_fit.py`.
+- Spec: undocumented Word quirk — content visibility governed by line
+  count fit, not line-slot Y overlap with clip bottom. Pixel-confirmed.
+
+**Multi-line overflow case preserved**:
+- 2ea81a textbox 5 (h=74.4, line_h=32.3): inner_h=67.2, avail=2, cutoff =
+  top + 2×32.3. The 3rd-line elements (y >= cutoff) are still dropped,
+  matching Word's overflow behavior.
+
+**Verify** (full baseline 177 docs / 352 pages):
+- 0 improved / 352 unchanged / 0 regressed
+- Bottom-5 floor: 3.2645 → 3.2645 (UNCHANGED, equal OK per CLAUDE.md)
+- 459f05 p.1 「様式１」 now renders correctly visibly (textbox area too
+  small to register SSIM delta > 0.001 threshold).
+
+**Other affected docs**: 664c38 (h=33.0), d1e8ac8 (h=33.0) had similar
+small textboxes — already rendering correctly with old filter (line_h
+sufficiently smaller than inner_h, so inner_h/line_h > 1). Unchanged.
+
 ### 2026-04-25 — body list-marker uses paragraph's font (not renderer default)
 
 **Divergence**: `crates/oxidocs-core/src/layout/mod.rs` emits the list
