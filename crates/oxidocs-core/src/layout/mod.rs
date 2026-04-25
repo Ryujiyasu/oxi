@@ -2048,6 +2048,24 @@ impl LayoutEngine {
                         // don't re-add to NEW page or they double-count.
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
+                        // Session 30 paired-audit probe (2026-04-26): re-commit
+                        // refs that LANDED on the new page after the mid-para
+                        // break. Without this, NEW page's reserve stays 0 and
+                        // fn body text is dropped (b837 p.5: refs 19-24 markers
+                        // emitted but bodies missing). Use per-line attribution
+                        // from para_fn_refs_per_page[pages_added] (last bucket
+                        // = current/final page after the break).
+                        if let Some(new_page_refs) = para_fn_refs_per_page.get(pages_added) {
+                            for &id in new_page_refs {
+                                if !footnote_ids_current_page.contains(&id) {
+                                    if footnote_ids_current_page.is_empty() {
+                                        footnote_reserve_current += 6.0;
+                                    }
+                                    footnote_ids_current_page.push(id);
+                                    footnote_reserve_current += estimate_footnote_h(id);
+                                }
+                            }
+                        }
                     }
                     // Round 30: render shapes attached to this paragraph (e.g.
                     // bracketPair preset frame around the date block in
