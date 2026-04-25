@@ -148,6 +148,13 @@ fn main() {
                 layout::LayoutContent::PresetShape { ref shape_type, .. } => {
                     println!("  [{:2}] SHAPE {} ({:.1},{:.1}) w={:.1} h={:.1}", ei, shape_type, elem.x, elem.y, elem.width, elem.height);
                 }
+                layout::LayoutContent::Balloon { comment_id, author, resolved, .. } => {
+                    let r = if *resolved { " [resolved]" } else { "" };
+                    println!("  [{:2}] BALLOON ({:.1},{:.1}) w={:.1} h={:.1} id={} author={}{}", ei, elem.x, elem.y, elem.width, elem.height, comment_id, author, r);
+                }
+                layout::LayoutContent::BalloonConnector { from_x, from_y, to_x, to_y, .. } => {
+                    println!("  [{:2}] CONNECTOR ({:.1},{:.1})->({:.1},{:.1})", ei, from_x, from_y, to_x, to_y);
+                }
             }
         }
     }

@@ -9,6 +9,17 @@ pub struct Document {
     /// Comments referenced in the document
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Authors known to the document (from `word/people.xml`, MS-DOCX w15).
+    /// Seeds the renderer's author-color palette (attack-matrix row R-02).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub people: Vec<Person>,
+    /// Author palette derived from people.xml + Comment.author + Run.tracked_change.author.
+    /// Order is first-seen across the document, with `people.xml` honoured first
+    /// (Word writes people.xml in reviewer-first-seen order). Each entry's
+    /// `color_index` is its position in this Vec, so the renderer can map
+    /// `color_index` → RGB through any palette without a separate join step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<Author>,
     /// Compatibility: adjustLineHeightInTable (compat65).
     /// true = adjust line height in table cells (disable grid snap in cells).
     /// false (default) = table cells snap to document grid like normal paragraphs.
@@ -140,6 +151,16 @@ pub struct Paragraph {
     /// Inline/anchor shapes attached to this paragraph (e.g. bracketPair)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shapes: Vec<Shape>,
+    /// Paragraph-property change (`<w:pPrChange>`): carries the prior pPr so
+    /// the renderer can reconstruct "Original" views (attack-matrix R-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ppr_change: Option<PropertyChange>,
+    /// Revision on the paragraph-mark itself (`<w:pPr>/<w:rPr>/<w:ins>` or
+    /// `<w:pPr>/<w:rPr>/<w:del>`). An inserted mark means the ¶ split is
+    /// new; a deleted mark means the ¶ was removed (paragraph merged with
+    /// the next). See revisions_notes.md §2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_mark_revision: Option<TrackedChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,9 +182,20 @@ pub struct Run {
     /// Comment IDs that end at this run
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comment_range_end: Vec<String>,
+    /// Comment IDs whose balloon anchor (`<w:commentReference>`) sits in this run.
+    /// Typically the enclosing run carries rStyle="CommentReference"; the reference
+    /// marker is zero-width but the renderer projects the Y of this run to the
+    /// right margin to position the balloon (ECMA-376 §22.1.2.56 + §17.13.1 Word
+    /// display rules).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_references: Vec<String>,
     /// Tracked change info (insertion/deletion)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracked_change: Option<TrackedChange>,
+    /// Run-property change (`<w:rPrChange>`): carries the prior rPr so the
+    /// renderer can emit "formatting changed" annotations (attack-matrix R-12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpr_change: Option<PropertyChange>,
     /// Ruby (furigana) annotation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruby: Option<Ruby>,
@@ -593,19 +625,124 @@ pub struct Comment {
     pub author: Option<String>,
     /// Date string
     pub date: Option<String>,
+    /// Author initials (1–6 glyphs; ECMA-376 §17.13.4.2 w:initials)
+    pub initials: Option<String>,
+    /// `w14:paraId` of the comment body's first paragraph — join key used by
+    /// `word/commentsExtended.xml` (ECMA-376 §17.13.1 + MS-DOCX w15 extensions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub para_id: Option<String>,
+    /// `w15:paraIdParent` from commentsExtended.xml — set when this comment is a
+    /// reply; points to the `para_id` of the parent comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_para_id: Option<String>,
+    /// `w15:done="1"` from commentsExtended.xml — Word 2013+ resolved state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
+    /// `w16cid:durableId` from `word/commentsIds.xml` — Word 2019+ identifier
+    /// that survives save-as round-trips (local `w:id` is freely renumbered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable_id: Option<String>,
     /// Comment text paragraphs
     pub blocks: Vec<Block>,
 }
 
-/// A tracked change (insertion or deletion)
+/// Author entry from `word/people.xml` (MS-DOCX w15 extension).
+///
+/// Word writes one `<w15:person>` per distinct reviewer. `author` is the
+/// display name used as the join key to `<w:comment w:author>`, `<w:ins
+/// w:author>`, etc. `provider_id` + `user_id` come from the nested
+/// `<w15:presenceInfo>` and identify the reviewer across sessions — Word
+/// uses the pair to colour-code revisions even when two authors share a
+/// display name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Person {
+    /// Display name (`w15:author`).
+    pub author: String,
+    /// Presence provider id (e.g., "AD" for Active Directory, "None" when absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// Provider-specific user id (often an email or the display name again when
+    /// `provider_id == "None"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
+/// A property-change revision (`<w:rPrChange>`, `<w:pPrChange>`, etc.).
+///
+/// `prior_run_style` stores the run's style as it was before the change, so
+/// "Original" / "Simple markup" views can reconstruct the pre-edit document
+/// without needing the original XML.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PropertyChange {
+    /// `w:id` attribute on the change element (document-local, not durable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// `w:author` attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// `w:date` attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// Prior run style (body of `<w:rPrChange>/<w:rPr>`). Boxed to keep `Run`
+    /// small in the common (no-change) case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_run_style: Option<Box<RunStyle>>,
+    /// Prior paragraph style (body of `<w:pPrChange>/<w:pPr>`). Boxed for the
+    /// same reason as `prior_run_style`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_paragraph_style: Option<Box<ParagraphStyle>>,
+}
+
+/// Resolved author palette entry — `display` is the join key, `color_index` is
+/// the position the renderer uses to look up an RGB swatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Author {
+    /// Display name (matches `<w:author>` attributes verbatim).
+    pub display: String,
+    /// 0-based palette index. Stable for a given document — derived from first-seen
+    /// order across people.xml + comments + tracked changes.
+    pub color_index: usize,
+}
+
+/// Reveal mode for revisions, mirroring Word's "Show Markup" / "Display for
+/// Review" dropdown. Set on the render config; the renderer uses it to decide
+/// which revisions to draw and how (attack-matrix row S-02).
+///
+/// - `All` — every revision is rendered with markup (default).
+/// - `Simple` — vertical change bar in the margin only; in-line text shows
+///   the post-edit document.
+/// - `Original` — pre-edit document: insertions are hidden, deletions appear
+///   as normal text, prior `*PrChange` styles are applied.
+/// - `Final` — post-edit document: deletions are hidden, insertions are
+///   normal text, `*PrChange` keeps the current style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowRevisions {
+    #[default]
+    All,
+    Simple,
+    Original,
+    Final,
+}
+
+/// A tracked change (insertion, deletion, or move).
+///
+/// `change_type` is one of: `"insert"` (`<w:ins>`), `"delete"` (`<w:del>`),
+/// `"moveFrom"` (`<w:moveFrom>`), `"moveTo"` (`<w:moveTo>`). `pair_id` is
+/// the `w:id` attribute, used by the renderer to pair a `moveFrom` with its
+/// `moveTo` across paragraphs (ECMA-376 §17.13.5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedChange {
-    /// "insert" or "delete"
+    /// "insert" | "delete" | "moveFrom" | "moveTo"
     pub change_type: String,
     /// Author of the change
     pub author: Option<String>,
     /// Date of the change
     pub date: Option<String>,
+    /// Document-local `w:id` of the revision. For moves, `pair_id` on a
+    /// `moveFrom` matches the `pair_id` on its partner `moveTo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_id: Option<String>,
 }
 
 /// Ruby (furigana) annotation

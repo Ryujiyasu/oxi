@@ -1,0 +1,52 @@
+[
+  {
+    "file": "fixture_01_single_comment.docx",
+    "description": "One comment anchored on 'brown fox' in a single-paragraph body.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_02_comment_with_reply.docx",
+    "description": "Parent comment + one reply via commentsExtended paraIdParent linkage.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_03_resolved_comment.docx",
+    "description": "Single comment marked resolved (w15:done=\"1\").",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_04_multi_para_range.docx",
+    "description": "One comment whose range spans three consecutive paragraphs.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_05_single_ins.docx",
+    "description": "Single w:ins insertion of 'INSERTED TEXT ' by one author in one paragraph.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_06_single_del.docx",
+    "description": "Single w:del deletion of 'DELETED TEXT ' by one author in one paragraph.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_07_mixed_ins_del.docx",
+    "description": "Two insertions + one deletion interleaved in a single paragraph.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_08_move_from_to.docx",
+    "description": "Text moved between two paragraphs via moveFromRange/moveToRange pair.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_09_rPrChange_bold.docx",
+    "description": "rPrChange revision — a run toggled to bold; prior rPr recorded empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_10_multiple_reviewers.docx",
+    "description": "Two authors: Alice's insertion + Bob's deletion in same paragraph; people.xml includes both.",
+    "status": "OK"
+  }
+]

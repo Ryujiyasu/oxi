@@ -709,6 +709,28 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
+                        // R-05a: balloon variants surfaced as `kind` strings;
+                        // payload (comment_id, body, replies) not yet
+                        // serialised to LayoutElementJs — JS consumers can
+                        // detect presence and render placeholders until R-05g.
+                        oxidocs_core::layout::LayoutContent::Balloon { .. } => LayoutElementJs {
+                            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+                            kind: "balloon".into(),
+                            text: None, font_size: None, font_family: None, bold: None, italic: None,
+                            underline: None, underline_style: None, strikethrough: None,
+                            color: None, highlight: None, character_spacing: None, corner_radius: None,
+                            image_data: None, content_type: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+                        },
+                        oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => LayoutElementJs {
+                            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+                            kind: "balloon_connector".into(),
+                            text: None, font_size: None, font_family: None, bold: None, italic: None,
+                            underline: None, underline_style: None, strikethrough: None,
+                            color: None, highlight: None, character_spacing: None, corner_radius: None,
+                            image_data: None, content_type: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+                        },
                     }
                 }).collect(),
             }
@@ -833,6 +855,23 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
         },
         oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
             x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "preset_shape".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+        // R-05a: stub kind strings for the balloon variants — payload not
+        // serialised yet (deferred to R-05g once JS consumers actually use
+        // it).
+        oxidocs_core::layout::LayoutContent::Balloon { .. } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "balloon".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
+        oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "balloon_connector".into(),
             text: None, font_size: None, font_family: None, bold: None, italic: None,
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
             character_spacing: None, corner_radius: None, image_data: None, content_type: None,
@@ -973,6 +1012,9 @@ fn layout_to_pdf(
                 }
                 oxidocs_core::layout::LayoutContent::ClipStart | oxidocs_core::layout::LayoutContent::ClipEnd => {}
                 oxidocs_core::layout::LayoutContent::PresetShape { .. } => {}
+                // R-05a: balloon variants not yet rendered to PDF; skip.
+                oxidocs_core::layout::LayoutContent::Balloon { .. } => {}
+                oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => {}
             }
         }
 

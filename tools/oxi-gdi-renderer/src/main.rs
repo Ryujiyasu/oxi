@@ -68,6 +68,19 @@ fn main() {
 }
 
 #[cfg(windows)]
+/// Parse a `#RRGGBB` hex color into (r, g, b) bytes. Defaults to (0, 0, 0)
+/// for malformed input — used by R-05g balloon + connector renderers.
+fn parse_hex_rgb(s: &str) -> (u8, u8, u8) {
+    let c = s.strip_prefix('#').unwrap_or(s);
+    if c.len() != 6 {
+        return (0, 0, 0);
+    }
+    let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(0);
+    let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(0);
+    let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(0);
+    (r, g, b)
+}
+
 fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, supersample: u32, exclude: &[String]) {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::*;
@@ -110,6 +123,10 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     oxidocs_core::layout::LayoutContent::ClipStart => "clip",
                     oxidocs_core::layout::LayoutContent::ClipEnd => "clip",
                     oxidocs_core::layout::LayoutContent::PresetShape { .. } => "shape",
+                    // R-05a: balloon variants are layout-only stubs for now;
+                    // the GDI renderer will gain real handlers in R-05g.
+                    oxidocs_core::layout::LayoutContent::Balloon { .. } => "balloon",
+                    oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => "balloon_connector",
                 };
                 if exclude.iter().any(|e| e == type_name) {
                     continue;
@@ -516,6 +533,113 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             _ => {}
                         }
                     }
+                    // R-05g: render comment balloon as a rounded-rect filled
+                    // with the author's tint, then draw author header line +
+                    // body + indented reply blocks inside.
+                    oxidocs_core::layout::LayoutContent::Balloon {
+                        author, author_color_index, resolved, body, replies, ..
+                    } => {
+                        let tint_hex = oxidocs_core::layout::comment_balloon_fill(*author_color_index, *resolved);
+                        let (br, bg, bb) = parse_hex_rgb(tint_hex);
+                        let fill = CreateSolidBrush(COLORREF((br as u32) | ((bg as u32) << 8) | ((bb as u32) << 16)));
+                        // Subtle border in a slightly darker shade of the tint.
+                        let border_pen = CreatePen(PS_SOLID, 1, COLORREF(((br.saturating_sub(40)) as u32) | (((bg.saturating_sub(40)) as u32) << 8) | (((bb.saturating_sub(40)) as u32) << 16)));
+                        let old_brush = SelectObject(mem_dc, fill);
+                        let old_pen = SelectObject(mem_dc, border_pen);
+                        let radius = (4.0 * scale).round().max(1.0) as i32;
+                        RoundRect(mem_dc, x, y, x + ew, y + eh, radius * 2, radius * 2);
+                        SelectObject(mem_dc, old_brush);
+                        SelectObject(mem_dc, old_pen);
+                        let _ = DeleteObject(fill);
+                        let _ = DeleteObject(border_pen);
+
+                        // Header + body text. Use 9pt-equivalent for compactness.
+                        let header_fs = (9.0 * scale).round() as i32;
+                        let body_fs = (10.0 * scale).round() as i32;
+                        let family_wide: Vec<u16> = "Calibri".encode_utf16().chain(std::iter::once(0)).collect();
+                        let header_font = CreateFontW(-header_fs, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, PCWSTR(family_wide.as_ptr()));
+                        let body_font = CreateFontW(-body_fs, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, PCWSTR(family_wide.as_ptr()));
+
+                        let pad = (4.0 * scale).round() as i32;
+                        let mut text_y = y + pad;
+                        let text_x = x + pad;
+                        let text_right = x + ew - pad;
+
+                        // Author header (bold, slightly darker than body color).
+                        SetBkMode(mem_dc, TRANSPARENT);
+                        SetTextColor(mem_dc, COLORREF(0x00404040));
+                        let old_f = SelectObject(mem_dc, header_font);
+                        let header_str = format!("{}", author);
+                        let header_wide: Vec<u16> = header_str.encode_utf16().collect();
+                        let mut header_rect = RECT { left: text_x, top: text_y, right: text_right, bottom: text_y + header_fs + pad };
+                        DrawTextW(mem_dc, &mut header_wide.clone(), &mut header_rect, DT_LEFT | DT_TOP | DT_NOCLIP);
+                        text_y = header_rect.bottom + 1;
+                        SelectObject(mem_dc, old_f);
+                        let _ = DeleteObject(header_font);
+
+                        // Body text — wrap inside balloon width.
+                        SetTextColor(mem_dc, COLORREF(0x00000000));
+                        let old_f = SelectObject(mem_dc, body_font);
+                        let body_wide: Vec<u16> = body.encode_utf16().collect();
+                        let mut body_rect = RECT { left: text_x, top: text_y, right: text_right, bottom: y + eh - pad };
+                        let body_h = DrawTextW(mem_dc, &mut body_wide.clone(), &mut body_rect, DT_LEFT | DT_TOP | DT_WORDBREAK);
+                        text_y += body_h + pad;
+                        SelectObject(mem_dc, old_f);
+
+                        // Replies (R-08) — indented ~10pt, each with its own author chip.
+                        let indent_px = (10.0 * scale).round() as i32;
+                        for reply in replies.iter() {
+                            // Reply author chip
+                            SetTextColor(mem_dc, COLORREF(0x00606060));
+                            let header_font2 = CreateFontW(-header_fs, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, PCWSTR(family_wide.as_ptr()));
+                            let oldf = SelectObject(mem_dc, header_font2);
+                            let h_str = format!("{}", reply.author);
+                            let h_wide: Vec<u16> = h_str.encode_utf16().collect();
+                            let mut hr = RECT { left: text_x + indent_px, top: text_y, right: text_right, bottom: text_y + header_fs + pad };
+                            DrawTextW(mem_dc, &mut h_wide.clone(), &mut hr, DT_LEFT | DT_TOP | DT_NOCLIP);
+                            text_y = hr.bottom + 1;
+                            SelectObject(mem_dc, oldf);
+                            let _ = DeleteObject(header_font2);
+                            // Reply body
+                            let body_font2 = CreateFontW(-body_fs, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, PCWSTR(family_wide.as_ptr()));
+                            let oldf = SelectObject(mem_dc, body_font2);
+                            SetTextColor(mem_dc, COLORREF(0x00000000));
+                            let r_wide: Vec<u16> = reply.body.encode_utf16().collect();
+                            let mut rr = RECT { left: text_x + indent_px, top: text_y, right: text_right, bottom: y + eh - pad };
+                            let rh = DrawTextW(mem_dc, &mut r_wide.clone(), &mut rr, DT_LEFT | DT_TOP | DT_WORDBREAK);
+                            text_y += rh + pad;
+                            SelectObject(mem_dc, oldf);
+                            let _ = DeleteObject(body_font2);
+                        }
+
+                        let _ = DeleteObject(body_font);
+                    }
+                    // R-05g: dotted connector line from the inline anchor to
+                    // the balloon's left edge, in the author's tint hue.
+                    // Word's connector is roughly 0.75pt thick — dim grey
+                    // dotted, visible against white background. We use a
+                    // medium grey (#808080) at 1pt for v1 since PS_DOT with
+                    // a colored pen is hard to see at small thickness.
+                    oxidocs_core::layout::LayoutContent::BalloonConnector {
+                        from_x, from_y, to_x, to_y, color_hex: _,
+                    } => {
+                        // Slightly thicker grey dotted line so it's visible
+                        // at typical screen DPI without being intrusive.
+                        let pen = CreatePen(
+                            PS_DOT,
+                            (1.0 * scale).round().max(1.0) as i32,
+                            COLORREF(0x00808080),
+                        );
+                        let old_pen = SelectObject(mem_dc, pen);
+                        let fx = (*from_x as f64 * scale).round() as i32;
+                        let fy = (*from_y as f64 * scale).round() as i32;
+                        let tx = (*to_x as f64 * scale).round() as i32;
+                        let ty = (*to_y as f64 * scale).round() as i32;
+                        let _ = MoveToEx(mem_dc, fx, fy, None);
+                        let _ = LineTo(mem_dc, tx, ty);
+                        SelectObject(mem_dc, old_pen);
+                        let _ = DeleteObject(pen);
+                    }
                 }
             }
 
@@ -577,7 +701,7 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                pi + 1, page.width, page.height).unwrap();
         let mut first = true;
         for el in &page.elements {
-            let (kind, text_json, font_size, extra) = match &el.content {
+            let (kind, text_json, font_size) = match &el.content {
                 LayoutContent::Text { text, font_size, .. } => {
                     let mut esc = String::with_capacity(text.len());
                     for c in text.chars() {
@@ -594,16 +718,12 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                             c => esc.push(c),
                         }
                     }
-                    ("text", format!("\"{}\"", esc), *font_size, String::new())
+                    ("text", format!("\"{}\"", esc), *font_size)
                 }
-                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0, String::new()),
-                LayoutContent::TableBorder { x1, y1, x2, y2, width, .. } => {
-                    ("border", "null".to_string(), 0.0,
-                     format!(", \"x1\": {:.3}, \"y1\": {:.3}, \"x2\": {:.3}, \"y2\": {:.3}, \"bw\": {:.3}",
-                             x1, y1, x2, y2, width))
-                }
-                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0, String::new()),
-                _ => ("other", "null".to_string(), 0.0, String::new()),
+                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0),
+                LayoutContent::TableBorder { .. } => ("border", "null".to_string(), 0.0),
+                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0),
+                _ => ("other", "null".to_string(), 0.0),
             };
             if !first { out.push_str(",\n"); }
             first = false;
@@ -611,8 +731,8 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             let ri_json = el.run_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let co_json = el.char_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}{}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, extra).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json).unwrap();
         }
         out.push_str("\n    ]}");
     }

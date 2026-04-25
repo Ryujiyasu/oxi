@@ -64,6 +64,7 @@ impl OoxmlParser {
         let compat_mode = self.parse_compat_mode();
         let compress_punctuation = self.parse_compress_punctuation();
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
+        let people = self.parse_people();
 
         let mut pages = Vec::new();
         let mut page_index = 0usize;
@@ -253,17 +254,32 @@ impl OoxmlParser {
         // Collect all comments referenced in the document
         let all_comments: Vec<Comment> = ctx.comments.values().cloned().collect();
 
+        // Build the author palette: people.xml first (Word writes reviewer-
+        // first-seen order), then any author surfaced by comments or tracked
+        // changes. Color index = position in this Vec.
+        let authors = build_author_palette(&people, &all_comments, &pages);
+
         Ok(Document {
             pages,
             styles,
             metadata,
             comments: all_comments,
+            people,
+            authors,
             adjust_line_height_in_table,
             default_tab_stop,
             compat_mode,
             compress_punctuation,
             do_not_expand_shift_return,
         })
+    }
+
+    /// Parse `word/people.xml` (MS-DOCX w15). Missing part → empty list.
+    fn parse_people(&mut self) -> Vec<Person> {
+        match self.read_part("word/people.xml") {
+            Ok(xml) => parse_people_xml(&xml).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Parse header or footer XML parts referenced by relationship IDs
@@ -387,11 +403,48 @@ impl OoxmlParser {
         };
 
         // Parse comments
-        let comments = match self.read_part("word/comments.xml") {
+        let mut comments = match self.read_part("word/comments.xml") {
             Ok(xml) => parse_comments_xml(&xml)?,
             Err(ParseError::MissingPart(_)) => HashMap::new(),
             Err(e) => return Err(e),
         };
+
+        // Parse commentsExtended.xml (optional) and merge parent-pointer +
+        // resolved flag onto the already-parsed Comment objects via paraId.
+        if !comments.is_empty() {
+            match self.read_part("word/commentsExtended.xml") {
+                Ok(xml) => {
+                    let ext = parse_comments_extended_xml(&xml)?;
+                    for c in comments.values_mut() {
+                        if let Some(pid) = c.para_id.as_deref() {
+                            if let Some(info) = ext.get(pid) {
+                                c.parent_para_id = info.parent_para_id.clone();
+                                c.resolved = info.resolved;
+                            }
+                        }
+                    }
+                }
+                Err(ParseError::MissingPart(_)) => {}
+                Err(e) => return Err(e),
+            }
+
+            // Parse commentsIds.xml (Word 2019+, optional) and merge durable
+            // ids onto Comments via paraId.
+            match self.read_part("word/commentsIds.xml") {
+                Ok(xml) => {
+                    let ids = parse_comments_ids_xml(&xml)?;
+                    for c in comments.values_mut() {
+                        if let Some(pid) = c.para_id.as_deref() {
+                            if let Some(did) = ids.get(pid) {
+                                c.durable_id = Some(did.clone());
+                            }
+                        }
+                    }
+                }
+                Err(ParseError::MissingPart(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
 
         // Theme already parsed and passed in
         Ok(ParseContext {
@@ -860,6 +913,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             style,
                             alignment: Alignment::default(),
                             shapes: vec![],
+                            ppr_change: None,
+                            paragraph_mark_revision: None,
                         }));
                     }
                     _ => {}
@@ -910,6 +965,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                 style: ParagraphStyle::default(),
                 alignment: Alignment::Left,
                 shapes: Vec::new(),
+                ppr_change: None,
+                paragraph_mark_revision: None,
             }));
         }
     }
@@ -939,6 +996,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut style_id: Option<String> = None;
     let mut num_pr_ref: Option<NumPrRef> = None;
     let mut para_sect_pr: Option<SectionProperties> = None;
+    let mut ppr_change: Option<PropertyChange> = None;
+    let mut paragraph_mark_revision: Option<TrackedChange> = None;
     let mut depth = 0;
     // Field state: tracks fldChar begin/separate/end across runs.
     // Runs between "separate" and "end" contain cached field results
@@ -951,7 +1010,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, explicit_align, sid, npr, spr) = parse_paragraph_properties(reader)?;
+                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) = parse_paragraph_properties(reader)?;
                         style = s;
                         if let Some(a) = explicit_align {
                             alignment = a;
@@ -959,6 +1018,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         style_id = sid;
                         num_pr_ref = npr;
                         para_sect_pr = spr;
+                        ppr_change = ppr_change_parsed;
+                        paragraph_mark_revision = pmark_rev;
                     }
                     "r" if depth == 0 => {
                         let (mut run, dr) = parse_run(reader, ctx, styles, None)?;
@@ -1008,38 +1069,39 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url)?;
                         runs.extend(hyperlink_runs);
                     }
-                    // Track changes: inserted content
-                    "ins" if depth == 0 => {
+                    // Track changes: inserted / deleted / moved content.
+                    // ECMA-376 §17.13.5. Each element wraps runs; w:author, w:date,
+                    // w:id are attributes on the wrapper. For moves, w:id pairs a
+                    // moveFrom with its companion moveTo.
+                    "ins" | "del" | "moveFrom" | "moveTo" if depth == 0 => {
+                        let change_type = match local.as_str() {
+                            "ins" => "insert",
+                            "del" => "delete",
+                            "moveFrom" => "moveFrom",
+                            "moveTo" => "moveTo",
+                            _ => unreachable!(),
+                        };
                         let mut author = None;
                         let mut date = None;
+                        let mut pair_id = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "author" => author = Some(val),
                                 "date" => date = Some(val),
+                                "id" => pair_id = Some(val),
                                 _ => {}
                             }
                         }
-                        let tc = TrackedChange { change_type: "insert".into(), author, date };
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "ins", tc)?;
-                        runs.extend(tracked_runs);
-                    }
-                    // Track changes: deleted content
-                    "del" if depth == 0 => {
-                        let mut author = None;
-                        let mut date = None;
-                        for attr in e.attributes().flatten() {
-                            let key = local_name(attr.key.as_ref());
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
-                            match key.as_str() {
-                                "author" => author = Some(val),
-                                "date" => date = Some(val),
-                                _ => {}
-                            }
-                        }
-                        let tc = TrackedChange { change_type: "delete".into(), author, date };
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, "del", tc)?;
+                        let tc = TrackedChange {
+                            change_type: change_type.into(),
+                            author,
+                            date,
+                            pair_id,
+                        };
+                        let end_tag = local.clone();
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, &end_tag, tc)?;
                         runs.extend(tracked_runs);
                     }
                     // mc:AlternateContent at paragraph level
@@ -1159,6 +1221,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 endnote_ref: None,
                                 comment_range_start: Vec::new(),
                                 comment_range_end: Vec::new(),
+                                comment_references: Vec::new(),
+                                rpr_change: None,
                                 tracked_change: None,
                                 ruby: None,
                                 bookmark_name: None,
@@ -1181,9 +1245,34 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 let key = local_name(attr.key.as_ref());
                                 if key == "id" {
                                     let id = String::from_utf8_lossy(&attr.value).to_string();
-                                    // Mark the next run as having a comment start
+                                    // Attach to the previous run when possible; when the
+                                    // marker appears before any real run (e.g., at the
+                                    // start of a paragraph whose first element is the
+                                    // commentRangeStart), create an empty anchor run so
+                                    // the id survives to the IR. Without the anchor the
+                                    // id is silently dropped — that breaks any
+                                    // range-aware renderer pass (R-04 highlight, etc.)
+                                    // whenever a comment range begins at a paragraph
+                                    // boundary.
                                     if let Some(last_run) = runs.last_mut() {
                                         last_run.comment_range_start.push(id);
+                                    } else {
+                                        runs.push(Run {
+                                            text: String::new(),
+                                            style: RunStyle::default(),
+                                            url: None,
+                                            footnote_ref: None,
+                                            endnote_ref: None,
+                                            comment_range_start: vec![id],
+                                            comment_range_end: Vec::new(),
+                                            comment_references: Vec::new(),
+                                            tracked_change: None,
+                                            rpr_change: None,
+                                            ruby: None,
+                                            bookmark_name: None,
+                                            is_math: false,
+                                            field_type: None,
+                                        });
                                     }
                                 }
                             }
@@ -1195,6 +1284,28 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     let id = String::from_utf8_lossy(&attr.value).to_string();
                                     if let Some(last_run) = runs.last_mut() {
                                         last_run.comment_range_end.push(id);
+                                    } else {
+                                        // Symmetric with commentRangeStart — create an
+                                        // anchor run if there is no prior run to stamp.
+                                        // This is rare (usually rangeEnd comes after some
+                                        // content) but covers the "empty paragraph that
+                                        // only contains the close marker" case.
+                                        runs.push(Run {
+                                            text: String::new(),
+                                            style: RunStyle::default(),
+                                            url: None,
+                                            footnote_ref: None,
+                                            endnote_ref: None,
+                                            comment_range_start: Vec::new(),
+                                            comment_range_end: vec![id],
+                                            comment_references: Vec::new(),
+                                            tracked_change: None,
+                                            rpr_change: None,
+                                            ruby: None,
+                                            bookmark_name: None,
+                                            is_math: false,
+                                            field_type: None,
+                                        });
                                     }
                                 }
                             }
@@ -1220,7 +1331,9 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     endnote_ref: None,
                                     comment_range_start: Vec::new(),
                                     comment_range_end: Vec::new(),
+                                    comment_references: Vec::new(),
                                     tracked_change: None,
+                                    rpr_change: None,
                                     ruby: None,
                                     bookmark_name: Some(name),
                                     is_math: false,
@@ -1485,6 +1598,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             style,
             alignment,
             shapes: found_shapes.clone(),
+            ppr_change,
+            paragraph_mark_revision,
         },
         sect_pr: para_sect_pr,
         shapes: Vec::new(), // shapes are now in Paragraph.shapes, not page-level
@@ -1504,12 +1619,25 @@ struct NumPrRef {
 /// Returns: (style, alignment, style_id, numPr, optional section properties for section break)
 fn parse_paragraph_properties(
     reader: &mut Reader<&[u8]>,
-) -> Result<(ParagraphStyle, Option<Alignment>, Option<String>, Option<NumPrRef>, Option<SectionProperties>), ParseError> {
+) -> Result<
+    (
+        ParagraphStyle,
+        Option<Alignment>,
+        Option<String>,
+        Option<NumPrRef>,
+        Option<SectionProperties>,
+        Option<PropertyChange>,
+        Option<TrackedChange>,
+    ),
+    ParseError,
+> {
     let mut style = ParagraphStyle::default();
     let mut alignment: Option<Alignment> = None;
     let mut style_id: Option<String> = None;
     let mut num_pr: Option<NumPrRef> = None;
     let mut sect_pr: Option<SectionProperties> = None;
+    let mut ppr_change: Option<PropertyChange> = None;
+    let mut paragraph_mark_revision: Option<TrackedChange> = None;
     let mut has_explicit_widow_control = false;
     let mut depth = 0;
 
@@ -1548,6 +1676,32 @@ fn parse_paragraph_properties(
                                             }
                                         }
                                     } else if l == "b" { ppr_rpr.bold = true; }
+                                    else if (l == "ins" || l == "del") && paragraph_mark_revision.is_none() {
+                                        // Paragraph-mark revision: `<w:pPr>/<w:rPr>/<w:ins>` or
+                                        // `<w:pPr>/<w:rPr>/<w:del>` marks the pilcrow (¶) itself
+                                        // as inserted or deleted (revisions_notes.md §2). Empty
+                                        // element, attrs only.
+                                        let change_type = if l == "ins" { "insert" } else { "delete" };
+                                        let mut author = None;
+                                        let mut date = None;
+                                        let mut pair_id = None;
+                                        for a in e2.attributes().flatten() {
+                                            let k = local_name(a.key.as_ref());
+                                            let v = String::from_utf8_lossy(&a.value).to_string();
+                                            match k.as_str() {
+                                                "author" => author = Some(v),
+                                                "date" => date = Some(v),
+                                                "id" => pair_id = Some(v),
+                                                _ => {}
+                                            }
+                                        }
+                                        paragraph_mark_revision = Some(TrackedChange {
+                                            change_type: change_type.into(),
+                                            author,
+                                            date,
+                                            pair_id,
+                                        });
+                                    }
                                 }
                                 Event::Start(_) => { rd += 1; }
                                 Event::End(_) => { if rd == 0 { break; } rd -= 1; }
@@ -1616,6 +1770,51 @@ fn parse_paragraph_properties(
                     }
                     "sectPr" if depth == 0 => {
                         sect_pr = Some(parse_section_properties(reader)?);
+                    }
+                    // Paragraph-property change (`<w:pPrChange>`): body contains
+                    // a prior `<w:pPr>` with the pre-edit paragraph style.
+                    // Drain it explicitly so its inner Empty children (jc, ind,
+                    // spacing…) don't silently overwrite the current style —
+                    // the outer handlers don't gate on depth for Empty events.
+                    "pPrChange" if depth == 0 => {
+                        let mut pc = PropertyChange::default();
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "id" => pc.id = Some(val),
+                                "author" => pc.author = Some(val),
+                                "date" => pc.date = Some(val),
+                                _ => {}
+                            }
+                        }
+                        loop {
+                            match reader.read_event()? {
+                                Event::Start(inner) => {
+                                    if local_name(inner.name().as_ref()) == "pPr" {
+                                        let (prior, _a, _sid, _npr, _spr, _nested, _pmr) =
+                                            parse_paragraph_properties(reader)?;
+                                        pc.prior_paragraph_style = Some(Box::new(prior));
+                                    }
+                                }
+                                Event::Empty(inner) => {
+                                    if local_name(inner.name().as_ref()) == "pPr"
+                                        && pc.prior_paragraph_style.is_none()
+                                    {
+                                        pc.prior_paragraph_style =
+                                            Some(Box::new(ParagraphStyle::default()));
+                                    }
+                                }
+                                Event::End(inner) => {
+                                    if local_name(inner.name().as_ref()) == "pPrChange" {
+                                        break;
+                                    }
+                                }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
+                        ppr_change = Some(pc);
                     }
                     _ => {
                         depth += 1;
@@ -1927,7 +2126,7 @@ fn parse_paragraph_properties(
     }
 
     style.has_explicit_widow_control = has_explicit_widow_control;
-    Ok((style, alignment, style_id, num_pr, sect_pr))
+    Ok((style, alignment, style_id, num_pr, sect_pr, ppr_change, paragraph_mark_revision))
 }
 
 /// Parse w:numPr element
@@ -1938,7 +2137,11 @@ fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
 
     loop {
         match reader.read_event()? {
-            Event::Start(_) => {
+            Event::Start(e) => {
+                if local_name(e.name().as_ref()) == "numberingChange" {
+                    drain_element(reader, "numberingChange")?;
+                    continue;
+                }
                 depth += 1;
             }
             Event::Empty(e) => {
@@ -2127,6 +2330,8 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
     let mut footnote_ref: Option<u32> = None;
     let mut endnote_ref: Option<u32> = None;
     let mut ruby: Option<Ruby> = None;
+    let mut comment_references: Vec<String> = Vec::new();
+    let mut rpr_change: Option<PropertyChange> = None;
 
     loop {
         match reader.read_event()? {
@@ -2134,7 +2339,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "rPr" if depth == 0 => {
-                        style = parse_run_properties(reader, ctx, styles)?;
+                        let (s, c) = parse_run_properties(reader, ctx, styles)?;
+                        style = s;
+                        rpr_change = c;
                     }
                     "t" | "delText" if depth == 0 => {
                         in_text = true;
@@ -2256,6 +2463,19 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             }
                         }
                     }
+                    // Comment balloon anchor — zero-width marker inside the run.
+                    // The enclosing run is what the renderer projects to the right
+                    // margin; one run may legally carry multiple references.
+                    "commentReference" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "id" {
+                                let id = String::from_utf8_lossy(&attr.value).to_string();
+                                if !id.is_empty() {
+                                    comment_references.push(id);
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2302,7 +2522,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         text, style, url, footnote_ref, endnote_ref,
         comment_range_start: Vec::new(),
         comment_range_end: Vec::new(),
+        comment_references,
         tracked_change: None,
+        rpr_change,
         ruby,
         bookmark_name: None,
         is_math: false,
@@ -3783,16 +4005,68 @@ fn parse_omml(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<String, Parse
 }
 
 /// Parse w:rPr (run properties)
-fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<RunStyle, ParseError> {
+fn parse_run_properties(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<(RunStyle, Option<PropertyChange>), ParseError> {
     let mut style = RunStyle::default();
     let mut depth = 0;
     let mut rstyle_id: Option<String> = None;
+    let mut rpr_change: Option<PropertyChange> = None;
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
-                depth += 1;
                 let local = local_name(e.name().as_ref());
+                // rPrChange carries a full prior <w:rPr> body. If we fell through
+                // to the normal handlers, every prior property (bold, italic,
+                // color, font) would silently merge into the *current* style.
+                // Handle it inline: capture attrs, recursively parse the nested
+                // <w:rPr> to get the prior RunStyle, then consume the close tag.
+                if depth == 0 && local == "rPrChange" {
+                    let mut pc = PropertyChange::default();
+                    for attr in e.attributes().flatten() {
+                        let key = local_name(attr.key.as_ref());
+                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        match key.as_str() {
+                            "id" => pc.id = Some(val),
+                            "author" => pc.author = Some(val),
+                            "date" => pc.date = Some(val),
+                            _ => {}
+                        }
+                    }
+                    // Drain until </w:rPrChange>, recursing into inner <w:rPr>.
+                    loop {
+                        match reader.read_event()? {
+                            Event::Start(inner) => {
+                                if local_name(inner.name().as_ref()) == "rPr" {
+                                    let (prior, _nested) =
+                                        parse_run_properties(reader, ctx, styles)?;
+                                    pc.prior_run_style = Some(Box::new(prior));
+                                }
+                            }
+                            Event::Empty(inner) => {
+                                // <w:rPr/> with no children — prior style is default.
+                                if local_name(inner.name().as_ref()) == "rPr"
+                                    && pc.prior_run_style.is_none()
+                                {
+                                    pc.prior_run_style = Some(Box::new(RunStyle::default()));
+                                }
+                            }
+                            Event::End(inner) => {
+                                if local_name(inner.name().as_ref()) == "rPrChange" {
+                                    break;
+                                }
+                            }
+                            Event::Eof => break,
+                            _ => {}
+                        }
+                    }
+                    rpr_change = Some(pc);
+                    continue;
+                }
+                depth += 1;
                 if local == "rFonts" {
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
@@ -4106,7 +4380,7 @@ fn parse_run_properties(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
         }
     }
 
-    Ok(style)
+    Ok((style, rpr_change))
 }
 
 /// Parse a w:tbl element (table)
@@ -4288,7 +4562,27 @@ fn parse_table_grid(reader: &mut Reader<&[u8]>) -> Result<Vec<f32>, ParseError> 
     let mut columns = Vec::new();
     loop {
         match reader.read_event()? {
-            Event::Empty(e) | Event::Start(e) => {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "tblGridChange" {
+                    drain_element(reader, "tblGridChange")?;
+                    continue;
+                }
+                // gridCol Start (rare but legal) — handled in next branch by also matching Start.
+                if local == "gridCol" {
+                    for attr in e.attributes().flatten() {
+                        let key = local_name(attr.key.as_ref());
+                        if key == "w" {
+                            if let Ok(val) = std::str::from_utf8(&attr.value) {
+                                if let Ok(twips) = val.parse::<f32>() {
+                                    columns.push(twips / 20.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "gridCol" {
                     for attr in e.attributes().flatten() {
@@ -4326,6 +4620,12 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "tblPrChange" {
+                    // Revision history — drain so the prior tblPr inside
+                    // doesn't leak into the current style.
+                    drain_element(reader, "tblPrChange")?;
+                    continue;
+                }
                 if local == "tblBorders" {
                     // Don't set border=true here; individual border elements check val!=none
                     in_borders = true;
@@ -4589,6 +4889,10 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "trPrChange" => {
+                        drain_element(reader, "trPrChange")?;
+                        continue;
+                    }
                     "tc" if depth == 0 => {
                         let cell = parse_table_cell(reader, ctx, styles)?;
                         cells.push(cell);
@@ -4766,6 +5070,10 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "tcPrChange" => {
+                        drain_element(reader, "tcPrChange")?;
+                        continue;
+                    }
                     "vMerge" => {
                         let mut val = "continue".to_string();
                         for attr in e.attributes().flatten() {
@@ -4986,6 +5294,10 @@ fn parse_section_properties(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "sectPrChange" {
+                    drain_element(reader, "sectPrChange")?;
+                    continue;
+                }
                 if local == "pgBorders" && depth == 0 {
                     // Parse page borders - child elements: top, bottom, left, right
                     let mut pb = PageBorders { top: None, bottom: None, left: None, right: None };
@@ -5633,6 +5945,8 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     let mut current_id = String::new();
     let mut current_author: Option<String> = None;
     let mut current_date: Option<String> = None;
+    let mut current_initials: Option<String> = None;
+    let mut current_para_id: Option<String> = None;
     let mut current_blocks: Vec<Block> = Vec::new();
 
     let note_ctx = ParseContext {
@@ -5661,6 +5975,8 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                         current_id.clear();
                         current_author = None;
                         current_date = None;
+                        current_initials = None;
+                        current_para_id = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
@@ -5668,11 +5984,23 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                                 "id" => current_id = val,
                                 "author" => current_author = Some(val),
                                 "date" => current_date = Some(val),
+                                "initials" => current_initials = Some(val),
                                 _ => {}
                             }
                         }
                     }
                     "p" if in_comment && depth == 0 => {
+                        // The first paragraph's w14:paraId is the join key used
+                        // by commentsExtended.xml (MS-DOCX w15).
+                        if current_para_id.is_none() {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "paraId" {
+                                    current_para_id =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    break;
+                                }
+                            }
+                        }
                         let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
@@ -5691,6 +6019,11 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                             id: current_id.clone(),
                             author: current_author.take(),
                             date: current_date.take(),
+                            initials: current_initials.take(),
+                            para_id: current_para_id.take(),
+                            parent_para_id: None,
+                            resolved: false,
+                            durable_id: None,
                             blocks: std::mem::take(&mut current_blocks),
                         });
                     }
@@ -5707,11 +6040,708 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
     Ok(comments)
 }
 
+/// Build the document-level author palette in deterministic first-seen order.
+///
+/// Sources, in priority:
+/// 1. `Document.people` (people.xml — Word writes reviewer-first-seen order)
+/// 2. Each `Comment.author`
+/// 3. Each `Run.tracked_change.author` (walked in document order, plus
+///    rpr_change.author, ppr_change.author, paragraph_mark_revision.author)
+///
+/// Authors that already appear earlier in the list are skipped, so a single
+/// reviewer always gets the same `color_index` regardless of how many times
+/// they appear.
+fn build_author_palette(
+    people: &[Person],
+    comments: &[Comment],
+    pages: &[Page],
+) -> Vec<Author> {
+    fn push_unique(seen: &mut Vec<String>, name: &str) {
+        if !name.is_empty() && !seen.iter().any(|s| s == name) {
+            seen.push(name.to_string());
+        }
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for p in people {
+        push_unique(&mut seen, &p.author);
+    }
+    for c in comments {
+        if let Some(a) = c.author.as_deref() {
+            push_unique(&mut seen, a);
+        }
+    }
+    for page in pages {
+        for block in &page.blocks {
+            walk_block_authors(block, &mut seen);
+        }
+    }
+    seen.into_iter()
+        .enumerate()
+        .map(|(color_index, display)| Author { display, color_index })
+        .collect()
+}
+
+fn walk_block_authors(block: &Block, seen: &mut Vec<String>) {
+    fn push(seen: &mut Vec<String>, a: Option<&str>) {
+        if let Some(a) = a {
+            if !a.is_empty() && !seen.iter().any(|s| s == a) {
+                seen.push(a.to_string());
+            }
+        }
+    }
+    match block {
+        Block::Paragraph(p) => {
+            for r in &p.runs {
+                if let Some(tc) = r.tracked_change.as_ref() {
+                    push(seen, tc.author.as_deref());
+                }
+                if let Some(pc) = r.rpr_change.as_ref() {
+                    push(seen, pc.author.as_deref());
+                }
+            }
+            if let Some(pc) = p.ppr_change.as_ref() {
+                push(seen, pc.author.as_deref());
+            }
+            if let Some(pmark) = p.paragraph_mark_revision.as_ref() {
+                push(seen, pmark.author.as_deref());
+            }
+        }
+        Block::Table(t) => {
+            for row in &t.rows {
+                for cell in &row.cells {
+                    for inner in &cell.blocks {
+                        walk_block_authors(inner, seen);
+                    }
+                }
+            }
+        }
+        Block::Image(_) | Block::UnsupportedElement(_) => {}
+    }
+}
+
+/// Parse `word/people.xml` (MS-DOCX w15).
+///
+/// Produces one [`Person`] per `<w15:person>`. Preserves document order so
+/// downstream code can assign author colours deterministically without a
+/// separate sort (Word writes people.xml in reviewer-first-seen order).
+fn parse_people_xml(xml: &str) -> Result<Vec<Person>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut people: Vec<Person> = Vec::new();
+    let mut current: Option<Person> = None;
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let local = local_name(e.name().as_ref());
+                if local == "person" {
+                    let mut author = String::new();
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "author" {
+                            author = String::from_utf8_lossy(&attr.value).to_string();
+                        }
+                    }
+                    current = Some(Person { author, provider_id: None, user_id: None });
+                }
+            }
+            Event::Empty(e) => {
+                let local = local_name(e.name().as_ref());
+                match local.as_str() {
+                    // Self-closing <w15:person w15:author="..."/> with no presenceInfo.
+                    "person" => {
+                        let mut author = String::new();
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "author" {
+                                author = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                        if !author.is_empty() {
+                            people.push(Person { author, provider_id: None, user_id: None });
+                        }
+                    }
+                    "presenceInfo" => {
+                        if let Some(p) = current.as_mut() {
+                            for attr in e.attributes().flatten() {
+                                let key = local_name(attr.key.as_ref());
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                match key.as_str() {
+                                    "providerId" => p.provider_id = Some(val),
+                                    "userId" => p.user_id = Some(val),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "person" {
+                    if let Some(p) = current.take() {
+                        if !p.author.is_empty() {
+                            people.push(p);
+                        }
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(people)
+}
+
+/// Parse `word/commentsIds.xml` (Word 2019+ w16cid extension).
+///
+/// Returns a `paraId → durableId` map. The durable id survives save-as
+/// roundtrips and is the stable key to use across sessions (the local
+/// `w:id` is renumbered freely on save — see `comments_notes.md` §7).
+///
+/// Accepts `w16cid:durableId` (canonical) and `w16cid:id` (older draft
+/// spelling). Namespace stripped via `local_name`.
+fn parse_comments_ids_xml(xml: &str) -> Result<HashMap<String, String>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut map: HashMap<String, String> = HashMap::new();
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) | Event::Empty(e) => {
+                if local_name(e.name().as_ref()) != "commentId" {
+                    continue;
+                }
+                let mut para_id: Option<String> = None;
+                let mut durable_id: Option<String> = None;
+                for attr in e.attributes().flatten() {
+                    let key = local_name(attr.key.as_ref());
+                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    match key.as_str() {
+                        "paraId" => para_id = Some(val),
+                        "durableId" | "id" => durable_id = Some(val),
+                        _ => {}
+                    }
+                }
+                if let (Some(p), Some(d)) = (para_id, durable_id) {
+                    map.insert(p, d);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(map)
+}
+
+/// Metadata merged onto a [`Comment`] from `word/commentsExtended.xml`.
+///
+/// The join key is the `w14:paraId` of the comment body's first paragraph.
+#[derive(Debug, Default, Clone)]
+struct CommentExtendedInfo {
+    parent_para_id: Option<String>,
+    resolved: bool,
+}
+
+/// Parse `word/commentsExtended.xml` (MS-DOCX w15 extension).
+///
+/// Each `<w15:commentEx>` carries the paraId of a comment body paragraph plus
+/// optional `w15:paraIdParent` (reply threading) and `w15:done` (resolved
+/// state). Accept both `w15:paraIdParent` (canonical) and `w15:parentParaId`
+/// (legacy variant) — see `comments_notes.md` §4.
+fn parse_comments_extended_xml(
+    xml: &str,
+) -> Result<HashMap<String, CommentExtendedInfo>, ParseError> {
+    let mut reader = Reader::from_str(xml);
+    let mut map: HashMap<String, CommentExtendedInfo> = HashMap::new();
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) | Event::Empty(e) => {
+                if local_name(e.name().as_ref()) != "commentEx" {
+                    continue;
+                }
+                let mut para_id: Option<String> = None;
+                let mut info = CommentExtendedInfo::default();
+                for attr in e.attributes().flatten() {
+                    let key = local_name(attr.key.as_ref());
+                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    match key.as_str() {
+                        "paraId" => para_id = Some(val),
+                        "paraIdParent" | "parentParaId" => info.parent_para_id = Some(val),
+                        "done" => info.resolved = val == "1" || val == "true",
+                        _ => {}
+                    }
+                }
+                if let Some(pid) = para_id {
+                    map.insert(pid, info);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(map)
+}
+
+/// Read and discard XML events up to and including the matching End tag for
+/// `tag_name`. Used to drain `*PrChange` revision-history bodies (tblPrChange,
+/// trPrChange, tcPrChange, sectPrChange, tblGridChange, numberingChange) so
+/// their inner property elements don't silently leak into the current parse
+/// state — every such body contains a *prior* copy of the same property
+/// element it sits inside (e.g. tcPrChange contains a prior tcPr).
+fn drain_element(reader: &mut Reader<&[u8]>, tag_name: &str) -> Result<(), ParseError> {
+    let mut depth = 0u32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(_) => depth += 1,
+            Event::End(e) => {
+                if depth == 0 && local_name(e.name().as_ref()) == tag_name {
+                    return Ok(());
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
 /// Extract local name from a potentially namespaced XML tag
 fn local_name(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");
     match s.rfind(':') {
         Some(pos) => s[pos + 1..].to_string(),
         None => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Block;
+
+    #[test]
+    fn parse_comments_xml_captures_initials_and_metadata() {
+        // Mirrors tools/fixtures/comments_samples/fixture_01_single_comment.docx.
+        // Word COM-validated 2026-04-18: Comments.Count=1, Author="Alice Reviewer",
+        // Initial="AR", Scope.Text="brown fox".
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+  <w:comment w:id="0" w:author="Alice Reviewer" w:date="2026-04-18T10:00:00Z" w:initials="AR">
+    <w:p w14:paraId="00000010">
+      <w:r><w:t>Is 'brown' needed here?</w:t></w:r>
+    </w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments = parse_comments_xml(xml).expect("parse");
+        assert_eq!(comments.len(), 1);
+        let c = comments.get("0").expect("id=0 present");
+        assert_eq!(c.id, "0");
+        assert_eq!(c.author.as_deref(), Some("Alice Reviewer"));
+        assert_eq!(c.date.as_deref(), Some("2026-04-18T10:00:00Z"));
+        assert_eq!(c.initials.as_deref(), Some("AR"));
+        assert_eq!(c.blocks.len(), 1);
+        match &c.blocks[0] {
+            Block::Paragraph(p) => {
+                let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+                assert_eq!(text, "Is 'brown' needed here?");
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_pprchange_stores_prior_style_without_merging_into_current() {
+        // `<w:pPr>` carries current alignment=left, and a `<w:pPrChange>` with
+        // prior alignment=right. Without the explicit drain, the inner `<w:jc
+        // val="right"/>` would silently overwrite the current alignment via
+        // the outer Empty handler (which doesn't gate on depth).
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:jc w:val="left"/>
+  <w:pPrChange w:id="42" w:author="A" w:date="2026-04-18T10:00:00Z">
+    <w:pPr>
+      <w:jc w:val="right"/>
+    </w:pPr>
+  </w:pPrChange>
+</w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance to the outer <w:pPr> Start.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "pPr" => break,
+                Event::Eof => panic!("no <w:pPr>"),
+                _ => continue,
+            }
+        }
+        let (_style, alignment, _sid, _npr, _spr, ppr_change, _pmark) =
+            parse_paragraph_properties(&mut reader).expect("parse");
+        assert_eq!(
+            alignment,
+            Some(crate::ir::Alignment::Left),
+            "current alignment must stay Left; pPrChange body must not leak"
+        );
+        let pc = ppr_change.expect("ppr_change populated");
+        assert_eq!(pc.id.as_deref(), Some("42"));
+        assert_eq!(pc.author.as_deref(), Some("A"));
+        assert!(pc.prior_paragraph_style.is_some(), "prior style must be captured");
+    }
+
+    #[test]
+    fn show_revisions_default_is_all_and_round_trips_json() {
+        use crate::ir::ShowRevisions;
+        // I-04: default = All; serde uses snake_case rename.
+        assert_eq!(ShowRevisions::default(), ShowRevisions::All);
+        assert_eq!(serde_json::to_string(&ShowRevisions::All).unwrap(), "\"all\"");
+        assert_eq!(serde_json::to_string(&ShowRevisions::Simple).unwrap(), "\"simple\"");
+        assert_eq!(serde_json::to_string(&ShowRevisions::Original).unwrap(), "\"original\"");
+        assert_eq!(serde_json::to_string(&ShowRevisions::Final).unwrap(), "\"final\"");
+        let parsed: ShowRevisions = serde_json::from_str("\"original\"").unwrap();
+        assert_eq!(parsed, ShowRevisions::Original);
+    }
+
+    #[test]
+    fn build_author_palette_dedupes_in_first_seen_order() {
+        let people = vec![Person {
+            author: "Alice".into(),
+            provider_id: None,
+            user_id: None,
+        }];
+        // Comments add a new author Bob (after Alice from people).
+        let comments = vec![Comment {
+            id: "0".into(),
+            author: Some("Bob".into()),
+            date: None,
+            initials: None,
+            para_id: None,
+            parent_para_id: None,
+            resolved: false,
+            durable_id: None,
+            blocks: vec![],
+        }];
+        let pages: Vec<Page> = Vec::new();
+        let palette = build_author_palette(&people, &comments, &pages);
+        assert_eq!(palette.len(), 2);
+        assert_eq!(palette[0].display, "Alice");
+        assert_eq!(palette[0].color_index, 0);
+        assert_eq!(palette[1].display, "Bob");
+        assert_eq!(palette[1].color_index, 1);
+
+        // Re-seen author keeps original index — duplicates suppressed.
+        let comments_dup = vec![Comment {
+            id: "0".into(),
+            author: Some("Alice".into()),
+            date: None,
+            initials: None,
+            para_id: None,
+            parent_para_id: None,
+            resolved: false,
+            durable_id: None,
+            blocks: vec![],
+        }];
+        let palette2 = build_author_palette(&people, &comments_dup, &pages);
+        assert_eq!(palette2.len(), 1);
+        assert_eq!(palette2[0].display, "Alice");
+        assert_eq!(palette2[0].color_index, 0);
+    }
+
+    #[test]
+    fn drain_element_skips_nested_body() {
+        let xml = r#"<w:trPrChange xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:id="1">
+  <w:trPr>
+    <w:trHeight w:val="500"/>
+    <w:cantSplit/>
+  </w:trPr>
+</w:trPrChange><w:after/>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance past the opening tag.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "trPrChange" => break,
+                Event::Eof => panic!("no trPrChange"),
+                _ => continue,
+            }
+        }
+        drain_element(&mut reader, "trPrChange").expect("drain");
+        // After drain, the next event must be `<w:after/>` Empty — proves we
+        // consumed exactly the trPrChange body and its closing tag.
+        let next = reader.read_event().expect("read after drain");
+        match next {
+            Event::Empty(e) => assert_eq!(local_name(e.name().as_ref()), "after"),
+            other => panic!("expected <w:after/> Empty, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_table_grid_ignores_tblGridChange_prior_columns() {
+        // Without the drain, the prior <w:gridCol w="999"/> inside tblGridChange
+        // would be appended to the columns vector. With the drain, only the
+        // current columns are emitted.
+        let xml = r#"<w:tblGrid xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:gridCol w:w="2880"/>
+  <w:gridCol w:w="2880"/>
+  <w:tblGridChange w:id="1">
+    <w:tblGrid>
+      <w:gridCol w:w="9999"/>
+    </w:tblGrid>
+  </w:tblGridChange>
+</w:tblGrid>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance to tblGrid Start.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "tblGrid" => break,
+                Event::Eof => panic!("no tblGrid"),
+                _ => continue,
+            }
+        }
+        let columns = parse_table_grid(&mut reader).expect("parse");
+        assert_eq!(columns.len(), 2, "prior gridCol must not leak");
+        assert_eq!(columns, vec![144.0, 144.0]); // 2880 twips → 144 pt
+    }
+
+    #[test]
+    fn parse_num_pr_ignores_numberingChange_prior_values() {
+        // Without the drain, prior <w:numId val="999"/> inside numberingChange
+        // would silently overwrite the current numId.
+        let xml = r#"<w:numPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:ilvl w:val="0"/>
+  <w:numId w:val="5"/>
+  <w:numberingChange w:id="1" w:author="A" w:date="2026-04-18T10:00:00Z">
+    <w:numPr>
+      <w:numId w:val="999"/>
+    </w:numPr>
+  </w:numberingChange>
+</w:numPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "numPr" => break,
+                Event::Eof => panic!("no numPr"),
+                _ => continue,
+            }
+        }
+        let np = parse_num_pr(&mut reader).expect("parse");
+        assert_eq!(np.num_id, "5", "prior numId must not leak");
+        assert_eq!(np.ilvl, 0);
+    }
+
+    #[test]
+    fn parse_pmark_ins_via_ppr_rpr() {
+        // `<w:pPr>/<w:rPr>/<w:ins>` flags the paragraph-mark (¶) as inserted.
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rPr>
+    <w:ins w:id="77" w:author="Alice" w:date="2026-04-18T10:00:00Z"/>
+  </w:rPr>
+</w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "pPr" => break,
+                Event::Eof => panic!("no pPr"),
+                _ => continue,
+            }
+        }
+        let (_s, _a, _sid, _npr, _spr, _pc, pmark) =
+            parse_paragraph_properties(&mut reader).expect("parse");
+        let tc = pmark.expect("paragraph_mark_revision populated");
+        assert_eq!(tc.change_type, "insert");
+        assert_eq!(tc.pair_id.as_deref(), Some("77"));
+        assert_eq!(tc.author.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn parse_pmark_del_via_ppr_rpr() {
+        // `<w:pPr>/<w:rPr>/<w:del>` flags the pilcrow as deleted — the
+        // paragraph has been merged with the next one.
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rPr>
+    <w:del w:id="88" w:author="Bob" w:date="2026-04-18T10:00:00Z"/>
+  </w:rPr>
+</w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "pPr" => break,
+                Event::Eof => panic!("no pPr"),
+                _ => continue,
+            }
+        }
+        let (_s, _a, _sid, _npr, _spr, _pc, pmark) =
+            parse_paragraph_properties(&mut reader).expect("parse");
+        let tc = pmark.expect("paragraph_mark_revision populated");
+        assert_eq!(tc.change_type, "delete");
+        assert_eq!(tc.pair_id.as_deref(), Some("88"));
+        assert_eq!(tc.author.as_deref(), Some("Bob"));
+    }
+
+    #[test]
+    fn parse_run_captures_comment_reference() {
+        // ECMA-376: <w:commentReference w:id="N"/> is a zero-width marker inside
+        // a <w:r>. The enclosing run is what the renderer projects to the right
+        // margin — the id must survive to Run::comment_references.
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
+  <w:commentReference w:id="0"/>
+</w:r>"#;
+        let ctx = ParseContext {
+            _rels: HashMap::new(),
+            media: HashMap::new(),
+            media_types: HashMap::new(),
+            hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            footnotes: HashMap::new(),
+            endnotes: HashMap::new(),
+            comments: HashMap::new(),
+            theme: ThemeColors::default(),
+        };
+        let styles = StyleSheet::default();
+        let mut reader = Reader::from_str(xml);
+        // Advance to the <w:r> start tag the way parse_paragraph does.
+        let start = loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "r" => break e,
+                Event::Eof => panic!("no <w:r> in test fixture"),
+                _ => continue,
+            }
+        };
+        let _ = start;
+        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None).expect("parse_run");
+        assert_eq!(run.comment_references, vec!["0".to_string()]);
+    }
+
+    #[test]
+    fn parse_comments_xml_captures_first_para_id() {
+        // w14:paraId on the comment body's first <w:p> is the join key used by
+        // commentsExtended.xml. Must land on Comment.para_id.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+  <w:comment w:id="0" w:author="A" w:date="2026-04-18T10:00:00Z" w:initials="A">
+    <w:p w14:paraId="00000010"><w:r><w:t>body</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments = parse_comments_xml(xml).expect("parse");
+        assert_eq!(comments.get("0").and_then(|c| c.para_id.as_deref()), Some("00000010"));
+    }
+
+    #[test]
+    fn parse_comments_extended_reply_and_resolved() {
+        // Mirrors fixture_02/03: paraIdParent marks a reply, done="1" marks resolved.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"
+                xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w15:commentEx w15:paraId="00000010" w15:done="0"/>
+  <w15:commentEx w15:paraId="00000011" w15:paraIdParent="00000010" w15:done="0"/>
+  <w15:commentEx w15:paraId="00000020" w15:done="1"/>
+</w15:commentsEx>"#;
+        let ext = parse_comments_extended_xml(xml).expect("parse");
+        assert_eq!(ext.len(), 3);
+        let root = ext.get("00000010").expect("root");
+        assert!(root.parent_para_id.is_none());
+        assert!(!root.resolved);
+        let reply = ext.get("00000011").expect("reply");
+        assert_eq!(reply.parent_para_id.as_deref(), Some("00000010"));
+        assert!(!reply.resolved);
+        let resolved = ext.get("00000020").expect("resolved");
+        assert!(resolved.resolved);
+    }
+
+    #[test]
+    fn parse_people_xml_two_reviewers_preserves_order() {
+        // Mirrors fixture_10_multiple_reviewers.docx
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"
+            xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w15:person w15:author="Alice Reviewer">
+    <w15:presenceInfo w15:providerId="None" w15:userId="Alice Reviewer"/>
+  </w15:person>
+  <w15:person w15:author="Bob Reviewer">
+    <w15:presenceInfo w15:providerId="None" w15:userId="Bob Reviewer"/>
+  </w15:person>
+</w15:people>"#;
+        let people = parse_people_xml(xml).expect("parse");
+        assert_eq!(people.len(), 2);
+        assert_eq!(people[0].author, "Alice Reviewer");
+        assert_eq!(people[0].provider_id.as_deref(), Some("None"));
+        assert_eq!(people[0].user_id.as_deref(), Some("Alice Reviewer"));
+        assert_eq!(people[1].author, "Bob Reviewer");
+        assert_eq!(people[1].user_id.as_deref(), Some("Bob Reviewer"));
+    }
+
+    #[test]
+    fn parse_people_xml_without_presence_info() {
+        // <w15:person> without a nested <w15:presenceInfo> — provider_id and
+        // user_id must be None, not empty strings.
+        let xml = r#"<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:person w15:author="Charlie"/>
+</w15:people>"#;
+        let people = parse_people_xml(xml).expect("parse");
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].author, "Charlie");
+        assert!(people[0].provider_id.is_none());
+        assert!(people[0].user_id.is_none());
+    }
+
+    #[test]
+    fn parse_people_xml_drops_blank_author() {
+        // Malformed: <w15:person> without w15:author — must not appear in output.
+        let xml = r#"<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:person><w15:presenceInfo w15:providerId="None" w15:userId="x"/></w15:person>
+  <w15:person w15:author="OK"><w15:presenceInfo w15:providerId="None" w15:userId="OK"/></w15:person>
+</w15:people>"#;
+        let people = parse_people_xml(xml).expect("parse");
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].author, "OK");
+    }
+
+    #[test]
+    fn parse_comments_ids_durable_id_mapping() {
+        let xml = r#"<?xml version="1.0"?>
+<w16cid:commentsIds xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                    xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">
+  <w16cid:commentId w16cid:paraId="00000010" w16cid:durableId="12345"/>
+  <w16cid:commentId w16cid:paraId="00000011" w16cid:durableId="67890"/>
+</w16cid:commentsIds>"#;
+        let map = parse_comments_ids_xml(xml).expect("parse");
+        assert_eq!(map.get("00000010").map(String::as_str), Some("12345"));
+        assert_eq!(map.get("00000011").map(String::as_str), Some("67890"));
+    }
+
+    #[test]
+    fn parse_comments_ids_accepts_legacy_id_attribute() {
+        // Older drafts used `w16cid:id` before settling on `w16cid:durableId`.
+        let xml = r#"<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">
+  <w16cid:commentId w16cid:paraId="00000020" w16cid:id="AAA"/>
+</w16cid:commentsIds>"#;
+        let map = parse_comments_ids_xml(xml).expect("parse");
+        assert_eq!(map.get("00000020").map(String::as_str), Some("AAA"));
+    }
+
+    #[test]
+    fn parse_comments_extended_accepts_legacy_parent_para_id_spelling() {
+        // comments_notes.md §4 — some Word versions emit w15:parentParaId.
+        let xml = r#"<?xml version="1.0"?>
+<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:commentEx w15:paraId="00000002" w15:parentParaId="00000001" w15:done="0"/>
+</w15:commentsEx>"#;
+        let ext = parse_comments_extended_xml(xml).expect("parse");
+        assert_eq!(
+            ext.get("00000002").and_then(|i| i.parent_para_id.as_deref()),
+            Some("00000001")
+        );
+    }
+
+    #[test]
+    fn parse_comments_xml_missing_initials_is_none() {
+        // Older Word versions sometimes omit w:initials; it must parse as None,
+        // not empty string.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="5" w:author="Bob" w:date="2026-04-18T10:00:00Z">
+    <w:p><w:r><w:t>No initials set</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments = parse_comments_xml(xml).expect("parse");
+        let c = comments.get("5").expect("id=5 present");
+        assert!(c.initials.is_none(), "initials should be None when absent");
+        assert_eq!(c.author.as_deref(), Some("Bob"));
     }
 }

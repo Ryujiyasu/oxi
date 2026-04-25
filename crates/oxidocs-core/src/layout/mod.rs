@@ -21,6 +21,770 @@ fn is_break_after(ch: char) -> bool {
     matches!(ch, '-' | '/' | '\\' | ')' | ']' | '}' | '>' | '!' | '?' | ';' | ':' | ',')
 }
 
+/// Word's default 8-color rotation for tracked-change author tints. The
+/// author's `color_index` in `Document.authors` selects a slot here.
+///
+/// COM-confirmed against Word 16.0 (2026-04-25, see
+/// `docs/spec/comments_tracked_changes/com_measurements/PIXEL_PASS_README.md`):
+///   - Slot 0 → #D03337 (Alice in fixture_05/06/07/10)
+///   - Slot 1 → #5B2C90 (Bob in fixture_10)
+///
+/// Slots 2..7 are Word's documented rotation defaults but not yet COM-confirmed
+/// — they need a 3+author fixture. The list below is the Word/Office reviewing
+/// palette as published by Microsoft; if a future measurement contradicts a
+/// specific slot, replace just that entry.
+const REVISION_AUTHOR_PALETTE: [&str; 8] = [
+    "#D03337", // 0 — confirmed
+    "#5B2C90", // 1 — confirmed
+    "#2B6033", // 2 — green (also used for moves regardless of author)
+    "#ED7D31", // 3 — orange
+    "#4472C4", // 4 — blue
+    "#843C0C", // 5 — brown
+    "#C00000", // 6 — dark red
+    "#00B050", // 7 — teal
+];
+
+/// Word renders `<w:moveFrom>` / `<w:moveTo>` in a fixed green regardless of
+/// author (COM-confirmed 2026-04-25 in fixture_08). The author-color rotation
+/// does NOT apply to moves.
+const REVISION_MOVE_COLOR: &str = "#2B6033";
+
+/// Per-author comment-range highlight tint. These are lightened (≈12% author
+/// color + 88% white) versions of the revision palette — Word uses them as
+/// the in-line background tint for text inside `commentRangeStart/End`, as
+/// well as for the unresolved balloon background.
+///
+/// Slot 0 (#FAE6E7) is the COM-confirmed Alice tint from the pixel pass
+/// (fixture_01 balloon background, 2026-04-25). Slots 1-7 are computed via
+/// the 12/88 white-blend formula off the same palette; pixel-pass
+/// confirmation for the other slots awaits a fixture with 3+ authors.
+const COMMENT_HIGHLIGHT_TINT_PALETTE: [&str; 8] = [
+    "#FAE6E7", // 0 — Alice, COM-confirmed
+    "#EFEAF4", // 1 — Bob (derived from #5B2C90)
+    "#EAEFEA", // 2 — derived from #2B6033
+    "#FCEEE0", // 3 — derived from #ED7D31
+    "#E8ECF6", // 4 — derived from #4472C4
+    "#F2EAE4", // 5 — derived from #843C0C
+    "#F6E0E0", // 6 — derived from #C00000
+    "#E1F3E9", // 7 — derived from #00B050
+];
+
+/// Public resolver: given an author's palette index and whether the comment
+/// is resolved, return the hex color string a renderer should use as the
+/// balloon background fill (R-05g) or the in-line range highlight tint (R-04 /
+/// R-09 in-line). Slots are clamped via modulo so any caller-supplied index
+/// works.
+pub fn comment_balloon_fill(author_color_index: usize, resolved: bool) -> &'static str {
+    let palette = if resolved {
+        &COMMENT_HIGHLIGHT_RESOLVED_PALETTE
+    } else {
+        &COMMENT_HIGHLIGHT_TINT_PALETTE
+    };
+    palette[author_color_index % palette.len()]
+}
+
+/// Resolved variant of the comment tint palette (R-09). When a comment has
+/// `Comment.resolved == true` (`<w15:done="1"/>` in `commentsExtended.xml`),
+/// Word desaturates the in-line range tint AND the balloon background by
+/// blending the unresolved tint with grey at ~75/25 — chroma drops to ~5
+/// while lightness stays the same.
+///
+/// Slot 0 (#F1EDEC) is the COM-confirmed Alice resolved tint from the pixel
+/// pass (fixture_03 balloon background, 2026-04-25). Slots 1-7 are derived
+/// by applying the same 25% tint + 75% grey blend per slot; awaits 3+ author
+/// confirmation.
+const COMMENT_HIGHLIGHT_RESOLVED_PALETTE: [&str; 8] = [
+    "#F1EDEC", // 0 — Alice resolved, COM-confirmed
+    "#EFEEF1", // 1 — Bob resolved
+    "#EEEEEC", // 2 — derived green
+    "#F2EDE6", // 3 — derived orange
+    "#EBEDF1", // 4 — derived blue
+    "#EFECEA", // 5 — derived brown
+    "#F1E9E9", // 6 — derived dark red
+    "#E8EFEA", // 7 — derived teal
+];
+
+/// Pre-pass: apply Word's default tracked-change visual styling to runs.
+///
+/// For runs whose `tracked_change` is set, mutate `run.style` to add the
+/// underline / strikethrough / color the renderer would normally need to
+/// special-case at the layout site. This keeps the rest of the layout pipeline
+/// style-only and matches Word's "All markup" view (the default).
+///
+/// Notes:
+/// - `Run::style` is a small struct (clone is cheap) and only revision-bearing
+///   runs are touched.
+/// - The styling is non-destructive in the sense that a run's *original*
+///   `tracked_change` field is preserved on the IR (`doc_resolved` is a clone)
+///   so future passes / tools can still inspect the revision metadata.
+/// - Recurses into table cells. Walks body, headers, footers, footnotes,
+///   endnotes, and textbox content via `for_each_block_tree`.
+fn apply_revision_styling(doc: &mut Document) {
+    use std::collections::HashMap;
+
+    let author_to_idx: HashMap<String, usize> = doc
+        .authors
+        .iter()
+        .map(|a| (a.display.clone(), a.color_index))
+        .collect();
+
+    for_each_block_tree(doc, |blocks| {
+        for block in blocks.iter_mut() {
+            apply_revision_styling_to_block(block, &author_to_idx);
+        }
+    });
+}
+
+/// Iterate every top-level `Vec<Block>` in the document — body
+/// (`page.blocks`), headers, footers, footnote bodies, endnote bodies,
+/// and textbox contents. Each pre-pass that wants to operate on the full
+/// document can call this once and process the yielded slice.
+///
+/// Skips `Page.shapes` / `Page.floating_images` because those don't contain
+/// runs (just geometry).
+fn for_each_block_tree<F: FnMut(&mut Vec<Block>)>(doc: &mut Document, mut f: F) {
+    for page in &mut doc.pages {
+        f(&mut page.blocks);
+        f(&mut page.header);
+        f(&mut page.footer);
+        for footnote in &mut page.footnotes {
+            f(&mut footnote.blocks);
+        }
+        for endnote in &mut page.endnotes {
+            f(&mut endnote.blocks);
+        }
+        for tb in &mut page.text_boxes {
+            f(&mut tb.blocks);
+        }
+    }
+}
+
+fn apply_revision_styling_to_block(
+    block: &mut Block,
+    author_to_idx: &std::collections::HashMap<String, usize>,
+) {
+    match block {
+        Block::Paragraph(p) => {
+            for run in &mut p.runs {
+                if let Some(tc) = run.tracked_change.clone() {
+                    apply_revision_styling_to_run(run, &tc, author_to_idx);
+                }
+            }
+        }
+        Block::Table(t) => {
+            for row in &mut t.rows {
+                for cell in &mut row.cells {
+                    for b in &mut cell.blocks {
+                        apply_revision_styling_to_block(b, author_to_idx);
+                    }
+                }
+            }
+        }
+        Block::Image(_) | Block::UnsupportedElement(_) => {}
+    }
+}
+
+/// R-04 pre-pass: apply in-line comment-range highlight tint.
+///
+/// Walks runs in document order, maintains a set of currently-open comment
+/// ids (pushed on `comment_range_start`, popped on `comment_range_end`), and
+/// stamps `style.highlight` on every run *between* the start and end markers.
+///
+/// The marker attachment convention after the parser fix (2026-04-25) is:
+/// - `comment_range_start` on run R means "range starts AFTER R"; R itself is
+///   outside the range.
+/// - `comment_range_end` on run R means "range ends AFTER R"; R IS the last
+///   run inside the range.
+/// So the walk applies highlight *before* processing markers — R gets the
+/// tint only if the open set was already non-empty at visit time.
+///
+/// Resolved comments (`Comment.resolved = true`) still get highlighted but
+/// with a desaturated tint — R-09 will refine this; for now the in-line
+/// highlight is identical whether resolved or not. The visual "resolved"
+/// signal lives primarily on the balloon (R-05 / R-09), not the in-line
+/// range.
+fn apply_comment_range_highlighting(doc: &mut Document) {
+    use std::collections::{HashMap, HashSet};
+
+    // Build comment_id → author tint hex. If a comment has no author or the
+    // author isn't in the palette, fall back to slot 0.
+    let author_color_index: HashMap<String, usize> = doc
+        .authors
+        .iter()
+        .map(|a| (a.display.clone(), a.color_index))
+        .collect();
+    let comment_tint: HashMap<String, String> = doc
+        .comments
+        .iter()
+        .map(|c| {
+            let idx = c
+                .author
+                .as_deref()
+                .and_then(|a| author_color_index.get(a).copied())
+                .unwrap_or(0);
+            // R-09: resolved comments (`<w15:done="1"/>`) use the desaturated
+            // palette. Same author slot, lower chroma. The palette is keyed on
+            // the same color_index so a reply (which inherits the parent's
+            // author) gets the same slot regardless of resolved state.
+            let palette = if c.resolved {
+                &COMMENT_HIGHLIGHT_RESOLVED_PALETTE
+            } else {
+                &COMMENT_HIGHLIGHT_TINT_PALETTE
+            };
+            (c.id.clone(), palette[idx % palette.len()].to_string())
+        })
+        .collect();
+
+    // Nothing to do if there are no comments at all.
+    if comment_tint.is_empty() {
+        return;
+    }
+
+    let mut open: HashSet<String> = HashSet::new();
+    for_each_block_tree(doc, |blocks| {
+        for block in blocks.iter_mut() {
+            apply_comment_highlight_to_block(block, &comment_tint, &mut open);
+        }
+    });
+}
+
+fn apply_comment_highlight_to_block(
+    block: &mut Block,
+    comment_tint: &std::collections::HashMap<String, String>,
+    open: &mut std::collections::HashSet<String>,
+) {
+    match block {
+        Block::Paragraph(p) => {
+            for run in &mut p.runs {
+                // 1. Apply highlight if any comment range is currently open.
+                if !open.is_empty() && run.style.highlight.is_none() {
+                    // Use the most-recently-opened comment's tint. `open` is a
+                    // HashSet so order isn't stable — pick any deterministic
+                    // member. `min()` gives deterministic output across runs.
+                    if let Some(first_open) = open.iter().min() {
+                        if let Some(tint) = comment_tint.get(first_open) {
+                            run.style.highlight = Some(tint.clone());
+                        }
+                    }
+                }
+                // 2. Process comment_range_end — the current run was the LAST
+                //    inside; remove so the next run is outside.
+                for id in &run.comment_range_end {
+                    open.remove(id);
+                }
+                // 3. Process comment_range_start — range opens AFTER this run,
+                //    so next run will be inside.
+                for id in &run.comment_range_start {
+                    open.insert(id.clone());
+                }
+            }
+        }
+        Block::Table(t) => {
+            for row in &mut t.rows {
+                for cell in &mut row.cells {
+                    for b in &mut cell.blocks {
+                        apply_comment_highlight_to_block(b, comment_tint, open);
+                    }
+                }
+            }
+        }
+        Block::Image(_) | Block::UnsupportedElement(_) => {}
+    }
+}
+
+/// R-05c: emit one `LayoutContent::Balloon` per visible comment on this
+/// LayoutPage, anchored to the rendered Y of its `commentRangeStart`.
+///
+/// Per `r05_balloon_design.md`:
+/// - Balloon column right edge is `page_width − 4pt`.
+/// - Balloon width is 293.8pt for unresolved, 190.1pt for resolved
+///   (COM-confirmed 2026-04-25 from fixture_01 / fixture_03 pixel pass).
+/// - Anchor Y is the rendered Y of the FIRST `commentRangeStart` marker for
+///   the comment found on this page. (If a comment's scope starts on a prior
+///   page, no balloon emits for it on later pages — Word renders the balloon
+///   only on the page where the scope begins.)
+/// - This iteration emits balloons in document order; per-balloon stacking
+///   to prevent overlap is R-05d.
+fn emit_balloons_for_layout_page(
+    layout_page: &mut LayoutPage,
+    doc: &Document,
+    ir_page_idx: usize,
+) {
+    use std::collections::HashMap;
+
+    // Map comment.id → comment for fast lookup.
+    let id_to_comment: HashMap<&str, &Comment> = doc
+        .comments
+        .iter()
+        .map(|c| (c.id.as_str(), c))
+        .collect();
+    if id_to_comment.is_empty() {
+        return;
+    }
+    // Map author display → palette index (slot 0 fallback for unknown authors).
+    let author_to_idx: HashMap<&str, usize> = doc
+        .authors
+        .iter()
+        .map(|a| (a.display.as_str(), a.color_index))
+        .collect();
+
+    let ir_page = match doc.pages.get(ir_page_idx) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // First pass: build `paragraph_index → first-rendered (x, y)` map by
+    // walking LayoutElements. This handles the case where a comment's
+    // `commentRangeStart` is attached to an empty-text marker run that
+    // emits no Text LayoutElement — we still need an anchor Y, so we use
+    // the paragraph's first visible element instead.
+    let mut para_first_xy: HashMap<usize, (f32, f32)> = HashMap::new();
+    for el in &layout_page.elements {
+        if !matches!(&el.content, LayoutContent::Text { .. }) {
+            continue;
+        }
+        if let Some(pi) = el.paragraph_index {
+            para_first_xy.entry(pi).or_insert((el.x, el.y));
+        }
+    }
+
+    // Second pass: scan IR paragraphs (in document order) for any run that
+    // carries a `commentRangeStart` id. Anchor Y is taken from the
+    // paragraph's first-rendered LayoutElement (built above), so empty
+    // marker runs don't lose their anchor.
+    let mut anchors: Vec<(String, f32, f32)> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (pi, block) in ir_page.blocks.iter().enumerate() {
+        if let Block::Paragraph(p) = block {
+            for run in &p.runs {
+                for cid in &run.comment_range_start {
+                    if seen_ids.insert(cid.clone()) {
+                        if let Some(&(x, y)) = para_first_xy.get(&pi) {
+                            anchors.push((cid.clone(), x, y));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if anchors.is_empty() {
+        return;
+    }
+
+    // Compute balloon column geometry once per page.
+    let page_w = layout_page.width;
+    let balloon_right_inset = 4.0;
+    let balloon_width_unresolved = 293.8;
+    let balloon_width_resolved = 190.1;
+
+    // Pre-compute every balloon's natural (anchor-aligned) Y + height. We
+    // emit *after* applying R-05d stacking, so adjacent balloons can be
+    // pushed down to avoid overlap.
+    struct PendingBalloon {
+        cid: String,
+        author: String,
+        author_color_index: usize,
+        resolved: bool,
+        body: String,
+        replies: Vec<BalloonReply>,
+        anchor_x: f32,
+        anchor_y: f32,
+        balloon_left: f32,
+        balloon_width: f32,
+        balloon_height: f32,
+        /// Resolved Y after stacking — initialised to anchor_y.
+        y: f32,
+    }
+
+    let mut pending: Vec<PendingBalloon> = Vec::new();
+
+    for (cid, anchor_x, anchor_y) in &anchors {
+        let comment = match id_to_comment.get(cid.as_str()) {
+            Some(c) => *c,
+            None => continue, // commentRangeStart with no matching <w:comment> body
+        };
+
+        let color_idx = comment
+            .author
+            .as_deref()
+            .and_then(|a| author_to_idx.get(a).copied())
+            .unwrap_or(0);
+
+        let body = comment_body_text(&comment.blocks);
+
+        // R-05f: fold any reply comments (those whose `parent_para_id`
+        // matches this comment's `para_id`) into the parent balloon's
+        // `replies` Vec. Replies don't get their own standalone Balloon
+        // because they share the parent's range — Word renders them
+        // indented inside the same balloon.
+        let replies: Vec<BalloonReply> = if let Some(parent_pid) = comment.para_id.as_deref() {
+            doc.comments
+                .iter()
+                .filter(|c| c.parent_para_id.as_deref() == Some(parent_pid))
+                .map(|reply| BalloonReply {
+                    author: reply.author.clone().unwrap_or_default(),
+                    author_color_index: reply
+                        .author
+                        .as_deref()
+                        .and_then(|a| author_to_idx.get(a).copied())
+                        .unwrap_or(0),
+                    body: comment_body_text(&reply.blocks),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Pick balloon width based on resolved state.
+        let balloon_width = if comment.resolved {
+            balloon_width_resolved
+        } else {
+            balloon_width_unresolved
+        };
+        let balloon_left = (page_w - balloon_right_inset - balloon_width).max(0.0);
+
+        // Estimate balloon height. Word actually wraps at the balloon width;
+        // for v1 use a quick line estimate based on character count and a
+        // rough average glyph width. Replies indent ~10pt inside but we
+        // estimate them as full-width text for the height calc — minor
+        // over-estimate that R-05g will refine.
+        let avg_glyph_pt = 5.0; // ~5pt per glyph at 11pt Calibri (approximate)
+        let max_chars_per_line = ((balloon_width - 8.0) / avg_glyph_pt).max(1.0) as usize;
+        let body_est_lines = body
+            .lines()
+            .map(|line| (line.chars().count().max(1) + max_chars_per_line - 1) / max_chars_per_line)
+            .sum::<usize>()
+            .max(1);
+        let reply_est_lines = replies
+            .iter()
+            .map(|r| {
+                r.body
+                    .lines()
+                    .map(|line| (line.chars().count().max(1) + max_chars_per_line - 1) / max_chars_per_line)
+                    .sum::<usize>()
+                    .max(1)
+                    + 1 // +1 for the author header chip on each reply
+            })
+            .sum::<usize>();
+        // Each text section (header chip, body, reply chip, reply body)
+        // contributes its own height + an inter-section pad in the renderer.
+        // The rendering loop in `tools/oxi-gdi-renderer/src/main.rs` adds
+        // (header_fs + pad) after header, (body_h + pad) after body, and
+        // (header_fs + pad) + (body_h + pad) per reply. Mirror those costs
+        // here so the bounding box doesn't truncate.
+        let line_height = 14.0; // ~10pt body + small leading
+        let chip_h = 14.0; // ~9pt header + leading
+        let section_pad = 4.0; // matches the renderer's inter-section pad
+        let outer_pad = 8.0;
+        let body_h = (body_est_lines as f32) * line_height;
+        let replies_h = replies.iter().map(|r| {
+            let r_body_lines = r
+                .body
+                .lines()
+                .map(|line| (line.chars().count().max(1) + max_chars_per_line - 1) / max_chars_per_line)
+                .sum::<usize>()
+                .max(1);
+            chip_h + section_pad + (r_body_lines as f32) * line_height + section_pad
+        }).sum::<f32>();
+        let balloon_height = outer_pad
+            + chip_h
+            + section_pad
+            + body_h
+            + section_pad
+            + replies_h
+            + outer_pad;
+        let _ = reply_est_lines; // kept for future per-reply line accounting
+
+        pending.push(PendingBalloon {
+            cid: cid.clone(),
+            author: comment.author.clone().unwrap_or_default(),
+            author_color_index: color_idx,
+            resolved: comment.resolved,
+            body,
+            replies,
+            anchor_x: *anchor_x,
+            anchor_y: *anchor_y,
+            balloon_left,
+            balloon_width,
+            balloon_height,
+            y: *anchor_y,
+        });
+    }
+
+    // R-05d: stack to prevent overlap. Sort by anchor Y ascending; pure
+    // helper handles the per-element Y resolution. See `stack_balloon_ys`
+    // below for the algorithm.
+    pending.sort_by(|a, b| {
+        a.anchor_y
+            .partial_cmp(&b.anchor_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    {
+        let mut ys: Vec<(f32, f32)> = pending
+            .iter()
+            .map(|pb| (pb.anchor_y, pb.balloon_height))
+            .collect();
+        stack_balloon_ys(&mut ys, BALLOON_STACK_GAP);
+        for (pb, (resolved_y, _)) in pending.iter_mut().zip(ys.iter()) {
+            pb.y = *resolved_y;
+        }
+    }
+
+    for pb in pending {
+        // R-05e: connector line from the inline anchor to the balloon's left
+        // edge. Drawn before the balloon so the balloon's background (when
+        // R-05g lands) overdraws any portion that crosses the balloon's
+        // bounding box.
+        let connector_color = COMMENT_HIGHLIGHT_TINT_PALETTE
+            [pb.author_color_index % COMMENT_HIGHLIGHT_TINT_PALETTE.len()]
+        .to_string();
+        // Connector sticks slightly into the balloon (~5pt below balloon top)
+        // so it visually meets the balloon's vertical centerline of its
+        // first text row, matching Word's appearance.
+        let to_x = pb.balloon_left;
+        let to_y = pb.y + 5.0;
+        layout_page.elements.push(LayoutElement::new(
+            pb.anchor_x.min(to_x),
+            pb.anchor_y.min(to_y),
+            (to_x - pb.anchor_x).abs(),
+            (to_y - pb.anchor_y).abs(),
+            LayoutContent::BalloonConnector {
+                from_x: pb.anchor_x,
+                from_y: pb.anchor_y,
+                to_x,
+                to_y,
+                color_hex: connector_color,
+            },
+        ));
+        layout_page.elements.push(LayoutElement::new(
+            pb.balloon_left,
+            pb.y,
+            pb.balloon_width,
+            pb.balloon_height,
+            LayoutContent::Balloon {
+                comment_id: pb.cid,
+                author: pb.author,
+                author_color_index: pb.author_color_index,
+                resolved: pb.resolved,
+                body: pb.body,
+                replies: pb.replies,
+                anchor_x: pb.anchor_x,
+                anchor_y: pb.anchor_y,
+            },
+        ));
+    }
+}
+
+/// 6pt vertical gap between stacked balloons (R-05d). Approximate; Word's
+/// actual gap looks closer to 4-8pt depending on density. Pixel-tune in
+/// R-05g once GDI render lands and we can A/B compare.
+const BALLOON_STACK_GAP: f32 = 6.0;
+
+/// Pure helper for R-05d. Given a slice of `(anchor_y, height)` pairs sorted
+/// ascending by `anchor_y`, mutate each pair's first element to its
+/// post-stacking Y so no two balloons overlap. The first balloon stays at
+/// its natural anchor; each subsequent balloon's Y is at least
+/// `prev_y + prev_height + gap`.
+///
+/// Pure function (no I/O, no allocations beyond the input slice) — unit-
+/// testable without touching the rest of layout. Test lives in `mod tests`
+/// at the bottom of this file.
+fn stack_balloon_ys(positions: &mut [(f32, f32)], gap: f32) {
+    if positions.len() < 2 {
+        return;
+    }
+    for i in 1..positions.len() {
+        let prev_bottom = positions[i - 1].0 + positions[i - 1].1;
+        let floor = prev_bottom + gap;
+        if positions[i].0 < floor {
+            positions[i].0 = floor;
+        }
+    }
+}
+
+/// Flatten a comment's `blocks` (paragraph runs) into a plain string for the
+/// balloon body. Replies / nested formatting are not preserved here — R-05g
+/// renderer can re-walk the structured form when it needs to.
+fn comment_body_text(blocks: &[Block]) -> String {
+    let mut out = String::new();
+    for block in blocks {
+        if let Block::Paragraph(p) = block {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            for run in &p.runs {
+                out.push_str(&run.text);
+            }
+        }
+    }
+    out
+}
+
+/// S-02 (Simple mode): strip the parser's pre-applied tracked-change
+/// styling (underline + red on `<w:ins>` runs, strikethrough + red on
+/// `<w:del>` runs) WITHOUT removing `tracked_change` itself. Keeps R-10's
+/// margin change bar firing while letting the in-line text render plain.
+fn strip_parser_revision_styling(doc: &mut Document) {
+    fn visit(blocks: &mut Vec<Block>) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(p) => {
+                    for run in &mut p.runs {
+                        if let Some(tc) = run.tracked_change.as_ref() {
+                            match tc.change_type.as_str() {
+                                "insert" | "moveTo" => {
+                                    run.style.underline = false;
+                                    run.style.underline_style = None;
+                                }
+                                "delete" | "moveFrom" => {
+                                    run.style.strikethrough = false;
+                                }
+                                _ => {}
+                            }
+                            if run.style.color.as_deref() == Some("FF0000") {
+                                run.style.color = None;
+                            }
+                        }
+                    }
+                }
+                Block::Table(t) => {
+                    for row in &mut t.rows {
+                        for cell in &mut row.cells {
+                            visit(&mut cell.blocks);
+                        }
+                    }
+                }
+                Block::Image(_) | Block::UnsupportedElement(_) => {}
+            }
+        }
+    }
+    for_each_block_tree(doc, |blocks| visit(blocks));
+}
+
+/// S-02: filter / clear tracked-change runs in-place for `Original` /
+/// `Final` view modes.
+///
+/// `final_view = true` keeps `insert` / `moveTo` runs (clears their
+/// `tracked_change` so they render as normal text) and DROPS
+/// `delete` / `moveFrom` runs from the paragraph.
+///
+/// `final_view = false` (== Original) does the inverse: drops `insert`
+/// / `moveTo`, keeps `delete` / `moveFrom`.
+///
+/// Recurses into table cells. After this pass `apply_revision_styling`
+/// is intentionally NOT called — surviving runs render as normal text.
+fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
+    fn visit(blocks: &mut Vec<Block>, final_view: bool) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(p) => {
+                    p.runs.retain_mut(|run| match run.tracked_change.as_ref() {
+                        None => true,
+                        Some(tc) => {
+                            let drop_in_final = matches!(tc.change_type.as_str(), "delete" | "moveFrom");
+                            let drop_in_original = matches!(tc.change_type.as_str(), "insert" | "moveTo");
+                            let drop = if final_view { drop_in_final } else { drop_in_original };
+                            if drop {
+                                false
+                            } else {
+                                // Run survives — strip the parser's
+                                // pre-applied tracked-change styling
+                                // (underline + red for ins, strike + red
+                                // for del) and the IR marker, so the run
+                                // renders as plain body text.
+                                let kind = tc.change_type.clone();
+                                run.tracked_change = None;
+                                if kind == "insert" || kind == "moveTo" {
+                                    run.style.underline = false;
+                                    run.style.underline_style = None;
+                                    if run.style.color.as_deref() == Some("FF0000") {
+                                        run.style.color = None;
+                                    }
+                                } else if kind == "delete" || kind == "moveFrom" {
+                                    run.style.strikethrough = false;
+                                    if run.style.color.as_deref() == Some("FF0000") {
+                                        run.style.color = None;
+                                    }
+                                }
+                                true
+                            }
+                        }
+                    });
+                }
+                Block::Table(t) => {
+                    for row in &mut t.rows {
+                        for cell in &mut row.cells {
+                            visit(&mut cell.blocks, final_view);
+                        }
+                    }
+                }
+                Block::Image(_) | Block::UnsupportedElement(_) => {}
+            }
+        }
+    }
+    for_each_block_tree(doc, |blocks| visit(blocks, final_view));
+}
+
+fn apply_revision_styling_to_run(
+    run: &mut Run,
+    tc: &TrackedChange,
+    author_to_idx: &std::collections::HashMap<String, usize>,
+) {
+    // Choose the ink color: hard-coded green for moves, otherwise the author's
+    // palette slot. If the author isn't in the palette (defensive fallback —
+    // I-03 builds the palette from the same source authors so this should be
+    // unreachable in practice), fall back to slot 0.
+    let color_hex = match tc.change_type.as_str() {
+        "moveFrom" | "moveTo" => REVISION_MOVE_COLOR.to_string(),
+        _ => {
+            let idx = tc
+                .author
+                .as_deref()
+                .and_then(|a| author_to_idx.get(a).copied())
+                .unwrap_or(0);
+            REVISION_AUTHOR_PALETTE[idx % REVISION_AUTHOR_PALETTE.len()].to_string()
+        }
+    };
+
+    match tc.change_type.as_str() {
+        "insert" => {
+            run.style.underline = true;
+            if run.style.underline_style.is_none() {
+                run.style.underline_style = Some("single".to_string());
+            }
+            run.style.color = Some(color_hex);
+        }
+        "delete" => {
+            run.style.strikethrough = true;
+            run.style.color = Some(color_hex);
+        }
+        "moveFrom" => {
+            // Word default: double-strikethrough in green. The renderer's
+            // strikethrough primitive is single-line; settle for that in v1
+            // — visually distinguishable from a regular delete by the green
+            // tint. Upgrade to a "double" style when R-11 lands.
+            run.style.strikethrough = true;
+            run.style.color = Some(color_hex);
+        }
+        "moveTo" => {
+            // Word default: double-underline in green. Same rationale as
+            // moveFrom — single underline in green for v1, upgrade in R-11.
+            run.style.underline = true;
+            if run.style.underline_style.is_none() {
+                run.style.underline_style = Some("single".to_string());
+            }
+            run.style.color = Some(color_hex);
+        }
+        _ => {
+            // Unknown change_type — leave the run alone. This branch keeps
+            // forward-compatibility with future change kinds without forcing
+            // a code change.
+        }
+    }
+}
+
 /// Result of layout: positioned elements across pages
 pub struct LayoutResult {
     pub pages: Vec<LayoutPage>,
@@ -111,6 +875,46 @@ pub enum LayoutContent {
     ClipStart,
     /// End the current clipping region (restore graphics state).
     ClipEnd,
+    /// A right-margin comment balloon (R-05). Renderer is expected to draw a
+    /// rounded-rect background filled with the resolved-or-unresolved tint
+    /// for `author_color_index`, then lay the comment `body` and any
+    /// `replies` inside the bounding box `(x, y, width, height)`. See
+    /// `docs/spec/comments_tracked_changes/r05_balloon_design.md`.
+    Balloon {
+        comment_id: String,
+        author: String,
+        author_color_index: usize,
+        resolved: bool,
+        body: String,
+        replies: Vec<BalloonReply>,
+        /// X of the inline anchor on the body (for renderer-side connector
+        /// drawing or hit-testing). Set to the same value as the
+        /// `BalloonConnector.from_x` if the renderer prefers reading from
+        /// the balloon directly.
+        anchor_x: f32,
+        /// Y of the inline anchor on the body — typically the rendered Y of
+        /// the comment's `commentRangeStart` line.
+        anchor_y: f32,
+    },
+    /// Dotted connector line from the inline comment anchor to its balloon
+    /// (R-07). Drawn separately so the renderer can apply a dashed pen
+    /// without bundling the geometry into `Balloon`.
+    BalloonConnector {
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+        color_hex: String,
+    },
+}
+
+/// One reply inside a balloon (R-08). Renderer indents these by ~10pt
+/// inside the parent balloon's body area.
+#[derive(Debug, Clone)]
+pub struct BalloonReply {
+    pub author: String,
+    pub author_color_index: usize,
+    pub body: String,
 }
 
 pub struct LayoutEngine {
@@ -130,6 +934,29 @@ pub struct LayoutEngine {
     compress_punctuation: bool,
     /// w:doNotExpandShiftReturn: don't justify lines ending with soft break (Shift+Enter)
     do_not_expand_shift_return: bool,
+    /// R-05b: when the document has any comments, the body's available width
+    /// is reduced by this many points to make room for the right-margin
+    /// balloon column. 0.0 when the document has no comments. Set in
+    /// `for_document` from `doc.comments.is_empty()`.
+    balloon_column_width: f32,
+    /// S-01: render-time toggle for the comment family — balloons,
+    /// connectors, in-line range highlight, AND body-width compression. When
+    /// `false`, the LayoutResult contains zero `Balloon` / `BalloonConnector`
+    /// elements, no comment-range highlight tints, and the body uses the full
+    /// width. Default `true` (Word's "All Markup" view).
+    show_comments: bool,
+    /// S-02: which view of revisions to render. Mirrors Word's "Display for
+    /// Review" dropdown via the existing `ir::ShowRevisions` enum:
+    ///
+    /// - `All` (default): every revision rendered with markup (current
+    ///   behavior — pre-S-02).
+    /// - `Simple`: change bar in left margin only (R-10 fires); ins/del
+    ///   text renders without color or underline/strike.
+    /// - `Original`: pre-edit view — `<w:ins>` and `<w:moveTo>` runs are
+    ///   removed; `<w:del>` and `<w:moveFrom>` render as normal text.
+    /// - `Final`: post-edit view — `<w:del>` and `<w:moveFrom>` runs are
+    ///   removed; `<w:ins>` and `<w:moveTo>` render as normal text.
+    show_revisions: ShowRevisions,
 }
 
 /// Word's default heading font sizes (in points)
@@ -179,7 +1006,24 @@ impl LayoutEngine {
             compat_mode: 15,
             compress_punctuation: false,
             do_not_expand_shift_return: false,
+            balloon_column_width: 0.0,
+            show_comments: true,
+            show_revisions: ShowRevisions::All,
         }
+    }
+
+    /// S-01 setter: toggle whether comments / balloons / range highlight render.
+    pub fn with_show_comments(mut self, show: bool) -> Self {
+        self.show_comments = show;
+        self
+    }
+
+    /// S-02 setter: pick the revision-display mode (`ShowRevisions::{All,
+    /// Simple, Original, Final}`). See the field doc-comment for what each
+    /// mode does.
+    pub fn with_show_revisions(mut self, mode: ShowRevisions) -> Self {
+        self.show_revisions = mode;
+        self
     }
 
     /// Create a LayoutEngine with document-specific defaults from docDefaults
@@ -204,6 +1048,13 @@ impl LayoutEngine {
             compat_mode: doc.compat_mode,
             compress_punctuation: doc.compress_punctuation,
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
+            // R-05b: 293.8pt balloon column + 24pt buffer between body and
+            // balloon = 317.8pt total. Width is COM-confirmed (fixture_01
+            // pixel pass, 2026-04-25); buffer is approximate and refined as
+            // R-05c+ pixel-tests narrow it.
+            balloon_column_width: if doc.comments.is_empty() { 0.0 } else { 293.8 + 24.0 },
+            show_comments: true,
+            show_revisions: ShowRevisions::All,
         }
     }
 
@@ -214,11 +1065,68 @@ impl LayoutEngine {
             self.resolve_fit_text_page(page);
         }
 
-        let mut pages = Vec::new();
+        // S-02: filter revisions by ShowRevisions mode BEFORE applying the
+        // styling pass, so Original/Final actually drop runs from the IR
+        // rather than just hiding them at render time.
+        match self.show_revisions {
+            ShowRevisions::All => {
+                // Default — keep every run, apply markup styling.
+                apply_revision_styling(&mut doc_resolved);
+            }
+            ShowRevisions::Simple => {
+                // Change bar only — keep tracked_change so R-10 still fires
+                // a margin bar per revision-bearing line, but DON'T apply the
+                // color / underline / strike pre-pass. Also strip the
+                // parser's pre-applied underline+red on ins / strike+red on
+                // del so the surviving runs read as plain body text.
+                strip_parser_revision_styling(&mut doc_resolved);
+            }
+            ShowRevisions::Original => {
+                // Pre-edit view — drop `ins` / `moveTo` runs entirely. Keep
+                // `del` / `moveFrom` runs but clear their `tracked_change`
+                // so they render as normal text (no strikethrough, no
+                // margin bar).
+                filter_runs_for_show_revisions(&mut doc_resolved, false);
+            }
+            ShowRevisions::Final => {
+                // Post-edit view — drop `del` / `moveFrom` runs. Keep `ins`
+                // / `moveTo` runs but clear their `tracked_change` so they
+                // render as normal text.
+                filter_runs_for_show_revisions(&mut doc_resolved, true);
+            }
+        }
 
-        for page in &doc_resolved.pages {
+        // Pre-pass: apply in-line comment-range highlight tint (R-04). Must
+        // run after `apply_revision_styling` so revision-bearing runs still
+        // get the tint on top of their underline/strikethrough color. Gated
+        // by S-01.
+        if self.show_comments {
+            apply_comment_range_highlighting(&mut doc_resolved);
+        }
+
+        let mut pages = Vec::new();
+        // R-05c: track which IR page each LayoutPage came from so the
+        // post-pass can resolve `paragraph_index` → source `Run` for balloon
+        // emission. A single IR page may produce multiple LayoutPages
+        // (pagination), all sharing the same IR index.
+        let mut layout_to_ir_page: Vec<usize> = Vec::new();
+
+        for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
             let laid_out = self.layout_page(page);
+            for _ in &laid_out {
+                layout_to_ir_page.push(ir_idx);
+            }
             pages.extend(laid_out);
+        }
+
+        // R-05c post-pass: emit one Balloon LayoutElement per visible
+        // comment, anchored to the rendered Y of its `commentRangeStart`.
+        // Gated by S-01.
+        if self.show_comments && !doc_resolved.comments.is_empty() {
+            for (layout_idx, layout_page) in pages.iter_mut().enumerate() {
+                let ir_idx = layout_to_ir_page[layout_idx];
+                emit_balloons_for_layout_page(layout_page, &doc_resolved, ir_idx);
+            }
         }
 
         // Post-layout pass: substitute PAGE and NUMPAGES field placeholders
@@ -545,7 +1453,18 @@ impl LayoutEngine {
     }
 
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
-        let total_content_width = page.size.width - page.margin.left - page.margin.right;
+        // R-05b: reduce body content width when the document has comments —
+        // makes room for the right-margin balloon column. Header / footer /
+        // floating-image / footnote widths intentionally use the full
+        // un-reduced width (matches Word's behavior: only the body reflows).
+        // S-01: only reduce when the engine's `show_comments` is true.
+        let balloon_reservation = if self.show_comments {
+            self.balloon_column_width
+        } else {
+            0.0
+        };
+        let total_content_width =
+            page.size.width - page.margin.left - page.margin.right - balloon_reservation;
         // COM-confirmed (2026-04-03, order_08): when header extends below margin.top,
         // body content starts below the header (header pushes body down).
         // header_distance + header_content_height = header_bottom.
@@ -1619,7 +2538,9 @@ impl LayoutEngine {
                                                 endnote_ref: None,
                                                 comment_range_start: Vec::new(),
                                                 comment_range_end: Vec::new(),
+                                                comment_references: Vec::new(),
                                                 tracked_change: None,
+                                                rpr_change: None,
                                                 ruby: None,
                                                 bookmark_name: None,
                                                 is_math: false,
@@ -2789,6 +3710,15 @@ impl LayoutEngine {
                 }).fold(0.0_f32, f32::max)
             };
 
+            // R-10: track whether any fragment on this line came from a
+            // revision-bearing source run; if so we emit one change-bar at
+            // the line's left margin after the fragment loop finishes.
+            // Paragraph-level revisions (ppr_change, paragraph_mark_revision)
+            // count as revisions on every line of the paragraph — they're
+            // detected once at paragraph entry rather than per-fragment.
+            let mut line_has_revision = para.ppr_change.is_some()
+                || para.paragraph_mark_revision.is_some();
+
             for (frag_idx, frag) in line.fragments.iter().enumerate() {
                 let base_font_size = frag.style.font_size.unwrap_or(para_font_size);
                 // Round 29: superscript/subscript rendering. Word default for
@@ -2849,7 +3779,44 @@ impl LayoutEngine {
                     el.char_offset = Some(frag.char_offset);
                 }
                 elements.push(el);
+                // R-10: detect revision-bearing fragment by looking up the
+                // source run's `tracked_change` OR `rpr_change`. The pre-pass
+                // mutated `style.underline`/`color`/`strikethrough` but
+                // preserved both revision pointers, so this lookup is the
+                // canonical signal. Word fires a change bar for any revision
+                // — insert/delete/move via `tracked_change`, or formatting
+                // change via `rpr_change` (R-12).
+                if !line_has_revision {
+                    if let Some(run) = para.runs.get(frag.run_index) {
+                        if run.tracked_change.is_some() || run.rpr_change.is_some() {
+                            line_has_revision = true;
+                        }
+                    }
+                }
                 x += adjusted_width + frag_spacing_after[frag_idx];
+            }
+
+            // R-10: emit one margin change-bar per revision-bearing line.
+            // Word's default change bar sits ~12pt outside the body's left
+            // edge, ~1.5pt thick, dark grey. Independent of author color so
+            // multi-author paragraphs still get a single unambiguous bar.
+            if line_has_revision {
+                let bar_x = (start_x - 12.0).max(0.0);
+                let bar_y = *cursor_y;
+                let bar_h = line_height;
+                let bar_w: f32 = 1.5;
+                elements.push(LayoutElement::new(
+                    bar_x,
+                    bar_y,
+                    bar_w,
+                    bar_h,
+                    LayoutContent::BoxRect {
+                        fill: Some("#424242".to_string()),
+                        stroke_color: None,
+                        stroke_width: 0.0,
+                        corner_radius: 0.0,
+                    },
+                ));
             }
 
             // Empty-line placeholder (Round 10): for empty paragraphs (no
@@ -5739,6 +6706,50 @@ enum LineBreakType {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    /// R-05d: balloons that don't overlap stay at their natural anchor.
+    #[test]
+    fn stack_balloon_ys_no_overlap_keeps_anchors() {
+        let mut positions = vec![(100.0, 30.0), (200.0, 40.0), (300.0, 20.0)];
+        stack_balloon_ys(&mut positions, 6.0);
+        assert_eq!(positions, vec![(100.0, 30.0), (200.0, 40.0), (300.0, 20.0)]);
+    }
+
+    /// R-05d: when a balloon would overlap the previous one's bottom + gap,
+    /// it gets pushed down. First balloon never moves.
+    #[test]
+    fn stack_balloon_ys_pushes_overlapping_balloons_down() {
+        // (100, 30) ends at 130. (140, 40) starts at 140 which is above 130+6=136 floor.
+        // 140 >= 136 so no push needed.
+        let mut positions = vec![(100.0, 30.0), (140.0, 40.0)];
+        stack_balloon_ys(&mut positions, 6.0);
+        assert_eq!(positions, vec![(100.0, 30.0), (140.0, 40.0)]);
+
+        // (100, 30) ends at 130. (135, 40) starts at 135 < 136 floor → push to 136.
+        let mut positions = vec![(100.0, 30.0), (135.0, 40.0)];
+        stack_balloon_ys(&mut positions, 6.0);
+        assert_eq!(positions, vec![(100.0, 30.0), (136.0, 40.0)]);
+
+        // Cascade: 3 balloons all anchored at the same Y get fanned out.
+        let mut positions = vec![(100.0, 20.0), (100.0, 30.0), (100.0, 25.0)];
+        stack_balloon_ys(&mut positions, 6.0);
+        // 1st stays at 100 (height 20 → bottom 120).
+        // 2nd: floor = 120 + 6 = 126; 100 < 126 → push to 126 (height 30 → bottom 156).
+        // 3rd: floor = 156 + 6 = 162; 100 < 162 → push to 162.
+        assert_eq!(positions, vec![(100.0, 20.0), (126.0, 30.0), (162.0, 25.0)]);
+    }
+
+    /// R-05d: degenerate inputs (empty / single) are no-ops.
+    #[test]
+    fn stack_balloon_ys_handles_degenerate_inputs() {
+        let mut empty: Vec<(f32, f32)> = Vec::new();
+        stack_balloon_ys(&mut empty, 6.0);
+        assert!(empty.is_empty());
+
+        let mut single = vec![(50.0, 100.0)];
+        stack_balloon_ys(&mut single, 6.0);
+        assert_eq!(single, vec![(50.0, 100.0)]);
+    }
 
     #[test]
     #[ignore]
