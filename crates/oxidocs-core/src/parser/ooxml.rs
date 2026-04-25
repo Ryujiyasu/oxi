@@ -1218,9 +1218,34 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 let key = local_name(attr.key.as_ref());
                                 if key == "id" {
                                     let id = String::from_utf8_lossy(&attr.value).to_string();
-                                    // Mark the next run as having a comment start
+                                    // Attach to the previous run when possible; when the
+                                    // marker appears before any real run (e.g., at the
+                                    // start of a paragraph whose first element is the
+                                    // commentRangeStart), create an empty anchor run so
+                                    // the id survives to the IR. Without the anchor the
+                                    // id is silently dropped — that breaks any
+                                    // range-aware renderer pass (R-04 highlight, etc.)
+                                    // whenever a comment range begins at a paragraph
+                                    // boundary.
                                     if let Some(last_run) = runs.last_mut() {
                                         last_run.comment_range_start.push(id);
+                                    } else {
+                                        runs.push(Run {
+                                            text: String::new(),
+                                            style: RunStyle::default(),
+                                            url: None,
+                                            footnote_ref: None,
+                                            endnote_ref: None,
+                                            comment_range_start: vec![id],
+                                            comment_range_end: Vec::new(),
+                                            comment_references: Vec::new(),
+                                            tracked_change: None,
+                                            rpr_change: None,
+                                            ruby: None,
+                                            bookmark_name: None,
+                                            is_math: false,
+                                            field_type: None,
+                                        });
                                     }
                                 }
                             }
@@ -1232,6 +1257,28 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     let id = String::from_utf8_lossy(&attr.value).to_string();
                                     if let Some(last_run) = runs.last_mut() {
                                         last_run.comment_range_end.push(id);
+                                    } else {
+                                        // Symmetric with commentRangeStart — create an
+                                        // anchor run if there is no prior run to stamp.
+                                        // This is rare (usually rangeEnd comes after some
+                                        // content) but covers the "empty paragraph that
+                                        // only contains the close marker" case.
+                                        runs.push(Run {
+                                            text: String::new(),
+                                            style: RunStyle::default(),
+                                            url: None,
+                                            footnote_ref: None,
+                                            endnote_ref: None,
+                                            comment_range_start: Vec::new(),
+                                            comment_range_end: vec![id],
+                                            comment_references: Vec::new(),
+                                            tracked_change: None,
+                                            rpr_change: None,
+                                            ruby: None,
+                                            bookmark_name: None,
+                                            is_math: false,
+                                            field_type: None,
+                                        });
                                     }
                                 }
                             }
