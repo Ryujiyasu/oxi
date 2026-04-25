@@ -115,13 +115,14 @@ fn main() {
         println!("Elements: {}", page.elements.len());
         for (ei, elem) in page.elements.iter().enumerate() {
             match &elem.content {
-                layout::LayoutContent::Text { text, font_size, bold, italic, .. } => {
+                layout::LayoutContent::Text { text, font_size, bold, italic, color, .. } => {
                     let mut flags = String::new();
                     if *bold { flags.push('B'); }
                     if *italic { flags.push('I'); }
                     if !flags.is_empty() { flags = format!(" [{}]", flags); }
-                    println!("  [{:2}] TEXT ({:6.1}, {:6.1}) w={:6.1} h={:5.1} {:.0}pt{} \"{}\"", 
-                        ei, elem.x, elem.y, elem.width, elem.height, font_size, flags, text);
+                    let col = color.as_deref().map(|c| format!(" col={}", c)).unwrap_or_default();
+                    println!("  [{:2}] TEXT ({:6.1}, {:6.1}) w={:6.1} h={:5.1} {:.0}pt{}{} \"{}\"",
+                        ei, elem.x, elem.y, elem.width, elem.height, font_size, flags, col, text);
                 }
                 layout::LayoutContent::Image { data, .. } => {
                     println!("  [{:2}] IMG  ({:6.1}, {:6.1}) w={:6.1} h={:5.1} {} bytes", 
@@ -143,6 +144,9 @@ fn main() {
                 }
                 layout::LayoutContent::ClipEnd => {
                     println!("  [{:2}] CLIP_END", ei);
+                }
+                layout::LayoutContent::PresetShape { ref shape_type, .. } => {
+                    println!("  [{:2}] SHAPE {} ({:.1},{:.1}) w={:.1} h={:.1}", ei, shape_type, elem.x, elem.y, elem.width, elem.height);
                 }
             }
         }

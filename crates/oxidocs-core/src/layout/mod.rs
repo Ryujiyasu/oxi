@@ -1941,8 +1941,40 @@ impl LayoutEngine {
                             false
                         }
                     });
+                    // Line-count-aware overflow cutoff (2026-04-25):
+                    // For tight-fit single-line textboxes (459f05 様式１: textbox height
+                    // = inset+line_height exactly), the OLD `pe.y + pe.height > clip_bottom`
+                    // filter dropped the only line because line slot extends past clip.
+                    // Compute available lines = floor(inner_height / line_height) and
+                    // drop only elements whose line index >= available (i.e., y >= line_avail_top).
+                    // For multi-line overflow (2ea81a tbx 5: 3 lines, only 2 fit), this
+                    // correctly drops the 3rd line while keeping the first 2.
+                    // line_height is taken from the first text element in para_elements.
+                    let inner_h = (text_box.height - inset_t - inset_b).max(0.0);
+                    let line_h = para_elements.iter()
+                        .find_map(|pe| match &pe.content {
+                            LayoutContent::Text { .. } if pe.height > 0.5 => Some(pe.height),
+                            _ => None,
+                        })
+                        .unwrap_or(0.0);
+                    let line_cutoff_y = if line_h > 0.5 && inner_h > 0.0 {
+                        let avail = (inner_h / line_h).floor();
+                        abs_y + inset_t + avail * line_h
+                    } else {
+                        clip_bottom
+                    };
                     let accept_and_fix_color = |pe: &mut LayoutElement| -> bool {
-                        if pe.y + pe.height > clip_bottom { return false; }
+                        // Drop elements whose Y is past the last-line-allowed cutoff.
+                        // For non-text elements (BoxRect inside textbox), use traditional
+                        // bounds check.
+                        match &pe.content {
+                            LayoutContent::Text { .. } => {
+                                if pe.y >= line_cutoff_y { return false; }
+                            }
+                            _ => {
+                                if pe.y + pe.height > clip_bottom { return false; }
+                            }
+                        }
                         // Word omits runs that have no explicit color attribute when
                         // rendered inside a dark-filled shape: these are overflow/invisible
                         // glyphs that would otherwise be black-on-dark. Verified on 1ec1
