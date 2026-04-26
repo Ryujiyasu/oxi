@@ -598,6 +598,7 @@ fn emit_text_at(
             highlight: None,
             field_type: None,
             character_spacing: 0.0,
+            text_scale: 100.0,
         },
     )
 }

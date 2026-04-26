@@ -63,7 +63,7 @@ fn apply_review(doc: &mut Document, mode: ReviewMode, target_id: Option<&str>) {
                         }
                     }
                 }
-                Block::Image(_) | Block::UnsupportedElement(_) => {}
+                Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
             }
         }
     }

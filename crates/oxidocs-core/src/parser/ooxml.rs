@@ -6138,7 +6138,7 @@ fn walk_block_authors(block: &Block, seen: &mut Vec<String>) {
                 }
             }
         }
-        Block::Image(_) | Block::UnsupportedElement(_) => {}
+        Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
     }
 }
 

@@ -181,7 +181,7 @@ fn apply_revision_styling_to_block(
                 }
             }
         }
-        Block::Image(_) | Block::UnsupportedElement(_) => {}
+        Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
     }
 }
 
@@ -289,7 +289,7 @@ fn apply_comment_highlight_to_block(
                 }
             }
         }
-        Block::Image(_) | Block::UnsupportedElement(_) => {}
+        Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
     }
 }
 
@@ -657,7 +657,7 @@ fn strip_parser_revision_styling(doc: &mut Document) {
                         }
                     }
                 }
-                Block::Image(_) | Block::UnsupportedElement(_) => {}
+                Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
             }
         }
     }
@@ -721,7 +721,7 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
                         }
                     }
                 }
-                Block::Image(_) | Block::UnsupportedElement(_) => {}
+                Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
             }
         }
     }
