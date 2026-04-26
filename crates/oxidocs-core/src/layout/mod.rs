@@ -1,4 +1,5 @@
 mod kinsoku;
+pub mod math;
 
 use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
@@ -2184,6 +2185,23 @@ impl LayoutEngine {
                 Block::UnsupportedElement(_) => {
                     // Skip unsupported elements in layout
                 }
+                Block::Math(math_block) => {
+                    // Phase 3: emit positioned LayoutElements for math primitives.
+                    // Fraction/Sup/Sub/SubSup render stacked; other primitives
+                    // fall back to flat text for now.
+                    let math_font_size: f32 = 10.5;
+                    let x = page.margin.left;
+                    let (math_elems, bbox) = crate::layout::math::emit_math_block(
+                        math_block, x, cursor_y, math_font_size,
+                    );
+                    if !math_elems.is_empty() {
+                        elements.extend(math_elems);
+                        // Advance by full bbox height + a line of descent leeway.
+                        let advance = bbox.height().max(math_font_size * 1.2)
+                            + math_font_size * 0.3;
+                        cursor_y += advance;
+                    }
+                }
             }
         }
 
@@ -2944,6 +2962,9 @@ impl LayoutEngine {
                     cursor_y += img.height;
                 }
                 Block::UnsupportedElement(_) => {}
+                Block::Math(_) => {
+                    // Phase 2 stub: textbox-embedded OMML math not yet rendered.
+                }
             }
         }
 

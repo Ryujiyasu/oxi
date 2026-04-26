@@ -725,6 +725,10 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     "p" if in_body && depth == 0 => {
                         let pr = parse_paragraph(&mut reader, ctx, styles)?;
                         current_blocks.push(Block::Paragraph(pr.paragraph));
+                        // OMML math blocks become sibling Block::Math entries.
+                        for mb in pr.math_blocks {
+                            current_blocks.push(Block::Math(mb));
+                        }
                         // Inline images become separate blocks after the paragraph
                         current_blocks.extend(pr.inline_images);
                         // Set anchor_block_index for floating images
@@ -768,6 +772,9 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                             "p" => {
                                                 let pr = parse_paragraph(&mut reader, ctx, styles)?;
                                                 current_blocks.push(Block::Paragraph(pr.paragraph));
+                                                for mb in pr.math_blocks {
+                                                    current_blocks.push(Block::Math(mb));
+                                                }
                                                 current_blocks.extend(pr.inline_images);
                                                 let anchor_idx2 = current_blocks.len().saturating_sub(1);
                                                 for mut img in pr.floating_images {
@@ -984,6 +991,9 @@ struct ParagraphResult {
     text_boxes: Vec<TextBox>,
     inline_images: Vec<Block>,
     floating_images: Vec<Image>,
+    /// OMML math blocks extracted from inside this paragraph. Each becomes
+    /// a sibling `Block::Math` in the page's block list.
+    math_blocks: Vec<crate::ir::MathBlock>,
 }
 
 fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<ParagraphResult, ParseError> {
@@ -991,6 +1001,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut images = Vec::new();
     let mut found_shapes: Vec<Shape> = Vec::new();
     let mut found_text_boxes: Vec<TextBox> = Vec::new();
+    let mut math_blocks: Vec<crate::ir::MathBlock> = Vec::new();
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     let mut style_id: Option<String> = None;
@@ -1020,6 +1031,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         para_sect_pr = spr;
                         ppr_change = ppr_change_parsed;
                         paragraph_mark_revision = pmark_rev;
+                    }
+                    // OMML math inside paragraph. Both inline (<m:oMath>) and
+                    // display (<m:oMathPara>) are collected and emitted as
+                    // sibling Block::Math after the paragraph closes.
+                    "oMath" if depth == 0 => {
+                        let mb = crate::parser::omml::parse_omath_inline(reader)?;
+                        math_blocks.push(mb);
+                    }
+                    "oMathPara" if depth == 0 => {
+                        let mb = crate::parser::omml::parse_omath_para(reader)?;
+                        math_blocks.push(mb);
                     }
                     "r" if depth == 0 => {
                         let (mut run, dr) = parse_run(reader, ctx, styles, None)?;
@@ -1606,6 +1628,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         text_boxes: found_text_boxes,
         inline_images,
         floating_images: floating_imgs,
+        math_blocks,
     })
 }
 
@@ -5763,7 +5786,7 @@ fn renumber_note_refs(
                     }
                 }
             }
-            Block::Image(_) | Block::UnsupportedElement(_) => {}
+            Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
         }
     }
 }
@@ -5805,7 +5828,7 @@ fn collect_note_refs(blocks: &[Block], ctx: &ParseContext, footnotes: &mut Vec<F
                     }
                 }
             }
-            Block::Image(_) | Block::UnsupportedElement(_) => {}
+            Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
         }
     }
 }
