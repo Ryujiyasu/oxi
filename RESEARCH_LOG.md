@@ -1298,6 +1298,55 @@ Merges that landed because the fix is *known correct* via COM + 3 docs + minimal
 repro + spec reference, but didn't necessarily improve bottom-5 floor. See
 CLAUDE.md §9 Path B for the rules.
 
+### 2026-04-27 — OMML Phase 1-3 math equation rendering (merge 4dcda93)
+
+**Greenfield feature** merge of `feat/omml-math` (37 commits, last 4/18,
+9 days unmerged). Phase 1-3 complete per `docs/spec/omml_phase3_summary.md`.
+
+**Evidence**:
+- COM: 15 fixtures with mean SSIM **0.9929** vs Word ground truth (Phase 3
+  validation: `tools/metrics/measure_omml_fixtures.py`)
+- Minimal repro: `tools/metrics/omml_fixtures/` (10 primitive cases + 5
+  complex real-world formulas)
+- Spec: ECMA-376 Part 1 §22.1 (OMML); 56 MATH constants from Cambria Math;
+  166 codepoint substitution rules per Word's italic-math semantic
+- Bottom-5: 3.2645 → 3.2645 (greenfield, **0/184 baseline docs have OMML**;
+  scanned via `<m:oMath` / `mc:oMath` markup search)
+- Rationale: pure additive feature, zero overlap with baseline. Phase 3
+  handoff doc explicitly marks "merge-ready greenfield feature"
+
+**Implementation scope** (per Phase 3 summary):
+- IR: `crates/oxidocs-core/src/ir/math.rs` (438 lines, 20 MathExpr variants
+  + MathBlock + MathStyle + 6 supporting enums)
+- Font: `font/math_constants.rs` (Cambria Math MATH table, 56 constants),
+  `math_substitute.rs` (166 codepoint rules: A→𝐴, α→𝛼, h→ℎ, ∂→𝜕, ∇→𝛁),
+  `math_glyphs.rs` (italic correction + vertical variants)
+- Parser: OMML XML → MathBlock IR (16 unit tests)
+- Layout: per-primitive `emit_*` functions with stacked rendering using
+  MATH constants. Inline (m:oMath) vs Display (m:oMathPara) styles.
+
+**Verification**:
+- Auto-merge **clean** (4 files auto-merged: font/mod.rs, ir/types.rs,
+  layout/mod.rs, parser/ooxml.rs)
+- OMML parser tests: 16/16 pass; font::math tests: 23/23 pass; integration
+  tests: 5/5 pass; total **+22 new passing tests**
+- Pre-existing `kinsoku::test_line_start_prohibited` failure remains
+  (unrelated to OMML, fails on main pre-merge too)
+
+**Post-merge integration fix** (commit ddfd883):
+
+Auto-merge succeeded textually but the omml-math branch (forked before
+Phase 2 comments+tracked-changes) had semantic gaps:
+
+1. `layout/math.rs:588` — `LayoutContent::Text {...}` missing `text_scale`
+   field (added during R-12).
+2. 6 `match block` statements added during Phase 2 work
+   (revisions/comments visitors) lacked `Block::Math(_)` arms — added as
+   no-op alongside `Block::Image(_) | Block::UnsupportedElement(_)`.
+
+Math content carries no runs to which revision/comment styling applies, so
+no-op arms are semantically correct.
+
 ### 2026-04-25 — textbox line-count-aware overflow filter (commit 61833e2)
 
 **Divergence**: `crates/oxidocs-core/src/layout/mod.rs:1944` filter
