@@ -59,6 +59,10 @@ FIXTURES = [
     "RUBY_V10_base_090dpt",
     "RUBY_V10_base_120dpt",
     "RUBY_V10_base_140dpt",
+    "RUBY_V13_base_090dpt",
+    "RUBY_V13_base_110dpt",
+    "RUBY_V13_base_120dpt",
+    "RUBY_V13_base_140dpt",
 ]
 
 DOCX_DIR = os.path.abspath("pipeline_data/docx")

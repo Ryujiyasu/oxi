@@ -97,19 +97,21 @@ DOC_TAIL_DEFAULT = SECT_PR + """
 </w:document>"""
 
 
-def _r(text: str, sz: str = "21") -> str:
-    """Plain run with given size (half-points)."""
+def _r(text: str, sz: str = "21", font_name: str = "ＭＳ 明朝") -> str:
+    """Plain run with given size (half-points). font_name controls all 3 rFonts attrs."""
     return (
-        f'<w:r><w:rPr><w:rFonts w:ascii="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝" '
-        f'w:hAnsi="ＭＳ 明朝"/><w:sz w:val="{sz}"/></w:rPr>'
+        f'<w:r><w:rPr><w:rFonts w:ascii="{font_name}" w:eastAsia="{font_name}" '
+        f'w:hAnsi="{font_name}"/><w:sz w:val="{sz}"/></w:rPr>'
         f'<w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
     )
 
 
 def _ruby(base: str, ruby_text: str, *, ruby_align: str = None,
           hps: str = None, hps_raise: str = None, hps_base_text: str = None,
-          base_sz: str = "21", ruby_sz: str = "11") -> str:
-    """Build a w:ruby element. base_sz/ruby_sz are half-points (21 = 10.5pt)."""
+          base_sz: str = "21", ruby_sz: str = "11",
+          font_name: str = "ＭＳ 明朝") -> str:
+    """Build a w:ruby element. base_sz/ruby_sz are half-points (21 = 10.5pt).
+    font_name controls all 3 rFonts attrs on both rt and rubyBase."""
     parts = ["<w:rubyPr>"]
     if ruby_align:
         parts.append(f'<w:rubyAlign w:val="{ruby_align}"/>')
@@ -123,13 +125,13 @@ def _ruby(base: str, ruby_text: str, *, ruby_align: str = None,
     parts.append("</w:rubyPr>")
     rubypr_xml = "".join(parts)
     rt_run = (
-        f'<w:r><w:rPr><w:rFonts w:ascii="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝" '
-        f'w:hAnsi="ＭＳ 明朝"/><w:sz w:val="{ruby_sz}"/></w:rPr>'
+        f'<w:r><w:rPr><w:rFonts w:ascii="{font_name}" w:eastAsia="{font_name}" '
+        f'w:hAnsi="{font_name}"/><w:sz w:val="{ruby_sz}"/></w:rPr>'
         f'<w:t xml:space="preserve">{escape(ruby_text)}</w:t></w:r>'
     )
     base_run = (
-        f'<w:r><w:rPr><w:rFonts w:ascii="ＭＳ 明朝" w:eastAsia="ＭＳ 明朝" '
-        f'w:hAnsi="ＭＳ 明朝"/><w:sz w:val="{base_sz}"/></w:rPr>'
+        f'<w:r><w:rPr><w:rFonts w:ascii="{font_name}" w:eastAsia="{font_name}" '
+        f'w:hAnsi="{font_name}"/><w:sz w:val="{base_sz}"/></w:rPr>'
         f'<w:t xml:space="preserve">{escape(base)}</w:t></w:r>'
     )
     return (
@@ -471,6 +473,198 @@ def build_v9_combined_formula_grid() -> None:
     write_docx(os.path.join(OUT_DIR, "RUBY_V9_combined_grid.docx"), "\n".join(paragraphs))
 
 
+def build_v13_base_raise_grid() -> None:
+    """Disambiguate base × hpsRaise × hps scaling for non-10.5pt bases.
+
+    V10 already showed `expansion = max(0, raise + 0.75*hps - 9)` does NOT
+    generalize beyond 10.5pt — at base=14pt with default ruby it was off
+    by +1.25pt. The constant `9` was the MS Mincho line-box ascent at 10.5pt.
+    Hypotheses to discriminate at base ∈ {9, 11, 12, 14}pt:
+      H1 (font-ratio):   ascent = base_pt × (9/10.5) = base × 0.857
+      H2 (constant):     ascent = 9pt (independent of base)
+      H3 (CJK 9/14):     ascent = base_pt × 9/14 ≈ 0.643 × base
+      H4 (CJK 9/7):      ascent = base_pt × 9/7 = no_ruby_LH itself
+
+    For each base size, emit 9 paragraphs in V4-triple chain:
+      P0 no-ruby ref
+      P1 default ruby            (raise=default, hps=base/2)
+      P2 no-ruby ref             ← gives P1 height
+      P3 explicit raise=12halfpt (=6pt), hps=default
+      P4 no-ruby ref
+      P5 explicit raise=24halfpt (=12pt), hps=default
+      P6 no-ruby ref
+      P7 explicit hps=base_halfpt (=base_pt), raise=default
+      P8 no-ruby closure ref
+
+    dy from no-ruby anchor → ruby para → no-ruby reveals each cell's LH.
+    Solving across cells:
+      P1 cell    → default expansion = default_raise + 0.75 × (base/2) − ascent
+      P3,P5 cell → ascent = (raise + 0.75 × default_hps) − measured_expansion
+      P7 cell    → big_hps expansion = default_raise + 0.75 × base − ascent
+    Two unknowns (default_raise, ascent) from 4 equations → over-determined.
+    """
+    base_sizes_halfpt = [18, 22, 24, 28]  # 9pt, 11pt, 12pt, 14pt
+    for base_sz in base_sizes_halfpt:
+        base_pt = base_sz / 2
+        default_hps_halfpt = base_sz // 2  # base/2 in halfpt
+        big_hps_halfpt = base_sz            # = base_pt in halfpt
+        body_paras = [
+            _para(_r(f"V13 base={base_pt}pt P0 no-ruby ref.", sz=str(base_sz))),
+            _para(
+                _r("P1 default-ruby: ", sz=str(base_sz)),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps_halfpt),
+                    hps=str(default_hps_halfpt),
+                ),
+                _r("です。", sz=str(base_sz)),
+            ),
+            _para(_r("P2 no-ruby (measures P1 height).", sz=str(base_sz))),
+            _para(
+                _r("P3 raise=12halfpt: ", sz=str(base_sz)),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps_halfpt),
+                    hps=str(default_hps_halfpt),
+                    hps_raise="12",
+                ),
+                _r("です。", sz=str(base_sz)),
+            ),
+            _para(_r("P4 no-ruby (measures P3 height).", sz=str(base_sz))),
+            _para(
+                _r("P5 raise=24halfpt: ", sz=str(base_sz)),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps_halfpt),
+                    hps=str(default_hps_halfpt),
+                    hps_raise="24",
+                ),
+                _r("です。", sz=str(base_sz)),
+            ),
+            _para(_r("P6 no-ruby (measures P5 height).", sz=str(base_sz))),
+            _para(
+                _r(f"P7 hps={big_hps_halfpt}halfpt: ", sz=str(base_sz)),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(big_hps_halfpt),
+                    hps=str(big_hps_halfpt),
+                ),
+                _r("です。", sz=str(base_sz)),
+            ),
+            _para(_r("P8 no-ruby closure (measures P7 height).", sz=str(base_sz))),
+        ]
+        write_docx(
+            os.path.join(OUT_DIR, f"RUBY_V13_base_{int(base_pt*10):03d}dpt.docx"),
+            "\n".join(body_paras),
+        )
+
+
+def build_v14_font_family_variants() -> None:
+    """Test ROUND 10 PREDICTION: ascent constant = base × OS/2.sTypoAscender / unitsPerEm.
+
+    TTF probe (round 10) found two main JP font families:
+      MS legacy   (upem=256, ratio=0.8594) → 14pt ascent = 12.031pt
+      Yu/BIZ std  (upem=2048, ratio=0.8799) → 14pt ascent = 12.319pt (Δ +0.288pt)
+
+    With the V13-confirmed formula
+      expansion = max(0, raise + 0.75×hps - base × ratio)
+    at base=14pt, raise=12pt (hps=24halfpt), hps=7pt (default base/2):
+      MS Mincho:  max(0, 12 + 5.25 - 12.031) = 5.219pt
+      Yu Mincho:  max(0, 12 + 5.25 - 12.319) = 4.931pt
+      Δ = 0.288pt → with Word's 0.5pt rounding, MS likely rounds to 5.5,
+      Yu likely rounds to 5.0 → DETECTABLE.
+
+    For each test font, emit 9 paragraphs in V13's V4-triple chain pattern,
+    all base=14pt:
+      P1 no-ruby ref
+      P2 default ruby
+      P3 no-ruby
+      P4 explicit raise=12halfpt (=6pt), hps=default
+      P5 no-ruby
+      P6 explicit raise=24halfpt (=12pt), hps=default  ← signal cell
+      P7 no-ruby
+      P8 explicit hps=base_halfpt (=14pt), raise=default
+      P9 no-ruby closure
+
+    If V14 measured cells match TTF prediction within ±0.3pt rounding, the
+    font-intrinsic generalization (round 10) is confirmed.
+    """
+    # (font_name_in_xml, file_suffix, predicted_family)
+    fonts = [
+        ("ＭＳ 明朝", "MSMincho_control", "MS_legacy_0.8594"),
+        ("Yu Mincho", "YuMincho", "Yu_BIZ_std_0.8799"),
+        ("游ゴシック", "YuGothic_jp", "Yu_BIZ_std_0.8799"),
+        ("Yu Gothic", "YuGothic_en", "Yu_BIZ_std_0.8799"),
+        ("BIZ UDMincho Medium", "BIZUDMincho", "Yu_BIZ_std_0.8799"),
+    ]
+    base_sz = 28  # halfpt = 14pt
+    base_pt = 14.0
+    default_hps = base_sz // 2  # halfpt
+    big_hps = base_sz             # halfpt = base_pt
+    for font_name, suffix, family in fonts:
+        body_paras = [
+            _para(_r(f"V14 P0 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P1 def: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V14 P2 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P3 r6: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    hps_raise="12",
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V14 P4 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P5 r12: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    hps_raise="24",
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V14 P6 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r(f"P7 hpsB: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(big_hps),
+                    hps=str(big_hps),
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V14 P8 close.", sz=str(base_sz), font_name=font_name)),
+        ]
+        write_docx(
+            os.path.join(OUT_DIR, f"RUBY_V14_{suffix}_140dpt.docx"),
+            "\n".join(body_paras),
+        )
+
+
 def build_v8_extreme_hps() -> None:
     """Test whether ruby_expansion = hps_pt - 1.5 holds OUTSIDE the V3 range
     (9-13 half-pt). Tests hps ∈ {5, 7, 15, 17, 21} half-pt with base=21.
@@ -514,6 +708,8 @@ def main() -> None:
     build_v10_base_size_variants()
     build_v11_align_asymmetric()
     build_v12_atomic_wrap_overhang()
+    build_v13_base_raise_grid()
+    build_v14_font_family_variants()
     print("Done.")
 
 
