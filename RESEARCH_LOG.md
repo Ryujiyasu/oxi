@@ -103,6 +103,67 @@ Format:
   always-on next-trigger rule, no controlling toggle in the
   {compat,cSC,useFELayout,kern} axis space measured.
 
+## 2026-04-27 — oxi-main — refuted — yakumono always-on gate-open FALSIFIED on baseline (catastrophic regression)
+
+- context: Acted on the 2026-04-27 confirmed entry above. Patched
+  `crates/oxidocs-core/src/layout/mod.rs:4178`:
+    -    let yakumono_enabled = self.compress_punctuation;
+    +    let yakumono_enabled = true;
+  Followed CLAUDE.md verify hygiene: `cd tools/oxi-gdi-renderer && cargo
+  build --release` (1m 06s), cleared `pipeline_data/oxi_png/<doc>/` for
+  20 affected dirs (11 absent), ran full `pipeline.verify` on 177 baseline
+  docs / 352 pages.
+- result: **18 page regressions, 6 improvements, 328 unchanged. Net
+  -2.0184**. Two docs collapsed catastrophically:
+  - `0e7af1ae8f21_..._sample_00`: pages 2,3,4,5,6,7 dropped from
+    0.75-0.81 to **0.50-0.56** (-0.19 to -0.29 each); p.8 -0.0175;
+    p.10 -0.0570; p.1 -0.0154
+  - `683ffcab86e2_..._addon_00`: p.1 0.7592→0.6310 (-0.1282), p.2
+    0.7558→0.5022 (-0.2536), p.3 0.9695→0.9316 (-0.0379)
+  - `e3c545fac7a7_LOD_Handbook`: p.1 -0.057, p.2 -0.023, p.4 -0.024,
+    p.5 -0.014, p.11 -0.010 (mixed: 6 other LOD pages improved
+    +0.002 to +0.027)
+  - `4a36b62555f2_kyodokenkyuyoushiki10` p.1: -0.0047 (tiny)
+- bottom-5 floor impact:
+  - pre: 3.2645 (d77a 0.6268 + b837 0.6449 + 29dc 0.6636 + 2ea8 0.6643 + e3c5 0.6649)
+  - post: ~2.9337 (683ff 0.5022 + 0e7af 0.5051 + d77a 0.6268 + b837 0.6449 + e3c5 0.6547)
+  - **Δ -0.3308 catastrophic floor regression**
+- falsification: The "always-on next-trigger rule" hypothesis is FALSE at
+  the baseline level. COM measurement on 4-char isolated paragraphs
+  (8x8 grid × {V_CP,V_COMPAT15} = 180 fixtures, all matching baseline)
+  did NOT generalize to multi-line real-world paragraphs. Word's actual
+  gate involves additional context the 4-char fixtures could not test
+  (line-position dependency? surrounding-char dependency? line-break
+  interaction with paragraph layout? something Oxi's implementation
+  mishandles when always enabled?).
+- mechanism speculation (NOT verified):
+  - The 4-char fixtures had only 1 yakumono pair per paragraph, on line 1
+  - Real docs (0e7af, 683ff) have many pairs distributed across lines
+  - Possibility A: Word's compression triggers only at specific positions
+    (e.g., line-end? after specific char classes Oxi doesn't track?)
+  - Possibility B: Oxi's compression code has bugs that surface only
+    when the gate is open on multi-pair paragraphs
+  - Possibility C: GDI rendering pipeline applies compression
+    inconsistently with the layout calculation
+  - Distinguishing requires DML extraction / per-line position diff for
+    0e7af and 683ff — out of scope this session
+- spec status: cSC=doNotCompress + COM-measured isolated yakumono pair
+  compression remains a real Word behavior (LW_30/LW_31, V_CP/V_COMPAT15
+  all confirmed), but the rule that *opens the gate* is NOT
+  unconditionally always-on. Some context-discriminator exists.
+- code change: REVERTED to `let yakumono_enabled = self.compress_punctuation;`
+  with extensive comment block at mod.rs:4161-4180 documenting this
+  falsification so future agents do not re-attempt the same patch.
+  Rebuilt oxi-gdi-renderer post-revert (1m 06s, second build). Cleared 32
+  PNG dirs (affected + regressed) so cache regenerates on next render.
+  Baseline JSON UNCHANGED (verify.py returns False before updating when
+  regressions present; confirmed: timestamp 2026-04-26, bottom-5 sum
+  3.2645 unchanged).
+- outcome: bottom-5 floor 3.2645 maintained. Patch falsified. Real Word
+  gate is narrower than the 8x8 fixture matrix could detect. Future
+  investigation needs multi-line, multi-pair fixtures + DML-level
+  per-line position comparison on 0e7af/683ff specifically.
+
 ## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
 
 - context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".

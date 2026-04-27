@@ -4158,6 +4158,23 @@ impl LayoutEngine {
             // `compat>=15` gate excluded compat=14 docs that Word DOES compress.
             // Drop the compat gate — `compress_punctuation` alone matches
             // Word's behavior for both compat 14 and compat 15.
+            //
+            // 2026-04-27 attempted-but-reverted: V_CP + V_COMPAT15 8x8 matrix
+            // measurement (180 fixtures) showed Word applies next-trigger
+            // compression unconditionally on isolated 4-char paragraphs across
+            // compat∈{14,15} × cSC∈{doNotCompress,compressPunctuation} ×
+            // useFELayout∈{on,off} × kern∈{on,off}. Patched to
+            // `yakumono_enabled = true` and ran pipeline.verify on 177 docs:
+            // **18 page regressions, net -2.0184, bottom-5 floor 3.2645→2.9337
+            // (-0.3308 catastrophic)**. Two docs collapsed:
+            //   - 0e7af1ae8f21 pages 2-7,8,10: -0.18 to -0.29 each
+            //   - 683ffcab86e2 pages 1-3: -0.04 to -0.25
+            // 6 e3c5 pages improved (+0.01 to +0.03) but vastly outweighed.
+            // **Implication**: COM 4-char isolated fixtures do not generalize
+            // to multi-line real-world paragraphs. Word's actual gate involves
+            // additional context (line position, surrounding chars, paragraph
+            // structure?) NOT captured in the 8x8 grid. Reverted on 2026-04-27.
+            // See RESEARCH_LOG 2026-04-27 falsified entry for full data.
             let yakumono_enabled = self.compress_punctuation;
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
