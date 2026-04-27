@@ -5101,6 +5101,15 @@ impl LayoutEngine {
             // for at least some Word style + lineSpacing combinations
             // (likely compensating for other Oxi quirks). Lookup retained
             // until the underlying compensation is identified.
+            // Round 20 (2026-04-28) — TARGETED CJK-only skip attempt:
+            // Made closure conditional `if metrics.is_cjk_83_64_font()`.
+            // Verify result: 0 improved / 352 unchanged / 0 regressed
+            // (all sub-threshold movements; 130 pages with diff < 0.001
+            // each, total net +0.0039, bottom-5 floor +0.000018 = noise).
+            // Path A gate technically passes (strict increase) but SSIM
+            // value essentially zero. Reverted to keep code simple; LM0
+            // lookup question requires per-entry verification (240 cells)
+            // before further fix attempts.
             let lookup_no_grid = |family: &str, font_size: f32, fallback: f32| -> f32 {
                 self.registry.lm0_lineauto_base(family, font_size).unwrap_or(fallback)
             };
