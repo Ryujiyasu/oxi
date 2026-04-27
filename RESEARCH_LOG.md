@@ -55,6 +55,54 @@ Format:
   unquantified. Path B candidate pending V_CP + V_COMPAT15 measurement and a
   controlled `pipeline.verify` run.
 
+## 2026-04-27 — oxi-main — confirmed — V_CP + V_COMPAT15 8x8 matrices both match baseline (always-on rule confirmed)
+
+- context: follow-up to 2026-04-27 partial entry above. Ran
+  `tools/metrics/measure_adjacency_matrix_variants.py` against 60-fixture
+  V_CP (compat=14 + cSC=compressPunctuation) and V_COMPAT15 (compat=15 +
+  cSC=doNotCompress) variant sets, comparing to baseline
+  `pipeline_data/adjacency_matrix_widths.json` (compat=14 + cSC=doNotCompress
+  + useFELayout=on).
+- result: **EVERY cell in both 8x8 matrices (prev + next axes) matches
+  baseline within 0.3pt tolerance**. No `*` (full-width / compression LOST)
+  or `!` (still-compressed-but-different) markers.
+  - `、` `。` `」` `）` `．` `，` after any closing-class neighbor → 5.25pt
+    (compressed) in baseline, V_CP, AND V_COMPAT15
+  - `「` `（` after compressed neighbor → 10.50pt (full)
+  - `「` `（` before another opener `「` `（` → 5.25pt (compressed)
+- conclusion: Word applies the next-trigger yakumono compression rule
+  **unconditionally** for at least:
+  - `compatibilityMode` ∈ {14, 15}
+  - `cSC` ∈ {doNotCompress, compressPunctuation}
+  - `useFELayout` ∈ {on, off} (LW_30/LW_31 finding above)
+  - `kern` ∈ {on, off} (LW_30/LW_31 finding above)
+- implication: Oxi's `mod.rs:4161` gate `yakumono_enabled =
+  self.compress_punctuation` is **over-restrictive for the entire baseline**.
+  Baseline docs predominantly use cSC=doNotCompress, which currently disables
+  Oxi's yakumono compression — but Word compresses them anyway. This
+  explains documented Word-vs-Oxi line-fit gaps in 31+ baseline docs
+  (3a4f9fbe1a83 = 213 closing-yakumono pairs, largest single-doc impact).
+- spec reference: undocumented Word quirk (no JIS X 4051 / ECMA-376 clause
+  describes "always-on next-trigger yakumono compression"). Designating the
+  COM matrix above as the spec evidence per CLAUDE.md Path B clause.
+- evidence files preserved:
+  - `pipeline_data/adjacency_matrix_widths.json` (baseline, 8x8 grid, 4 fonts)
+  - `pipeline_data/adjacency_matrix_widths_V_CP.json` (8x8 grid, cSC=cP)
+  - `pipeline_data/adjacency_matrix_widths_V_COMPAT15.json` (8x8 grid, compat=15)
+  - `pipeline_data/meiryo_linewidth_repro.json` (LW_30/LW_31 useFE/kern refute)
+  - `tools/metrics/adjacency_matrix_repro_*` (180 fixture docx)
+  - `tools/metrics/measure_adjacency_matrix_variants.py` (re-runnable harness)
+- code change: NONE this commit. Gate-open patch (`mod.rs:4161` →
+  `yakumono_enabled = true`) is the natural next step but requires:
+  (a) GDI renderer rebuild, (b) clear `pipeline_data/oxi_png/<doc>/` for
+  31+ affected docs, (c) full `pipeline.verify` run, (d) Path B
+  [confidence-merge] commit if bottom-N floor (3.2645) does not regress.
+  d77a is the SOLE rule_b doc and is currently in bottom-5 → could improve
+  or regress; verify mandatory.
+- outcome: Path B candidate cleared for verify. 4 of 4 deep dives now align:
+  always-on next-trigger rule, no controlling toggle in the
+  {compat,cSC,useFELayout,kern} axis space measured.
+
 ## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
 
 - context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".
