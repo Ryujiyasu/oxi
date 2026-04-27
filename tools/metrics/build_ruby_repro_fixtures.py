@@ -665,6 +665,300 @@ def build_v14_font_family_variants() -> None:
         )
 
 
+def build_v15_extreme_ratio_fonts() -> None:
+    """Test ROUND 11 PREDICTION at EXTREME usWinAscent ratios.
+
+    Round 11 V14 covered 4 fonts in usWinAsc/upem range 0.8594–0.9951.
+    V15 extends to extreme ratios discovered via probe_jp_font_ascent.py:
+      Meiryo / Meiryo UI: usWinAsc=2171/2048 = 1.0601 → asc(14pt)=14.84pt
+      Yu Gothic UI:        usWinAsc=2210/2048 = 1.0791 → asc(14pt)=15.11pt
+
+    At base=14pt with raise=12pt, hps=7pt:
+      Meiryo:        max(0, 12 + 5.25 - 14.841) = 2.409pt
+      Yu Gothic UI:  max(0, 12 + 5.25 - 15.107) = 2.143pt
+      (vs Yu Mincho 3.318pt, MS Mincho 5.219pt — clearly distinguishable
+       at Word's 0.5pt rounding)
+
+    Meiryo + Meiryo UI share TTF metrics (same TTC face); included as
+    a sanity check that font name alone (not the underlying TTF) does
+    not affect ruby ascent.
+    """
+    fonts = [
+        ("Yu Gothic UI",  "YuGothicUI",  "Yu_GothicUI_1.0791"),
+        ("メイリオ",        "Meiryo_jp",   "Meiryo_1.0601"),
+        ("Meiryo",        "Meiryo_en",   "Meiryo_1.0601"),
+        ("Meiryo UI",     "MeiryoUI",    "Meiryo_1.0601_(UI variant, same TTF)"),
+    ]
+    base_sz = 28
+    base_pt = 14.0
+    default_hps = base_sz // 2
+    big_hps = base_sz
+    for font_name, suffix, family in fonts:
+        body_paras = [
+            _para(_r(f"V15 P0 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P1 def: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V15 P2 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P3 r6: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    hps_raise="12",
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V15 P4 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P5 r12: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    hps_raise="24",
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V15 P6 ref.", sz=str(base_sz), font_name=font_name)),
+            _para(
+                _r("P7 hpsB: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(big_hps),
+                    hps=str(big_hps),
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ),
+            _para(_r("V15 P8 close.", sz=str(base_sz), font_name=font_name)),
+        ]
+        write_docx(
+            os.path.join(OUT_DIR, f"RUBY_V15_{suffix}_140dpt.docx"),
+            "\n".join(body_paras),
+        )
+
+
+def build_v16_tier_bc_raise_sweep() -> None:
+    """V15 (round 12) showed Round 11's usWinAscent formula breaks for
+    tier B (Meiryo Regular) and tier C (Yu Gothic UI) fonts. V16 tests
+    the formula STRUCTURE: does `expansion ∝ raise + 0.75×hps - constant`
+    still hold linearly, just with a different constant per font?
+
+    Focus: hold hps fixed at default (base/2 = 7pt), sweep raise across
+    5 values to derive the raise→exp slope. If slope = 1.0 (per-pt raise
+    yields per-pt exp), formula structure is preserved → tier B/C just
+    needs per-font ascent calibration. If slope < 1.0, formula structure
+    itself is wrong for these fonts.
+
+    Hypothesis pre-V16:
+    - V15 Yu Gothic UI: raise=6 → exp=0.5, raise=12 → exp=3.5
+      slope estimate: (3.5 - 0.5) / (12 - 6) = 0.5 ← SUB-UNITY suggests
+      structural difference
+
+    Layout: per font, V13-triple chain
+      P0 ref / P1 raise=6 / P2 ref / P3 raise=12 / P4 ref / P5 raise=18
+      / P6 ref / P7 raise=24 / P8 ref / P9 raise=36 / P10 ref
+    11 paragraphs per fixture, 2 fixtures.
+    """
+    fonts = [
+        ("Yu Gothic UI", "YuGothicUI"),
+        ("メイリオ",       "MeiryoRegular_jp"),
+    ]
+    raises_halfpt = [12, 24, 36, 48, 72]  # 6pt, 12pt, 18pt, 24pt, 36pt
+    base_sz = 28
+    base_pt = 14.0
+    default_hps = base_sz // 2  # 14 halfpt = 7pt
+
+    for font_name, suffix in fonts:
+        body_paras = [_para(_r("V16 P0 ref.", sz=str(base_sz), font_name=font_name))]
+        for i, rh in enumerate(raises_halfpt):
+            r_pt = rh / 2
+            body_paras.append(_para(
+                _r(f"r{r_pt:g}: ", sz=str(base_sz), font_name=font_name),
+                _ruby(
+                    "含", "ふく",
+                    base_sz=str(base_sz),
+                    ruby_sz=str(default_hps),
+                    hps=str(default_hps),
+                    hps_raise=str(rh),
+                    font_name=font_name,
+                ),
+                _r("です。", sz=str(base_sz), font_name=font_name),
+            ))
+            body_paras.append(_para(_r(f"V16 P{2*(i+1)} ref.", sz=str(base_sz), font_name=font_name)))
+        write_docx(
+            os.path.join(OUT_DIR, f"RUBY_V16_{suffix}_140dpt_raisesweep.docx"),
+            "\n".join(body_paras),
+        )
+
+
+def build_v17_no_ruby_lineheight_per_font() -> None:
+    """V17: pure no-ruby line-height profiling per font × base size.
+
+    V14/V15 measurements showed Yu Mincho/Gothic at base=14pt has
+    no_ruby_LH = 23.5pt (1.679× base) and Meiryo Regular = 27.375pt (1.955×
+    base), violating the CLAUDE.md `base × 9/7 = 1.286× base` CJK rule
+    derived from MS Mincho. V17 isolates no-ruby line-height by removing
+    all ruby content, sweeping 5 base sizes per font.
+
+    Per font: 11 paragraphs at 5 base sizes (2 paragraphs per size for
+    clean dy + 1 closer). Pattern (per fixture):
+      [P1 size_a / P2 size_a]   ← dy(P1,P2) = no_ruby_LH at a
+      [P3 size_b / P4 size_b]   ← dy(P3,P4) = no_ruby_LH at b
+      ... (5 bases × 2 = 10 paragraphs)
+      [P11 closer]
+
+    Note: dy(P2, P3) is base_a + spacing-with-base_b — discard. Only same-
+    size pairs are valid.
+    """
+    fonts = [
+        ("ＭＳ 明朝",       "MSMincho_control"),
+        ("Yu Mincho",     "YuMincho"),
+        ("游ゴシック",      "YuGothic"),
+        ("Yu Gothic UI",  "YuGothicUI"),
+        ("メイリオ",        "Meiryo"),
+        ("Meiryo UI",     "MeiryoUI"),
+    ]
+    base_halfpts = [18, 21, 22, 24, 28]  # 9pt, 10.5pt, 11pt, 12pt, 14pt
+    for font_name, suffix in fonts:
+        body_paras = []
+        for bhp in base_halfpts:
+            bp = bhp / 2
+            body_paras.append(_para(_r(f"V17 {bp}pt P_a 本文.", sz=str(bhp), font_name=font_name)))
+            body_paras.append(_para(_r(f"V17 {bp}pt P_b 本文.", sz=str(bhp), font_name=font_name)))
+        body_paras.append(_para(_r("V17 closer.", sz="21", font_name=font_name)))
+        write_docx(
+            os.path.join(OUT_DIR, f"RUBY_V17_{suffix}_no_ruby_LH.docx"),
+            "\n".join(body_paras),
+        )
+
+
+def build_v18_no_docgrid_lineheight() -> None:
+    """V18: pure no_ruby_LH WITHOUT <w:docGrid> element in sectPr.
+
+    Round 15 audit revealed Oxi has a `lm0_lineauto.json` lookup table
+    for "no docGrid" scenarios with values divergent from V17 (which
+    uses docGrid type='default' linePitch=312):
+
+      MS Mincho 14pt: LM0 lookup=21.0pt vs V17 measured=18.5pt (Δ +2.5)
+      Yu Mincho 14pt: LM0=27.5pt vs V17=23.5pt (Δ +4.0)
+
+    Hypothesis: LM0 represents Word's behavior at sectPr.docGrid ELEMENT
+    ABSENT (vs V17 which has the element with type=default). Per spec
+    §1.4, 'docGrid element absent → grid snap NOT applied' — so the
+    line-height formula path may differ.
+
+    V18 builds same V17-pattern (6 fonts × 5 base sizes) but with sectPr
+    that omits <w:docGrid> entirely. If V18 == LM0 lookup table, LM0
+    is validated for the no-docGrid scenario. If V18 == V17, LM0 may
+    be incorrect or measure something else entirely.
+    """
+    fonts = [
+        ("ＭＳ 明朝",       "MSMincho_control"),
+        ("Yu Mincho",     "YuMincho"),
+        ("游ゴシック",      "YuGothic"),
+        ("Yu Gothic UI",  "YuGothicUI"),
+        ("メイリオ",        "Meiryo"),
+        ("Meiryo UI",     "MeiryoUI"),
+    ]
+    base_halfpts = [18, 21, 22, 24, 28]
+    sect_pr_no_docgrid = (
+        '<w:sectPr>'
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
+        'w:header="851" w:footer="992" w:gutter="0"/>'
+        '<w:cols w:space="425"/>'
+        '</w:sectPr>'
+    )
+    for font_name, suffix in fonts:
+        body_paras = []
+        for bhp in base_halfpts:
+            bp = bhp / 2
+            body_paras.append(_para(_r(f"V18 {bp}pt P_a 本文.", sz=str(bhp), font_name=font_name)))
+            body_paras.append(_para(_r(f"V18 {bp}pt P_b 本文.", sz=str(bhp), font_name=font_name)))
+        body_paras.append(_para(_r("V18 closer.", sz="21", font_name=font_name)))
+        body_xml = DOC_HEAD + "\n".join(body_paras) + sect_pr_no_docgrid + "\n</w:body>\n</w:document>"
+        path = os.path.join(OUT_DIR, f"RUBY_V18_{suffix}_no_docgrid.docx")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", CONTENT_TYPES)
+            z.writestr("_rels/.rels", ROOT_RELS)
+            z.writestr("word/_rels/document.xml.rels", DOC_RELS)
+            z.writestr("word/document.xml", body_xml)
+            z.writestr("word/styles.xml", STYLES_XML)
+            z.writestr("word/settings.xml", SETTINGS_XML)
+        print(f"  wrote {path}")
+
+
+def build_v19_baseline_pattern_docgrid() -> None:
+    """V19: replicate the EXACT baseline docGrid pattern.
+
+    Survey (round 16) showed 49/51 baseline docs use:
+      <w:docGrid w:linePitch="360"/>  (type attribute ABSENT)
+
+    Oxi parser (parser/ooxml.rs:5532-5538) routes type-absent docGrid to
+    `grid_line_pitch = None` (only "lines"/"linesAndChars" set Some).
+    Combined with auto lineSpacing, this triggers `is_single_lm0`
+    (layout/mod.rs:3294) → LM0 lookup table fires.
+
+    LM0 vs V18 (no docGrid) divergence is 2.5–9pt. If V19 (baseline
+    pattern) == V18 (no docGrid) measurements, LM0 is incorrect for
+    nearly the entire baseline → significant SHIP OPPORTUNITY.
+
+    V19 same as V17/V18 layout (6 fonts × 5 base sizes × 11 paragraphs)
+    but with baseline-style sectPr.
+    """
+    fonts = [
+        ("ＭＳ 明朝",       "MSMincho_control"),
+        ("Yu Mincho",     "YuMincho"),
+        ("游ゴシック",      "YuGothic"),
+        ("Yu Gothic UI",  "YuGothicUI"),
+        ("メイリオ",        "Meiryo"),
+        ("Meiryo UI",     "MeiryoUI"),
+    ]
+    base_halfpts = [18, 21, 22, 24, 28]
+    sect_pr_baseline = (
+        '<w:sectPr>'
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
+        'w:header="851" w:footer="992" w:gutter="0"/>'
+        '<w:cols w:space="425"/>'
+        '<w:docGrid w:linePitch="360"/>'  # exact baseline: type absent, linePitch=18pt
+        '</w:sectPr>'
+    )
+    for font_name, suffix in fonts:
+        body_paras = []
+        for bhp in base_halfpts:
+            bp = bhp / 2
+            body_paras.append(_para(_r(f"V19 {bp}pt P_a 本文.", sz=str(bhp), font_name=font_name)))
+            body_paras.append(_para(_r(f"V19 {bp}pt P_b 本文.", sz=str(bhp), font_name=font_name)))
+        body_paras.append(_para(_r("V19 closer.", sz="21", font_name=font_name)))
+        body_xml = DOC_HEAD + "\n".join(body_paras) + sect_pr_baseline + "\n</w:body>\n</w:document>"
+        path = os.path.join(OUT_DIR, f"RUBY_V19_{suffix}_baseline_docgrid.docx")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", CONTENT_TYPES)
+            z.writestr("_rels/.rels", ROOT_RELS)
+            z.writestr("word/_rels/document.xml.rels", DOC_RELS)
+            z.writestr("word/document.xml", body_xml)
+            z.writestr("word/styles.xml", STYLES_XML)
+            z.writestr("word/settings.xml", SETTINGS_XML)
+        print(f"  wrote {path}")
+
+
 def build_v8_extreme_hps() -> None:
     """Test whether ruby_expansion = hps_pt - 1.5 holds OUTSIDE the V3 range
     (9-13 half-pt). Tests hps ∈ {5, 7, 15, 17, 21} half-pt with base=21.
@@ -710,6 +1004,11 @@ def main() -> None:
     build_v12_atomic_wrap_overhang()
     build_v13_base_raise_grid()
     build_v14_font_family_variants()
+    build_v15_extreme_ratio_fonts()
+    build_v16_tier_bc_raise_sweep()
+    build_v17_no_ruby_lineheight_per_font()
+    build_v18_no_docgrid_lineheight()
+    build_v19_baseline_pattern_docgrid()
     print("Done.")
 
 

@@ -108,6 +108,9 @@ FILES = [
     "C:/Windows/Fonts/BIZ-UDMinchoM.ttc",
     "C:/Windows/Fonts/BIZ-UDGothicR.ttc",
     "C:/Windows/Fonts/BIZ-UDGothicB.ttc",
+    "C:/Windows/Fonts/meiryo.ttc",
+    "C:/Windows/Fonts/meiryob.ttc",
+    "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc",
 ]
 
 
