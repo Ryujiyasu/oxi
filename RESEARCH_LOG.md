@@ -272,6 +272,61 @@ Format:
   Recommend (3) per CLAUDE.md "no excuse stacking" principle: when a
   rule needs many carve-outs, the rule itself is wrong / too narrow.
 
+## 2026-04-27 — oxi-main — confirmed — current Oxi yakumono gate is CORRECT for entire baseline (gate composite, no patch needed)
+
+- context: After 6+ falsified hypotheses, used inverse-strip on 0e7af +
+  text-injected fixture pair to find what suppresses Word's yakumono
+  compression in real-world docs.
+- artifacts:
+  - `tools/metrics/inverse_strip_with_inject.py` + 6 strip variants of
+    0e7af with fixture-text injected
+  - `tools/metrics/inverse_strip_rprdefault_subelements.py` + 3 sub-strip
+    variants
+  - `tools/metrics/mincho_with_docdefaults.docx` (reverse test variant)
+- inverse-strip result (compression on injected `、「` pair):
+  | variant                       | width  | verdict                |
+  | V0 (inject only, no strip)    | 11.50  | FULL (suppressed)      |
+  | V1 (strip rPrDefault lang)    | 11.50  | FULL                   |
+  | **V2 (strip rPrDefault all)** | **6.00**  | **COMPRESSED!**       |
+  | V3 (strip pPrDefault)         | 10.50  | FULL                   |
+  | V4 (strip docDefaults)        | 5.50   | COMPRESSED             |
+  | V5 (minimal styles.xml)       | 5.50   | COMPRESSED             |
+- sub-element drill-down (within rPrDefault):
+  | variant                | rPrDefault remaining       | width | verdict |
+  | V2a (strip rFonts)     | sz, szCs, lang             | 11.50 | FULL    |
+  | V2b (strip sz/szCs)    | rFonts, lang               | 11.50 | FULL    |
+  | V2c (strip rFonts+sz)  | lang only                  | 11.50 | FULL    |
+  | V2d (empty rPrDefault) | <w:rPr/> only              | 11.50 | FULL    |
+- reverse confirmation: added empty docDefaults to MC_A_mincho.docx
+  (which originally compresses) → STILL COMPRESSED 5.50pt. The rule is
+  NOT simply "rPrDefault presence suppresses compression" — adding it
+  to a minimal fixture doesn't transfer the suppression.
+- conclusion: Word uses a **composite heuristic** to detect "modern Word
+  2007+ document" vs "minimal/legacy document". The detection involves
+  multiple structural elements (styles.xml content + relationships +
+  possibly fontTable.xml + theme.xml + ...). Modern docs use one layout
+  mode (no yakumono compression unless cSC=cP); minimal/legacy docs use
+  another (compress yakumono regardless of cSC).
+- **practical implication**: ALL baseline real-world docs are modern
+  Word 2007+ docs with full structure. For all of them, Word does NOT
+  compress yakumono when cSC=doNotCompress. **Oxi's current gate
+  `yakumono_enabled = self.compress_punctuation` correctly matches Word
+  for the entire baseline**. The "always-on" patch (55a8b4c, reverted)
+  was based on V_CP/V_COMPAT15 fixture evidence that turns out to be
+  artifacts of fixture minimality — those fixtures lacked the full
+  structure that triggers Word's modern-doc-mode suppression.
+- **NO Path B ship needed**. Current code is correct. Investigation closes.
+- code change: NONE. mod.rs:4178 stays as-is with the falsification
+  comment block from 55a8b4c (which now is the right outcome — the
+  comment correctly warns future agents not to enable always-on).
+- bottom-5 floor 3.2645 maintained (unchanged throughout).
+- artifacts retained for future:
+  - `pipeline_data/probe_0e7af_yakumono.json` (real-doc compression evidence)
+  - `pipeline_data/mincho_kern_variants.json` (kern non-discriminator)
+  - `pipeline_data/adjacency_matrix_widths_V_CP.json` (fixture compression)
+  - `pipeline_data/adjacency_matrix_widths_V_COMPAT15.json`
+  - `tools/metrics/inverse_strip_*` scripts + variants (composite-gate evidence)
+
 ## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
 
 - context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".
