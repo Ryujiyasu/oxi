@@ -13,6 +13,48 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-04-27 — oxi-main — partial — yakumono closing-punct compression fires regardless of useFELayout / kern (gate hypothesis narrowed)
+
+- context: post-loop-termination triage (3 deep dives across `adjacency_matrix_widths.json`,
+  `bracket_pair_widths.json`, `mincho_adjacency_widths.json`) found that for
+  Meiryo 10.5pt + cSC=doNotCompress + compat=14, Word compresses closing-class
+  punct (、。」）．，) to 5.25pt when followed by a trigger char — but Oxi's
+  `crates/oxidocs-core/src/layout/mod.rs:4140` gate
+  `yakumono_enabled = self.compress_punctuation` is FALSE for cSC=doNotCompress
+  → would render full 10.5pt → mismatches Word.
+- hypothesis: useFELayout (and/or kern w:val="3") is the unaccounted trigger
+  Word checks for, gating yakumono compression independent of cSC. Oxi does
+  not parse useFELayout (grep confirmed), so opening that gate would close
+  the gap.
+- evidence: `pipeline_data/meiryo_linewidth_repro.json` LW_30 (useFE=ON,kern=3)
+  vs LW_31 (useFE=off,kern=off) per-char compare — identical paragraph text
+  `メタデータは、各機関で...「９．例 (1)メタデータ」を参照ください。`, both
+  cSC=doNotCompress + compat=14. Position 24 (`、` followed by `「`) measured
+  **5.50pt in BOTH cases**; all other punct unchanged at 10.50pt. Total line
+  widths identical at 465.50pt. → useFELayout/kern do NOT gate the compression.
+  Compression fires identically on the next-trigger rule alone.
+- outcome: Hypothesis useFELayout-as-gate REFUTED. Oxi's `mod.rs:4140` gate
+  is *probably* over-restrictive — Word applies the next-trigger rule
+  unconditionally for at least {compat=14, cSC=doNotCompress, useFELayout in
+  {on,off}, kern in {on,off}}. Two open suspects remain: cSC=compressPunctuation
+  giving *extra* compression beyond the always-on rule, and compat=15 differing
+  from compat=14. Staged variant test trimmed to V_CP + V_COMPAT15
+  (`tools/metrics/{build,measure}_adjacency_matrix_variants.py` + 2×60 fixtures).
+  V_NOFE fixture set deleted (60 docx) as it would only re-confirm the LW_30/31
+  finding.
+- caveat to RESEARCH_LOG 2026-04-18 d77a yakumono bisect: that entry recorded
+  "cSC alone: NO compression". Likely a content artifact — d77a's bisect text
+  may not have contained trigger-pairs (`、` followed by `観` = CJK ideograph,
+  NOT trigger → would never compress regardless of settings). The 2026-04-18
+  finding is consistent with this 2026-04-27 finding under the next-trigger
+  rule, but its conclusion ("compress_punctuation alone gates yakumono") is
+  not supported by the data. Subsequent gate logic at `mod.rs:4140` should
+  be reviewed against this corrected understanding.
+- code change: NONE. Opening the gate is potentially correct but unverified
+  on baseline (177 docs / 352 pages). Bottom-N floor regression risk
+  unquantified. Path B candidate pending V_CP + V_COMPAT15 measurement and a
+  controlled `pipeline.verify` run.
+
 ## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
 
 - context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".
