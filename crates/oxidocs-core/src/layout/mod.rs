@@ -1,5 +1,6 @@
 mod kinsoku;
 pub mod math;
+mod ruby;
 
 use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
@@ -3228,11 +3229,49 @@ impl LayoutEngine {
             &para.style,
         );
 
+        // Round 7: pre-compute ruby paragraph-tail expansion once.
+        // Greenfield-dormant: 0/177 baseline docs use w:ruby, so this is
+        // 0.0 for all baseline paragraphs. Used at last-line cursor advance
+        // and gates ruby-annotation emission below.
+        let ruby_para_expansion_pt = ruby::paragraph_ruby_expansion_pt(&para.runs, para_font_size);
+
+        // Round 7.7: ruby atomic-wrap budget (conservative).
+        // When a run has ruby_w > base_w (V2 case "とくてい" 22pt over
+        // "特定" 21pt = 1pt overhang), the inline footprint of that run
+        // is field_w = max(base_w, ruby_w), not base_w alone. Because
+        // break_into_lines tracks fragment widths per char (not per Run)
+        // and refactoring it to thread per-Run extra width is invasive,
+        // we instead reserve the total overhang from available_width
+        // up-front. This over-reserves slightly on multi-run paragraphs
+        // where only one run has overhang, but never under-reserves —
+        // ensuring atomic wrap correctness without touching the wrap
+        // loop. Greenfield-dormant: total_overhang = 0 when no run has
+        // ruby (or when ruby_w ≤ base_w, the common case).
+        let ruby_total_overhang_pt: f32 = para.runs.iter()
+            .filter_map(|run| run.ruby.as_ref().map(|r| (run, r)))
+            .map(|(run, ruby_ir)| {
+                let base_pt = run.style.font_size.unwrap_or(para_font_size);
+                let hps_pt = ruby_ir.hps_halfpt
+                    .map(|h| h as f32 / 2.0)
+                    .unwrap_or(base_pt / 2.0);
+                let ruby_metrics = self.metrics_for_text(&ruby_ir.text, &run.style, &para.style);
+                let base_metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
+                let ruby_w: f32 = ruby_ir.text.chars()
+                    .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_metrics))
+                    .sum();
+                let base_w: f32 = run.text.chars()
+                    .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, base_metrics))
+                    .sum();
+                (ruby_w - base_w).max(0.0)
+            })
+            .sum();
+
         // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
         // NOT shift start position. Text starts at margin, line is shorter.
         let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
-        let lines = self.break_into_lines(&fragments, available_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
+        let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -3799,7 +3838,101 @@ impl LayoutEngine {
                     el.run_index = Some(frag.run_index);
                     el.char_offset = Some(frag.char_offset);
                 }
+                // Round 7: capture base element x/y BEFORE push (move).
+                // Used below to position the ruby annotation above the base.
+                let base_el_x = el.x;
+                let base_el_y = el.y;
                 elements.push(el);
+
+                // Round 7: emit ruby annotation glyph element above the
+                // base text. Only fires on the FIRST fragment of a Run
+                // (char_offset == 0) to avoid duplicate emission when the
+                // base text spans multiple fragments. Base width is computed
+                // from the full run text (not just this fragment) so the
+                // annotation centers over all base chars per V2 §18.5.
+                // Currently implements `Center` only — other rubyAlign
+                // modes default to center; per-mode positioning is a
+                // Round 7.5 follow-up.
+                if frag.char_offset == 0 {
+                    if let Some(run) = para.runs.get(frag.run_index) {
+                        if let Some(ref ruby_ir) = run.ruby {
+                            let base_pt = frag.style.font_size.unwrap_or(para_font_size);
+                            let hps_pt = ruby_ir.hps_halfpt
+                                .map(|h| h as f32 / 2.0)
+                                .unwrap_or(base_pt / 2.0);
+                            let hps_raise_pt = ruby_ir.hps_raise_halfpt
+                                .map(|h| h as f32 / 2.0)
+                                .unwrap_or(ruby::DEFAULT_HPS_RAISE_PT);
+                            let ruby_text = ruby_ir.text.as_str();
+                            let mut ruby_run_style = frag.style.clone();
+                            ruby_run_style.font_size = Some(hps_pt);
+                            let ruby_metrics = self.metrics_for_text(ruby_text, &ruby_run_style, &para.style);
+                            // Round 7.6: precise per-char widths via GDI metrics.
+                            // Replaces the previous `chars × font_size` CJK
+                            // monospace approximation; matches non-CJK ruby
+                            // and proportional fonts correctly.
+                            let ruby_char_count = ruby_text.chars().count();
+                            let ruby_w: f32 = ruby_text
+                                .chars()
+                                .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_metrics))
+                                .sum();
+                            let base_metrics = self.metrics_for_text(run.text.as_str(), &frag.style, &para.style);
+                            let base_w: f32 = run.text
+                                .chars()
+                                .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, base_metrics))
+                                .sum();
+                            // Round 7.5: rubyAlign positioning per ECMA-376 §17.3.3.26.
+                            // ruby_position returns (x_offset_from_base, per_char_spacing).
+                            let (ruby_x_offset, ruby_char_spacing) = ruby::ruby_position(
+                                base_w, ruby_w, ruby_char_count, ruby_ir.align,
+                            );
+                            let ruby_x = base_el_x + ruby_x_offset;
+                            let ruby_ascent = ruby_metrics.word_ascent_pt(hps_pt);
+                            let frag_metrics = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                            let base_ascent = frag_metrics.word_ascent_pt(base_pt);
+                            let ruby_y = base_el_y + base_ascent - hps_raise_pt - ruby_ascent;
+                            let ruby_color = self.resolve_color(&ruby_run_style, &para.style).map(|s| s.to_string());
+                            let ruby_font_family = self.resolve_font_family_for_text(ruby_text, &ruby_run_style, &para.style)
+                                .map(|s| s.to_string());
+                            let mut ruby_el = LayoutElement::new(
+                                ruby_x,
+                                ruby_y,
+                                ruby_w,
+                                hps_pt * 1.2,
+                                LayoutContent::Text {
+                                    text: ruby_text.to_string(),
+                                    font_size: hps_pt,
+                                    font_family: ruby_font_family,
+                                    bold: false,
+                                    italic: false,
+                                    underline: false,
+                                    underline_style: None,
+                                    strikethrough: false,
+                                    color: ruby_color,
+                                    highlight: None,
+                                    field_type: None,
+                                    character_spacing: ruby_char_spacing,
+                                    text_scale: 100.0,
+                                },
+                            );
+                            if let Some(pi) = body_para_index {
+                                ruby_el.paragraph_index = Some(pi);
+                                ruby_el.run_index = Some(frag.run_index);
+                                ruby_el.char_offset = Some(0);
+                            }
+                            // Round 7.5: when char spacing > 0 (distribute*),
+                            // the rendered width grows by (chars × extra). The
+                            // element's `width` field tracks the visual extent
+                            // for hit testing — bump it so the renderer reserves
+                            // the full distributed range.
+                            if ruby_char_spacing > 0.0 {
+                                ruby_el.width = ruby_w + ruby_char_count as f32 * ruby_char_spacing;
+                            }
+                            elements.push(ruby_el);
+                        }
+                    }
+                }
+
                 // R-10: detect revision-bearing fragment by looking up the
                 // source run's `tracked_change` OR `rpr_change`. The pre-pass
                 // mutated `style.underline`/`color`/`strikethrough` but
@@ -3950,6 +4083,16 @@ impl LayoutEngine {
                 }
             } else {
                 *cursor_y += line_height;
+            }
+            // Round 7: ruby paragraph-tail expansion (V7 measurement) —
+            // when the current paragraph contains any ruby annotation,
+            // add the expansion AFTER the last line's cursor advance.
+            // Greenfield-dormant on baseline (ruby_para_expansion_pt = 0
+            // when no run has ruby). Estimate path is wired in §18.4
+            // estimate_para_height; this is the matching render-side
+            // wiring so cursor positions match the estimate.
+            if line_idx + 1 == lines.len() && ruby_para_expansion_pt > 0.0 {
+                *cursor_y += ruby_para_expansion_pt;
             }
             // Only advance cumul index when cumulative round is active.
             // COM-confirmed (683f): paragraphs with non-uniform line heights
@@ -6670,6 +6813,15 @@ impl LayoutEngine {
                 if lh > max_line_height { max_line_height = lh; }
             }
             height += max_line_height * line_count as f32;
+
+            // Ruby paragraph-tail expansion (§18 spec, V3/V6/V9 measurement).
+            // Greenfield: 0/177 baseline docs use w:ruby, so this branch is
+            // dormant on the baseline and adds 0.0pt to height. For ruby-
+            // bearing paragraphs (V1-V10 fixtures), it adds the calibrated
+            // expansion to make pagination match Word's larger paragraph box.
+            let para_default_pt = self.resolve_font_size(&RunStyle::default(), &para.style);
+            let ruby_exp = ruby::paragraph_ruby_expansion_pt(&para.runs, para_default_pt);
+            height += ruby_exp;
         }
 
         if should_reset {

@@ -749,6 +749,25 @@ pub struct TrackedChange {
     pub pair_id: Option<String>,
 }
 
+/// Alignment of ruby annotation relative to base text.
+/// Per ECMA-376 §17.3.3.26 (CT_RubyAlign).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RubyAlign {
+    /// Center: ruby and base both centered in field (default).
+    Center,
+    /// Distribute ruby letters evenly across the base width.
+    DistributeLetter,
+    /// Distribute ruby letters with extra padding at both ends.
+    DistributeSpace,
+    /// Both ruby and base left-aligned.
+    Left,
+    /// Both ruby and base right-aligned.
+    Right,
+    /// For vertical writing only.
+    RightVertical,
+}
+
 /// Ruby (furigana) annotation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ruby {
@@ -756,9 +775,26 @@ pub struct Ruby {
     pub base: String,
     /// Annotation text (furigana reading)
     pub text: String,
-    /// Font size of the ruby text in points
+    /// Font size of the ruby text in points (derived from `hps`).
     #[serde(default)]
     pub font_size: Option<f32>,
+    /// Alignment of annotation relative to base (`<w:rubyAlign>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<RubyAlign>,
+    /// Ruby font size in half-points (`<w:hps w:val="...">`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hps_halfpt: Option<u32>,
+    /// Distance ruby annotation is raised above base baseline, half-points
+    /// (`<w:hpsRaise w:val="...">`). Default is approximately 18 (= 9pt)
+    /// per Word's empirical behavior; see spec §18.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hps_raise_halfpt: Option<u32>,
+    /// Base text font size in half-points (`<w:hpsBaseText w:val="...">`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hps_base_text_halfpt: Option<u32>,
+    /// Language code for the ruby annotation (`<w:lid w:val="...">`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
 }
 
 /// Column layout definition (from w:cols)

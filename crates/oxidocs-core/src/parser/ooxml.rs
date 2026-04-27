@@ -5887,16 +5887,32 @@ fn parse_tracked_change_runs(
     Ok(runs)
 }
 
-/// Parse w:ruby element (furigana)
+/// Parse w:ruby element (furigana). Populates all rubyPr children:
+/// rubyAlign, hps, hpsRaise, hpsBaseText, lid (per ECMA-376 §17.3.3.25).
+/// Geometry rules in spec/word_layout_spec_ra.md §18.
 fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
     let mut base_text = String::new();
     let mut ruby_text = String::new();
     let mut ruby_font_size: Option<f32> = None;
+    let mut align: Option<RubyAlign> = None;
+    let mut hps_halfpt: Option<u32> = None;
+    let mut hps_raise_halfpt: Option<u32> = None;
+    let mut hps_base_text_halfpt: Option<u32> = None;
+    let mut lang: Option<String> = None;
     let mut depth = 0;
-    let mut in_rt = false; // ruby text (annotation)
-    let mut in_ruby_base = false; // base text
-    let mut in_ruby_pr = false; // ruby properties
+    let mut in_rt = false;
+    let mut in_ruby_base = false;
+    let mut in_ruby_pr = false;
     let mut in_t = false;
+
+    fn read_val_attr(e: &quick_xml::events::BytesStart) -> Option<String> {
+        for attr in e.attributes().flatten() {
+            if local_name(attr.key.as_ref()) == "val" {
+                return Some(String::from_utf8_lossy(&attr.value).into_owned());
+            }
+        }
+        None
+    }
 
     loop {
         match reader.read_event()? {
@@ -5923,20 +5939,61 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "sz" && in_ruby_pr {
-                    for attr in e.attributes().flatten() {
-                        if local_name(attr.key.as_ref()) == "val" {
-                            let val = String::from_utf8_lossy(&attr.value);
+                if !in_ruby_pr {
+                    continue;
+                }
+                match local.as_str() {
+                    "sz" => {
+                        if let Some(val) = read_val_attr(&e) {
                             ruby_font_size = val.parse::<f32>().ok().map(|v| v / 2.0);
                         }
                     }
+                    "rubyAlign" => {
+                        if let Some(val) = read_val_attr(&e) {
+                            align = match val.as_str() {
+                                "center" => Some(RubyAlign::Center),
+                                "distributeLetter" => Some(RubyAlign::DistributeLetter),
+                                "distributeSpace" => Some(RubyAlign::DistributeSpace),
+                                "left" => Some(RubyAlign::Left),
+                                "right" => Some(RubyAlign::Right),
+                                "rightVertical" => Some(RubyAlign::RightVertical),
+                                _ => None,
+                            };
+                        }
+                    }
+                    "hps" => {
+                        if let Some(val) = read_val_attr(&e) {
+                            hps_halfpt = val.parse::<u32>().ok();
+                        }
+                    }
+                    "hpsRaise" => {
+                        if let Some(val) = read_val_attr(&e) {
+                            hps_raise_halfpt = val.parse::<u32>().ok();
+                        }
+                    }
+                    "hpsBaseText" => {
+                        if let Some(val) = read_val_attr(&e) {
+                            hps_base_text_halfpt = val.parse::<u32>().ok();
+                        }
+                    }
+                    "lid" => {
+                        lang = read_val_attr(&e);
+                    }
+                    _ => {}
                 }
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
-                    "ruby" if depth == 1 => {
-                        depth -= 1;
+                    // parse_ruby is invoked AFTER the parent loop consumed
+                    // <w:ruby> Start, so we are positioned INSIDE ruby with
+                    // depth=0 representing the ruby's own level. We break on
+                    // </w:ruby> at that level. (Previous condition used
+                    // depth==1 which never matched, causing the reader to
+                    // consume past ruby and eat following Runs — the bug
+                    // was dormant pre-Round-5 because no baseline doc had
+                    // a ruby followed by additional Runs.)
+                    "ruby" if depth == 0 => {
                         break;
                     }
                     "rt" => { in_rt = false; }
@@ -5952,10 +6009,20 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
         }
     }
 
+    // If hps was parsed and font_size wasn't set from <sz>, derive from hps.
+    if ruby_font_size.is_none() {
+        ruby_font_size = hps_halfpt.map(|h| h as f32 / 2.0);
+    }
+
     Ok(Ruby {
         base: base_text,
         text: ruby_text,
         font_size: ruby_font_size,
+        align,
+        hps_halfpt,
+        hps_raise_halfpt,
+        hps_base_text_halfpt,
+        lang,
     })
 }
 
@@ -6766,5 +6833,100 @@ mod tests {
         let c = comments.get("5").expect("id=5 present");
         assert!(c.initials.is_none(), "initials should be None when absent");
         assert_eq!(c.author.as_deref(), Some("Bob"));
+    }
+
+    #[test]
+    fn parse_ruby_captures_full_ruby_pr() {
+        // ECMA-376 §17.3.3.25 ruby with all rubyPr children. Geometry rules
+        // verified empirically in spec/word_layout_spec_ra.md §18.
+        let xml = r#"<w:ruby xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rubyPr>
+    <w:rubyAlign w:val="distributeLetter"/>
+    <w:hps w:val="11"/>
+    <w:hpsRaise w:val="18"/>
+    <w:hpsBaseText w:val="21"/>
+    <w:lid w:val="ja-JP"/>
+  </w:rubyPr>
+  <w:rt><w:r><w:rPr><w:sz w:val="11"/></w:rPr><w:t>かんじ</w:t></w:r></w:rt>
+  <w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase>
+</w:ruby>"#;
+        let mut reader = Reader::from_str(xml);
+        // Advance to the <w:ruby> start tag.
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "ruby" => break,
+                Event::Eof => panic!("no <w:ruby> in fixture"),
+                _ => continue,
+            }
+        }
+        let ruby = parse_ruby(&mut reader).expect("parse_ruby");
+        assert_eq!(ruby.base, "漢字");
+        assert_eq!(ruby.text, "かんじ");
+        assert_eq!(ruby.align, Some(RubyAlign::DistributeLetter));
+        assert_eq!(ruby.hps_halfpt, Some(11));
+        assert_eq!(ruby.hps_raise_halfpt, Some(18));
+        assert_eq!(ruby.hps_base_text_halfpt, Some(21));
+        assert_eq!(ruby.lang.as_deref(), Some("ja-JP"));
+        // hps=11 half-pt → font_size 5.5pt (derived from hps when no <sz> present)
+        assert_eq!(ruby.font_size, Some(5.5));
+    }
+
+    #[test]
+    fn parse_ruby_minimal_omits_optional_fields() {
+        // ECMA-376 allows w:ruby with no rubyPr at all; all rubyPr-derived
+        // fields must default to None and not panic.
+        let xml = r#"<w:ruby xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rt><w:r><w:t>ふく</w:t></w:r></w:rt>
+  <w:rubyBase><w:r><w:t>含</w:t></w:r></w:rubyBase>
+</w:ruby>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "ruby" => break,
+                Event::Eof => panic!("no <w:ruby> in fixture"),
+                _ => continue,
+            }
+        }
+        let ruby = parse_ruby(&mut reader).expect("parse_ruby");
+        assert_eq!(ruby.base, "含");
+        assert_eq!(ruby.text, "ふく");
+        assert!(ruby.align.is_none());
+        assert!(ruby.hps_halfpt.is_none());
+        assert!(ruby.hps_raise_halfpt.is_none());
+        assert!(ruby.hps_base_text_halfpt.is_none());
+        assert!(ruby.lang.is_none());
+    }
+
+    #[test]
+    fn parse_ruby_align_modes_round_trip() {
+        // Each w:rubyAlign value parses to its corresponding RubyAlign variant.
+        let modes = [
+            ("center", RubyAlign::Center),
+            ("distributeLetter", RubyAlign::DistributeLetter),
+            ("distributeSpace", RubyAlign::DistributeSpace),
+            ("left", RubyAlign::Left),
+            ("right", RubyAlign::Right),
+            ("rightVertical", RubyAlign::RightVertical),
+        ];
+        for (val, expected) in modes {
+            let xml = format!(
+                r#"<w:ruby xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rubyPr><w:rubyAlign w:val="{}"/></w:rubyPr>
+  <w:rt><w:r><w:t>a</w:t></w:r></w:rt>
+  <w:rubyBase><w:r><w:t>b</w:t></w:r></w:rubyBase>
+</w:ruby>"#,
+                val
+            );
+            let mut reader = Reader::from_str(&xml);
+            loop {
+                match reader.read_event().expect("read") {
+                    Event::Start(e) if local_name(e.name().as_ref()) == "ruby" => break,
+                    Event::Eof => panic!("no <w:ruby>"),
+                    _ => continue,
+                }
+            }
+            let ruby = parse_ruby(&mut reader).expect("parse_ruby");
+            assert_eq!(ruby.align, Some(expected), "align for w:val={val:?}");
+        }
     }
 }
