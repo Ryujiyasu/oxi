@@ -164,6 +164,58 @@ Format:
   investigation needs multi-line, multi-pair fixtures + DML-level
   per-line position comparison on 0e7af/683ff specifically.
 
+## 2026-04-27 — oxi-main — narrowing — 0e7af/683ff direct COM probe + 4 discriminator candidates eliminated
+
+- context: Followed up on the always-on falsification by directly probing
+  Word's actual yakumono compression behavior on the regressed real docs.
+- artifacts:
+  - `tools/metrics/probe_0e7af_yakumono.py` — measures all closing-class
+    yakumono pairs in a docx via COM, classifies width as
+    COMPRESSED (5.25pt) / FULL (10.5pt) / OTHER
+  - `pipeline_data/probe_0e7af_yakumono.json` — measurements for 0e7af
+    (822 pairs) and 683ff (187 pairs)
+  - `tools/metrics/build_mincho_nokern_variants.py` +
+    `tools/metrics/mincho_kern_variants/{MC_A_mincho_NOKERN,MC_A_mincho_NOKERN_COMPAT15}.docx`
+  - `tools/metrics/measure_mincho_kern_variants.py` +
+    `pipeline_data/mincho_kern_variants.json`
+  - `tools/metrics/build_mincho_9pt_variant.py` +
+    `tools/metrics/mincho_size_variants/MC_A_mincho_9pt.docx`
+- direct evidence:
+  - **0e7af** (MS Mincho 9pt, no kern, compat=15, cSC=doNotCompress):
+    822 yakumono pairs measured → **0 COMPRESSED (0.0%)**, 6 FULL (0.7%),
+    816 OTHER (mostly 9.0pt = fullwidth at 9pt). Even `。）` (38 occurrences)
+    showed 9.0pt for `。`. **Word does NOT compress in 0e7af**.
+  - **683ff** (MS Mincho ~10.5pt, no kern, compat=15, cSC=doNotCompress):
+    187 pairs → 1 COMPRESSED (0.5%), 129 FULL (69%), 57 OTHER. **Word does
+    NOT compress in 683ff**.
+- discriminator hypothesis testing (vs MC_A_mincho fixture which compresses):
+  | hypothesis | test | result |
+  |---|---|---|
+  | font (MS Mincho excluded?) | mincho_adjacency MC_A_mincho.docx | COMPRESS — REFUTED |
+  | compat=14 vs 15 | MC_A_mincho_NOKERN_COMPAT15 | COMPRESS — REFUTED |
+  | kerning | MC_A_mincho_NOKERN (compat=14, no kern) | COMPRESS — REFUTED |
+  | font size 9pt | MC_A_mincho_9pt | COMPRESS (4.5pt = half of 9pt) — REFUTED |
+- 4 of 5 obvious axis-discriminators eliminated. Remaining candidates
+  must lie outside the {compat, cSC, useFE, kern, font, size} space:
+  - real-doc text shape (multi-paragraph natural Japanese vs synthetic
+    `観、「測` repeat)
+  - paragraph indent / hanging
+  - run-level properties beyond rFonts (lang tag, theme refs, rPr
+    inheritance from styles)
+  - line-wrap context (compression conditional on wrap-budget pressure?)
+  - section properties (page columns, gutters)
+- code change: NONE. Adds 3 measurement scripts + 3 variant fixtures.
+  No `crates/` touched. No baseline impact.
+- outcome: 4 discriminator candidates eliminated via 6+1+1 variant
+  measurements. Next session needs structurally-different approach:
+  (a) Word DML position extraction on 0e7af page 4 + Oxi layout JSON
+  comparison to find specific divergence positions, OR
+  (b) Build a fixture that *clones* 0e7af's first multi-pair paragraph
+  exactly (same indent, run properties, paragraph context) and measure;
+  if clone compresses, narrow further; if not, the discriminator is
+  in the cloned property set
+  Hand-off doc updated in `project_adjacency_matrix_variants_2026_04_27.md`.
+
 ## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
 
 - context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".
