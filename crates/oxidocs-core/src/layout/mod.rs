@@ -5091,6 +5091,16 @@ impl LayoutEngine {
             // `lm0_lineauto.json` overrides the formula when present
             // (COM-confirmed sweep across MS Mincho/Gothic, Yu Mincho/Gothic,
             // Calibri, TNR, Meiryo at sizes 7-25pt).
+            // Round 18 (2026-04-28) — REVERT attempt at lookup removal:
+            // Round 16 V18/V19 measurement showed LM0 values diverge from
+            // formula by 1.5-9pt for the no-docGrid scenario. Removing the
+            // lookup at this site (replacing with `fallback`) caused
+            // pipeline.verify NG: test_line_heights p.4 (−0.0027) +
+            // p.5 (−0.0012) regressed against +0.0045 gain at p.2. Net
+            // ≈0, bottom-5 floor unchanged. LM0 lookup is load-bearing
+            // for at least some Word style + lineSpacing combinations
+            // (likely compensating for other Oxi quirks). Lookup retained
+            // until the underlying compensation is identified.
             let lookup_no_grid = |family: &str, font_size: f32, fallback: f32| -> f32 {
                 self.registry.lm0_lineauto_base(family, font_size).unwrap_or(fallback)
             };
