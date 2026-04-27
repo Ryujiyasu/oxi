@@ -216,6 +216,62 @@ Format:
   in the cloned property set
   Hand-off doc updated in `project_adjacency_matrix_variants_2026_04_27.md`.
 
+## 2026-04-27 — oxi-main — narrowing — 2 more discriminator candidates eliminated (text-shape, jc=both)
+
+- context: Continued narrowing after 4 axis-discriminators eliminated.
+- artifacts:
+  - `tools/metrics/build_0e7af_text_replaced_variant.py` — replaces the
+    first body paragraph's text in 0e7af with the MC_A_mincho fixture
+    pattern (`観、「測` × 10), preserving all run/para/section properties
+  - `tools/metrics/text_replaced_variants/0e7af_with_fixture_text_in_p1.docx`
+  - `tools/metrics/build_mincho_jc_both_variant.py` — adds
+    `<w:jc w:val="both"/>` to MC_A_mincho's single paragraph
+  - `tools/metrics/jc_variants/MC_A_mincho_jc_both.docx`
+- evidence:
+  - **Text shape (text in 0e7af context)**: Injected `観、「測` × 10 into a
+    plain body paragraph of 0e7af (no pStyle, no run sz override → inherits
+    pPrDefault jc=both + 9pt body font from rPrDefault). COM-measured `、`
+    widths = ~11.5pt (full at the inherited size). NOT COMPRESSED. Even
+    with the exact MC_A_mincho text, 0e7af's environment suppresses
+    compression. ⇒ text-shape is NOT the discriminator.
+  - **jc=both**: Added `<w:jc w:val="both"/>` to MC_A_mincho's only
+    paragraph. COM-measured `、` widths = 5.0-5.5pt (avg 5.3). STILL
+    COMPRESSED. ⇒ jc=both alone is NOT the discriminator. (However,
+    note: MC_A_mincho's text fits one line, so jc=both has no
+    justification work to do — a long-paragraph test is still possible.)
+- discriminator candidates eliminated this session: 6 of 7 axis tests
+  REFUTED:
+  | hypothesis        | test                                  | result   |
+  | font (Mincho?)    | mincho_adjacency MC_A_mincho          | REFUTED  |
+  | compat=14 vs 15   | MC_A_mincho_NOKERN_COMPAT15           | REFUTED  |
+  | kerning           | MC_A_mincho_NOKERN                    | REFUTED  |
+  | font size 9pt     | MC_A_mincho_9pt                       | REFUTED  |
+  | text shape        | 0e7af with fixture-text injection     | REFUTED  |
+  | jc=both           | MC_A_mincho with jc=both              | REFUTED  |
+- structural finding: MC_A_mincho.docx is **minimal** (only
+  `[Content_Types].xml`, `word/document.xml`, `word/settings.xml`).
+  0e7af.docx has additionally `word/styles.xml`,
+  `word/fontTable.xml`, `word/theme/theme1.xml`, `word/webSettings.xml`,
+  footnotes/endnotes.xml. The discriminator likely lives in one of
+  these support files. 0e7af's `<w:rPrDefault>` includes
+  `<w:lang w:val="en-US" w:eastAsia="ja-JP" w:bidi="ar-SA"/>` which
+  MC_A_mincho lacks. fontTable.xml may carry PANOSE info that triggers
+  font-specific layout rules.
+- code change: NONE. Adds 2 build scripts + 2 fixture variants.
+- outcome: 6 discriminator candidates REFUTED. Bottom-5 floor 3.2645
+  maintained. Investigation has reached "MC_A_mincho is too minimal to
+  match real-world Word docs' rendering context" — narrowing further
+  requires either:
+  (1) progressive test: add styles.xml + fontTable.xml + theme.xml +
+      lang tag + ... to MC_A_mincho one at a time, measure after each
+  (2) inverse test: take 0e7af and progressively REMOVE features until
+      compression starts (likely faster — fewer iterations)
+  (3) structural pivot: accept that yakumono compression has a complex
+      gate that COM-by-fixture investigation is poorly suited to
+      uncover, and move to a different productive task
+  Recommend (3) per CLAUDE.md "no excuse stacking" principle: when a
+  rule needs many carve-outs, the rule itself is wrong / too narrow.
+
 ## 2026-04-25 — oxi-main — refuted — split-box bottom padding cursor_y narrow fix (5th FALSIFIED)
 
 - context: d77a P.7 rank-1 worst page (0.6268). User flagged "box 下 padding 欠落".
