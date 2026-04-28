@@ -75,11 +75,17 @@ def measure_doc(word, docx_path: str) -> dict:
                     vis_rng = doc.Range(rng.Start + visible_offset,
                                         rng.Start + visible_offset)
                     page = vis_rng.Information(3)
+                    y = vis_rng.Information(6)  # wdVerticalPositionRelativeToPage
+                    x = vis_rng.Information(5)  # wdHorizontalPositionRelativeToPage
                 else:
                     start_rng = doc.Range(rng.Start, rng.Start)
                     page = start_rng.Information(3)  # wdActiveEndPageNumber
+                    y = start_rng.Information(6)
+                    x = start_rng.Information(5)
             except Exception:
                 page = None
+                y = None
+                x = None
             text = raw_text.replace("\r", "").replace("\x07", "").replace("\n", "").replace("\x0c", "").replace("\x0b", "")
             text = text[:30]
 
@@ -91,6 +97,8 @@ def measure_doc(word, docx_path: str) -> dict:
             rows.append({
                 "i": pi,
                 "page": page,
+                "y": round(y, 2) if y is not None else None,
+                "x": round(x, 2) if x is not None else None,
                 "text": text,
                 "in_table": in_table,
             })
