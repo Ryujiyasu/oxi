@@ -1579,10 +1579,17 @@ impl LayoutEngine {
                         // 14pt + 10.5pt in 18pt grid → each paragraph uses 18pt cell.
                         // COM-measured (2026-04-17, 04b88e): bridging to 5-page layout
                         // requires grid-aware footer height.
+                        // R37 (2026-04-28): switched ceil → round for empty footer
+                        // paragraph cell-count. ceil(14/13.6)=2 over-reserves by 1
+                        // grid cell when nat barely exceeds pitch, pushing the last
+                        // body paragraph (e.g. 備考 boilerplate) onto the next page.
+                        // Word does not consume an extra cell when the empty paragraph
+                        // marker just barely overflows the grid line. 7 baseline
+                        // pagination FAIL docs share this 備考-spill symptom.
                         if let Some(pitch) = gp {
                             if pitch > 0.0 {
                                 let nat = metrics.word_line_height_no_grid(empty_fs);
-                                let cells = (nat / pitch).ceil().max(1.0);
+                                let cells = (nat / pitch).round().max(1.0);
                                 cells * pitch
                             } else {
                                 metrics.word_line_height_no_grid(empty_fs)
