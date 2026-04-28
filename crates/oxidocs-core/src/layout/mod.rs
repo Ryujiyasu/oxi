@@ -5539,9 +5539,22 @@ impl LayoutEngine {
             // 11pt natural in Word, not snapped to 16.5pt. Snapping when content
             // < pitch over-reserves by (pitch - content) per row, causing cumulative
             // drift that pushes the bottom 備考 paragraph to next page.
+            // Grid snap row content height, then round to 0.5pt (10tw)
+            // R40 (2026-04-28): only grid-snap when content >= pitch.
+            // R47 (2026-04-29): also skip snap when ANY cell in this row uses
+            // vMerge. Instrumentation-driven finding (R45/R46): snap removal
+            // collapses 459f05f p.3 (SSIM 0.86→0.00) because its heavy vMerge
+            // (30 across 2 tables) depends on snap-rounded row heights for
+            // vMerge-cell content positioning. Tables WITHOUT vMerge (bd90,
+            // d77a58, b837808, e3c545 — most baseline docs, 156/177) safely
+            // tolerate snap removal because their cells are independent rows.
+            // The vMerge gate isolates 459f05f and 21 similar vMerge docs
+            // from the snap behavior change.
+            let row_has_vmerge = row.cells.iter().any(|c| c.v_merge.is_some());
             if let Some(pitch) = table_grid_pitch {
                 if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none()
-                    && row_height >= pitch {
+                    && row_height >= pitch
+                    && row_has_vmerge {
                     let snapped = (row_height / pitch).ceil() * pitch;
                     // Round to 0.5pt (10 twips) — matches Word internal precision
                     row_height = (snapped * 2.0).round() / 2.0;
