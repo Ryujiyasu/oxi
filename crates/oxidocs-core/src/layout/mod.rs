@@ -5534,8 +5534,14 @@ impl LayoutEngine {
             // COM-confirmed: table row height = round_10tw(ceil(content / pitch) * pitch)
             // linesAndChars mode: Word does NOT grid-snap table row heights
             // (COM-measured: row heights are natural content height, not grid multiples)
+            // R40 (2026-04-28): only grid-snap when content >= pitch. COM-measured
+            // bd90 (lines pitch=16.5): table rows with sz=10.5 content render at
+            // 11pt natural in Word, not snapped to 16.5pt. Snapping when content
+            // < pitch over-reserves by (pitch - content) per row, causing cumulative
+            // drift that pushes the bottom 備考 paragraph to next page.
             if let Some(pitch) = table_grid_pitch {
-                if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none() {
+                if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none()
+                    && row_height >= pitch {
                     let snapped = (row_height / pitch).ceil() * pitch;
                     // Round to 0.5pt (10 twips) — matches Word internal precision
                     row_height = (snapped * 2.0).round() / 2.0;
