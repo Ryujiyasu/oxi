@@ -51,12 +51,35 @@ def normalize_text(s: str) -> str:
 
 
 def yrange_iou(s1: float, e1: float, s2: float, e2: float) -> float:
-    """1D Intersection-over-Union on two y-ranges."""
+    """1D Intersection-over-Union on two y-ranges (legacy, kept for raw_iou)."""
     inter = max(0.0, min(e1, e2) - max(s1, s2))
     union = max(e1, e2) - min(s1, s2)
     if union <= 0.0:
         return 0.0
     return inter / union
+
+
+def position_iou(wy: float, wh: float, oy: float, oh: float) -> float:
+    """R53 (2026-04-29): position-focused IoU metric for Phase 2.
+
+    Decouples y-position alignment from height-rendering convention.
+    Phase 2 cascade work targets y-position correctness; height differences
+    (Oxi grid-pitch-snapped vs Word natural font line-height) are a
+    separate rendering convention issue (~0.5pt per line, ceiling at
+    0.973 with strict IoU).
+
+    Formula: 1 - |dy| / max(wh, oh), clamped to [0, 1].
+        dy=0 (perfect alignment) → 1.0
+        |dy|=h (1 paragraph apart) → 0.0
+        |dy| > h → 0.0 (no overlap)
+
+    Independent of relative heights; only y-start position matters.
+    """
+    h_max = max(wh, oh)
+    if h_max <= 0:
+        return 0.0
+    dy_abs = abs(oy - wy)
+    return max(0.0, 1.0 - dy_abs / h_max)
 
 
 def load_word(doc_id: str) -> dict | None:
@@ -230,13 +253,16 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
             continue
         wy, wh = m["word_y"], m["word_h"]
         oy, oh = m["oxi_y"], m["oxi_h"]
-        # Raw IoU (no adjustment)
+        # R53: position-focused IoU is the Phase 2 gate metric. Raw and
+        # adjusted yrange-IoU kept for diagnosis.
         if m["oxi_page"] == m["word_page"]:
             iou_raw = yrange_iou(wy, wy + wh, oy, oy + oh)
-            iou_adj = yrange_iou(wy, wy + wh, oy - median_dy, oy - median_dy + oh)
+            iou_yrange_adj = yrange_iou(wy, wy + wh, oy - median_dy, oy - median_dy + oh)
+            iou_pos = position_iou(wy, wh, oy - median_dy, oh)
         else:
             iou_raw = 0.0
-            iou_adj = 0.0
+            iou_yrange_adj = 0.0
+            iou_pos = 0.0
         matches.append({
             "word_i": m["word_i"],
             "word_page": m["word_page"],
@@ -246,7 +272,8 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
             "oxi_y": round(oy, 2),
             "oxi_h": round(oh, 2),
             "iou_raw": round(iou_raw, 4),
-            "iou_adj": round(iou_adj, 4),
+            "iou_yrange_adj": round(iou_yrange_adj, 4),
+            "iou_pos": round(iou_pos, 4),  # Phase 2 gate metric
             "matched": True,
         })
 
@@ -254,13 +281,15 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     n_matched = len(matched)
     if n_matched > 0:
         mean_iou_raw = sum(m["iou_raw"] for m in matched) / n_matched
-        mean_iou_adj = sum(m["iou_adj"] for m in matched) / n_matched
-        n_iou_high_adj = sum(1 for m in matched if m["iou_adj"] >= 0.99)
-        n_iou_zero = sum(1 for m in matched if m["iou_adj"] == 0.0)
+        mean_iou_yrange = sum(m["iou_yrange_adj"] for m in matched) / n_matched
+        mean_iou_pos = sum(m["iou_pos"] for m in matched) / n_matched
+        n_iou_high = sum(1 for m in matched if m["iou_pos"] >= 0.99)
+        n_iou_zero = sum(1 for m in matched if m["iou_pos"] == 0.0)
     else:
         mean_iou_raw = 0.0
-        mean_iou_adj = 0.0
-        n_iou_high_adj = 0
+        mean_iou_yrange = 0.0
+        mean_iou_pos = 0.0
+        n_iou_high = 0
         n_iou_zero = 0
 
     return {
@@ -269,13 +298,15 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
         "n_matched": n_matched,
         "n_unmatched": len(matches) - n_matched,
         "median_dy": round(median_dy, 2),
-        # Primary gate metric: dy-adjusted IoU (measures real misalignment beyond
-        # systematic convention offset between Word COM and Oxi dump-layout).
-        "mean_iou": round(mean_iou_adj, 4),
+        # Primary gate metric: position-focused IoU (R53, 2026-04-29).
+        # Decoupled from height rendering convention (Oxi grid-pitch vs
+        # Word natural). Measures real y-position alignment.
+        "mean_iou": round(mean_iou_pos, 4),
+        "mean_iou_yrange_adj": round(mean_iou_yrange, 4),  # legacy R52 metric
         "mean_iou_raw": round(mean_iou_raw, 4),
-        "n_iou_high": n_iou_high_adj,
+        "n_iou_high": n_iou_high,
         "n_iou_zero": n_iou_zero,
-        "frac_iou_high": round(n_iou_high_adj / n_matched, 4) if n_matched else 0.0,
+        "frac_iou_high": round(n_iou_high / n_matched, 4) if n_matched else 0.0,
         "matches": matches,
     }
 
