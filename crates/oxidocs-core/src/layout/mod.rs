@@ -4215,6 +4215,19 @@ impl LayoutEngine {
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
 
+        // R38 (2026-04-28): paragraphs whose fragments are entirely whitespace
+        // (incl. fullwidth space U+3000) render as a SINGLE empty line in Word.
+        // Pre-fix: Oxi treated each fullwidth space as a regular CJK char and
+        // wrapped 142 spaces over 4 lines (d77a58 i=129: Word 18pt, Oxi 72pt,
+        // +54pt over-render → page-8 cascade → i=135 spill to next page).
+        // Post-fix: collapse to 1 empty line matching Word.
+        let all_whitespace = !fragments.is_empty() && fragments.iter().all(|(text, _, _, _, _)| {
+            text.chars().all(|c| c.is_whitespace())
+        });
+        if all_whitespace {
+            return vec![Line { fragments: vec![], ..Default::default() }];
+        }
+
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
         let mut current_width = first_line_indent;
