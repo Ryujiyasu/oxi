@@ -97,12 +97,25 @@ def measure_doc(word, info: dict) -> dict:
         for pi in range(1, n_paras + 1):
             p = doc.Paragraphs(pi)
             rng = p.Range
+            # CRITICAL (Round 30 fix): Range.Information returns the position of the
+            # *active end* of the range. For paragraphs whose range spans a page
+            # boundary (e.g., a paragraph at the end of a multi-page cell whose
+            # trailing run/marker overflows to the next page), the end-position Y
+            # is on the *next* page while the START is the actual visible top of
+            # the paragraph. Round 28-29 used end-position Y and produced false
+            # outliers for cell-end paragraphs (delta -361pt artifacts).
+            # Use Range.Start collapsed to a zero-length range to get true start Y.
             try:
-                y = rng.Information(6)  # wdVerticalPositionRelativeToPage
-                x = rng.Information(5)  # wdHorizontalPositionRelativeToPage
-                page = rng.Information(3)  # wdActiveEndAdjustedPageNumber
+                start_rng = doc.Range(rng.Start, rng.Start)
+                y = start_rng.Information(6)
+                x = start_rng.Information(5)
+                page = start_rng.Information(3)
+                # Also capture end-position for diagnosis: nonzero start_vs_end
+                # delta indicates a multi-page paragraph or a cell-trailing edge case.
+                y_end = rng.Information(6)
+                page_end = rng.Information(3)
             except Exception:
-                y = x = page = None
+                y = x = page = y_end = page_end = None
             text = (rng.Text or "").replace("\r", "").replace("\x07", "").replace("\n", "")
             text = text[:30]
 
@@ -142,6 +155,8 @@ def measure_doc(word, info: dict) -> dict:
                 "page": page,
                 "y_pt": y,
                 "x_pt": x,
+                "y_pt_end": y_end,
+                "page_end": page_end,
                 "text": text,
                 "font": font_name,
                 "size_pt": font_size,
