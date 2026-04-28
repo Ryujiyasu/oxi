@@ -53,15 +53,34 @@ def measure_doc(word, docx_path: str) -> dict:
         for pi in range(1, n_paras + 1):
             p = doc.Paragraphs(pi)
             rng = p.Range
+            raw_text = rng.Text or ""
             try:
                 # R30 fix: collapsed start range avoids Information() reporting
                 # the active-end page for paragraphs whose trailing run/marker
                 # overflows to the next page.
-                start_rng = doc.Range(rng.Start, rng.Start)
-                page = start_rng.Information(3)  # wdActiveEndPageNumber
+                # R39 (2026-04-28): skip leading control chars (page break
+                # \x0c, line break \x0b, paragraph mark \r) when determining
+                # the visible page. Paragraphs starting with <w:br type="page"/>
+                # have rng.Start at the page-break marker (page N-1) but the
+                # visible text on page N. Using start position misreports the
+                # page in pagination_diff (0e7af1ae i=59 "総則" was a false
+                # FAIL: visible text on page 2, marker on page 1).
+                visible_offset = 0
+                for ch in raw_text:
+                    if ch in ("\x0c", "\x0b", "\r", "\n", "\x07"):
+                        visible_offset += 1
+                    else:
+                        break
+                if visible_offset > 0 and visible_offset < len(raw_text):
+                    vis_rng = doc.Range(rng.Start + visible_offset,
+                                        rng.Start + visible_offset)
+                    page = vis_rng.Information(3)
+                else:
+                    start_rng = doc.Range(rng.Start, rng.Start)
+                    page = start_rng.Information(3)  # wdActiveEndPageNumber
             except Exception:
                 page = None
-            text = (rng.Text or "").replace("\r", "").replace("\x07", "").replace("\n", "")
+            text = raw_text.replace("\r", "").replace("\x07", "").replace("\n", "").replace("\x0c", "").replace("\x0b", "")
             text = text[:30]
 
             try:
