@@ -5808,7 +5808,16 @@ impl LayoutEngine {
                                 // Previous formula (fs × pitch/default_fs) over-compressed
                                 // when fs<default_fs. Correct: cw = fs + charSpace_pt where
                                 // charSpace_pt = pitch − default_fs (negative for compressPunc).
-                                if run.style.fit_text.is_none() {
+                                // R41 (2026-04-28): gate charGrid pitch widening on
+                                // para.style.snap_to_grid, mirroring body path
+                                // (mod.rs:3279 sets effective_cw_ratio=None when
+                                // snap_to_grid=false). Cell path was widening
+                                // unconditionally, causing extra-wrap cascade for
+                                // paragraphs with <w:snapToGrid w:val="0"/>.
+                                // 1636 i=70: 43 fullwidth chars × +0.20pt = +8.4pt
+                                // overflow → spurious 2-line wrap that pushes
+                                // 備考 (i=79) past page bottom.
+                                if run.style.fit_text.is_none() && para.style.snap_to_grid {
                                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                                             && crate::font::is_fullwidth(ch)
@@ -6691,7 +6700,11 @@ impl LayoutEngine {
             for ch in run.text.chars() {
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
-                if run.style.fit_text.is_none() {
+                // R41 (2026-04-28): same snap_to_grid gate as the cell render
+                // path above (~line 5811) — count_cell_lines must match the
+                // render's wrap decision, otherwise estimate vs render diverge
+                // and cell content_h drifts.
+                if run.style.fit_text.is_none() && para.style.snap_to_grid {
                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                             && crate::font::is_fullwidth(ch)
