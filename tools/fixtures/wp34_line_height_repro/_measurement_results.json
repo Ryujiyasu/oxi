@@ -1,0 +1,44 @@
+{
+  "v1_ascii_sp20_cjk16": {
+    "p1_y": 28.5,
+    "p2_y": 38.5,
+    "p3_y": 49.0,
+    "stride_p1_to_p2": 10.0,
+    "stride_p2_to_p3": 10.5
+  },
+  "v2_cjk16_only": {
+    "p1_y": 28.5,
+    "p2_y": 38.5,
+    "p3_y": 49.0,
+    "stride_p1_to_p2": 10.0,
+    "stride_p2_to_p3": 10.5
+  },
+  "v3_cjk_fullwidth_sp16_cjk16": {
+    "p1_y": 28.5,
+    "p2_y": 38.5,
+    "p3_y": 49.0,
+    "stride_p1_to_p2": 10.0,
+    "stride_p2_to_p3": 10.5
+  },
+  "v4_ascii_sp20_cjk20": {
+    "p1_y": 28.5,
+    "p2_y": 38.5,
+    "p3_y": 51.5,
+    "stride_p1_to_p2": 10.0,
+    "stride_p2_to_p3": 13.0
+  },
+  "v5_ascii_sp16_cjk16": {
+    "p1_y": 28.5,
+    "p2_y": 38.5,
+    "p3_y": 49.0,
+    "stride_p1_to_p2": 10.0,
+    "stride_p2_to_p3": 10.5
+  },
+  "v6_ascii_X20_cjk16": {
+    "p1_y": 28.5,
+    "p2_y": 38.5,
+    "p3_y": 51.0,
+    "stride_p1_to_p2": 10.0,
+    "stride_p2_to_p3": 12.5
+  }
+}
