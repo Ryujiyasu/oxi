@@ -1735,7 +1735,21 @@ fn parse_paragraph_properties(
                         style.ppr_rpr = Some(ppr_rpr);
                     }
                     "numPr" if depth == 0 => {
-                        num_pr = Some(parse_num_pr(reader)?);
+                        let npr = parse_num_pr(reader)?;
+                        // R95 (2026-04-30): also mirror the parsed inline
+                        // numPr onto style.num_id/num_ilvl so describe_ppr_diff
+                        // (R-12 v3 ppr-axis) can compare prior vs current
+                        // numbering when a pPrChange records an inline numPr
+                        // toggle. Layout reads via num_pr_ref directly (line
+                        // ~1540-1552 reconstructs num_pr_ref from style.num_id
+                        // only when num_pr_ref is None — never the other way
+                        // around) so this is read-only from the perspective
+                        // of layout / list rendering.
+                        if !npr.num_id.is_empty() {
+                            style.num_id = Some(npr.num_id.clone());
+                            style.num_ilvl = npr.ilvl;
+                        }
+                        num_pr = Some(npr);
                     }
                     "spacing" if depth == 0 => {
                         style.has_direct_spacing = true;

@@ -65,6 +65,10 @@ Fixture list (indexed by file name):
        added at 72/144/216pt). R94 extends describe_ppr_diff via
        position-only summary (mirrors R93 borders pattern).
        Surfaces "Tab Stops Added".
+  22 — `<w:pPrChange>` paragraph-numPr revision (inline numId=1
+       ilvl=0 attached). R95 patches the parser to mirror inline
+       numPr onto style.num_id/num_ilvl, unblocking the R89
+       attempted branches. Surfaces "Numbering: list 1".
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -703,6 +707,33 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f22_pPrChange_numPr() -> Fixture:
+    # Paragraph that became a list item via inline pPrChange. Current
+    # pPr has <w:numPr><w:numId val=1/><w:ilvl val=0/></w:numPr>;
+    # pPrChange's prior pPr is empty. R95 patches parser to mirror
+    # inline numPr onto style.num_id, making describe_ppr_diff fire
+    # the "Numbering: list 1" branch.
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:numPr>\n'
+        '          <w:ilvl w:val="0"/>\n'
+        '          <w:numId w:val="1"/>\n'
+        '        </w:numPr>\n'
+        '        <w:pPrChange w:id="1500" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now numbered (was plain).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_22_pPrChange_numPr.docx",
+        description="pPrChange revision — paragraph attached to inline numPr (numId=1 ilvl=0); prior pPr empty.",
+        document_body=body,
+    )
+
+
 def f21_pPrChange_tabs() -> Fixture:
     # Paragraph that gained 3 tab stops via pPrChange. Current pPr has
     # <w:tabs><w:tab pos=1440 (=72pt) center align/><w:tab pos=2880
@@ -900,6 +931,7 @@ ALL_FIXTURES = [
     f19_pPrChange_keep_next,
     f20_pPrChange_borders,
     f21_pPrChange_tabs,
+    f22_pPrChange_numPr,
 ]
 
 

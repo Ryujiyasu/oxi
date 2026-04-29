@@ -1045,6 +1045,27 @@ fn describe_ppr_diff(
         }
         (true, true) => {}
     }
+    // R95 (2026-04-30): list / numbering axes (num_id + num_ilvl).
+    // Closes the last R72 §19.47.5 ppr-axis follow-up. R89 originally
+    // attempted these branches but the parser asymmetry prevented
+    // them from firing — parse_paragraph_properties returned numPr as
+    // a 4th tuple element without writing to style. R95 patches the
+    // parser to mirror inline numPr onto style.num_id/num_ilvl, which
+    // lets these branches fire reliably for both inline and pStyle-
+    // inherited numbering.
+    if prior.num_id != current.num_id {
+        match current.num_id.as_deref() {
+            Some(id) => diffs.push(format!("Numbering: list {}", id)),
+            None => {
+                if prior.num_id.is_some() {
+                    diffs.push("Numbering: None".to_string());
+                }
+            }
+        }
+    }
+    if prior.num_ilvl != current.num_ilvl {
+        diffs.push(format!("List Level: {}", current.num_ilvl));
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

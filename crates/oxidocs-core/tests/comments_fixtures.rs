@@ -1838,6 +1838,52 @@ fn fixture_21_layout_pprchange_tabs_added() {
     );
 }
 
+/// R95 (2026-04-30): describe_ppr_diff covers num_id (and num_ilvl,
+/// not exercised here since prior_ilvl == current_ilvl == 0). R89
+/// originally attempted these but parser asymmetry blocked them;
+/// R95 patches the parser to mirror inline numPr onto
+/// style.num_id/num_ilvl. fixture_22 attaches a paragraph to an
+/// inline list (numId=1 ilvl=0) via pPrChange whose prior pPr was
+/// empty. Body must contain "Numbering: list 1".
+#[test]
+fn fixture_22_layout_pprchange_inline_numPr_attach() {
+    let Some(bytes) = read_fixture("fixture_22_pPrChange_numPr.docx") else {
+        eprintln!("skipping: fixture_22 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_22");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_22 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Numbering: list 1"),
+        "num_id attach must surface as 'Numbering: list 1'; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

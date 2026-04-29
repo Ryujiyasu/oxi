@@ -103,5 +103,10 @@
     "file": "fixture_21_pPrChange_tabs.docx",
     "description": "pPrChange revision — 3 tab stops added at 72/144/216pt; prior pPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_22_pPrChange_numPr.docx",
+    "description": "pPrChange revision — paragraph attached to inline numPr (numId=1 ilvl=0); prior pPr empty.",
+    "status": "OK"
   }
 ]
