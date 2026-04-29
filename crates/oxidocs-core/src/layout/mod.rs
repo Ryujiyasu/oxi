@@ -3237,8 +3237,24 @@ impl LayoutEngine {
                     cursor_y += img.height;
                 }
                 Block::UnsupportedElement(_) => {}
-                Block::Math(_) => {
-                    // Phase 2 stub: textbox-embedded OMML math not yet rendered.
+                Block::Math(math_block) => {
+                    // R76 (2026-04-29): textbox-embedded OMML math, mirroring
+                    // the body arm at mod.rs:2463+. The math layout pipeline
+                    // doesn't depend on textbox-specific context (math
+                    // expressions are atomic with their own bbox), so the
+                    // body call signature works as-is. Origin = inner_x,
+                    // cursor advance = bbox height (with the same leeway
+                    // factor as body so per-paragraph spacing is consistent).
+                    let math_font_size: f32 = 10.5;
+                    let (math_elems, bbox) = crate::layout::math::emit_math_block(
+                        math_block, inner_x, cursor_y, math_font_size,
+                    );
+                    if !math_elems.is_empty() {
+                        elements.extend(math_elems);
+                        let advance = bbox.height().max(math_font_size * 1.2)
+                            + math_font_size * 0.3;
+                        cursor_y += advance;
+                    }
                 }
             }
         }
@@ -7689,5 +7705,53 @@ mod tests {
                 println!("  y={:.1} x={:.1} [{}c] \"{}\"", prev_y, line_x, chars, snippet);
             }
         }
+    }
+
+    /// R76 (2026-04-29): textbox-embedded OMML math renders via
+    /// `emit_math_block`, mirroring the body arm. Verifies the new
+    /// path emits at least one math element by calling the helper
+    /// directly (the integration concern — that
+    /// `layout_text_box`'s `Block::Math` arm wires correctly to the
+    /// helper — is covered by the simple structural check that the
+    /// arm now calls `emit_math_block` and not the prior stub).
+    #[test]
+    fn r76_emit_math_block_returns_elements_for_inline_fraction() {
+        use crate::ir::{MathBlock, MathExpr, FracBarType};
+
+        let math = MathBlock::Inline(vec![MathExpr::Fraction {
+            num: Box::new(MathExpr::Text("a".into())),
+            den: Box::new(MathExpr::Text("b".into())),
+            bar_type: FracBarType::Bar,
+        }]);
+        let (elems, bbox) = crate::layout::math::emit_math_block(&math, 0.0, 0.0, 10.5);
+        assert_eq!(elems.len(), 3, "fraction must emit 3 elements (num, den, bar); got {}", elems.len());
+        assert!(bbox.height() > 0.0, "fraction bbox must have positive height");
+        // OMML substitutes ASCII letters with Unicode Mathematical Italic
+        // (U+1D44E for 'a', U+1D44F for 'b') per Word's math font cascade.
+        // Numerator first, denominator second, bar last.
+        let mut saw_num = false;
+        let mut saw_den = false;
+        for el in &elems {
+            if let LayoutContent::Text { text, .. } = &el.content {
+                if text == "𝑎" { saw_num = true; }
+                if text == "𝑏" { saw_den = true; }
+            }
+        }
+        assert!(saw_num, "numerator (Mathematical Italic 'a') must be emitted");
+        assert!(saw_den, "denominator (Mathematical Italic 'b') must be emitted");
+        // Numerator y < denominator y (vertically stacked).
+        let num_y = elems.iter().find_map(|el| {
+            if let LayoutContent::Text { text, .. } = &el.content {
+                if text == "𝑎" { return Some(el.y); }
+            }
+            None
+        }).unwrap();
+        let den_y = elems.iter().find_map(|el| {
+            if let LayoutContent::Text { text, .. } = &el.content {
+                if text == "𝑏" { return Some(el.y); }
+            }
+            None
+        }).unwrap();
+        assert!(num_y < den_y, "numerator y ({num_y}) must be above denominator y ({den_y})");
     }
 }
