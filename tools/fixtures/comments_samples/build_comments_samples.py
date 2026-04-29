@@ -18,6 +18,9 @@ Fixture list (indexed by file name):
   08 — `<w:moveFrom>` + `<w:moveTo>` between paragraphs
   09 — `<w:rPrChange>` formatting revision (bold toggle)
   10 — Multiple reviewers — two distinct authors, one `<w:ins>` + one `<w:del>`
+  11 — CJK body (MS Mincho 24pt) with one `<w:ins>` + one `<w:del>` —
+       exercises R-01/R-03 styling on CJK glyphs and is the smallest case
+       for verifying strikethrough Y on full-width characters.
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -530,6 +533,43 @@ def f10_multiple_reviewers() -> Fixture:
     )
 
 
+def f11_cjk_revisions() -> Fixture:
+    # Single MS Mincho 24pt paragraph: prefix + ins(CJK) + middle + del(CJK)
+    # + suffix. All runs by Alice Reviewer (palette slot 0, #D03337). The
+    # large 24pt size makes strikethrough Y measurable in the GDI render
+    # (font ascent/descent based; CJK fonts have different metrics than
+    # Latin so this is the smallest case that surfaces a CJK-specific bug
+    # if one exists). Limitation #5 in PHASE_2_CLOSEOUT.md known-limitations
+    # was the trigger for this fixture.
+    rpr_mincho_24 = (
+        '<w:rPr>'
+        '<w:rFonts w:ascii="Calibri" w:eastAsia="MS Mincho" w:hAnsi="Calibri"/>'
+        '<w:sz w:val="48"/><w:szCs w:val="48"/>'
+        '</w:rPr>'
+    )
+    body = para(
+        f'<w:r>{rpr_mincho_24}<w:t xml:space="preserve">前段落。</w:t></w:r>',
+        (
+            '<w:ins w:id="500" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            f'<w:r>{rpr_mincho_24}<w:t xml:space="preserve">挿入された文字</w:t></w:r>'
+            '</w:ins>'
+        ),
+        f'<w:r>{rpr_mincho_24}<w:t xml:space="preserve">、</w:t></w:r>',
+        (
+            '<w:del w:id="501" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            f'<w:r>{rpr_mincho_24}<w:delText xml:space="preserve">削除された文字</w:delText></w:r>'
+            '</w:del>'
+        ),
+        f'<w:r>{rpr_mincho_24}<w:t xml:space="preserve">、終わり。</w:t></w:r>',
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_11_cjk_revisions.docx",
+        description="CJK body (MS Mincho 24pt) with one ins + one del — exercises R-01/R-03 styling on CJK glyphs.",
+        document_body=body,
+    )
+
+
 ALL_FIXTURES = [
     f01_single_comment,
     f02_comment_with_reply,
@@ -541,6 +581,7 @@ ALL_FIXTURES = [
     f08_move_from_to,
     f09_rPrChange_bold,
     f10_multiple_reviewers,
+    f11_cjk_revisions,
 ]
 
 

@@ -1244,3 +1244,145 @@ fn fixture_08_layout_moves_render_in_green() {
     assert!(any_struck, "at least one moveFrom fragment must be strikethrough");
     assert!(any_underlined, "at least one moveTo fragment must be underlined");
 }
+
+// ---------------------------------------------------------------------------
+// fixture_11 — CJK body with one ins + one del.
+//
+// PHASE_2_CLOSEOUT.md known-limitation #5 noted that the existing fixtures are
+// Latin-only and the strikethrough Y on CJK glyphs has not been verified.
+// fixture_11 is the smallest case that exercises R-01 / R-03 styling on
+// MS Mincho 24pt content; it covers the IR / layout side. The actual
+// pixel-level Y position is a renderer-side concern (TextOutW + GDI font
+// metrics) so verifying it via cargo tests is out of scope — the fixture
+// instead pins the prerequisite: the IR carries the right tracked_change
+// and the layout pre-pass applies underline/strikethrough + author color
+// regardless of script.
+// ---------------------------------------------------------------------------
+
+const F11_INS_TEXT: &str = "挿入された文字";
+const F11_DEL_TEXT: &str = "削除された文字";
+
+/// fixture_11 parser side: ins + del runs preserve CJK text and tracked-change
+/// metadata identically to the Latin fixtures.
+#[test]
+fn fixture_11_cjk_ins_del_parse_roundtrip() {
+    let Some(bytes) = read_fixture("fixture_11_cjk_revisions.docx") else {
+        eprintln!("skipping: fixture_11 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_11");
+
+    let revisions: Vec<(String, String)> = collect_runs(&doc)
+        .into_iter()
+        .filter_map(|r| {
+            r.tracked_change
+                .as_ref()
+                .map(|t| (t.change_type.clone(), r.text.clone()))
+        })
+        .collect();
+    assert_eq!(
+        revisions,
+        vec![
+            ("insert".to_string(), F11_INS_TEXT.to_string()),
+            ("delete".to_string(), F11_DEL_TEXT.to_string()),
+        ],
+        "fixture_11 must surface one CJK ins + one CJK del in document order"
+    );
+
+    // Author + date metadata still intact.
+    let with_tc: Vec<&oxidocs_core::ir::Run> = collect_runs(&doc)
+        .into_iter()
+        .filter(|r| r.tracked_change.is_some())
+        .collect();
+    for run in &with_tc {
+        let tc = run.tracked_change.as_ref().unwrap();
+        assert_eq!(tc.author.as_deref(), Some("Alice Reviewer"));
+        assert!(tc.date.is_some(), "w:date must survive on CJK runs too");
+    }
+}
+
+/// fixture_11 layout side: R-01 styles the CJK ins as underlined Alice-red,
+/// R-03 styles the CJK del as struck Alice-red. Adjacent normal CJK runs are
+/// left untouched.
+///
+/// Note: the body layout splits CJK content into per-glyph `LayoutContent::Text`
+/// fragments (one element per character; matches the per-glyph TextOutW
+/// emission the GDI renderer needs for CJK kerning / spacing). Tests below
+/// match on individual CJK characters rather than multi-char substrings.
+#[test]
+fn fixture_11_cjk_layout_ins_underline_and_del_strikethrough() {
+    let Some(bytes) = read_fixture("fixture_11_cjk_revisions.docx") else {
+        eprintln!("skipping: fixture_11 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_11");
+    let result = layout_doc(&doc);
+
+    // R-01: every CJK glyph that came from the <w:ins> run must be underlined
+    // + Alice-red. Pick the first two CJK characters of "挿入された文字".
+    for needle in &["挿", "入", "た", "文", "字"] {
+        let hits = collect_text_elements_with(&result, needle);
+        assert!(
+            !hits.is_empty(),
+            "ins CJK glyph '{needle}' must reach layout"
+        );
+        // Glyphs from the ins run must all be underlined Alice-red. The same
+        // glyph may appear elsewhere in the doc — filter to the underlined
+        // hits and require at least one.
+        let ins_styled: Vec<_> = hits
+            .iter()
+            .filter(|(u, _, c)| *u && c.as_deref() == Some("#D03337"))
+            .collect();
+        assert!(
+            !ins_styled.is_empty(),
+            "ins CJK glyph '{needle}' must surface underlined+red at least once; got {hits:?}"
+        );
+        for (_underline, strike, _color) in &ins_styled {
+            assert!(!*strike, "ins CJK glyph '{needle}' must NOT be strikethrough");
+        }
+    }
+
+    // R-03: every CJK glyph from the <w:del> run must be strikethrough +
+    // Alice-red. "削除された文字" — pick characters unique to del so we don't
+    // collide with the ins run.
+    for needle in &["削", "除"] {
+        let hits = collect_text_elements_with(&result, needle);
+        assert!(
+            !hits.is_empty(),
+            "del CJK glyph '{needle}' must reach layout"
+        );
+        let del_styled: Vec<_> = hits
+            .iter()
+            .filter(|(_, s, c)| *s && c.as_deref() == Some("#D03337"))
+            .collect();
+        assert!(
+            !del_styled.is_empty(),
+            "del CJK glyph '{needle}' must surface struck+red at least once; got {hits:?}"
+        );
+        for (underline, _strike, _color) in &del_styled {
+            assert!(
+                !*underline,
+                "del CJK glyph '{needle}' must NOT be underlined"
+            );
+        }
+    }
+
+    // Adjacent normal CJK runs must not be touched by the revision pre-pass.
+    // "前段落。" precedes the ins run; pick a glyph unique to that prefix.
+    for needle in &["前", "段", "落"] {
+        let hits = collect_text_elements_with(&result, needle);
+        assert!(
+            !hits.is_empty(),
+            "normal CJK glyph '{needle}' must reach layout"
+        );
+        for (underline, strike, color) in &hits {
+            assert!(!*underline, "normal CJK glyph '{needle}' must not be underlined");
+            assert!(!*strike, "normal CJK glyph '{needle}' must not be struck");
+            assert_ne!(
+                color.as_deref(),
+                Some("#D03337"),
+                "normal CJK glyph '{needle}' must not be author-tinted"
+            );
+        }
+    }
+}

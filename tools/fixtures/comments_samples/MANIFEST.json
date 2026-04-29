@@ -48,5 +48,10 @@
     "file": "fixture_10_multiple_reviewers.docx",
     "description": "Two authors: Alice's insertion + Bob's deletion in same paragraph; people.xml includes both.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_11_cjk_revisions.docx",
+    "description": "CJK body (MS Mincho 24pt) with one ins + one del — exercises R-01/R-03 styling on CJK glyphs.",
+    "status": "OK"
   }
 ]
