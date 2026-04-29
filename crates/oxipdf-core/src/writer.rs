@@ -954,6 +954,8 @@ mod tests {
                     data: pixel_data,
                     color_space: ColorSpace::DeviceRgb,
                     bits_per_component: 8,
+                    pixel_width: 200,
+                    pixel_height: 200,
                 })],
                 rotation: 0,
             }],
