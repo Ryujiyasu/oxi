@@ -1752,6 +1752,21 @@ impl LayoutEngine {
                     let lh = metrics.word_line_height(fs, 96.0);
                     hdr_h += lh;
                     hdr_h += para.style.space_after.unwrap_or(0.0);
+                } else if let Block::Math(math_block) = block {
+                    // R77 (2026-04-29): account for header-embedded OMML
+                    // math height when sizing the header band. Without
+                    // this, math in headers either overlaps body content
+                    // (bbox larger than reserved hdr_h) or leaves dead
+                    // space (bbox smaller). The bbox is used as a
+                    // height proxy with the same `font_size × 1.2` floor
+                    // and `× 0.3` descent leeway as the body and textbox
+                    // arms (mod.rs:2463+, mod.rs:3240+).
+                    let math_font_size: f32 = 10.5;
+                    let (_, bbox) = crate::layout::math::emit_math_block(
+                        math_block, 0.0, 0.0, math_font_size,
+                    );
+                    hdr_h += bbox.height().max(math_font_size * 1.2)
+                        + math_font_size * 0.3;
                 }
             }
             header_y + hdr_h
@@ -1868,6 +1883,16 @@ impl LayoutEngine {
                         self.estimate_para_height(p, cw, gp, None, false, None, None)
                     };
                     footer_h += h;
+                } else if let Block::Math(math_block) = block {
+                    // R77 (2026-04-29): account for footer-embedded OMML
+                    // math height when sizing the footer reservation.
+                    // See header counterpart at mod.rs:1744+.
+                    let math_font_size: f32 = 10.5;
+                    let (_, bbox) = crate::layout::math::emit_math_block(
+                        math_block, 0.0, 0.0, math_font_size,
+                    );
+                    footer_h += bbox.height().max(math_font_size * 1.2)
+                        + math_font_size * 0.3;
                 }
             }
             (footer_dist + footer_h).max(page.margin.bottom)
@@ -2549,6 +2574,20 @@ impl LayoutEngine {
                             false, None,
                         );
                         lp.elements.extend(hdr_elements);
+                    } else if let Block::Math(math_block) = block {
+                        // R77 (2026-04-29): render header-embedded OMML math.
+                        // Mirror the textbox arm at mod.rs:3240+ — math layout
+                        // doesn't depend on header context, so origin = hdr_x
+                        // and cursor advance = bbox height + same leeway.
+                        let math_font_size: f32 = 10.5;
+                        let (math_elems, bbox) = crate::layout::math::emit_math_block(
+                            math_block, hdr_x, cy, math_font_size,
+                        );
+                        if !math_elems.is_empty() {
+                            lp.elements.extend(math_elems);
+                            cy += bbox.height().max(math_font_size * 1.2)
+                                + math_font_size * 0.3;
+                        }
                     }
                 }
             }
@@ -2558,6 +2597,15 @@ impl LayoutEngine {
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
                         footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
+                    } else if let Block::Math(math_block) = block {
+                        // R77 (2026-04-29): footer math estimation, mirroring
+                        // the height-reservation site at mod.rs:1848+.
+                        let math_font_size: f32 = 10.5;
+                        let (_, bbox) = crate::layout::math::emit_math_block(
+                            math_block, 0.0, 0.0, math_font_size,
+                        );
+                        footer_h += bbox.height().max(math_font_size * 1.2)
+                            + math_font_size * 0.3;
                     }
                 }
                 let footer_top = page.size.height - footer_dist - footer_h;
@@ -2572,6 +2620,18 @@ impl LayoutEngine {
                             false, None,
                         );
                         lp.elements.extend(ftr_elements);
+                    } else if let Block::Math(math_block) = block {
+                        // R77 (2026-04-29): render footer-embedded OMML math.
+                        // Same shape as the header rendering site above.
+                        let math_font_size: f32 = 10.5;
+                        let (math_elems, bbox) = crate::layout::math::emit_math_block(
+                            math_block, hdr_x, cy, math_font_size,
+                        );
+                        if !math_elems.is_empty() {
+                            lp.elements.extend(math_elems);
+                            cy += bbox.height().max(math_font_size * 1.2)
+                                + math_font_size * 0.3;
+                        }
                     }
                 }
             }
