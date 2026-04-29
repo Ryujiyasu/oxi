@@ -18,11 +18,18 @@ use crate::ir::Ruby;
 pub const DEFAULT_HPS_RAISE_PT: f32 = 9.0;
 
 /// Word's typical line-box ascent above the base baseline at 10.5pt
-/// MS Mincho, in pt. Empirical anchor for the expansion formula.
-/// Likely scales with base size in non-trivial ways (V10 falsified
-/// simple linear scaling); for now this constant is calibrated for
-/// 10.5pt base.
+/// MS Mincho, in pt. Empirical anchor for the expansion formula —
+/// V3-derived when base = 10.5pt; V13 (round 9, 2026-04-27) confirmed
+/// the formula generalises linearly via `base_pt × 9/10.5` across
+/// {9, 10.5, 11, 12, 14}pt MS Mincho with explicit hpsRaise (spec §18.7).
 pub const LINE_BOX_ASCENT_PT_AT_10_5: f32 = 9.0;
+
+/// V13-confirmed scaling: line-box ascent at arbitrary base size, in pt.
+/// Formula: `base_pt × 9 / 10.5`. Returns the constant 9.0 when base = 10.5pt
+/// (the legacy round-8 calibration), and scales linearly for other sizes.
+fn line_box_ascent_pt(base_pt: f32) -> f32 {
+    base_pt * (LINE_BOX_ASCENT_PT_AT_10_5 / 10.5)
+}
 
 /// Approximate ratio of ruby ascent to ruby font size (how much of
 /// the ruby's height extends above its baseline). Empirical fit.
@@ -32,11 +39,16 @@ pub const HPS_ASCENT_RATIO: f32 = 0.75;
 /// Compute the line-height expansion (paragraph-tail) added by a
 /// ruby annotation, in pt.
 ///
-/// Formula: `max(0, hpsRaise_pt + 0.75 × hps_pt − 9)` (calibrated
-/// for 10.5pt MS Mincho base; see spec §18.4 and §18.7).
+/// Formula: `max(0, hpsRaise_pt + 0.75 × hps_pt − base_pt × 9/10.5)`.
+/// Calibrated against V3 fixtures (round 8) for 10.5pt MS Mincho base,
+/// then generalised by V13 (round 9, 2026-04-27) to base ∈
+/// {9, 10.5, 11, 12, 14}pt MS Mincho. The `base_pt × 9/10.5` term
+/// reduces to the original 9pt constant when base = 10.5pt, so all
+/// pre-existing 10.5pt tests stay green. See spec §18.4 and §18.7.
 ///
 /// `base_pt` is the base text font size, used to derive defaults
-/// when `hps_halfpt` is unset.
+/// when `hps_halfpt` is unset and as the scaling input for the
+/// line-box ascent.
 pub fn ruby_expansion_pt(ruby: &Ruby, base_pt: f32) -> f32 {
     let hps_pt = ruby.hps_halfpt
         .map(|h| h as f32 / 2.0)
@@ -44,7 +56,7 @@ pub fn ruby_expansion_pt(ruby: &Ruby, base_pt: f32) -> f32 {
     let hps_raise_pt = ruby.hps_raise_halfpt
         .map(|h| h as f32 / 2.0)
         .unwrap_or(DEFAULT_HPS_RAISE_PT);
-    let raw = hps_raise_pt + HPS_ASCENT_RATIO * hps_pt - LINE_BOX_ASCENT_PT_AT_10_5;
+    let raw = hps_raise_pt + HPS_ASCENT_RATIO * hps_pt - line_box_ascent_pt(base_pt);
     raw.max(0.0)
 }
 
@@ -224,6 +236,67 @@ mod tests {
                 "raise={raise} measured {measured} got {exp}"
             );
         }
+    }
+
+    /// V13 (round 9, 2026-04-27): the line-box ascent constant scales
+    /// linearly with base_pt as `base × 9/10.5`. R74 (2026-04-29) wires
+    /// this into `ruby_expansion_pt`. Check against V13's grid spanning
+    /// base ∈ {9, 11, 12, 14}pt × raise ∈ {6, 12}pt — predicted values
+    /// must reproduce the formula exactly; measured values agree within
+    /// ±0.5pt Word-rounding tolerance (see spec §18.7).
+    #[test]
+    fn ruby_expansion_v13_grid_matches_predicted_and_measured() {
+        // (base_pt, raise_halfpt, hps_halfpt, predicted, measured)
+        // Predicted = base × 9/10.5 line-box ascent, formula in §18.7.
+        // Measured = Word COM (V13 fixtures), tolerance 0.5pt.
+        let cases = [
+            ( 9.0_f32,  12,  9, 1.661_f32, 1.50_f32),  // base=9, raise=6,  hps=4.5
+            ( 9.0_f32,  24,  9, 7.661_f32, 7.50_f32),  // base=9, raise=12, hps=4.5
+            (11.0_f32,  12, 11, 0.696_f32, 0.25_f32),  // base=11, raise=6,  hps=5.5
+            (11.0_f32,  24, 11, 6.696_f32, 6.75_f32),  // base=11, raise=12, hps=5.5
+            (12.0_f32,  12, 12, 0.214_f32, 0.00_f32),  // base=12, raise=6,  hps=6.0
+            (12.0_f32,  24, 12, 6.214_f32, 6.00_f32),  // base=12, raise=12, hps=6.0
+            (14.0_f32,  12, 14, 0.000_f32, 0.00_f32),  // base=14, raise=6,  hps=7.0  (clamped to 0)
+            (14.0_f32,  24, 14, 5.250_f32, 5.50_f32),  // base=14, raise=12, hps=7.0
+        ];
+        for (base_pt, raise_halfpt, hps_halfpt, predicted, measured) in cases {
+            let r = Ruby {
+                base: "x".into(),
+                text: "y".into(),
+                font_size: Some(hps_halfpt as f32 / 2.0),
+                align: None,
+                hps_halfpt: Some(hps_halfpt),
+                hps_raise_halfpt: Some(raise_halfpt),
+                hps_base_text_halfpt: Some((base_pt * 2.0) as u32),
+                lang: None,
+            };
+            let exp = ruby_expansion_pt(&r, base_pt);
+            assert!(
+                (exp - predicted).abs() < 0.01,
+                "V13 base={base_pt} raise_hp={raise_halfpt} hps_hp={hps_halfpt}: \
+                 expected predicted {predicted:.3}, got {exp:.3}"
+            );
+            assert!(
+                (exp - measured).abs() <= 0.5,
+                "V13 measured tolerance: base={base_pt} raise_hp={raise_halfpt} \
+                 measured {measured:.2}, got {exp:.3}"
+            );
+        }
+    }
+
+    /// 10.5pt base must still produce identical results to the legacy
+    /// constant=9 formula — V13 generalisation collapses to `9` when
+    /// base = 10.5. Guards the round-7-era ship from R74's refactor.
+    #[test]
+    fn ruby_expansion_10pt5_base_unchanged_by_v13_generalisation() {
+        // Round-8 ship case: base=10.5, hps=11 (=5.5pt), raise=18 (=9pt).
+        // Pre-R74 formula: max(0, 9 + 0.75×5.5 − 9) = 4.125pt.
+        let r = ruby(Some(11), Some(18));
+        let exp = ruby_expansion_pt(&r, 10.5);
+        assert!(
+            (exp - 4.125).abs() < 0.001,
+            "10.5pt base: expected 4.125pt, got {exp}"
+        );
     }
 
     /// Default raise is treated as 9pt regardless of hps (V6 finding).
