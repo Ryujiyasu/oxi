@@ -57,6 +57,10 @@ Fixture list (indexed by file name):
   19 — `<w:pPrChange>` keep-with-next revision. R89 extends
        describe_ppr_diff to cover keep_next + keep_lines (direct-only
        bool axes on pPr). Surfaces "Keep With Next".
+  20 — `<w:pPrChange>` paragraph-borders revision (bottom border
+       added). R93 extends describe_ppr_diff to cover the borders
+       struct axis via side-presence summary (no PartialEq derive
+       needed). Surfaces "Borders Added".
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -695,6 +699,31 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f20_pPrChange_borders() -> Fixture:
+    # Paragraph that gained a bottom border via pPrChange. Current pPr
+    # declares <w:pBdr><w:bottom .../></w:pBdr>; pPrChange's prior pPr
+    # is empty (no border). R93's describe_ppr_diff branch surfaces
+    # "Borders Added".
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:pBdr>\n'
+        '          <w:bottom w:val="single" w:sz="4" w:space="1" w:color="000000"/>\n'
+        '        </w:pBdr>\n'
+        '        <w:pPrChange w:id="1300" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now has a bottom border (was plain).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_20_pPrChange_borders.docx",
+        description="pPrChange revision — paragraph gained a bottom border (single 0.5pt black); prior pPr empty.",
+        document_body=body,
+    )
+
+
 def f19_pPrChange_keep_next() -> Fixture:
     # Paragraph toggled to "keep with next" via pPrChange. Current pPr
     # declares <w:keepNext/>; the pPrChange body records that prior pPr
@@ -838,6 +867,7 @@ ALL_FIXTURES = [
     f17_rPrChange_vAlign_shading,
     f18_pPrChange_shading,
     f19_pPrChange_keep_next,
+    f20_pPrChange_borders,
 ]
 
 

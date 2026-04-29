@@ -1753,6 +1753,49 @@ fn fixture_19_layout_pprchange_keep_next() {
     );
 }
 
+/// R93 (2026-04-30): describe_ppr_diff covers paragraph borders via
+/// side-presence summary (no PartialEq derive needed). fixture_20
+/// adds a bottom border via pPrChange whose prior pPr was empty
+/// (no border). Body must mention "Borders Added".
+#[test]
+fn fixture_20_layout_pprchange_borders_added() {
+    let Some(bytes) = read_fixture("fixture_20_pPrChange_borders.docx") else {
+        eprintln!("skipping: fixture_20 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_20");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_20 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Borders Added"),
+        "borders toggle must surface as 'Borders Added'; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

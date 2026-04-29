@@ -93,5 +93,10 @@
     "file": "fixture_19_pPrChange_keep_next.docx",
     "description": "pPrChange revision — paragraph toggled to keep_next=true; prior pPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_20_pPrChange_borders.docx",
+    "description": "pPrChange revision — paragraph gained a bottom border (single 0.5pt black); prior pPr empty.",
+    "status": "OK"
   }
 ]

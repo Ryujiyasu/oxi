@@ -984,6 +984,37 @@ fn describe_ppr_diff(
     if prior.keep_lines != current.keep_lines {
         diffs.push(if current.keep_lines { "Keep Lines Together" } else { "Not Keep Lines Together" }.to_string());
     }
+    // R93 (2026-04-30): paragraph borders axis. ParagraphBorders is a
+    // 5-side struct (top/bottom/left/right/between) without PartialEq
+    // derive; compare via a side-presence summary. Three cases:
+    //   - prior=None, current=Some → "Borders Added"
+    //   - prior=Some, current=None → "Borders Removed"
+    //   - both Some, sides differ  → "Borders: <prior> → <current>"
+    // The summary is "top/bottom/left/right" (active sides joined),
+    // which captures the most common pPrChange patterns (add/remove a
+    // single side or all sides). Per-side style/width/color comparison
+    // is deferred — would require a PartialEq derive on BorderDef and
+    // a more verbose body string.
+    fn borders_summary(b: &ParagraphBorders) -> String {
+        let mut active: Vec<&str> = Vec::new();
+        if b.top.is_some()    { active.push("top"); }
+        if b.bottom.is_some() { active.push("bottom"); }
+        if b.left.is_some()   { active.push("left"); }
+        if b.right.is_some()  { active.push("right"); }
+        if active.is_empty() { "none".to_string() } else { active.join("/") }
+    }
+    match (prior.borders.as_ref(), current.borders.as_ref()) {
+        (None, Some(_)) => diffs.push("Borders Added".to_string()),
+        (Some(_), None) => diffs.push("Borders Removed".to_string()),
+        (Some(p), Some(c)) => {
+            let ps = borders_summary(p);
+            let cs = borders_summary(c);
+            if ps != cs {
+                diffs.push(format!("Borders: {} → {}", ps, cs));
+            }
+        }
+        (None, None) => {}
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {
