@@ -1552,6 +1552,58 @@ fn fixture_15_layout_pprchange_alignment_toggle() {
     );
 }
 
+/// R86 (2026-04-29): describe_rpr_diff covers 3 more axes — small_caps,
+/// all_caps, character_spacing. fixture_16 toggles all_caps + character
+/// _spacing in a single rPrChange to exercise (a) the new branches and
+/// (b) the comma-join across multiple new-axis diffs.
+#[test]
+fn fixture_16_layout_rprchange_caps_and_spacing() {
+    let Some(bytes) = read_fixture("fixture_16_rPrChange_caps_spacing.docx") else {
+        eprintln!("skipping: fixture_16 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_16");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_16 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("All Caps"),
+        "all_caps toggle must surface as 'All Caps'; got {body:?}"
+    );
+    assert!(
+        body.contains("Character Spacing"),
+        "character_spacing toggle must surface as 'Character Spacing:'; got {body:?}"
+    );
+    // Multi-axis diff: comma-separated.
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

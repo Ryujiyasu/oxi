@@ -795,6 +795,25 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
             }
         }
     }
+    // R86 (2026-04-29): small_caps / all_caps / character_spacing axes.
+    // Mirrors Word's "Formatted: All Caps" / "Small Caps" / "Character
+    // Spacing: 1.0pt" strings when an rPrChange toggles these props.
+    if prior.small_caps != current.small_caps {
+        diffs.push(if current.small_caps { "Small Caps" } else { "Not Small Caps" }.to_string());
+    }
+    if prior.all_caps != current.all_caps {
+        diffs.push(if current.all_caps { "All Caps" } else { "Not All Caps" }.to_string());
+    }
+    if prior.character_spacing != current.character_spacing {
+        match current.character_spacing {
+            Some(v) => diffs.push(format!("Character Spacing: {}pt", v)),
+            None => {
+                if prior.character_spacing.is_some() {
+                    diffs.push("Character Spacing: Default".to_string());
+                }
+            }
+        }
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

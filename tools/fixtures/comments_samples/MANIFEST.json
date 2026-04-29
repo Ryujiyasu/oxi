@@ -73,5 +73,10 @@
     "file": "fixture_15_pPrChange_alignment.docx",
     "description": "pPrChange revision — paragraph alignment toggled from left to center.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_16_rPrChange_caps_spacing.docx",
+    "description": "rPrChange revision — run toggled to all_caps + character_spacing=1pt; prior rPr empty.",
+    "status": "OK"
   }
 ]

@@ -41,6 +41,10 @@ Fixture list (indexed by file name):
        center). R72 unblocks alignment-toggle pPrChange by adding a
        `prior_alignment` IR field on PropertyChange. The R-12 v3.5
        balloon body must mention "Alignment: Centered".
+  16 — `<w:rPrChange>` multi-axis revision (small_caps + all_caps +
+       character_spacing toggled together). R86 extends
+       describe_rpr_diff to cover these 3 axes; this fixture is the
+       end-to-end exercise.
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -679,6 +683,32 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f16_rPrChange_caps_spacing() -> Fixture:
+    # Run currently has all_caps + character_spacing=1.0pt; rPrChange
+    # records that the prior rPr had neither. Two axes change in a single
+    # rPrChange — exercises describe_rpr_diff's R86 small_caps/all_caps/
+    # character_spacing branches plus its comma-join.
+    body = para(
+        run("Default. "),
+        (
+            '<w:r><w:rPr>'
+            '<w:caps/>'
+            '<w:spacing w:val="20"/>'
+            '<w:rPrChange w:id="900" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            '<w:rPr/>'
+            '</w:rPrChange>'
+            '</w:rPr>'
+            '<w:t xml:space="preserve">Now caps + spaced.</w:t></w:r>'
+        ),
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_16_rPrChange_caps_spacing.docx",
+        description="rPrChange revision — run toggled to all_caps + character_spacing=1pt; prior rPr empty.",
+        document_body=body,
+    )
+
+
 def f15_pPrChange_alignment() -> Fixture:
     # Single paragraph whose alignment was toggled via <w:pPrChange>.
     # Current pPr declares <w:jc w:val="center"/>; the pPrChange body
@@ -720,6 +750,7 @@ ALL_FIXTURES = [
     f13_pPrChange_indent,
     f14_rPrChange_font,
     f15_pPrChange_alignment,
+    f16_rPrChange_caps_spacing,
 ]
 
 
