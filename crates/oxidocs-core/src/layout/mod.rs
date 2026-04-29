@@ -1767,6 +1767,12 @@ impl LayoutEngine {
                     );
                     hdr_h += bbox.height().max(math_font_size * 1.2)
                         + math_font_size * 0.3;
+                } else if let Block::Image(img) = block {
+                    // R78 (2026-04-29): header-embedded Image height
+                    // contribution. Mirrors the textbox arm at
+                    // mod.rs:3232+ — height is just `img.height` (no
+                    // grid snap or font-size leeway).
+                    hdr_h += img.height;
                 }
             }
             header_y + hdr_h
@@ -1893,6 +1899,10 @@ impl LayoutEngine {
                     );
                     footer_h += bbox.height().max(math_font_size * 1.2)
                         + math_font_size * 0.3;
+                } else if let Block::Image(img) = block {
+                    // R78 (2026-04-29): footer-embedded Image height
+                    // contribution. See header counterpart above.
+                    footer_h += img.height;
                 }
             }
             (footer_dist + footer_h).max(page.margin.bottom)
@@ -2588,6 +2598,19 @@ impl LayoutEngine {
                             cy += bbox.height().max(math_font_size * 1.2)
                                 + math_font_size * 0.3;
                         }
+                    } else if let Block::Image(img) = block {
+                        // R78 (2026-04-29): render header-embedded Image,
+                        // mirroring the textbox arm at mod.rs:3232+. Width
+                        // is clamped to the header content width.
+                        lp.elements.push(LayoutElement::new(
+                            hdr_x, cy,
+                            img.width.min(hdr_width), img.height,
+                            LayoutContent::Image {
+                                data: img.data.clone(),
+                                content_type: img.content_type.clone(),
+                            },
+                        ));
+                        cy += img.height;
                     }
                 }
             }
@@ -2606,6 +2629,9 @@ impl LayoutEngine {
                         );
                         footer_h += bbox.height().max(math_font_size * 1.2)
                             + math_font_size * 0.3;
+                    } else if let Block::Image(img) = block {
+                        // R78 (2026-04-29): footer Image estimation.
+                        footer_h += img.height;
                     }
                 }
                 let footer_top = page.size.height - footer_dist - footer_h;
@@ -2632,6 +2658,18 @@ impl LayoutEngine {
                             cy += bbox.height().max(math_font_size * 1.2)
                                 + math_font_size * 0.3;
                         }
+                    } else if let Block::Image(img) = block {
+                        // R78 (2026-04-29): render footer-embedded Image.
+                        // Same shape as the header rendering site above.
+                        lp.elements.push(LayoutElement::new(
+                            hdr_x, cy,
+                            img.width.min(hdr_width), img.height,
+                            LayoutContent::Image {
+                                data: img.data.clone(),
+                                content_type: img.content_type.clone(),
+                            },
+                        ));
+                        cy += img.height;
                     }
                 }
             }
