@@ -1425,6 +1425,68 @@ fn fixture_13_layout_emits_pprchange_margin_balloon() {
     );
 }
 
+/// R-12 v1 + R71 (2026-04-29): a multi-property `<w:rPrChange>` (font
+/// family + font size in a single change) lays out as ONE balloon whose
+/// body lists both diffs comma-separated. Confirms `describe_rpr_diff`'s
+/// font_family branch (added R71) and the helper's comma-join behaviour
+/// when more than one property toggles in a single revision.
+#[test]
+fn fixture_14_layout_rprchange_multi_property_describe_diff() {
+    let Some(bytes) = read_fixture("fixture_14_rPrChange_font.docx") else {
+        eprintln!("skipping: fixture_14 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_14");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_14 has 1 rPrChange (font + size) → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Font:"),
+        "fixture_14 changes font_family → body must mention 'Font:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Times New Roman"),
+        "the new font name must appear in the body; got {body:?}"
+    );
+    assert!(
+        body.contains("Font Size:"),
+        "fixture_14 changes font_size too → body must mention 'Font Size:'; got {body:?}"
+    );
+    assert!(
+        body.contains("14pt"),
+        "the new font size must appear in the body; got {body:?}"
+    );
+    // Comma-join behaviour: there must be a comma separating the two
+    // property diffs (the only literal comma in this body).
+    assert!(
+        body.contains(", "),
+        "multi-property diff must be comma-separated; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

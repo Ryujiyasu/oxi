@@ -780,6 +780,20 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
             diffs.push(format!("Font Size: {}pt", fs));
         }
     }
+    // R71: font_family extension. Mirrors Word's "Formatted: Font: Times
+    // New Roman" string when an rPrChange toggles the run's typeface.
+    // Compares ascii/hAnsi font (`font_family`) only — the eastAsia font
+    // can be a separate change that surfaces in a future fixture.
+    if prior.font_family != current.font_family {
+        match current.font_family.as_deref() {
+            Some(name) => diffs.push(format!("Font: {}", name)),
+            None => {
+                if prior.font_family.is_some() {
+                    diffs.push("Font: Default".to_string());
+                }
+            }
+        }
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

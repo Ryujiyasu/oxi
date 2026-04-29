@@ -63,5 +63,10 @@
     "file": "fixture_13_pPrChange_indent.docx",
     "description": "pPrChange revision — paragraph left-indent toggled from 0 to 720dxa; prior pPr recorded empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_14_rPrChange_font.docx",
+    "description": "rPrChange revision — run toggled to Times New Roman 14pt; prior rPr recorded empty.",
+    "status": "OK"
   }
 ]

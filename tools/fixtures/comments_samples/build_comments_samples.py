@@ -31,6 +31,12 @@ Fixture list (indexed by file name):
        lands a "Formatted" margin balloon for paragraph-level changes
        too, not just run-level. Indent is the most common pPrChange
        observed in real docs.
+  14 — `<w:rPrChange>` font-family revision (Calibri → Times New Roman)
+       — second rPrChange variant after fixture_09's bold toggle.
+       Exercises `describe_rpr_diff`'s font_family branch (R71
+       extension). Multiple-property rPrChange surfaces here too:
+       the rPr also toggles font size, so the balloon body lists
+       both properties.
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -643,6 +649,32 @@ def f13_pPrChange_indent() -> Fixture:
     )
 
 
+def f14_rPrChange_font() -> Fixture:
+    # Run currently shows Times New Roman 14pt; rPrChange records that it
+    # used to be Calibri 11pt (default). Two properties change in a single
+    # rPrChange, exercising `describe_rpr_diff`'s comma-join behaviour:
+    # body should be "Formatted: Font Size: 14pt, Font: Times New Roman".
+    body = para(
+        run("Default text. "),
+        (
+            '<w:r><w:rPr>'
+            '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+            '<w:sz w:val="28"/><w:szCs w:val="28"/>'
+            '<w:rPrChange w:id="700" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            '<w:rPr/>'
+            '</w:rPrChange>'
+            '</w:rPr>'
+            '<w:t xml:space="preserve">Now Times 14pt (was default).</w:t></w:r>'
+        ),
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_14_rPrChange_font.docx",
+        description="rPrChange revision — run toggled to Times New Roman 14pt; prior rPr recorded empty.",
+        document_body=body,
+    )
+
+
 ALL_FIXTURES = [
     f01_single_comment,
     f02_comment_with_reply,
@@ -657,6 +689,7 @@ ALL_FIXTURES = [
     f11_cjk_revisions,
     f12_three_reviewers,
     f13_pPrChange_indent,
+    f14_rPrChange_font,
 ]
 
 
