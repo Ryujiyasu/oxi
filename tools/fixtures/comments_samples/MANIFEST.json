@@ -88,5 +88,10 @@
     "file": "fixture_18_pPrChange_shading.docx",
     "description": "pPrChange revision — paragraph shading toggled from default to yellow (#FFFF00); prior pPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_19_pPrChange_keep_next.docx",
+    "description": "pPrChange revision — paragraph toggled to keep_next=true; prior pPr empty.",
+    "status": "OK"
   }
 ]

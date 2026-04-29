@@ -54,6 +54,9 @@ Fixture list (indexed by file name):
        background). R88 extends describe_ppr_diff to cover the
        paragraph-scope shading axis (sister to RunStyle shading
        added in R87).
+  19 — `<w:pPrChange>` keep-with-next revision. R89 extends
+       describe_ppr_diff to cover keep_next + keep_lines (direct-only
+       bool axes on pPr). Surfaces "Keep With Next".
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -692,6 +695,29 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f19_pPrChange_keep_next() -> Fixture:
+    # Paragraph toggled to "keep with next" via pPrChange. Current pPr
+    # declares <w:keepNext/>; the pPrChange body records that prior pPr
+    # was empty (default = not kept). R89's describe_ppr_diff branch
+    # surfaces "Keep With Next".
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:keepNext/>\n'
+        '        <w:pPrChange w:id="1200" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now keep-with-next (was not).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_19_pPrChange_keep_next.docx",
+        description="pPrChange revision — paragraph toggled to keep_next=true; prior pPr empty.",
+        document_body=body,
+    )
+
+
 def f18_pPrChange_shading() -> Fixture:
     # Single paragraph whose background shading was added via pPrChange.
     # Current pPr declares <w:shd w:fill="FFFF00"/> (yellow paragraph bg);
@@ -811,6 +837,7 @@ ALL_FIXTURES = [
     f16_rPrChange_caps_spacing,
     f17_rPrChange_vAlign_shading,
     f18_pPrChange_shading,
+    f19_pPrChange_keep_next,
 ]
 
 

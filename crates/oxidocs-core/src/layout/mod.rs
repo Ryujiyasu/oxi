@@ -966,6 +966,24 @@ fn describe_ppr_diff(
             }
         }
     }
+    // R89 (2026-04-29): keep_next + keep_lines axes (direct-only
+    // bools, not inherited from style). Mirrors Word's "Formatted:
+    // Keep With Next" / "Keep Lines Together" balloon when a pPrChange
+    // toggles these. Originally R89 attempted num_id/num_ilvl axes but
+    // numPr is parsed separately into a NumPrRef returned by
+    // parse_paragraph_properties as a 4th tuple element — it never
+    // populates ParagraphStyle.num_id, so the prior/current comparison
+    // would always be (None, None) on pPrChange's prior_paragraph_style.
+    // Wiring numPr through PropertyChange's prior_num_pr field is a
+    // future R72-style 3-layer extension; R89 ships the simpler
+    // keep_* bool axes which ARE direct-only on pPr and reliably
+    // surface in the diff.
+    if prior.keep_next != current.keep_next {
+        diffs.push(if current.keep_next { "Keep With Next" } else { "Not Keep With Next" }.to_string());
+    }
+    if prior.keep_lines != current.keep_lines {
+        diffs.push(if current.keep_lines { "Keep Lines Together" } else { "Not Keep Lines Together" }.to_string());
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

@@ -1704,6 +1704,55 @@ fn fixture_18_layout_pprchange_paragraph_shading() {
     );
 }
 
+/// R89 (2026-04-29): describe_ppr_diff covers keep_next + keep_lines.
+/// fixture_19 toggles keep_next via pPrChange. Body must mention
+/// "Keep With Next".
+///
+/// Originally R89 attempted num_id/num_ilvl axes but numPr is parsed
+/// separately into NumPrRef returned as a 4th tuple element of
+/// parse_paragraph_properties — it never populates ParagraphStyle's
+/// num_id, so prior_paragraph_style.num_id is always None. Wiring
+/// numPr through PropertyChange's prior_num_pr is a future R72-style
+/// 3-layer extension; R89 ships the simpler keep_* bool axes.
+#[test]
+fn fixture_19_layout_pprchange_keep_next() {
+    let Some(bytes) = read_fixture("fixture_19_pPrChange_keep_next.docx") else {
+        eprintln!("skipping: fixture_19 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_19");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_19 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Keep With Next"),
+        "keep_next toggle must surface as 'Keep With Next'; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //
