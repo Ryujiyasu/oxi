@@ -11,11 +11,43 @@
 use crate::ir::Ruby;
 
 /// Word's default ruby raise (height above base baseline) when
-/// `<w:hpsRaise>` is omitted, in pt. Confirmed empirically: V6
-/// `RUBY_V6_hpsRaise.docx` showed `raise=None` and `raise=18` (= 9pt)
-/// produce identical line-height expansion. The default is hps-independent
-/// for the tested range. See spec §18.4.
+/// `<w:hpsRaise>` is omitted, in pt — calibrated for 10.5pt MS Mincho
+/// base. Confirmed empirically: V6 `RUBY_V6_hpsRaise.docx` showed
+/// `raise=None` and `raise=18` (= 9pt) produce identical line-height
+/// expansion at 10.5pt base. See spec §18.4.
 pub const DEFAULT_HPS_RAISE_PT: f32 = 9.0;
+
+/// V13 (round 9, 2026-04-27) generalised default-raise: when
+/// `<w:hpsRaise>` is omitted, Word's default depends on both base
+/// and hps (no clean closed-form, see spec §18.7). The dominant
+/// pattern: for the typical "hps = base/2" ruby case, default_raise
+/// ≈ base − 1pt across the V13 grid (base ∈ {9, 11, 12, 14}pt with
+/// derived defaults 8.34, 9.55, 10.79, 13.25 — Δ from base−1 ∈
+/// [−0.45, +0.25]pt, well within Word's ±0.5pt rounding noise).
+///
+/// R75 (2026-04-29) implements option (c) from spec §18.9: when the
+/// (currently-set) hps is approximately base/2, scale the default
+/// raise as `base_pt − 1.0`. Falls back to the 10.5pt constant 9.0pt
+/// otherwise — the non-typical `hps ≈ base` case empirically maps
+/// to `default_raise ≈ base + 0.5pt` but isn't covered until a
+/// fixture surfaces it.
+fn default_hps_raise_pt(base_pt: f32, hps_pt: f32) -> f32 {
+    // Round-8/V6 calibrated invariant: at base = 10.5pt the empirical
+    // default_raise is exactly 9pt (Word measurement V6, hps-independent
+    // across tested range). The V13 derived "base − 1pt" rule gives 9.5pt
+    // there, off by 0.5pt — small but enough to break the pre-R74 test
+    // suite. Keep the legacy constant for the 10.5pt anchor and apply
+    // V13 scaling only outside that anchor.
+    if (base_pt - 10.5).abs() < 0.01 {
+        return DEFAULT_HPS_RAISE_PT;
+    }
+    let hps_is_half_base = (hps_pt - base_pt / 2.0).abs() < 0.5;
+    if hps_is_half_base && base_pt > 0.0 {
+        (base_pt - 1.0).max(0.0)
+    } else {
+        DEFAULT_HPS_RAISE_PT
+    }
+}
 
 /// Word's typical line-box ascent above the base baseline at 10.5pt
 /// MS Mincho, in pt. Empirical anchor for the expansion formula —
@@ -55,7 +87,7 @@ pub fn ruby_expansion_pt(ruby: &Ruby, base_pt: f32) -> f32 {
         .unwrap_or(base_pt / 2.0);
     let hps_raise_pt = ruby.hps_raise_halfpt
         .map(|h| h as f32 / 2.0)
-        .unwrap_or(DEFAULT_HPS_RAISE_PT);
+        .unwrap_or_else(|| default_hps_raise_pt(base_pt, hps_pt));
     let raw = hps_raise_pt + HPS_ASCENT_RATIO * hps_pt - line_box_ascent_pt(base_pt);
     raw.max(0.0)
 }
@@ -297,6 +329,74 @@ mod tests {
             (exp - 4.125).abs() < 0.001,
             "10.5pt base: expected 4.125pt, got {exp}"
         );
+    }
+
+    /// R75 (2026-04-29): default_hps_raise_pt scales with base for the
+    /// typical "hps = base/2" ruby case. V13 grid (round 9, 2026-04-27)
+    /// derived these defaults at base ∈ {9, 11, 12, 14}pt with hps = base/2.
+    /// Implementation uses the simpler `default_raise = base − 1pt`
+    /// approximation per spec §18.9 (c), accepting ±0.5pt vs Word.
+    #[test]
+    fn ruby_default_raise_scales_with_base_v13_grid() {
+        // (base_pt, hps_halfpt, V13_measured_default_raise)
+        // hps_halfpt = base × 2 / 2 (= base/2 in pt when halfpt-encoded)
+        let cases = [
+            ( 9.0_f32,  9, 8.34_f32),  // base=9, hps=4.5 (= 9/2)
+            (11.0_f32, 11, 9.55_f32),  // base=11, hps=5.5
+            (12.0_f32, 12, 10.79_f32), // base=12, hps=6.0
+            (14.0_f32, 14, 13.25_f32), // base=14, hps=7.0
+        ];
+        for (base_pt, hps_halfpt, measured) in cases {
+            let hps_pt = hps_halfpt as f32 / 2.0;
+            // Direct helper check against the simpler "base − 1pt" rule:
+            assert!(
+                (default_hps_raise_pt(base_pt, hps_pt) - (base_pt - 1.0)).abs() < 0.001,
+                "base={base_pt} hps={hps_pt}: expected base−1, \
+                 got {}", default_hps_raise_pt(base_pt, hps_pt)
+            );
+            // End-to-end: ruby_expansion_pt with raise=None should now use
+            // the scaled default. Compute predicted expansion via the same
+            // formula and compare against V13's measured value within
+            // ±0.5pt rounding (the spec §18.9 (c) tolerance).
+            let r = Ruby {
+                base: "x".into(),
+                text: "y".into(),
+                font_size: Some(hps_pt),
+                align: None,
+                hps_halfpt: Some(hps_halfpt),
+                hps_raise_halfpt: None, // ← exercises default_hps_raise_pt
+                hps_base_text_halfpt: Some((base_pt * 2.0) as u32),
+                lang: None,
+            };
+            let predicted = (base_pt - 1.0) + 0.75 * hps_pt - base_pt * (9.0 / 10.5);
+            let predicted = predicted.max(0.0);
+            let exp = ruby_expansion_pt(&r, base_pt);
+            assert!(
+                (exp - predicted).abs() < 0.01,
+                "base={base_pt}: predicted {predicted:.3}, got {exp:.3}"
+            );
+            // V13 measured is hps × 0.75 + (base−1) − base × 9/10.5; the
+            // V13 paper itself notes the cell-by-cell measurement:
+            //   base=9 / hps=4.5: predicted (8 + 3.375 - 7.714) = 3.66
+            //                     (= measured (8.34 + 3.375 - 7.714) = 4.0 within 0.5pt)
+            // The V13 column gives expansion (computed with explicit raise);
+            // for the default-raise case the relevant comparison is
+            // expansion vs no_ruby_LH measurement which §18.7 derives back
+            // to default_raise. Cell-by-cell back-derivation:
+            //   default_raise_derived = measured_exp + base × 9/10.5 − 0.75 × hps
+            // Re-deriving from above: measured_default_raise was the value;
+            // expansion = (default_raise_derived) + 0.75 × hps − base × 9/10.5.
+            // So measured expansion = default_raise_derived + 0.75 × hps − base × 9/10.5.
+            // If our formula gives base−1 instead of derived, the expansion
+            // diff equals (base − 1) − default_raise_derived.
+            // Within ±0.5pt across V13 grid (max 0.45pt at base=11).
+            let v13_expansion = measured + 0.75 * hps_pt - base_pt * (9.0 / 10.5);
+            let v13_expansion = v13_expansion.max(0.0);
+            assert!(
+                (exp - v13_expansion).abs() <= 0.5,
+                "V13 measured tolerance: base={base_pt} v13_expansion {v13_expansion:.3}, got {exp:.3}"
+            );
+        }
     }
 
     /// Default raise is treated as 9pt regardless of hps (V6 finding).
