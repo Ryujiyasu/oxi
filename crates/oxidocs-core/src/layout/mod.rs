@@ -602,9 +602,10 @@ fn emit_balloons_for_layout_page(
                     .copied()
                     .unwrap_or(0);
                 let prior = pc.prior_paragraph_style.as_deref();
+                let prior_alignment = pc.prior_alignment;
                 let body = format!(
                     "Formatted: {}",
-                    describe_ppr_diff(prior, &p.style)
+                    describe_ppr_diff(prior, &p.style, prior_alignment, p.alignment)
                 );
                 let cid = format!(
                     "pprchange:p{}:{}",
@@ -801,22 +802,28 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
     }
 }
 
-/// R-12 v2 (R69): build a human-readable description of a `pPrChange` style
-/// diff. Companion to `describe_rpr_diff`.
+/// R-12 v2 (R69) + v3.5 (R72): build a human-readable description of a
+/// `pPrChange` style diff. Companion to `describe_rpr_diff`.
 ///
 /// Compares the paragraph's current style against `prior` (the
 /// ParagraphStyle stored inside `ppr_change.prior_paragraph_style`) and
 /// emits a comma-separated list of toggled properties. v1 covers
 /// `indent_left`, `indent_right`, `indent_first_line`, `line_spacing`,
-/// `space_before`, `space_after` — enough for fixture_13 (indent toggle)
-/// plus the most common Word "Formatted" balloon strings for paragraphs.
+/// `space_before`, `space_after`. R72 adds the alignment axis via
+/// `prior_alignment` / `current_alignment` parameters — the
+/// `Paragraph.alignment` field lives outside `ParagraphStyle`, so the
+/// caller must surface it explicitly.
 ///
-/// Note: paragraph alignment (`<w:jc>`) lives on `Paragraph.alignment`
-/// (top-level), not inside `ParagraphStyle`. `pPrChange.prior_paragraph_style`
-/// therefore can NOT capture alignment toggles. When fixture work surfaces
-/// an alignment-toggle case the IR will need a parallel `prior_alignment`
-/// field; for v1 we list only the properties available on `ParagraphStyle`.
-fn describe_ppr_diff(prior: Option<&ParagraphStyle>, current: &ParagraphStyle) -> String {
+/// `prior_alignment = None` means the prior `<w:pPr>` had no `<w:jc>`
+/// child (= inherited alignment); only emit a diff when the current
+/// alignment differs from `prior_alignment` AND `prior_alignment` is
+/// explicit (i.e. the change actually toggled `<w:jc>`).
+fn describe_ppr_diff(
+    prior: Option<&ParagraphStyle>,
+    current: &ParagraphStyle,
+    prior_alignment: Option<Alignment>,
+    current_alignment: Alignment,
+) -> String {
     let mut diffs: Vec<String> = Vec::new();
     let prior = match prior {
         Some(p) => p,
@@ -827,6 +834,20 @@ fn describe_ppr_diff(prior: Option<&ParagraphStyle>, current: &ParagraphStyle) -
             return "Style".to_string();
         }
     };
+    // R72: alignment axis. Only emit when prior_alignment was explicit and
+    // differs from the current alignment.
+    if let Some(pa) = prior_alignment {
+        if pa != current_alignment {
+            let label = match current_alignment {
+                Alignment::Left => "Left",
+                Alignment::Center => "Centered",
+                Alignment::Right => "Right",
+                Alignment::Justify => "Justified",
+                Alignment::Distribute => "Distributed",
+            };
+            diffs.push(format!("Alignment: {}", label));
+        }
+    }
     if prior.indent_left != current.indent_left {
         match current.indent_left {
             Some(v) => diffs.push(format!("Indent Left: {}pt", v)),

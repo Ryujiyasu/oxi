@@ -37,6 +37,10 @@ Fixture list (indexed by file name):
        extension). Multiple-property rPrChange surfaces here too:
        the rPr also toggles font size, so the balloon body lists
        both properties.
+  15 — `<w:pPrChange>` paragraph-alignment revision (default left →
+       center). R72 unblocks alignment-toggle pPrChange by adding a
+       `prior_alignment` IR field on PropertyChange. The R-12 v3.5
+       balloon body must mention "Alignment: Centered".
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -675,6 +679,31 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f15_pPrChange_alignment() -> Fixture:
+    # Single paragraph whose alignment was toggled via <w:pPrChange>.
+    # Current pPr declares <w:jc w:val="center"/>; the pPrChange body
+    # records that the prior pPr had <w:jc w:val="left"/>. R-12 v3.5 (R72)
+    # surfaces this in the "Formatted: Alignment: Centered" balloon.
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:jc w:val="center"/>\n'
+        '        <w:pPrChange w:id="800" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr>\n'
+        '            <w:jc w:val="left"/>\n'
+        '          </w:pPr>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now centered (was left).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_15_pPrChange_alignment.docx",
+        description="pPrChange revision — paragraph alignment toggled from left to center.",
+        document_body=body,
+    )
+
+
 ALL_FIXTURES = [
     f01_single_comment,
     f02_comment_with_reply,
@@ -690,6 +719,7 @@ ALL_FIXTURES = [
     f12_three_reviewers,
     f13_pPrChange_indent,
     f14_rPrChange_font,
+    f15_pPrChange_alignment,
 ]
 
 

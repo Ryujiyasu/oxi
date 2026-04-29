@@ -1815,9 +1815,17 @@ fn parse_paragraph_properties(
                             match reader.read_event()? {
                                 Event::Start(inner) => {
                                     if local_name(inner.name().as_ref()) == "pPr" {
-                                        let (prior, _a, _sid, _npr, _spr, _nested, _pmr) =
+                                        let (prior, prior_explicit_align, _sid, _npr, _spr, _nested, _pmr) =
                                             parse_paragraph_properties(reader)?;
                                         pc.prior_paragraph_style = Some(Box::new(prior));
+                                        // R72: capture prior <w:jc> if the inner pPr
+                                        // declared one. Only set when explicit — a
+                                        // missing jc means "inherit from style", not
+                                        // "Left" (parse_paragraph_properties returns
+                                        // None when no <w:jc> child was seen).
+                                        if let Some(a) = prior_explicit_align {
+                                            pc.prior_alignment = Some(a);
+                                        }
                                     }
                                 }
                                 Event::Empty(inner) => {

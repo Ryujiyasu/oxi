@@ -997,6 +997,7 @@ fn r10_fires_for_paragraph_level_ppr_change() {
                     date: None,
                     prior_run_style: None,
                     prior_paragraph_style: None,
+                    prior_alignment: None,
                 });
             }
         }
@@ -1484,6 +1485,70 @@ fn fixture_14_layout_rprchange_multi_property_describe_diff() {
     assert!(
         body.contains(", "),
         "multi-property diff must be comma-separated; got {body:?}"
+    );
+}
+
+/// R-12 v3.5 (R72, 2026-04-29): a `<w:pPrChange>` that toggles paragraph
+/// alignment surfaces "Alignment: …" in the balloon body. R69 v2 left
+/// this gap because Paragraph.alignment lives outside ParagraphStyle;
+/// R72 adds `prior_alignment` to PropertyChange so the parser can
+/// capture the prior `<w:jc>` and the helper can render the diff.
+#[test]
+fn fixture_15_layout_pprchange_alignment_toggle() {
+    let Some(bytes) = read_fixture("fixture_15_pPrChange_alignment.docx") else {
+        eprintln!("skipping: fixture_15 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_15");
+
+    // Parser side: prior_alignment must be captured from the inner
+    // pPr's <w:jc w:val="left"/> child.
+    let mut found_prior_alignment: Option<oxidocs_core::ir::Alignment> = None;
+    for page in &doc.pages {
+        for block in &page.blocks {
+            if let oxidocs_core::ir::Block::Paragraph(p) = block {
+                if let Some(pc) = p.ppr_change.as_ref() {
+                    found_prior_alignment = pc.prior_alignment;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        found_prior_alignment,
+        Some(oxidocs_core::ir::Alignment::Left),
+        "parser must capture prior_alignment = Left from inner pPr/jc"
+    );
+
+    // Layout side: balloon body must mention the alignment toggle.
+    let result = layout_doc(&doc);
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(balloon_count, 1, "fixture_15 has 1 pPrChange → 1 balloon");
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Alignment:"),
+        "alignment toggle must surface as 'Alignment:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Centered"),
+        "current alignment is Center → body should label it 'Centered'; got {body:?}"
     );
 }
 
