@@ -1290,6 +1290,71 @@ fn fixture_08_layout_moves_render_in_green() {
     );
 }
 
+/// R-12 (R67, 2026-04-29): a `<w:rPrChange>` run anchors a "Formatted: …"
+/// balloon in the right margin. Pixel-confirmed against fixture_09's
+/// rendered PNG: balloon column starts at x≈401pt (resolved-balloon left
+/// edge), balloon top is at y≈158pt, body line "Formatted: Bold" sits at
+/// y≈166pt. The Oxi side emits the balloon with author = revision author,
+/// resolved=true (narrow grey geometry), and a body string built from the
+/// style diff between `rpr_change.prior_run_style` and the run's current
+/// style.
+#[test]
+fn fixture_09_layout_emits_rprchange_margin_balloon() {
+    let Some(bytes) = read_fixture("fixture_09_rPrChange_bold.docx") else {
+        eprintln!("skipping: fixture_09 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_09");
+    let result = layout_doc(&doc);
+
+    let mut balloon_count = 0_usize;
+    let mut found_body: Option<String> = None;
+    let mut found_author: Option<String> = None;
+    let mut found_resolved: Option<bool> = None;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id,
+                body,
+                author,
+                resolved,
+                ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                    found_author = Some(author.clone());
+                    found_resolved = Some(*resolved);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_09 has 1 rPrChange (bold toggle) → must emit exactly 1 R-12 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "R-12 balloon body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Bold"),
+        "fixture_09 toggles bold on; body should mention 'Bold'; got {body:?}"
+    );
+    assert_eq!(
+        found_author.as_deref(),
+        Some("Alice Reviewer"),
+        "R-12 balloon author must be the rPrChange author"
+    );
+    assert_eq!(
+        found_resolved,
+        Some(true),
+        "R-12 balloons use the narrow (resolved-width) geometry to mirror Word's 'Formatted' balloon"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

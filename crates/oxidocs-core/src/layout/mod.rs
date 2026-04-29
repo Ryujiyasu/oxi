@@ -316,6 +316,7 @@ fn emit_balloons_for_layout_page(
     layout_page: &mut LayoutPage,
     doc: &Document,
     ir_page_idx: usize,
+    show_rpr_change_balloons: bool,
 ) {
     use std::collections::HashMap;
 
@@ -325,7 +326,26 @@ fn emit_balloons_for_layout_page(
         .iter()
         .map(|c| (c.id.as_str(), c))
         .collect();
-    if id_to_comment.is_empty() {
+
+    let ir_page = match doc.pages.get(ir_page_idx) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // R-12 (R67): does this page carry any rPrChange runs that need a
+    // formatting-change margin balloon? Only emit when the caller signals
+    // revisions should display ("All" markup view); under Simple / Original
+    // / Final the rPrChange annotation is suppressed.
+    let has_rpr_change_on_page = show_rpr_change_balloons
+        && ir_page.blocks.iter().any(|block| {
+            if let Block::Paragraph(p) = block {
+                p.runs.iter().any(|r| r.rpr_change.is_some())
+            } else {
+                false
+            }
+        });
+
+    if id_to_comment.is_empty() && !has_rpr_change_on_page {
         return;
     }
     // Map author display → palette index (slot 0 fallback for unknown authors).
@@ -334,11 +354,6 @@ fn emit_balloons_for_layout_page(
         .iter()
         .map(|a| (a.display.as_str(), a.color_index))
         .collect();
-
-    let ir_page = match doc.pages.get(ir_page_idx) {
-        Some(p) => p,
-        None => return,
-    };
 
     // First pass: build `paragraph_index → first-rendered (x, y)` map by
     // walking LayoutElements. This handles the case where a comment's
@@ -376,7 +391,7 @@ fn emit_balloons_for_layout_page(
         }
     }
 
-    if anchors.is_empty() {
+    if anchors.is_empty() && !has_rpr_change_on_page {
         return;
     }
 
@@ -520,6 +535,74 @@ fn emit_balloons_for_layout_page(
         });
     }
 
+    // R-12: rPrChange margin balloons. Walk runs looking for `rpr_change`,
+    // anchor at the paragraph's first-rendered Y, build a "Formatted: …"
+    // body from the style diff, and emit a narrow balloon (resolved-width
+    // geometry mirrors Word's "Formatted" balloon — see fixture_09 pixel
+    // pass: balloon column starts at x≈401pt = page_w − 4 − 190.1).
+    // Skipped when `show_rpr_change_balloons` is false (Simple / Original /
+    // Final markup views).
+    if show_rpr_change_balloons {
+    for (pi, block) in ir_page.blocks.iter().enumerate() {
+        let p = match block {
+            Block::Paragraph(p) => p,
+            _ => continue,
+        };
+        let para_anchor = match para_first_xy.get(&pi) {
+            Some(&xy) => xy,
+            None => continue,
+        };
+        for run in &p.runs {
+            let rpc = match run.rpr_change.as_ref() {
+                Some(r) => r,
+                None => continue,
+            };
+            let author = rpc.author.clone().unwrap_or_default();
+            let color_idx = author_to_idx
+                .get(author.as_str())
+                .copied()
+                .unwrap_or(0);
+            let prior = rpc.prior_run_style.as_deref();
+            let body = format!("Formatted: {}", describe_rpr_diff(prior, &run.style));
+            let balloon_width = balloon_width_resolved;
+            let balloon_left = (page_w - balloon_right_inset - balloon_width).max(0.0);
+            // Quick line estimate: ~31 chars fit on the 190pt narrow balloon.
+            let line_count = ((body.chars().count() + 30) / 31).max(1);
+            let line_height = 14.0_f32;
+            let outer_pad = 8.0_f32;
+            let chip_h = 14.0_f32;
+            let section_pad = 4.0_f32;
+            let balloon_height = outer_pad
+                + chip_h
+                + section_pad
+                + (line_count as f32) * line_height
+                + outer_pad;
+            // Synthetic id keeps R-12 balloons distinguishable from comment
+            // ids while still routing through the same LayoutContent::Balloon
+            // variant. Renderer doesn't care about the prefix.
+            let cid = format!(
+                "rprchange:p{}:{}",
+                pi,
+                rpc.id.clone().unwrap_or_default()
+            );
+            pending.push(PendingBalloon {
+                cid,
+                author,
+                author_color_index: color_idx,
+                resolved: true,
+                body,
+                replies: Vec::new(),
+                anchor_x: para_anchor.0,
+                anchor_y: para_anchor.1,
+                balloon_left,
+                balloon_width,
+                balloon_height,
+                y: para_anchor.1,
+            });
+        }
+    }
+    } // end `if show_rpr_change_balloons`
+
     // R-05d: stack to prevent overlap. Sort by anchor Y ascending; pure
     // helper handles the per-element Y resolution. See `stack_balloon_ys`
     // below for the algorithm.
@@ -608,6 +691,62 @@ fn stack_balloon_ys(positions: &mut [(f32, f32)], gap: f32) {
         if positions[i].0 < floor {
             positions[i].0 = floor;
         }
+    }
+}
+
+/// R-12: build a human-readable description of an `rPrChange` style diff.
+///
+/// Compares `current` against `prior` (the run-style stored inside
+/// `rpr_change.prior_run_style`) and emits a comma-separated list of toggled
+/// properties — e.g. `"Bold"` / `"Italic, Color: #FF0000"` /
+/// `"Font Size: 14pt"`. Only the v1 minimum-viable set is covered (bold,
+/// italic, underline, strikethrough, color, font_size); enough properties
+/// to make fixture_09 (bold toggle) read correctly. Extend per fixture as
+/// new property changes are exercised.
+///
+/// When `prior` is `None`, the run's prior style was empty (`<w:rPr/>`) →
+/// every set property in `current` becomes a "now X" diff. When the diff
+/// would be empty (defensive — Word should never write an rPrChange with
+/// no change), falls back to a generic "Style" label so the balloon still
+/// signals "something changed."
+fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
+    let prior_default = RunStyle::default();
+    let prior = prior.unwrap_or(&prior_default);
+    let mut diffs: Vec<String> = Vec::new();
+    if prior.bold != current.bold {
+        diffs.push(if current.bold { "Bold" } else { "Not Bold" }.to_string());
+    }
+    if prior.italic != current.italic {
+        diffs.push(if current.italic { "Italic" } else { "Not Italic" }.to_string());
+    }
+    if prior.underline != current.underline {
+        diffs.push(if current.underline { "Underline" } else { "Not Underline" }.to_string());
+    }
+    if prior.strikethrough != current.strikethrough {
+        diffs.push(
+            if current.strikethrough { "Strikethrough" } else { "Not Strikethrough" }
+                .to_string(),
+        );
+    }
+    if prior.color != current.color {
+        match current.color.as_deref() {
+            Some(c) => diffs.push(format!("Color: {}", c)),
+            None => {
+                if prior.color.is_some() {
+                    diffs.push("Color: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.font_size != current.font_size {
+        if let Some(fs) = current.font_size {
+            diffs.push(format!("Font Size: {}pt", fs));
+        }
+    }
+    if diffs.is_empty() {
+        "Style".to_string()
+    } else {
+        diffs.join(", ")
     }
 }
 
@@ -1087,10 +1226,25 @@ impl LayoutEngine {
         // R-05c post-pass: emit one Balloon LayoutElement per visible
         // comment, anchored to the rendered Y of its `commentRangeStart`.
         // Gated by S-01.
-        if self.show_comments && !doc_resolved.comments.is_empty() {
+        // R-12 (R67): emit_balloons_for_layout_page now also handles
+        // `<w:rPrChange>` margin balloons. We must call it whenever
+        // `show_comments` is on (the gate the user controls for "show
+        // markup"), even when the doc has zero comments — the function
+        // walks runs for rpr_change separately. R-12 emission inside is
+        // gated on the second arg (true only under ShowRevisions::All).
+        let show_rpr_change_balloons = matches!(
+            self.show_revisions,
+            ShowRevisions::All
+        );
+        if self.show_comments {
             for (layout_idx, layout_page) in pages.iter_mut().enumerate() {
                 let ir_idx = layout_to_ir_page[layout_idx];
-                emit_balloons_for_layout_page(layout_page, &doc_resolved, ir_idx);
+                emit_balloons_for_layout_page(
+                    layout_page,
+                    &doc_resolved,
+                    ir_idx,
+                    show_rpr_change_balloons,
+                );
             }
         }
 
