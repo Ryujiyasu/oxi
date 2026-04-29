@@ -1212,6 +1212,11 @@ fn fixture_04_layout_multi_paragraph_range_highlight() {
 /// R-11: `<w:moveFrom>` and `<w:moveTo>` always render in green (#2B6033)
 /// regardless of the author's palette slot — Word's hard-coded behavior
 /// (COM-confirmed 2026-04-25 in fixture_08).
+///
+/// R-11 v2 (R66, 2026-04-29): moveFrom uses **double** strikethrough and
+/// moveTo uses **double** underline. Confirmed by pixel-sampling fixture_08
+/// rendered output: two full-width green lines at y=164/167 (strike) and
+/// y=220/222 (underline), 1pt apart, on the "moved clause" runs.
 #[test]
 fn fixture_08_layout_moves_render_in_green() {
     let Some(bytes) = read_fixture("fixture_08_move_from_to.docx") else {
@@ -1221,15 +1226,44 @@ fn fixture_08_layout_moves_render_in_green() {
     let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_08");
     let result = layout_doc(&doc);
 
-    // Each occurrence of "moved" appears twice — once in the moveFrom and once
-    // in the moveTo (same text).
-    let move_hits = collect_text_elements_with(&result, "moved");
+    // Walk LayoutContent::Text fragments matching "moved" and capture the
+    // full styling tuple — R-11 needs underline_style and double_strikethrough,
+    // not just the bool pair the shared helper exposes.
+    type MoveHit = (bool, Option<String>, bool, bool, Option<String>);
+    let move_hits: Vec<MoveHit> = {
+        let mut out = Vec::new();
+        for page in &result.pages {
+            for el in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text {
+                    text,
+                    underline,
+                    underline_style,
+                    strikethrough,
+                    double_strikethrough,
+                    color,
+                    ..
+                } = &el.content
+                {
+                    if text.contains("moved") {
+                        out.push((
+                            *underline,
+                            underline_style.clone(),
+                            *strikethrough,
+                            *double_strikethrough,
+                            color.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    };
     assert!(
         move_hits.len() >= 2,
         "expected ≥2 'moved' fragments (one moveFrom + one moveTo); got {}",
         move_hits.len()
     );
-    for (_, _, color) in &move_hits {
+    for (_, _, _, _, color) in &move_hits {
         assert_eq!(
             color.as_deref(),
             Some("#2B6033"),
@@ -1237,12 +1271,23 @@ fn fixture_08_layout_moves_render_in_green() {
         );
     }
 
-    // moveFrom should render strikethrough (no underline); moveTo should render
-    // underline (no strikethrough). Find at least one of each.
-    let any_struck = move_hits.iter().any(|(u, s, _)| *s && !*u);
-    let any_underlined = move_hits.iter().any(|(u, s, _)| *u && !*s);
-    assert!(any_struck, "at least one moveFrom fragment must be strikethrough");
-    assert!(any_underlined, "at least one moveTo fragment must be underlined");
+    // moveFrom: strikethrough=true AND double_strikethrough=true (no underline).
+    let any_double_struck = move_hits
+        .iter()
+        .any(|(u, _, s, ds, _)| *s && *ds && !*u);
+    assert!(
+        any_double_struck,
+        "moveFrom must render with double strikethrough (R-11 v2, R66 COM-confirmed)"
+    );
+
+    // moveTo: underline=true AND underline_style=Some(\"double\") (no strikethrough).
+    let any_double_underlined = move_hits
+        .iter()
+        .any(|(u, us, s, _, _)| *u && us.as_deref() == Some("double") && !*s);
+    assert!(
+        any_double_underlined,
+        "moveTo must render with double underline (R-11 v2, R66 COM-confirmed)"
+    );
 }
 
 // ---------------------------------------------------------------------------

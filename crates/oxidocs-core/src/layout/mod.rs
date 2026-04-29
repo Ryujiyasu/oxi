@@ -715,20 +715,25 @@ fn apply_revision_styling_to_run(
             run.style.color = Some(color_hex);
         }
         "moveFrom" => {
-            // Word default: double-strikethrough in green. The renderer's
-            // strikethrough primitive is single-line; settle for that in v1
-            // — visually distinguishable from a regular delete by the green
-            // tint. Upgrade to a "double" style when R-11 lands.
+            // Word default: double-strikethrough in green (COM-confirmed
+            // 2026-04-29 in R66 — fixture_08 PNG shows two full-width green
+            // lines at y=164/165 and y=167/168 with a 1-px gap, on the
+            // "moved clause" run). The renderer reads `double_strikethrough`
+            // and draws two parallel lines; older renderers fall back to
+            // single-line strikethrough.
             run.style.strikethrough = true;
+            run.style.double_strikethrough = true;
             run.style.color = Some(color_hex);
         }
         "moveTo" => {
-            // Word default: double-underline in green. Same rationale as
-            // moveFrom — single underline in green for v1, upgrade in R-11.
+            // Word default: double-underline in green (COM-confirmed
+            // 2026-04-29 in R66 — fixture_08 PNG shows two full-width green
+            // lines at y=220 and y=222 with a 1-px gap, below the "moved
+            // clause" run on the destination paragraph). Setting
+            // underline_style="double" routes through the existing GDI
+            // double-underline path (mod.rs:235-247).
             run.style.underline = true;
-            if run.style.underline_style.is_none() {
-                run.style.underline_style = Some("single".to_string());
-            }
+            run.style.underline_style = Some("double".to_string());
             run.style.color = Some(color_hex);
         }
         _ => {
@@ -788,6 +793,13 @@ pub enum LayoutContent {
         underline: bool,
         underline_style: Option<String>,
         strikethrough: bool,
+        /// When true, the renderer draws a double strikethrough line. Currently
+        /// used by R-11 to render `<w:moveFrom>` runs (Word's default styling)
+        /// and surfaces the OOXML `<w:dstrike>` run-property for any future
+        /// spec coverage. Falls back to single-line strikethrough behaviour if
+        /// the renderer doesn't support double, so older renderers stay
+        /// visually correct (just with one line instead of two).
+        double_strikethrough: bool,
         color: Option<String>,
         highlight: Option<String>,
         field_type: Option<FieldType>,
@@ -3164,6 +3176,7 @@ impl LayoutEngine {
                     underline: marker_style.underline,
                     underline_style: marker_style.underline_style.clone(),
                     strikethrough: marker_style.strikethrough,
+                    double_strikethrough: marker_style.double_strikethrough,
                     color: marker_color,
                     highlight: marker_style.highlight.clone(),
                     field_type: None,
@@ -3781,6 +3794,7 @@ impl LayoutEngine {
                         underline: frag.style.underline,
                         underline_style: frag.style.underline_style.clone(),
                         strikethrough: frag.style.strikethrough,
+                        double_strikethrough: frag.style.double_strikethrough,
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
@@ -3866,6 +3880,7 @@ impl LayoutEngine {
                                     underline: false,
                                     underline_style: None,
                                     strikethrough: false,
+                                    double_strikethrough: false,
                                     color: ruby_color,
                                     highlight: None,
                                     field_type: None,
@@ -3952,6 +3967,7 @@ impl LayoutEngine {
                             underline: false,
                             underline_style: None,
                             strikethrough: false,
+                            double_strikethrough: false,
                             color: None,
                             highlight: None,
                             field_type: None,
@@ -5703,6 +5719,7 @@ impl LayoutEngine {
                                         underline: rs.underline,
                                         underline_style: rs.underline_style.clone(),
                                         strikethrough: rs.strikethrough,
+                                        double_strikethrough: rs.double_strikethrough,
                                         color: self.resolve_color(rs, ps).map(|s| s.to_string()),
                                         highlight: rs.highlight.clone(),
                                         field_type: None,
@@ -5736,6 +5753,7 @@ impl LayoutEngine {
                                         underline: rs.underline,
                                         underline_style: rs.underline_style.clone(),
                                         strikethrough: rs.strikethrough,
+                                        double_strikethrough: rs.double_strikethrough,
                                         color: self.resolve_color(rs, ps).map(|s| s.to_string()),
                                         highlight: rs.highlight.clone(),
                                         field_type: None,
@@ -6116,6 +6134,9 @@ impl LayoutEngine {
                                             underline: marker_style.underline,
                                             underline_style: marker_style.underline_style.clone(),
                                             strikethrough: marker_style.strikethrough,
+                                            // List markers don't carry revision state — moves
+                                            // attach to runs, not to the bullet glyph.
+                                            double_strikethrough: false,
                                             color: self.resolve_color(&marker_style, &para.style).map(|s| s.to_string()),
                                             highlight: marker_style.highlight.clone(),
                                             character_spacing: 0.0,
@@ -6150,6 +6171,12 @@ impl LayoutEngine {
                                         underline: *underline,
                                         underline_style: underline_style.clone(),
                                         strikethrough: *strikethrough,
+                                        // Cell-path 13-tuple line buffer doesn't carry
+                                        // double_strikethrough yet (rare in cells; move runs
+                                        // are typically body paragraphs). Body emissions at
+                                        // line ~3783 plumb the real value; extend cells when
+                                        // a fixture surfaces a table-cell move.
+                                        double_strikethrough: false,
                                         color: color.clone(),
                                         highlight: highlight.clone(),
                                         character_spacing: *cs + justify_char_spacing + grid_cs_adj,
