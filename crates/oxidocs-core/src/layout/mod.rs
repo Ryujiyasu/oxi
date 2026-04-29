@@ -5706,11 +5706,12 @@ impl LayoutEngine {
                         // chars_per_column based on available cell content height.
                         let chars_per_col = ((avail_h / font_size).floor() as usize).max(1);
                         let needs_multi = chars.len() > chars_per_col;
-                        // R59 conservative: column_pitch = font_size (each new column
-                        // shifts left by font_size). Word's actual column_pitch
-                        // observed empirically at font_size × 4/3 (10.5pt → 14pt
-                        // gap), which differs by ~3.5pt per column. Carried to R60.
-                        let column_pitch = font_size;
+                        // R60 (2026-04-29): column_pitch = font_size × 4/3.
+                        // Empirically matches Word VW_V1_two_cols (10.5pt MS Mincho
+                        // → 14pt gap, observed col 0 x=133, col 1 x=119, col 2 x=104.5).
+                        // Replaces R59 conservative font_size (which was 3.5pt off
+                        // per column for default MS Mincho).
+                        let column_pitch = font_size * 4.0 / 3.0;
                         let col0_x = cell_x + cell_w - pad_r - font_size;
                         if needs_multi {
                             // Multi-column: top-aligned each column, RTL progression.
