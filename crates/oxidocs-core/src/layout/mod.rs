@@ -5696,42 +5696,87 @@ impl LayoutEngine {
                     if !chars.is_empty() {
                         let (_, ref first_rs, ref first_ps) = chars[0];
                         let font_size = self.resolve_font_size(first_rs, first_ps);
-                        let block_h = chars.len() as f32 * font_size;
-                        let column_x = cell_x + cell_w - pad_r - font_size;
+                        let avail_h = (row_height - pad_t - pad_b).max(0.0);
                         // jc=center/both/distribute maps to vertical centering in tbRlV mode
                         let jc_center = matches!(p_jc,
                             Some(Alignment::Center) | Some(Alignment::Justify) | Some(Alignment::Distribute));
-                        let avail_h = (row_height - pad_t - pad_b).max(0.0);
-                        let y_offset_rel = if jc_center {
-                            ((avail_h - block_h) / 2.0).max(0.0)
+                        // R59 (2026-04-29): multi-column wrap. When chars overflow
+                        // single-column height, wrap to additional columns RTL
+                        // (right-to-left progression per ECMA-376 textDirection=tbRlV).
+                        // chars_per_column based on available cell content height.
+                        let chars_per_col = ((avail_h / font_size).floor() as usize).max(1);
+                        let needs_multi = chars.len() > chars_per_col;
+                        // R59 conservative: column_pitch = font_size (each new column
+                        // shifts left by font_size). Word's actual column_pitch
+                        // observed empirically at font_size × 4/3 (10.5pt → 14pt
+                        // gap), which differs by ~3.5pt per column. Carried to R60.
+                        let column_pitch = font_size;
+                        let col0_x = cell_x + cell_w - pad_r - font_size;
+                        if needs_multi {
+                            // Multi-column: top-aligned each column, RTL progression.
+                            // No vertical centering applied (chars fill each column top-down).
+                            for (i, (ch, rs, ps)) in chars.iter().enumerate() {
+                                let col_idx = i / chars_per_col;
+                                let char_in_col = i % chars_per_col;
+                                let column_x = col0_x - col_idx as f32 * column_pitch;
+                                let y_rel = char_in_col as f32 * font_size;
+                                let s: String = ch.to_string();
+                                cell_elements.push(LayoutElement::new(
+                                    column_x, y_rel, font_size, font_size,
+                                    LayoutContent::Text {
+                                        text: s,
+                                        font_size,
+                                        font_family: self.resolve_font_family_for_text(
+                                            &ch.to_string(), rs, ps
+                                        ).map(|s| s.to_string()),
+                                        bold: rs.bold,
+                                        italic: rs.italic,
+                                        underline: rs.underline,
+                                        underline_style: rs.underline_style.clone(),
+                                        strikethrough: rs.strikethrough,
+                                        color: self.resolve_color(rs, ps).map(|s| s.to_string()),
+                                        highlight: rs.highlight.clone(),
+                                        field_type: None,
+                                        character_spacing: 0.0,
+                                        text_scale: 100.0,
+                                    },
+                                ));
+                            }
+                            content_h = chars_per_col as f32 * font_size;
                         } else {
-                            0.0
-                        };
-                        for (i, (ch, rs, ps)) in chars.iter().enumerate() {
-                            let y_rel = y_offset_rel + i as f32 * font_size;
-                            let s: String = ch.to_string();
-                            cell_elements.push(LayoutElement::new(
-                                column_x, y_rel, font_size, font_size,
-                                LayoutContent::Text {
-                                    text: s,
-                                    font_size,
-                                    font_family: self.resolve_font_family_for_text(
-                                        &ch.to_string(), rs, ps
-                                    ).map(|s| s.to_string()),
-                                    bold: rs.bold,
-                                    italic: rs.italic,
-                                    underline: rs.underline,
-                                    underline_style: rs.underline_style.clone(),
-                                    strikethrough: rs.strikethrough,
-                                    color: self.resolve_color(rs, ps).map(|s| s.to_string()),
-                                    highlight: rs.highlight.clone(),
-                                    field_type: None,
-                                    character_spacing: 0.0,
-                                    text_scale: 100.0,
-                                },
-                            ));
+                            // Single column (R57 logic)
+                            let block_h = chars.len() as f32 * font_size;
+                            let y_offset_rel = if jc_center {
+                                ((avail_h - block_h) / 2.0).max(0.0)
+                            } else {
+                                0.0
+                            };
+                            for (i, (ch, rs, ps)) in chars.iter().enumerate() {
+                                let y_rel = y_offset_rel + i as f32 * font_size;
+                                let s: String = ch.to_string();
+                                cell_elements.push(LayoutElement::new(
+                                    col0_x, y_rel, font_size, font_size,
+                                    LayoutContent::Text {
+                                        text: s,
+                                        font_size,
+                                        font_family: self.resolve_font_family_for_text(
+                                            &ch.to_string(), rs, ps
+                                        ).map(|s| s.to_string()),
+                                        bold: rs.bold,
+                                        italic: rs.italic,
+                                        underline: rs.underline,
+                                        underline_style: rs.underline_style.clone(),
+                                        strikethrough: rs.strikethrough,
+                                        color: self.resolve_color(rs, ps).map(|s| s.to_string()),
+                                        highlight: rs.highlight.clone(),
+                                        field_type: None,
+                                        character_spacing: 0.0,
+                                        text_scale: 100.0,
+                                    },
+                                ));
+                            }
+                            content_h = block_h;
                         }
-                        content_h = block_h;
                     }
                 } else if !is_vmerge_continue {
                 for block in &cell.blocks {
