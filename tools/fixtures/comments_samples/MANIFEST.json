@@ -113,5 +113,10 @@
     "file": "fixture_23_rPrChange_outline_emboss.docx",
     "description": "rPrChange revision — run toggled to outline + emboss; prior rPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_24_rPrChange_shadow_vanish_dstrike.docx",
+    "description": "rPrChange revision — run toggled to shadow + vanish + double-strikethrough; prior rPr empty.",
+    "status": "OK"
   }
 ]

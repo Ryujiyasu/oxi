@@ -710,6 +710,33 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f24_rPrChange_shadow_vanish_dstrike() -> Fixture:
+    # Run currently has shadow + vanish + double-strikethrough; rPrChange
+    # records prior rPr had none. Three NEW non-R72 axes change at once —
+    # exercises describe_rpr_diff's R99 shadow + vanish + dstrike branches
+    # plus the comma-join across new branches.
+    body = para(
+        run("Default. "),
+        (
+            '<w:r><w:rPr>'
+            '<w:shadow/>'
+            '<w:vanish/>'
+            '<w:dstrike/>'
+            '<w:rPrChange w:id="1700" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            '<w:rPr/>'
+            '</w:rPrChange>'
+            '</w:rPr>'
+            '<w:t xml:space="preserve">Now shadowed+hidden+dstrike.</w:t></w:r>'
+        ),
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_24_rPrChange_shadow_vanish_dstrike.docx",
+        description="rPrChange revision — run toggled to shadow + vanish + double-strikethrough; prior rPr empty.",
+        document_body=body,
+    )
+
+
 def f23_rPrChange_outline_emboss() -> Fixture:
     # Run currently has outline + emboss; rPrChange records prior rPr
     # had neither. Two NEW non-R72 axes change at once — exercises
@@ -962,6 +989,7 @@ ALL_FIXTURES = [
     f21_pPrChange_tabs,
     f22_pPrChange_numPr,
     f23_rPrChange_outline_emboss,
+    f24_rPrChange_shadow_vanish_dstrike,
 ]
 
 

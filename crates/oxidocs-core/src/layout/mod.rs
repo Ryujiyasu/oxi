@@ -864,6 +864,22 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
     if prior.imprint != current.imprint {
         diffs.push(if current.imprint { "Imprint" } else { "Not Imprint" }.to_string());
     }
+    // R99 (2026-04-30): shadow, vanish, double_strikethrough — three more
+    // bool axes peer to R98 outline/emboss/imprint. shadow is the missing
+    // 4th text-effect (outline/shadow/emboss/imprint family); vanish is
+    // hidden-text toggle; double_strikethrough mirrors strikethrough.
+    if prior.shadow != current.shadow {
+        diffs.push(if current.shadow { "Shadow" } else { "Not Shadow" }.to_string());
+    }
+    if prior.vanish != current.vanish {
+        diffs.push(if current.vanish { "Hidden" } else { "Not Hidden" }.to_string());
+    }
+    if prior.double_strikethrough != current.double_strikethrough {
+        diffs.push(
+            if current.double_strikethrough { "Double Strikethrough" } else { "Not Double Strikethrough" }
+                .to_string(),
+        );
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {
