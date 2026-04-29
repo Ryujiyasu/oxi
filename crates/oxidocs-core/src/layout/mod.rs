@@ -851,6 +851,19 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
             }
         }
     }
+    // R98 (2026-04-30): outline, emboss, imprint — NEW rPr properties
+    // beyond R72 §19.47.5 list (R87 §19.62.6 noted these as future
+    // additions when fixture work surfaces them). All three are
+    // direct bools on RunStyle; same pattern as R86 small_caps/all_caps.
+    if prior.outline != current.outline {
+        diffs.push(if current.outline { "Outline" } else { "Not Outline" }.to_string());
+    }
+    if prior.emboss != current.emboss {
+        diffs.push(if current.emboss { "Emboss" } else { "Not Emboss" }.to_string());
+    }
+    if prior.imprint != current.imprint {
+        diffs.push(if current.imprint { "Imprint" } else { "Not Imprint" }.to_string());
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

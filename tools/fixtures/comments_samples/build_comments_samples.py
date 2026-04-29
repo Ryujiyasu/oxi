@@ -69,6 +69,9 @@ Fixture list (indexed by file name):
        ilvl=0 attached). R95 patches the parser to mirror inline
        numPr onto style.num_id/num_ilvl, unblocking the R89
        attempted branches. Surfaces "Numbering: list 1".
+  23 — `<w:rPrChange>` outline + emboss revision. R98 extends
+       describe_rpr_diff to cover 3 NEW non-R72 rPr axes
+       (outline + emboss + imprint). Surfaces "Outline" + "Emboss".
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -707,6 +710,32 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f23_rPrChange_outline_emboss() -> Fixture:
+    # Run currently has outline + emboss; rPrChange records prior rPr
+    # had neither. Two NEW non-R72 axes change at once — exercises
+    # describe_rpr_diff's R98 outline + emboss branches plus the
+    # comma-join across new branches.
+    body = para(
+        run("Default. "),
+        (
+            '<w:r><w:rPr>'
+            '<w:outline/>'
+            '<w:emboss/>'
+            '<w:rPrChange w:id="1600" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            '<w:rPr/>'
+            '</w:rPrChange>'
+            '</w:rPr>'
+            '<w:t xml:space="preserve">Now outlined+embossed.</w:t></w:r>'
+        ),
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_23_rPrChange_outline_emboss.docx",
+        description="rPrChange revision — run toggled to outline + emboss; prior rPr empty.",
+        document_body=body,
+    )
+
+
 def f22_pPrChange_numPr() -> Fixture:
     # Paragraph that became a list item via inline pPrChange. Current
     # pPr has <w:numPr><w:numId val=1/><w:ilvl val=0/></w:numPr>;
@@ -932,6 +961,7 @@ ALL_FIXTURES = [
     f20_pPrChange_borders,
     f21_pPrChange_tabs,
     f22_pPrChange_numPr,
+    f23_rPrChange_outline_emboss,
 ]
 
 
