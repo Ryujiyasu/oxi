@@ -1466,8 +1466,8 @@ fn fixture_12_layout_third_author_uses_palette_slot_2() {
         assert!(!*strike, "Carol's ins must not be strikethrough");
         assert_eq!(
             color.as_deref(),
-            Some("#2B6033"),
-            "Carol = slot 2 (#2B6033, Office documented; pending Word pixel-pass)"
+            Some("#478103"),
+            "Carol = slot 2 (#478103, COM-confirmed R65 2026-04-29 via fixture_12 pixel pass)"
         );
     }
 }

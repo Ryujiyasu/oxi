@@ -31,14 +31,19 @@ fn is_break_after(ch: char) -> bool {
 ///   - Slot 0 → #D03337 (Alice in fixture_05/06/07/10)
 ///   - Slot 1 → #5B2C90 (Bob in fixture_10)
 ///
-/// Slots 2..7 are Word's documented rotation defaults but not yet COM-confirmed
-/// — they need a 3+author fixture. The list below is the Word/Office reviewing
-/// palette as published by Microsoft; if a future measurement contradicts a
-/// specific slot, replace just that entry.
+/// Slot 2 was COM-confirmed 2026-04-29 in the R65 pixel pass:
+/// `tools/metrics/output/comments_tracked_changes_pixels.json` records
+/// Carol's CAROL INS run in fixture_12 as RGB (71, 129, 3) = #478103.
+/// The earlier placeholder #2B6033 was the move-runs color, not slot 2 —
+/// the two are distinct in Word even though they're both green.
+///
+/// Slots 3..7 are still Word's documented rotation defaults; they need
+/// a 6+author fixture or a per-slot probe. If a future measurement
+/// contradicts a specific slot, replace just that entry.
 const REVISION_AUTHOR_PALETTE: [&str; 8] = [
-    "#D03337", // 0 — confirmed
-    "#5B2C90", // 1 — confirmed
-    "#2B6033", // 2 — green (also used for moves regardless of author)
+    "#D03337", // 0 — confirmed (Alice fixture_05/06/07/10)
+    "#5B2C90", // 1 — confirmed (Bob fixture_10)
+    "#478103", // 2 — confirmed (Carol fixture_12, R65 2026-04-29)
     "#ED7D31", // 3 — orange
     "#4472C4", // 4 — blue
     "#843C0C", // 5 — brown
@@ -63,7 +68,7 @@ const REVISION_MOVE_COLOR: &str = "#2B6033";
 const COMMENT_HIGHLIGHT_TINT_PALETTE: [&str; 8] = [
     "#FAE6E7", // 0 — Alice, COM-confirmed
     "#EFEAF4", // 1 — Bob (derived from #5B2C90)
-    "#EAEFEA", // 2 — derived from #2B6033
+    "#E9F0E1", // 2 — derived from #478103 (R65 base correction)
     "#FCEEE0", // 3 — derived from #ED7D31
     "#E8ECF6", // 4 — derived from #4472C4
     "#F2EAE4", // 5 — derived from #843C0C
@@ -98,7 +103,7 @@ pub fn comment_balloon_fill(author_color_index: usize, resolved: bool) -> &'stat
 const COMMENT_HIGHLIGHT_RESOLVED_PALETTE: [&str; 8] = [
     "#F1EDEC", // 0 — Alice resolved, COM-confirmed
     "#EFEEF1", // 1 — Bob resolved
-    "#EEEEEC", // 2 — derived green
+    "#EBEDE9", // 2 — derived from #E9F0E1 (R65 base correction)
     "#F2EDE6", // 3 — derived orange
     "#EBEDF1", // 4 — derived blue
     "#EFECEA", // 5 — derived brown
