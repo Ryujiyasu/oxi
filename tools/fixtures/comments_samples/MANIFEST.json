@@ -78,5 +78,10 @@
     "file": "fixture_16_rPrChange_caps_spacing.docx",
     "description": "rPrChange revision — run toggled to all_caps + character_spacing=1pt; prior rPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_17_rPrChange_vAlign_shading.docx",
+    "description": "rPrChange revision — run toggled to superscript + yellow shading; prior rPr empty.",
+    "status": "OK"
   }
 ]

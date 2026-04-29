@@ -814,6 +814,43 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
             }
         }
     }
+    // R87 (2026-04-29): font_family_east_asia + vertical_align + shading.
+    // Closes the remaining R72 §19.47.5 axes — describe_rpr_diff now
+    // covers 12 axes total (full R72 list).
+    if prior.font_family_east_asia != current.font_family_east_asia {
+        match current.font_family_east_asia.as_deref() {
+            Some(name) => diffs.push(format!("East Asia Font: {}", name)),
+            None => {
+                if prior.font_family_east_asia.is_some() {
+                    diffs.push("East Asia Font: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.vertical_align != current.vertical_align {
+        match current.vertical_align {
+            Some(VerticalAlign::Superscript) => diffs.push("Superscript".to_string()),
+            Some(VerticalAlign::Subscript) => diffs.push("Subscript".to_string()),
+            Some(VerticalAlign::Baseline) | None => {
+                // None or back-to-baseline → "Baseline" (matches Word's UI label).
+                if prior.vertical_align.is_some()
+                    && prior.vertical_align != Some(VerticalAlign::Baseline)
+                {
+                    diffs.push("Baseline".to_string());
+                }
+            }
+        }
+    }
+    if prior.shading != current.shading {
+        match current.shading.as_deref() {
+            Some(hex) => diffs.push(format!("Shading: {}", hex)),
+            None => {
+                if prior.shading.is_some() {
+                    diffs.push("Shading: Default".to_string());
+                }
+            }
+        }
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

@@ -45,6 +45,11 @@ Fixture list (indexed by file name):
        character_spacing toggled together). R86 extends
        describe_rpr_diff to cover these 3 axes; this fixture is the
        end-to-end exercise.
+  17 — `<w:rPrChange>` multi-axis revision (vertical_align=superscript
+       + shading=#FFFF00 yellow). R87 closes the remaining R72 §19.47.5
+       axes; describe_rpr_diff now covers 12 axes total. East-Asia
+       font axis is wired but not exercised by this fixture (Western
+       fixtures suffice for the majority of real revisions).
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -683,6 +688,32 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f17_rPrChange_vAlign_shading() -> Fixture:
+    # Run currently has vertical_align=superscript + shading=yellow.
+    # rPrChange records that the prior rPr had neither. Two axes
+    # change in a single rPrChange — exercises describe_rpr_diff's
+    # R87 vertical_align + shading branches plus comma-join.
+    body = para(
+        run("Inline. "),
+        (
+            '<w:r><w:rPr>'
+            '<w:vertAlign w:val="superscript"/>'
+            '<w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/>'
+            '<w:rPrChange w:id="1000" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            '<w:rPr/>'
+            '</w:rPrChange>'
+            '</w:rPr>'
+            '<w:t xml:space="preserve">super+yellow</w:t></w:r>'
+        ),
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_17_rPrChange_vAlign_shading.docx",
+        description="rPrChange revision — run toggled to superscript + yellow shading; prior rPr empty.",
+        document_body=body,
+    )
+
+
 def f16_rPrChange_caps_spacing() -> Fixture:
     # Run currently has all_caps + character_spacing=1.0pt; rPrChange
     # records that the prior rPr had neither. Two axes change in a single
@@ -751,6 +782,7 @@ ALL_FIXTURES = [
     f14_rPrChange_font,
     f15_pPrChange_alignment,
     f16_rPrChange_caps_spacing,
+    f17_rPrChange_vAlign_shading,
 ]
 
 

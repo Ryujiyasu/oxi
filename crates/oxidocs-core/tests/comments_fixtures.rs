@@ -1604,6 +1604,58 @@ fn fixture_16_layout_rprchange_caps_and_spacing() {
     );
 }
 
+/// R87 (2026-04-29): describe_rpr_diff covers vertical_align + shading
+/// (and font_family_east_asia, untested by this fixture). fixture_17
+/// toggles vertical_align=superscript + shading=#FFFF00 in a single
+/// rPrChange to exercise both new branches plus comma-join.
+#[test]
+fn fixture_17_layout_rprchange_valign_and_shading() {
+    let Some(bytes) = read_fixture("fixture_17_rPrChange_vAlign_shading.docx") else {
+        eprintln!("skipping: fixture_17 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_17");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_17 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Superscript"),
+        "vertical_align=Superscript must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Shading:"),
+        "shading toggle must surface as 'Shading:'; got {body:?}"
+    );
+    // Multi-axis diff: comma-separated.
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //
