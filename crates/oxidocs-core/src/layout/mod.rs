@@ -5714,13 +5714,30 @@ impl LayoutEngine {
                         let column_pitch = font_size * 4.0 / 3.0;
                         let col0_x = cell_x + cell_w - pad_r - font_size;
                         if needs_multi {
-                            // Multi-column: top-aligned each column, RTL progression.
-                            // No vertical centering applied (chars fill each column top-down).
+                            // Multi-column: RTL progression, per-column vertical
+                            // centering when jc=center. R61 (2026-04-29): COM-confirmed
+                            // VW_V1_two_cols col 2 ("認", 1 char) at y=142.5 (centered
+                            // within 150pt cell), col 0/1 (14 chars each) at y=74-210.5
+                            // (block_h=147 centered in 150 → y_start=74). Each column
+                            // computes its own block_h based on chars in that column.
+                            let n_cols = (chars.len() + chars_per_col - 1) / chars_per_col;
+                            let last_col_n_chars = chars.len() - (n_cols - 1) * chars_per_col;
                             for (i, (ch, rs, ps)) in chars.iter().enumerate() {
                                 let col_idx = i / chars_per_col;
                                 let char_in_col = i % chars_per_col;
                                 let column_x = col0_x - col_idx as f32 * column_pitch;
-                                let y_rel = char_in_col as f32 * font_size;
+                                let chars_in_this_col = if col_idx + 1 == n_cols {
+                                    last_col_n_chars
+                                } else {
+                                    chars_per_col
+                                };
+                                let col_block_h = chars_in_this_col as f32 * font_size;
+                                let y_offset_rel = if jc_center {
+                                    ((avail_h - col_block_h) / 2.0).max(0.0)
+                                } else {
+                                    0.0
+                                };
+                                let y_rel = y_offset_rel + char_in_col as f32 * font_size;
                                 let s: String = ch.to_string();
                                 cell_elements.push(LayoutElement::new(
                                     column_x, y_rel, font_size, font_size,
