@@ -624,47 +624,6 @@ fn comment_body_text(blocks: &[Block]) -> String {
     out
 }
 
-/// S-02 (Simple mode): strip the parser's pre-applied tracked-change
-/// styling (underline + red on `<w:ins>` runs, strikethrough + red on
-/// `<w:del>` runs) WITHOUT removing `tracked_change` itself. Keeps R-10's
-/// margin change bar firing while letting the in-line text render plain.
-fn strip_parser_revision_styling(doc: &mut Document) {
-    fn visit(blocks: &mut Vec<Block>) {
-        for block in blocks.iter_mut() {
-            match block {
-                Block::Paragraph(p) => {
-                    for run in &mut p.runs {
-                        if let Some(tc) = run.tracked_change.as_ref() {
-                            match tc.change_type.as_str() {
-                                "insert" | "moveTo" => {
-                                    run.style.underline = false;
-                                    run.style.underline_style = None;
-                                }
-                                "delete" | "moveFrom" => {
-                                    run.style.strikethrough = false;
-                                }
-                                _ => {}
-                            }
-                            if run.style.color.as_deref() == Some("FF0000") {
-                                run.style.color = None;
-                            }
-                        }
-                    }
-                }
-                Block::Table(t) => {
-                    for row in &mut t.rows {
-                        for cell in &mut row.cells {
-                            visit(&mut cell.blocks);
-                        }
-                    }
-                }
-                Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
-            }
-        }
-    }
-    for_each_block_tree(doc, |blocks| visit(blocks));
-}
-
 /// S-02: filter / clear tracked-change runs in-place for `Original` /
 /// `Final` view modes.
 ///
@@ -677,6 +636,8 @@ fn strip_parser_revision_styling(doc: &mut Document) {
 ///
 /// Recurses into table cells. After this pass `apply_revision_styling`
 /// is intentionally NOT called — surviving runs render as normal text.
+/// R62 (2026-04-29): parser no longer pre-applies revision styling, so
+/// surviving runs need only `tracked_change` cleared.
 fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
     fn visit(blocks: &mut Vec<Block>, final_view: bool) {
         for block in blocks.iter_mut() {
@@ -691,25 +652,11 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
                             if drop {
                                 false
                             } else {
-                                // Run survives — strip the parser's
-                                // pre-applied tracked-change styling
-                                // (underline + red for ins, strike + red
-                                // for del) and the IR marker, so the run
-                                // renders as plain body text.
-                                let kind = tc.change_type.clone();
+                                // Run survives — clear tracked_change so the
+                                // run renders as plain body text. No style
+                                // strip needed (parser stores tracked_change
+                                // only since R62).
                                 run.tracked_change = None;
-                                if kind == "insert" || kind == "moveTo" {
-                                    run.style.underline = false;
-                                    run.style.underline_style = None;
-                                    if run.style.color.as_deref() == Some("FF0000") {
-                                        run.style.color = None;
-                                    }
-                                } else if kind == "delete" || kind == "moveFrom" {
-                                    run.style.strikethrough = false;
-                                    if run.style.color.as_deref() == Some("FF0000") {
-                                        run.style.color = None;
-                                    }
-                                }
                                 true
                             }
                         }
@@ -1077,11 +1024,10 @@ impl LayoutEngine {
             }
             ShowRevisions::Simple => {
                 // Change bar only — keep tracked_change so R-10 still fires
-                // a margin bar per revision-bearing line, but DON'T apply the
-                // color / underline / strike pre-pass. Also strip the
-                // parser's pre-applied underline+red on ins / strike+red on
-                // del so the surviving runs read as plain body text.
-                strip_parser_revision_styling(&mut doc_resolved);
+                // a margin bar per revision-bearing line. R62 (2026-04-29):
+                // no styling pass needed — parser stores tracked_change only
+                // (no pre-applied styling), so revision runs already render
+                // as plain body text. R-10 reads tracked_change directly.
             }
             ShowRevisions::Original => {
                 // Pre-edit view — drop `ins` / `moveTo` runs entirely. Keep

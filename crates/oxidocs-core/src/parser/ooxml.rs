@@ -5850,20 +5850,13 @@ fn parse_tracked_change_runs(
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
                     let (mut run, _dr) = parse_run(reader, ctx, styles, None)?;
-                    // Matches Word output:
-                    // - "delete" → strikethrough + red color
-                    // - "insert" → underline + red color
-                    if tc.change_type == "delete" {
-                        run.style.strikethrough = true;
-                        if run.style.color.is_none() {
-                            run.style.color = Some("FF0000".to_string());
-                        }
-                    } else if tc.change_type == "insert" {
-                        run.style.underline = true;
-                        if run.style.color.is_none() {
-                            run.style.color = Some("FF0000".to_string());
-                        }
-                    }
+                    // R62 (2026-04-29): parser stores tracked_change ONLY.
+                    // Visual styling (underline/strikethrough + author-palette
+                    // color) is applied at layout time by R-01
+                    // apply_revision_styling_to_run (mod.rs:732), using the
+                    // author palette and ShowRevisions mode. Pre-applying
+                    // hardcoded FF0000 here was legacy from before R-01
+                    // landed and required compensating strip helpers.
                     run.tracked_change = Some(tc.clone());
                     runs.push(run);
                 } else {
