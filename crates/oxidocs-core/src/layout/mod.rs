@@ -332,20 +332,21 @@ fn emit_balloons_for_layout_page(
         None => return,
     };
 
-    // R-12 (R67): does this page carry any rPrChange runs that need a
-    // formatting-change margin balloon? Only emit when the caller signals
-    // revisions should display ("All" markup view); under Simple / Original
-    // / Final the rPrChange annotation is suppressed.
-    let has_rpr_change_on_page = show_rpr_change_balloons
+    // R-12 v1 / v2 (R67 + R69): does this page carry any rPrChange runs OR
+    // pPrChange paragraphs that need a formatting-change margin balloon?
+    // Only emit when the caller signals revisions should display ("All"
+    // markup view); under Simple / Original / Final the change annotations
+    // are suppressed.
+    let has_format_change_on_page = show_rpr_change_balloons
         && ir_page.blocks.iter().any(|block| {
             if let Block::Paragraph(p) = block {
-                p.runs.iter().any(|r| r.rpr_change.is_some())
+                p.ppr_change.is_some() || p.runs.iter().any(|r| r.rpr_change.is_some())
             } else {
                 false
             }
         });
 
-    if id_to_comment.is_empty() && !has_rpr_change_on_page {
+    if id_to_comment.is_empty() && !has_format_change_on_page {
         return;
     }
     // Map author display → palette index (slot 0 fallback for unknown authors).
@@ -391,7 +392,7 @@ fn emit_balloons_for_layout_page(
         }
     }
 
-    if anchors.is_empty() && !has_rpr_change_on_page {
+    if anchors.is_empty() && !has_format_change_on_page {
         return;
     }
 
@@ -535,72 +536,108 @@ fn emit_balloons_for_layout_page(
         });
     }
 
-    // R-12: rPrChange margin balloons. Walk runs looking for `rpr_change`,
-    // anchor at the paragraph's first-rendered Y, build a "Formatted: …"
-    // body from the style diff, and emit a narrow balloon (resolved-width
-    // geometry mirrors Word's "Formatted" balloon — see fixture_09 pixel
-    // pass: balloon column starts at x≈401pt = page_w − 4 − 190.1).
-    // Skipped when `show_rpr_change_balloons` is false (Simple / Original /
-    // Final markup views).
+    // R-12 v1 (R67) + v2 (R69): rPrChange + pPrChange margin balloons.
+    // Walk paragraphs looking for `ppr_change` (paragraph-level) and runs
+    // for `rpr_change` (run-level). Anchor at the paragraph's first-rendered
+    // Y. Build a "Formatted: …" body from the style diff. Emit a narrow
+    // balloon (resolved-width geometry mirrors Word's "Formatted" balloon —
+    // fixture_09 pixel pass: balloon column starts at x≈401pt = page_w − 4
+    // − 190.1). Skipped when `show_rpr_change_balloons` is false (Simple /
+    // Original / Final markup views).
+    //
+    // Helper closure to keep the per-balloon push DRY across the
+    // pPr/rPr branches.
     if show_rpr_change_balloons {
-    for (pi, block) in ir_page.blocks.iter().enumerate() {
-        let p = match block {
-            Block::Paragraph(p) => p,
-            _ => continue,
-        };
-        let para_anchor = match para_first_xy.get(&pi) {
-            Some(&xy) => xy,
-            None => continue,
-        };
-        for run in &p.runs {
-            let rpc = match run.rpr_change.as_ref() {
-                Some(r) => r,
+        let push_format_balloon =
+            |pending: &mut Vec<PendingBalloon>,
+             cid: String,
+             author: String,
+             color_idx: usize,
+             body: String,
+             para_anchor: (f32, f32)| {
+                let balloon_width = balloon_width_resolved;
+                let balloon_left = (page_w - balloon_right_inset - balloon_width).max(0.0);
+                // Quick line estimate: ~31 chars fit on the 190pt narrow balloon.
+                let line_count = ((body.chars().count() + 30) / 31).max(1);
+                let line_height = 14.0_f32;
+                let outer_pad = 8.0_f32;
+                let chip_h = 14.0_f32;
+                let section_pad = 4.0_f32;
+                let balloon_height = outer_pad
+                    + chip_h
+                    + section_pad
+                    + (line_count as f32) * line_height
+                    + outer_pad;
+                pending.push(PendingBalloon {
+                    cid,
+                    author,
+                    author_color_index: color_idx,
+                    resolved: true,
+                    body,
+                    replies: Vec::new(),
+                    anchor_x: para_anchor.0,
+                    anchor_y: para_anchor.1,
+                    balloon_left,
+                    balloon_width,
+                    balloon_height,
+                    y: para_anchor.1,
+                });
+            };
+
+        for (pi, block) in ir_page.blocks.iter().enumerate() {
+            let p = match block {
+                Block::Paragraph(p) => p,
+                _ => continue,
+            };
+            let para_anchor = match para_first_xy.get(&pi) {
+                Some(&xy) => xy,
                 None => continue,
             };
-            let author = rpc.author.clone().unwrap_or_default();
-            let color_idx = author_to_idx
-                .get(author.as_str())
-                .copied()
-                .unwrap_or(0);
-            let prior = rpc.prior_run_style.as_deref();
-            let body = format!("Formatted: {}", describe_rpr_diff(prior, &run.style));
-            let balloon_width = balloon_width_resolved;
-            let balloon_left = (page_w - balloon_right_inset - balloon_width).max(0.0);
-            // Quick line estimate: ~31 chars fit on the 190pt narrow balloon.
-            let line_count = ((body.chars().count() + 30) / 31).max(1);
-            let line_height = 14.0_f32;
-            let outer_pad = 8.0_f32;
-            let chip_h = 14.0_f32;
-            let section_pad = 4.0_f32;
-            let balloon_height = outer_pad
-                + chip_h
-                + section_pad
-                + (line_count as f32) * line_height
-                + outer_pad;
-            // Synthetic id keeps R-12 balloons distinguishable from comment
-            // ids while still routing through the same LayoutContent::Balloon
-            // variant. Renderer doesn't care about the prefix.
-            let cid = format!(
-                "rprchange:p{}:{}",
-                pi,
-                rpc.id.clone().unwrap_or_default()
-            );
-            pending.push(PendingBalloon {
-                cid,
-                author,
-                author_color_index: color_idx,
-                resolved: true,
-                body,
-                replies: Vec::new(),
-                anchor_x: para_anchor.0,
-                anchor_y: para_anchor.1,
-                balloon_left,
-                balloon_width,
-                balloon_height,
-                y: para_anchor.1,
-            });
+            // Paragraph-level pPrChange first (one balloon per paragraph,
+            // anchored at the paragraph's first-rendered Y).
+            if let Some(pc) = p.ppr_change.as_ref() {
+                let author = pc.author.clone().unwrap_or_default();
+                let color_idx = author_to_idx
+                    .get(author.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let prior = pc.prior_paragraph_style.as_deref();
+                let body = format!(
+                    "Formatted: {}",
+                    describe_ppr_diff(prior, &p.style)
+                );
+                let cid = format!(
+                    "pprchange:p{}:{}",
+                    pi,
+                    pc.id.clone().unwrap_or_default()
+                );
+                push_format_balloon(&mut pending, cid, author, color_idx, body, para_anchor);
+            }
+            // Run-level rPrChange after — order matters only for stacking
+            // determinism; same paragraph anchor either way.
+            for run in &p.runs {
+                let rpc = match run.rpr_change.as_ref() {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let author = rpc.author.clone().unwrap_or_default();
+                let color_idx = author_to_idx
+                    .get(author.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let prior = rpc.prior_run_style.as_deref();
+                let body = format!(
+                    "Formatted: {}",
+                    describe_rpr_diff(prior, &run.style)
+                );
+                let cid = format!(
+                    "rprchange:p{}:{}",
+                    pi,
+                    rpc.id.clone().unwrap_or_default()
+                );
+                push_format_balloon(&mut pending, cid, author, color_idx, body, para_anchor);
+            }
         }
-    }
     } // end `if show_rpr_change_balloons`
 
     // R-05d: stack to prevent overlap. Sort by anchor Y ascending; pure
@@ -741,6 +778,84 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
     if prior.font_size != current.font_size {
         if let Some(fs) = current.font_size {
             diffs.push(format!("Font Size: {}pt", fs));
+        }
+    }
+    if diffs.is_empty() {
+        "Style".to_string()
+    } else {
+        diffs.join(", ")
+    }
+}
+
+/// R-12 v2 (R69): build a human-readable description of a `pPrChange` style
+/// diff. Companion to `describe_rpr_diff`.
+///
+/// Compares the paragraph's current style against `prior` (the
+/// ParagraphStyle stored inside `ppr_change.prior_paragraph_style`) and
+/// emits a comma-separated list of toggled properties. v1 covers
+/// `indent_left`, `indent_right`, `indent_first_line`, `line_spacing`,
+/// `space_before`, `space_after` — enough for fixture_13 (indent toggle)
+/// plus the most common Word "Formatted" balloon strings for paragraphs.
+///
+/// Note: paragraph alignment (`<w:jc>`) lives on `Paragraph.alignment`
+/// (top-level), not inside `ParagraphStyle`. `pPrChange.prior_paragraph_style`
+/// therefore can NOT capture alignment toggles. When fixture work surfaces
+/// an alignment-toggle case the IR will need a parallel `prior_alignment`
+/// field; for v1 we list only the properties available on `ParagraphStyle`.
+fn describe_ppr_diff(prior: Option<&ParagraphStyle>, current: &ParagraphStyle) -> String {
+    let mut diffs: Vec<String> = Vec::new();
+    let prior = match prior {
+        Some(p) => p,
+        None => {
+            // Empty prior → all set props on current become "now X" diffs,
+            // but emitting an exhaustive list would be noisy. Just say
+            // "Style" for now.
+            return "Style".to_string();
+        }
+    };
+    if prior.indent_left != current.indent_left {
+        match current.indent_left {
+            Some(v) => diffs.push(format!("Indent Left: {}pt", v)),
+            None => {
+                if prior.indent_left.is_some() {
+                    diffs.push("Indent Left: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.indent_right != current.indent_right {
+        match current.indent_right {
+            Some(v) => diffs.push(format!("Indent Right: {}pt", v)),
+            None => {
+                if prior.indent_right.is_some() {
+                    diffs.push("Indent Right: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.indent_first_line != current.indent_first_line {
+        match current.indent_first_line {
+            Some(v) => diffs.push(format!("First Line: {}pt", v)),
+            None => {
+                if prior.indent_first_line.is_some() {
+                    diffs.push("First Line: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.line_spacing != current.line_spacing {
+        if let Some(v) = current.line_spacing {
+            diffs.push(format!("Line Spacing: {}", v));
+        }
+    }
+    if prior.space_before != current.space_before {
+        if let Some(v) = current.space_before {
+            diffs.push(format!("Space Before: {}pt", v));
+        }
+    }
+    if prior.space_after != current.space_after {
+        if let Some(v) = current.space_after {
+            diffs.push(format!("Space After: {}pt", v));
         }
     }
     if diffs.is_empty() {

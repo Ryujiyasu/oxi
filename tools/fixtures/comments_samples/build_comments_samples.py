@@ -26,6 +26,11 @@ Fixture list (indexed by file name):
        documented but not yet COM-confirmed. The fixture surfaces it on
        the Oxi side and provides the input file that a future Word-side
        pixel-pass run can sample for ground-truth confirmation.
+  13 — `<w:pPrChange>` paragraph-property revision (indent toggle) —
+       paired with fixture_09 (rPrChange, run-level). Confirms R-12 v2
+       lands a "Formatted" margin balloon for paragraph-level changes
+       too, not just run-level. Indent is the most common pPrChange
+       observed in real docs.
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -614,6 +619,30 @@ def f12_three_reviewers() -> Fixture:
     )
 
 
+def f13_pPrChange_indent() -> Fixture:
+    # Single paragraph whose indent was changed via <w:pPrChange>. The current
+    # pPr declares left-indent=720dxa (= 0.5"), and the pPrChange body records
+    # that prior pPr had no indent. R-12 v2 (R69) emits a "Formatted: …"
+    # balloon for this paragraph in the right margin, mirroring how it does
+    # for rPrChange (fixture_09 / R-12 v1).
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:ind w:left="720"/>\n'
+        '        <w:pPrChange w:id="600" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now indented (was not).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_13_pPrChange_indent.docx",
+        description="pPrChange revision — paragraph left-indent toggled from 0 to 720dxa; prior pPr recorded empty.",
+        document_body=body,
+    )
+
+
 ALL_FIXTURES = [
     f01_single_comment,
     f02_comment_with_reply,
@@ -627,6 +656,7 @@ ALL_FIXTURES = [
     f10_multiple_reviewers,
     f11_cjk_revisions,
     f12_three_reviewers,
+    f13_pPrChange_indent,
 ]
 
 

@@ -1355,6 +1355,76 @@ fn fixture_09_layout_emits_rprchange_margin_balloon() {
     );
 }
 
+/// R-12 v2 (R69, 2026-04-29): a `<w:pPrChange>` paragraph anchors a
+/// "Formatted: …" balloon in the right margin, mirroring v1's run-level
+/// rPrChange behaviour. fixture_13 toggles paragraph indent (0 → 720dxa
+/// = 36pt left); the balloon body must mention "Indent Left" and the
+/// synthetic comment_id must use the `pprchange:` prefix to keep
+/// run-level and paragraph-level entries distinguishable.
+#[test]
+fn fixture_13_layout_emits_pprchange_margin_balloon() {
+    let Some(bytes) = read_fixture("fixture_13_pPrChange_indent.docx") else {
+        eprintln!("skipping: fixture_13 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_13");
+    let result = layout_doc(&doc);
+
+    let mut pprchange_count = 0_usize;
+    let mut rprchange_count = 0_usize;
+    let mut found_body: Option<String> = None;
+    let mut found_author: Option<String> = None;
+    let mut found_resolved: Option<bool> = None;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id,
+                body,
+                author,
+                resolved,
+                ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    pprchange_count += 1;
+                    found_body = Some(body.clone());
+                    found_author = Some(author.clone());
+                    found_resolved = Some(*resolved);
+                } else if comment_id.starts_with("rprchange:") {
+                    rprchange_count += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        pprchange_count, 1,
+        "fixture_13 has 1 pPrChange (indent toggle) → must emit exactly 1 pprchange-prefixed balloon"
+    );
+    assert_eq!(
+        rprchange_count, 0,
+        "fixture_13 has no rPrChange — no rprchange-prefixed balloon expected"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "R-12 v2 balloon body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Indent Left"),
+        "fixture_13 toggles indent → body should mention 'Indent Left'; got {body:?}"
+    );
+    assert_eq!(
+        found_author.as_deref(),
+        Some("Alice Reviewer"),
+        "R-12 v2 balloon author must be the pPrChange author"
+    );
+    assert_eq!(
+        found_resolved,
+        Some(true),
+        "R-12 balloons use narrow (resolved-width) geometry"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //
