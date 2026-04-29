@@ -1145,6 +1145,26 @@ fn describe_ppr_diff(
     if prior.contextual_spacing != current.contextual_spacing {
         diffs.push(if current.contextual_spacing { "Don't Add Space" } else { "Add Space Between Same-Style Paragraphs" }.to_string());
     }
+    // R108 (2026-04-30): three more NEW non-R72 ppr axes —
+    // bidi (RTL paragraph), page_break_after (less common pair to
+    // R107's page_break_before), text_alignment (Option<String>:
+    // "top"/"center"/"baseline"/"bottom"/"auto").
+    if prior.bidi != current.bidi {
+        diffs.push(if current.bidi { "Right-to-Left" } else { "Left-to-Right" }.to_string());
+    }
+    if prior.page_break_after != current.page_break_after {
+        diffs.push(if current.page_break_after { "Page Break After" } else { "Not Page Break After" }.to_string());
+    }
+    if prior.text_alignment != current.text_alignment {
+        match current.text_alignment.as_deref() {
+            Some(name) => diffs.push(format!("Text Alignment: {}", name)),
+            None => {
+                if prior.text_alignment.is_some() {
+                    diffs.push("Text Alignment: Default".to_string());
+                }
+            }
+        }
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

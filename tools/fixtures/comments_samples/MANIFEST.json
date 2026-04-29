@@ -128,5 +128,10 @@
     "file": "fixture_26_pPrChange_pageBreak_widow.docx",
     "description": "pPrChange revision — page_break_before added + widow_control turned off; prior pPr defaults.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_27_pPrChange_bidi_textAlign.docx",
+    "description": "pPrChange revision — bidi (RTL) + text_alignment=top added; prior pPr empty.",
+    "status": "OK"
   }
 ]

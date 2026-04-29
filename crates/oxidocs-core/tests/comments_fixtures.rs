@@ -1934,6 +1934,56 @@ fn fixture_23_layout_rprchange_outline_emboss() {
     );
 }
 
+/// R108 (2026-04-30): describe_ppr_diff extension — bidi + page_break_after
+/// + text_alignment (3 more NEW non-R72 ppr axes). fixture_27 toggles bidi
+/// ON and text_alignment="top" in one pPrChange.
+#[test]
+fn fixture_27_layout_pprchange_bidi_textAlign() {
+    let Some(bytes) = read_fixture("fixture_27_pPrChange_bidi_textAlign.docx") else {
+        eprintln!("skipping: fixture_27 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_27");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_27 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Right-to-Left"),
+        "bidi toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Text Alignment: top"),
+        "text_alignment toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
 /// R107 (2026-04-30): describe_ppr_diff NEW non-R72 axes — page_break_before
 /// + widow_control + contextual_spacing. fixture_26 toggles
 /// page_break_before ON and widow_control OFF in one pPrChange.

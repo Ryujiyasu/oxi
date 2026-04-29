@@ -710,6 +710,30 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f27_pPrChange_bidi_textAlignment() -> Fixture:
+    # Paragraph that gained bidi + text_alignment="top" via pPrChange.
+    # Current pPr has <w:bidi/> and <w:textAlignment w:val="top"/>;
+    # pPrChange's prior pPr is empty. R108 surfaces "Right-to-Left" +
+    # "Text Alignment: top".
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:bidi/>\n'
+        '        <w:textAlignment w:val="top"/>\n'
+        '        <w:pPrChange w:id="2000" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now RTL with top text alignment.</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_27_pPrChange_bidi_textAlign.docx",
+        description="pPrChange revision — bidi (RTL) + text_alignment=top added; prior pPr empty.",
+        document_body=body,
+    )
+
+
 def f26_pPrChange_pageBreakBefore_widow() -> Fixture:
     # Paragraph that gained page_break_before + lost widow_control via
     # pPrChange. Current pPr has <w:pageBreakBefore/> and
@@ -1044,6 +1068,7 @@ ALL_FIXTURES = [
     f24_rPrChange_shadow_vanish_dstrike,
     f25_rPrChange_highlight_position_em,
     f26_pPrChange_pageBreakBefore_widow,
+    f27_pPrChange_bidi_textAlignment,
 ]
 
 
