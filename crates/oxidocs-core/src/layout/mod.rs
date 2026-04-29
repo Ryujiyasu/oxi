@@ -5671,7 +5671,69 @@ impl LayoutEngine {
 
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
                 let is_exact = row.height_rule.as_deref() == Some("exact");
-                if !is_vmerge_continue {
+                // R57 (2026-04-29): Phase C #4 vertical writing — tbRlV cell layout.
+                // COM-confirmed (VW_V1_basic, MS Mincho 10.5pt): chars stacked at
+                // column_x = cell_right - pad_r - font_size, dy = font_size strict.
+                // jc=center → vertically centered; default → top-aligned.
+                // R57 covers single-column case only; multi-column wrap = R58.
+                let is_tbrlv = cell.text_direction.as_deref() == Some("tbRlV");
+                if !is_vmerge_continue && is_tbrlv {
+                    // Gather chars from all paragraphs/runs in cell
+                    let mut chars: Vec<(char, RunStyle, ParagraphStyle)> = Vec::new();
+                    let mut p_jc: Option<Alignment> = None;
+                    for block in &cell.blocks {
+                        if let Block::Paragraph(para) = block {
+                            if p_jc.is_none() {
+                                p_jc = Some(para.alignment);
+                            }
+                            for run in &para.runs {
+                                for ch in run.text.chars() {
+                                    chars.push((ch, run.style.clone(), para.style.clone()));
+                                }
+                            }
+                        }
+                    }
+                    if !chars.is_empty() {
+                        let (_, ref first_rs, ref first_ps) = chars[0];
+                        let font_size = self.resolve_font_size(first_rs, first_ps);
+                        let block_h = chars.len() as f32 * font_size;
+                        let column_x = cell_x + cell_w - pad_r - font_size;
+                        // jc=center/both/distribute maps to vertical centering in tbRlV mode
+                        let jc_center = matches!(p_jc,
+                            Some(Alignment::Center) | Some(Alignment::Justify) | Some(Alignment::Distribute));
+                        let avail_h = (row_height - pad_t - pad_b).max(0.0);
+                        let y_offset_rel = if jc_center {
+                            ((avail_h - block_h) / 2.0).max(0.0)
+                        } else {
+                            0.0
+                        };
+                        for (i, (ch, rs, ps)) in chars.iter().enumerate() {
+                            let y_rel = y_offset_rel + i as f32 * font_size;
+                            let s: String = ch.to_string();
+                            cell_elements.push(LayoutElement::new(
+                                column_x, y_rel, font_size, font_size,
+                                LayoutContent::Text {
+                                    text: s,
+                                    font_size,
+                                    font_family: self.resolve_font_family_for_text(
+                                        &ch.to_string(), rs, ps
+                                    ).map(|s| s.to_string()),
+                                    bold: rs.bold,
+                                    italic: rs.italic,
+                                    underline: rs.underline,
+                                    underline_style: rs.underline_style.clone(),
+                                    strikethrough: rs.strikethrough,
+                                    color: self.resolve_color(rs, ps).map(|s| s.to_string()),
+                                    highlight: rs.highlight.clone(),
+                                    field_type: None,
+                                    character_spacing: 0.0,
+                                    text_scale: 100.0,
+                                },
+                            ));
+                        }
+                        content_h = block_h;
+                    }
+                } else if !is_vmerge_continue {
                 for block in &cell.blocks {
                 // Clip content that overflows exact row height
                 if is_exact && content_h + pad_t >= row_height {
