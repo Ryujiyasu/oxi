@@ -21,6 +21,11 @@ Fixture list (indexed by file name):
   11 — CJK body (MS Mincho 24pt) with one `<w:ins>` + one `<w:del>` —
        exercises R-01/R-03 styling on CJK glyphs and is the smallest case
        for verifying strikethrough Y on full-width characters.
+  12 — Three reviewers (Alice + Bob + Carol) — exercises palette slot 2
+       (`#2B6033`). Slots 0/1 already proven via fixture_10; slot 2 is
+       documented but not yet COM-confirmed. The fixture surfaces it on
+       the Oxi side and provides the input file that a future Word-side
+       pixel-pass run can sample for ground-truth confirmation.
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -570,6 +575,45 @@ def f11_cjk_revisions() -> Fixture:
     )
 
 
+def f12_three_reviewers() -> Fixture:
+    # Three distinct authors in first-seen order: Alice (slot 0), Bob (slot 1),
+    # Carol (slot 2). Slot 2 in REVISION_AUTHOR_PALETTE is "#2B6033" — the same
+    # green Word uses for moves regardless of author. The fixture is the
+    # smallest input that exercises the third palette slot end-to-end on the
+    # Oxi side; future Word ground-truth pixel sampling will confirm whether
+    # slot 2 really matches the documented Office reviewing-palette green.
+    body = para(
+        run("Start. "),
+        '<w:ins w:id="500" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+        '<w:r><w:t xml:space="preserve">ALICE INS </w:t></w:r></w:ins>',
+        run("middle1 "),
+        '<w:del w:id="501" w:author="Bob Reviewer"   w:date="' + DATE_A + '">'
+        '<w:r><w:delText xml:space="preserve">BOB DEL </w:delText></w:r></w:del>',
+        run("middle2 "),
+        '<w:ins w:id="502" w:author="Carol Reviewer" w:date="' + DATE_B + '">'
+        '<w:r><w:t xml:space="preserve">CAROL INS</w:t></w:r></w:ins>',
+        run(". End."),
+        para_id="00000001",
+    )
+    people = _wrap_people(
+        '  <w15:person w15:author="Alice Reviewer">\n'
+        '    <w15:presenceInfo w15:providerId="None" w15:userId="Alice Reviewer"/>\n'
+        '  </w15:person>\n'
+        '  <w15:person w15:author="Bob Reviewer">\n'
+        '    <w15:presenceInfo w15:providerId="None" w15:userId="Bob Reviewer"/>\n'
+        '  </w15:person>\n'
+        '  <w15:person w15:author="Carol Reviewer">\n'
+        '    <w15:presenceInfo w15:providerId="None" w15:userId="Carol Reviewer"/>\n'
+        '  </w15:person>'
+    )
+    return Fixture(
+        name="fixture_12_three_reviewers.docx",
+        description="Three reviewers (Alice ins / Bob del / Carol ins) — surfaces palette slot 2 on the Oxi side for future Word pixel-pass confirmation.",
+        document_body=body,
+        people_xml=people,
+    )
+
+
 ALL_FIXTURES = [
     f01_single_comment,
     f02_comment_with_reply,
@@ -582,6 +626,7 @@ ALL_FIXTURES = [
     f09_rPrChange_bold,
     f10_multiple_reviewers,
     f11_cjk_revisions,
+    f12_three_reviewers,
 ]
 
 

@@ -1386,3 +1386,88 @@ fn fixture_11_cjk_layout_ins_underline_and_del_strikethrough() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// fixture_12 — three reviewers, exercising palette slot 2.
+//
+// Slots 0 (#D03337) and 1 (#5B2C90) are COM-confirmed via fixture_05/06/10.
+// Slot 2 in REVISION_AUTHOR_PALETTE is "#2B6033" (Word's documented green —
+// also used for moves regardless of author). PHASE_2_CLOSEOUT.md known-
+// limitation #9 noted that slots 2-7 lack ground-truth confirmation; the
+// fixture below is the smallest input that surfaces slot 2 on the Oxi side
+// so a future Word-side pixel pass can sample it.
+//
+// Body: "Start. ALICE INS middle1 BOB DEL middle2 CAROL INS. End."
+// people.xml seeds the palette in author-order so the assignment is stable.
+// ---------------------------------------------------------------------------
+
+/// fixture_12 parser side: people.xml seeds three authors and the palette
+/// hands them indices 0/1/2 in that order.
+#[test]
+fn fixture_12_three_reviewers_palette_assigns_slots_0_1_2() {
+    let Some(bytes) = read_fixture("fixture_12_three_reviewers.docx") else {
+        eprintln!("skipping: fixture_12 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_12");
+
+    assert_eq!(doc.people.len(), 3, "expected 3 reviewers in people.xml");
+    let people_authors: Vec<_> = doc.people.iter().map(|p| p.author.as_str()).collect();
+    assert_eq!(
+        people_authors,
+        vec!["Alice Reviewer", "Bob Reviewer", "Carol Reviewer"]
+    );
+
+    assert_eq!(doc.authors.len(), 3, "expected 3 palette entries");
+    assert_eq!(doc.authors[0].display, "Alice Reviewer");
+    assert_eq!(doc.authors[0].color_index, 0);
+    assert_eq!(doc.authors[1].display, "Bob Reviewer");
+    assert_eq!(doc.authors[1].color_index, 1);
+    assert_eq!(doc.authors[2].display, "Carol Reviewer");
+    assert_eq!(
+        doc.authors[2].color_index, 2,
+        "Carol must land on palette slot 2 (the new slot under test)"
+    );
+}
+
+/// fixture_12 layout side: each author's revision run renders in the
+/// palette color for its slot. The third author lands on slot 2 (`#2B6033`),
+/// which is currently sourced from Word's documented Office reviewing
+/// palette and not yet COM-confirmed against an actual Word render.
+/// Asserting against the constant pins the Oxi side; the comment above
+/// the test records the open ground-truth question.
+#[test]
+fn fixture_12_layout_third_author_uses_palette_slot_2() {
+    let Some(bytes) = read_fixture("fixture_12_three_reviewers.docx") else {
+        eprintln!("skipping: fixture_12 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_12");
+    let result = layout_doc(&doc);
+
+    let alice_ins = collect_text_elements_with(&result, "ALICE");
+    assert!(!alice_ins.is_empty(), "Alice's ins missing from layout");
+    for (underline, _, color) in &alice_ins {
+        assert!(*underline);
+        assert_eq!(color.as_deref(), Some("#D03337"), "Alice = slot 0");
+    }
+
+    let bob_del = collect_text_elements_with(&result, "BOB");
+    assert!(!bob_del.is_empty(), "Bob's del missing from layout");
+    for (_, strike, color) in &bob_del {
+        assert!(*strike);
+        assert_eq!(color.as_deref(), Some("#5B2C90"), "Bob = slot 1");
+    }
+
+    let carol_ins = collect_text_elements_with(&result, "CAROL");
+    assert!(!carol_ins.is_empty(), "Carol's ins missing from layout");
+    for (underline, strike, color) in &carol_ins {
+        assert!(*underline, "Carol's ins must be underlined");
+        assert!(!*strike, "Carol's ins must not be strikethrough");
+        assert_eq!(
+            color.as_deref(),
+            Some("#2B6033"),
+            "Carol = slot 2 (#2B6033, Office documented; pending Word pixel-pass)"
+        );
+    }
+}
