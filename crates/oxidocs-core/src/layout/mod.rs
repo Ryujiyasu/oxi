@@ -1952,6 +1952,19 @@ impl LayoutEngine {
                         } else {
                             h += self.estimate_para_height(p, cw, None, None, false, None, None);
                         }
+                    } else if let Block::Math(math_block) = nb {
+                        // R80 (2026-04-29): footnote-embedded OMML math height
+                        // contribution. Mirrors header/footer counterparts at
+                        // mod.rs:1744+ / 1854+.
+                        let math_font_size: f32 = 10.5;
+                        let (_, bbox) = crate::layout::math::emit_math_block(
+                            math_block, 0.0, 0.0, math_font_size,
+                        );
+                        h += bbox.height().max(math_font_size * 1.2)
+                            + math_font_size * 0.3;
+                    } else if let Block::Image(img) = nb {
+                        // R80 (2026-04-29): footnote-embedded Image height.
+                        h += img.height;
                     }
                 }
                 h
@@ -2792,6 +2805,20 @@ impl LayoutEngine {
                                 if let Block::Paragraph(p) = nb {
                                     let (h, _) = grid_snap_para(p);
                                     nh += h;
+                                } else if let Block::Math(math_block) = nb {
+                                    // R80 (2026-04-29): footnote math grid-snap
+                                    // estimation. Math bbox doesn't grid-snap;
+                                    // use raw bbox + leeway like header/footer.
+                                    let math_font_size: f32 = 10.5;
+                                    let (_, bbox) = crate::layout::math::emit_math_block(
+                                        math_block, 0.0, 0.0, math_font_size,
+                                    );
+                                    nh += bbox.height().max(math_font_size * 1.2)
+                                        + math_font_size * 0.3;
+                                } else if let Block::Image(img) = nb {
+                                    // R80 (2026-04-29): footnote Image grid
+                                    // estimation. Image height is exact.
+                                    nh += img.height;
                                 }
                             }
                             note_heights.push(nh);
@@ -2958,6 +2985,34 @@ impl LayoutEngine {
                                         false, None,
                                     );
                                     lp.elements.extend(note_elements);
+                                } else if let Block::Math(math_block) = nb {
+                                    // R80 (2026-04-29): render footnote-embedded
+                                    // OMML math. Mirrors header/footer rendering
+                                    // sites. first_para flag is irrelevant for
+                                    // math (no seq number prefix on math glyphs).
+                                    let math_font_size: f32 = 10.5;
+                                    let (math_elems, bbox) = crate::layout::math::emit_math_block(
+                                        math_block, page.margin.left, cy, math_font_size,
+                                    );
+                                    if !math_elems.is_empty() {
+                                        lp.elements.extend(math_elems);
+                                        cy += bbox.height().max(math_font_size * 1.2)
+                                            + math_font_size * 0.3;
+                                    }
+                                } else if let Block::Image(img) = nb {
+                                    // R80 (2026-04-29): render footnote-embedded
+                                    // Image. Width clamped to footnote_width.
+                                    let footnote_width = page.size.width
+                                        - page.margin.left - page.margin.right;
+                                    lp.elements.push(LayoutElement::new(
+                                        page.margin.left, cy,
+                                        img.width.min(footnote_width), img.height,
+                                        LayoutContent::Image {
+                                            data: img.data.clone(),
+                                            content_type: img.content_type.clone(),
+                                        },
+                                    ));
+                                    cy += img.height;
                                 }
                             }
                         }
