@@ -949,6 +949,23 @@ fn describe_ppr_diff(
             diffs.push(format!("Space After: {}pt", v));
         }
     }
+    // R88 (2026-04-29): paragraph shading axis. Mirrors the RunStyle
+    // shading branch in describe_rpr_diff (R87). Word's "Formatted"
+    // balloon shows "Paragraph Shading: <hex>" when a pPrChange
+    // toggles `<w:pPr>/<w:shd w:fill>`. The Run-level shading branch
+    // says just "Shading: <hex>"; the Paragraph-level prefix
+    // "Paragraph " disambiguates which scope changed when both run
+    // and paragraph shading toggle in the same paragraph.
+    if prior.shading != current.shading {
+        match current.shading.as_deref() {
+            Some(hex) => diffs.push(format!("Paragraph Shading: {}", hex)),
+            None => {
+                if prior.shading.is_some() {
+                    diffs.push("Paragraph Shading: Default".to_string());
+                }
+            }
+        }
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

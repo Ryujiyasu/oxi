@@ -50,6 +50,10 @@ Fixture list (indexed by file name):
        axes; describe_rpr_diff now covers 12 axes total. East-Asia
        font axis is wired but not exercised by this fixture (Western
        fixtures suffice for the majority of real revisions).
+  18 — `<w:pPrChange>` paragraph-shading revision (default → yellow
+       background). R88 extends describe_ppr_diff to cover the
+       paragraph-scope shading axis (sister to RunStyle shading
+       added in R87).
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -688,6 +692,29 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f18_pPrChange_shading() -> Fixture:
+    # Single paragraph whose background shading was added via pPrChange.
+    # Current pPr declares <w:shd w:fill="FFFF00"/> (yellow paragraph bg);
+    # the pPrChange body records that the prior pPr was empty. R88's
+    # describe_ppr_diff branch produces "Paragraph Shading: FFFF00".
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/>\n'
+        '        <w:pPrChange w:id="1100" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now highlighted (was plain).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_18_pPrChange_shading.docx",
+        description="pPrChange revision — paragraph shading toggled from default to yellow (#FFFF00); prior pPr empty.",
+        document_body=body,
+    )
+
+
 def f17_rPrChange_vAlign_shading() -> Fixture:
     # Run currently has vertical_align=superscript + shading=yellow.
     # rPrChange records that the prior rPr had neither. Two axes
@@ -783,6 +810,7 @@ ALL_FIXTURES = [
     f15_pPrChange_alignment,
     f16_rPrChange_caps_spacing,
     f17_rPrChange_vAlign_shading,
+    f18_pPrChange_shading,
 ]
 
 

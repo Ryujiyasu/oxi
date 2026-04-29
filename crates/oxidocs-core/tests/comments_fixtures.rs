@@ -1656,6 +1656,54 @@ fn fixture_17_layout_rprchange_valign_and_shading() {
     );
 }
 
+/// R88 (2026-04-29): describe_ppr_diff covers paragraph shading.
+/// fixture_18 toggles `<w:pPr>/<w:shd w:fill="FFFF00"/>` (yellow
+/// paragraph bg); prior pPr empty. Body must surface
+/// "Paragraph Shading: FFFF00" (the "Paragraph " prefix
+/// disambiguates from the run-level "Shading:" added in R87).
+#[test]
+fn fixture_18_layout_pprchange_paragraph_shading() {
+    let Some(bytes) = read_fixture("fixture_18_pPrChange_shading.docx") else {
+        eprintln!("skipping: fixture_18 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_18");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_18 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Paragraph Shading:"),
+        "paragraph shading toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("FFFF00"),
+        "the new shading hex must appear in the body; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

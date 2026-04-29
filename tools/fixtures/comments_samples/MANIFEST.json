@@ -83,5 +83,10 @@
     "file": "fixture_17_rPrChange_vAlign_shading.docx",
     "description": "rPrChange revision — run toggled to superscript + yellow shading; prior rPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_18_pPrChange_shading.docx",
+    "description": "pPrChange revision — paragraph shading toggled from default to yellow (#FFFF00); prior pPr empty.",
+    "status": "OK"
   }
 ]
