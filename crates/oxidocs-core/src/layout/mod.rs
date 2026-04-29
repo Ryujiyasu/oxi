@@ -4696,14 +4696,9 @@ impl LayoutEngine {
             // but only when raw_per_line > rounded_per_line (preserves page breaks).
             let is_last = line_idx == lines.len() - 1;
             // Round 30: linesAndChars Single spacing uses pitch-based cumulative round.
-            // R103 (2026-04-30): also requires `para.style.snap_to_grid == true`.
-            // Per-paragraph `<w:snapToGrid w:val="0"/>` opts out of the grid
-            // even when the section is linesAndChars. Trace-confirmed
-            // (§19.78/§19.80 R103+R105).
             let is_lm2_single = lm2_grid_cells.is_some()
                 && page.grid_char_pitch.is_some()
                 && grid_pitch.map_or(false, |p| p > 0.0)
-                && para.style.snap_to_grid
                 && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
                     (Some("exact"), _) | (Some("atLeast"), _) => false,
                     (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
@@ -5765,20 +5760,7 @@ impl LayoutEngine {
                 max_descent = metrics.word_descent_pt(font_size);
             }
         } else {
-            // R101+R105 (2026-04-30): Word ignores ASCII-whitespace-only
-            // runs in line-height calc when ≥1 non-whitespace run is
-            // present. COM-confirmed via 6-variant minimal repro
-            // (tools/fixtures/wp34_line_height_repro). The same skip rule
-            // is applied symmetrically in text_y_offset_for_line per
-            // §19.80 R105 — without that, text_y_offset uses inflated
-            // max_font_size relative to a smaller line_height, shifting
-            // glyph y by ~1pt and regressing SSIM (R103/R104 incident).
-            let has_non_ws = line.fragments.iter()
-                .any(|f| !f.text.chars().all(|c| c.is_ascii_whitespace()));
             for frag in &line.fragments {
-                if has_non_ws && frag.text.chars().all(|c| c.is_ascii_whitespace()) {
-                    continue;
-                }
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let (asc, des) = if use_standard {
@@ -5836,15 +5818,8 @@ impl LayoutEngine {
                 let formula = metrics.word_line_height_no_grid(font_size);
                 no_grid_max = lookup_no_grid(&metrics.family, font_size, formula);
             } else {
-                // R101+R105 (2026-04-30): same whitespace-only-skip rule
-                // as the grid path above. See §19.76 / §19.80.
-                let has_non_ws_lm0 = line.fragments.iter()
-                    .any(|f| !f.text.chars().all(|c| c.is_ascii_whitespace()));
                 let mut has_latin = false;
                 for frag in &line.fragments {
-                    if has_non_ws_lm0 && frag.text.chars().all(|c| c.is_ascii_whitespace()) {
-                        continue;
-                    }
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
                     let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                     let formula = metrics.word_line_height_no_grid(font_size);
@@ -5953,18 +5928,7 @@ impl LayoutEngine {
                         .and_then(|r| r.font_size)
                         .unwrap_or(para_font_size);
                 } else {
-                    // R105 (2026-04-30): apply the same whitespace-only-skip
-                    // rule as line_height_for_line_inner. Otherwise the
-                    // text_y_offset uses an inflated max_font_size relative
-                    // to the (smaller) line_height, shifting glyph y by
-                    // ~1pt. R103 incident: 20-page SSIM regression tracked
-                    // to this asymmetry.
-                    let has_non_ws = line.fragments.iter()
-                        .any(|f| !f.text.chars().all(|c| c.is_ascii_whitespace()));
                     for frag in &line.fragments {
-                        if has_non_ws && frag.text.chars().all(|c| c.is_ascii_whitespace()) {
-                            continue;
-                        }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         if fs > max_font_size { max_font_size = fs; }
                     }
@@ -5995,13 +5959,7 @@ impl LayoutEngine {
                     max_ascent = metrics.word_ascent_pt(font_size);
                     max_descent = metrics.word_descent_pt(font_size);
                 } else {
-                    // R105: same whitespace-only-skip as above branch.
-                    let has_non_ws = line.fragments.iter()
-                        .any(|f| !f.text.chars().all(|c| c.is_ascii_whitespace()));
                     for frag in &line.fragments {
-                        if has_non_ws && frag.text.chars().all(|c| c.is_ascii_whitespace()) {
-                            continue;
-                        }
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
                         let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                         let asc = metrics.word_ascent_pt(font_size);
@@ -6044,12 +6002,7 @@ impl LayoutEngine {
                     // Both reduce to (line_height - fontSize)/2 because line_height = pitch
                     // in the single-cell case.
                     let font_size = if !line.fragments.is_empty() {
-                        // R105: skip whitespace-only ASCII frags from
-                        // max font_size calc — symmetric with line_height.
-                        let has_non_ws = line.fragments.iter()
-                            .any(|f| !f.text.chars().all(|c| c.is_ascii_whitespace()));
                         line.fragments.iter()
-                            .filter(|f| !(has_non_ws && f.text.chars().all(|c| c.is_ascii_whitespace())))
                             .map(|f| f.style.font_size.unwrap_or(para_font_size))
                             .fold(0.0_f32, f32::max)
                     } else { para_font_size };
@@ -6064,11 +6017,7 @@ impl LayoutEngine {
                 } else {
                     // LM0: same centering formula as LM1/LM2 single cell.
                     let font_size = if !line.fragments.is_empty() {
-                        // R105: skip whitespace-only ASCII frags.
-                        let has_non_ws = line.fragments.iter()
-                            .any(|f| !f.text.chars().all(|c| c.is_ascii_whitespace()));
                         line.fragments.iter()
-                            .filter(|f| !(has_non_ws && f.text.chars().all(|c| c.is_ascii_whitespace())))
                             .map(|f| f.style.font_size.unwrap_or(para_font_size))
                             .fold(0.0_f32, f32::max)
                     } else { para_font_size };
