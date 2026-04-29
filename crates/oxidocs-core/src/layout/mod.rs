@@ -1015,6 +1015,36 @@ fn describe_ppr_diff(
         }
         (None, None) => {}
     }
+    // R94 (2026-04-30): tab_stops Vec axis. Like R93's borders, TabStop
+    // has no PartialEq derive — use a position-only summary
+    // ("72/144/216pt" for tab stops at those positions). Three diff
+    // cases mirror borders: Added / Removed / Changed (with summary
+    // arrow). Position-only is enough to surface the most common
+    // pPrChange patterns (adding/removing tab stops, or moving them);
+    // alignment and leader changes within the same position set are
+    // deferred to a later round.
+    fn tab_stops_summary(ts: &[crate::ir::TabStop]) -> String {
+        if ts.is_empty() {
+            "none".to_string()
+        } else {
+            ts.iter()
+                .map(|t| format!("{:.0}pt", t.position))
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+    }
+    match (prior.tab_stops.is_empty(), current.tab_stops.is_empty()) {
+        (true, false) => diffs.push("Tab Stops Added".to_string()),
+        (false, true) => diffs.push("Tab Stops Removed".to_string()),
+        (false, false) => {
+            let ps = tab_stops_summary(&prior.tab_stops);
+            let cs = tab_stops_summary(&current.tab_stops);
+            if ps != cs {
+                diffs.push(format!("Tab Stops: {} → {}", ps, cs));
+            }
+        }
+        (true, true) => {}
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

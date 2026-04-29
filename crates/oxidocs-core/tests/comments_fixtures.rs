@@ -1796,6 +1796,48 @@ fn fixture_20_layout_pprchange_borders_added() {
     );
 }
 
+/// R94 (2026-04-30): describe_ppr_diff covers tab_stops via position-
+/// only summary (mirror of R93 borders side-summary). fixture_21 adds
+/// 3 tab stops via pPrChange whose prior pPr was empty.
+#[test]
+fn fixture_21_layout_pprchange_tabs_added() {
+    let Some(bytes) = read_fixture("fixture_21_pPrChange_tabs.docx") else {
+        eprintln!("skipping: fixture_21 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_21");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_21 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Tab Stops Added"),
+        "tabs toggle must surface as 'Tab Stops Added'; got {body:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // fixture_11 — CJK body with one ins + one del.
 //

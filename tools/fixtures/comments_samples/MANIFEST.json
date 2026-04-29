@@ -98,5 +98,10 @@
     "file": "fixture_20_pPrChange_borders.docx",
     "description": "pPrChange revision — paragraph gained a bottom border (single 0.5pt black); prior pPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_21_pPrChange_tabs.docx",
+    "description": "pPrChange revision — 3 tab stops added at 72/144/216pt; prior pPr empty.",
+    "status": "OK"
   }
 ]

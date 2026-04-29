@@ -61,6 +61,10 @@ Fixture list (indexed by file name):
        added). R93 extends describe_ppr_diff to cover the borders
        struct axis via side-presence summary (no PartialEq derive
        needed). Surfaces "Borders Added".
+  21 — `<w:pPrChange>` paragraph-tab_stops revision (3 tab stops
+       added at 72/144/216pt). R94 extends describe_ppr_diff via
+       position-only summary (mirrors R93 borders pattern).
+       Surfaces "Tab Stops Added".
 
 Outputs to  tools/fixtures/comments_samples/fixture_NN_<slug>.docx.
 
@@ -699,6 +703,33 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f21_pPrChange_tabs() -> Fixture:
+    # Paragraph that gained 3 tab stops via pPrChange. Current pPr has
+    # <w:tabs><w:tab pos=1440 (=72pt) center align/><w:tab pos=2880
+    # (=144pt) right/><w:tab pos=4320 (=216pt) decimal/></w:tabs>;
+    # pPrChange's prior pPr is empty. R94 surfaces "Tab Stops Added".
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:tabs>\n'
+        '          <w:tab w:val="center" w:pos="1440"/>\n'
+        '          <w:tab w:val="right" w:pos="2880"/>\n'
+        '          <w:tab w:val="decimal" w:pos="4320"/>\n'
+        '        </w:tabs>\n'
+        '        <w:pPrChange w:id="1400" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now has 3 custom tab stops (was none).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_21_pPrChange_tabs.docx",
+        description="pPrChange revision — 3 tab stops added at 72/144/216pt; prior pPr empty.",
+        document_body=body,
+    )
+
+
 def f20_pPrChange_borders() -> Fixture:
     # Paragraph that gained a bottom border via pPrChange. Current pPr
     # declares <w:pBdr><w:bottom .../></w:pBdr>; pPrChange's prior pPr
@@ -868,6 +899,7 @@ ALL_FIXTURES = [
     f18_pPrChange_shading,
     f19_pPrChange_keep_next,
     f20_pPrChange_borders,
+    f21_pPrChange_tabs,
 ]
 
 
