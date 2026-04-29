@@ -880,6 +880,39 @@ fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
                 .to_string(),
         );
     }
+    // R100 (2026-04-30): highlight, position, emphasis_mark — three more
+    // user-visible Word properties. Option-typed (like R86 character_spacing
+    // and R87 shading) — surface name/value when set, "Default" when cleared.
+    if prior.highlight != current.highlight {
+        match current.highlight.as_deref() {
+            Some(name) => diffs.push(format!("Highlight: {}", name)),
+            None => {
+                if prior.highlight.is_some() {
+                    diffs.push("Highlight: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.position != current.position {
+        match current.position {
+            Some(v) => diffs.push(format!("Position: {}pt", v)),
+            None => {
+                if prior.position.is_some() {
+                    diffs.push("Position: Default".to_string());
+                }
+            }
+        }
+    }
+    if prior.emphasis_mark != current.emphasis_mark {
+        match current.emphasis_mark.as_deref() {
+            Some(name) => diffs.push(format!("Emphasis Mark: {}", name)),
+            None => {
+                if prior.emphasis_mark.is_some() {
+                    diffs.push("Emphasis Mark: Default".to_string());
+                }
+            }
+        }
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

@@ -1934,6 +1934,60 @@ fn fixture_23_layout_rprchange_outline_emboss() {
     );
 }
 
+/// R100 (2026-04-30): describe_rpr_diff extension — highlight + position
+/// + emphasis_mark (3 user-visible Word props, Option-typed). fixture_25
+/// toggles all three in one rPrChange.
+#[test]
+fn fixture_25_layout_rprchange_highlight_position_em() {
+    let Some(bytes) = read_fixture("fixture_25_rPrChange_highlight_position.docx") else {
+        eprintln!("skipping: fixture_25 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_25");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_25 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Highlight: yellow"),
+        "highlight toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Position:"),
+        "position toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Emphasis Mark: dot"),
+        "emphasis_mark toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
 /// R99 (2026-04-30): describe_rpr_diff extension — shadow + vanish +
 /// double_strikethrough (3 more NEW non-R72 rPr axes peer to R98).
 /// fixture_24 toggles all three in one rPrChange, exercises the new

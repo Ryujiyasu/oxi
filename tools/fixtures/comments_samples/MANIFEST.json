@@ -118,5 +118,10 @@
     "file": "fixture_24_rPrChange_shadow_vanish_dstrike.docx",
     "description": "rPrChange revision — run toggled to shadow + vanish + double-strikethrough; prior rPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_25_rPrChange_highlight_position.docx",
+    "description": "rPrChange revision — run toggled to highlight=yellow + position=3pt + emphasis_mark=dot; prior rPr empty.",
+    "status": "OK"
   }
 ]

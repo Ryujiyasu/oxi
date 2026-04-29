@@ -710,6 +710,33 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f25_rPrChange_highlight_position_em() -> Fixture:
+    # Run currently has highlight=yellow + position=6 (3pt raise) +
+    # emphasis_mark=dot; rPrChange records prior rPr empty. Three more
+    # NEW non-R72 axes — exercises describe_rpr_diff's R100 highlight
+    # + position + emphasis_mark branches plus comma-join.
+    body = para(
+        run("Default. "),
+        (
+            '<w:r><w:rPr>'
+            '<w:highlight w:val="yellow"/>'
+            '<w:position w:val="6"/>'
+            '<w:em w:val="dot"/>'
+            '<w:rPrChange w:id="1800" w:author="Alice Reviewer" w:date="' + DATE_A + '">'
+            '<w:rPr/>'
+            '</w:rPrChange>'
+            '</w:rPr>'
+            '<w:t xml:space="preserve">Now highlighted+raised+dotted.</w:t></w:r>'
+        ),
+        para_id="00000001",
+    )
+    return Fixture(
+        name="fixture_25_rPrChange_highlight_position.docx",
+        description="rPrChange revision — run toggled to highlight=yellow + position=3pt + emphasis_mark=dot; prior rPr empty.",
+        document_body=body,
+    )
+
+
 def f24_rPrChange_shadow_vanish_dstrike() -> Fixture:
     # Run currently has shadow + vanish + double-strikethrough; rPrChange
     # records prior rPr had none. Three NEW non-R72 axes change at once —
@@ -990,6 +1017,7 @@ ALL_FIXTURES = [
     f22_pPrChange_numPr,
     f23_rPrChange_outline_emboss,
     f24_rPrChange_shadow_vanish_dstrike,
+    f25_rPrChange_highlight_position_em,
 ]
 
 
