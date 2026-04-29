@@ -41,9 +41,27 @@ fn default_hps_raise_pt(base_pt: f32, hps_pt: f32) -> f32 {
     if (base_pt - 10.5).abs() < 0.01 {
         return DEFAULT_HPS_RAISE_PT;
     }
+    if base_pt <= 0.0 {
+        return DEFAULT_HPS_RAISE_PT;
+    }
+    // R75: typical "hps = base/2" case → default_raise ≈ base − 1pt.
+    // R85 (2026-04-29): extreme "hps = base" case → default_raise ≈
+    // base + 0.5pt. V13 grid (round 9, 2026-04-27) derived defaults at
+    // base ∈ {9, 11, 12, 14}pt × hps=base = {9.46, 11.43, 12.29, 14.50},
+    // all within ±0.5pt of `base + 0.5`. Spec §18.7 records this as
+    // the "hps doubled" empirical pattern; R85 wires option (c) for
+    // the extreme too, in addition to R75's typical case.
+    //
+    // The dispatch is by hps_pt vs base/2 closeness:
+    //   hps ≈ base/2  → R75 rule (typical ruby)
+    //   hps ≈ base    → R85 rule (extreme; e.g. CJK-base-sized ruby)
+    //   else          → fall back to 10.5pt anchor (DEFAULT_HPS_RAISE_PT)
     let hps_is_half_base = (hps_pt - base_pt / 2.0).abs() < 0.5;
-    if hps_is_half_base && base_pt > 0.0 {
+    let hps_is_full_base = (hps_pt - base_pt).abs() < 0.5;
+    if hps_is_half_base {
         (base_pt - 1.0).max(0.0)
+    } else if hps_is_full_base {
+        base_pt + 0.5
     } else {
         DEFAULT_HPS_RAISE_PT
     }
@@ -329,6 +347,58 @@ mod tests {
             (exp - 4.125).abs() < 0.001,
             "10.5pt base: expected 4.125pt, got {exp}"
         );
+    }
+
+    /// R85 (2026-04-29): the "hps = base" extreme ruby case. V13 grid
+    /// derived defaults {9.46, 11.43, 12.29, 14.50} at base ∈
+    /// {9, 11, 12, 14}pt × hps=base. Implementation rule:
+    /// `default_raise ≈ base + 0.5pt` (spec §18.7), within ±0.5pt
+    /// vs Word measured. Sister test to the R75 hps=base/2 grid.
+    #[test]
+    fn ruby_default_raise_v13_grid_hps_equals_base() {
+        // (base_pt, hps_halfpt, V13_measured_default_raise)
+        // hps_halfpt = base × 2 (= base in pt, so hps_pt == base_pt)
+        let cases = [
+            ( 9.0_f32, 18,  9.46_f32),
+            (11.0_f32, 22, 11.43_f32),
+            (12.0_f32, 24, 12.29_f32),
+            (14.0_f32, 28, 14.50_f32),
+        ];
+        for (base_pt, hps_halfpt, measured) in cases {
+            let hps_pt = hps_halfpt as f32 / 2.0;
+            // Helper picks the R85 branch (`base + 0.5`):
+            assert!(
+                (default_hps_raise_pt(base_pt, hps_pt) - (base_pt + 0.5)).abs() < 0.001,
+                "base={base_pt} hps={hps_pt} (= base): expected base+0.5, got {}",
+                default_hps_raise_pt(base_pt, hps_pt)
+            );
+            // End-to-end via ruby_expansion_pt with raise=None: prediction
+            // matches V13 measured within ±0.5pt §18.9 (c) tolerance.
+            let r = Ruby {
+                base: "x".into(),
+                text: "y".into(),
+                font_size: Some(hps_pt),
+                align: None,
+                hps_halfpt: Some(hps_halfpt),
+                hps_raise_halfpt: None, // exercises default_hps_raise_pt
+                hps_base_text_halfpt: Some((base_pt * 2.0) as u32),
+                lang: None,
+            };
+            let predicted = (base_pt + 0.5) + 0.75 * hps_pt - base_pt * (9.0 / 10.5);
+            let predicted = predicted.max(0.0);
+            let exp = ruby_expansion_pt(&r, base_pt);
+            assert!(
+                (exp - predicted).abs() < 0.01,
+                "base={base_pt}: predicted {predicted:.3}, got {exp:.3}"
+            );
+            // V13 measured expansion = derived_default_raise + 0.75×hps − base×9/10.5
+            let v13_expansion = measured + 0.75 * hps_pt - base_pt * (9.0 / 10.5);
+            let v13_expansion = v13_expansion.max(0.0);
+            assert!(
+                (exp - v13_expansion).abs() <= 0.5,
+                "V13 measured tolerance: base={base_pt} v13 {v13_expansion:.3}, got {exp:.3}"
+            );
+        }
     }
 
     /// R75 (2026-04-29): default_hps_raise_pt scales with base for the
