@@ -1934,6 +1934,56 @@ fn fixture_23_layout_rprchange_outline_emboss() {
     );
 }
 
+/// R107 (2026-04-30): describe_ppr_diff NEW non-R72 axes — page_break_before
+/// + widow_control + contextual_spacing. fixture_26 toggles
+/// page_break_before ON and widow_control OFF in one pPrChange.
+#[test]
+fn fixture_26_layout_pprchange_pageBreak_widow() {
+    let Some(bytes) = read_fixture("fixture_26_pPrChange_pageBreak_widow.docx") else {
+        eprintln!("skipping: fixture_26 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_26");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_26 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Page Break Before"),
+        "page_break_before toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Not Widow/Orphan Control"),
+        "widow_control off must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
 /// R100 (2026-04-30): describe_rpr_diff extension — highlight + position
 /// + emphasis_mark (3 user-visible Word props, Option-typed). fixture_25
 /// toggles all three in one rPrChange.

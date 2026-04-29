@@ -1128,6 +1128,23 @@ fn describe_ppr_diff(
     if prior.num_ilvl != current.num_ilvl {
         diffs.push(format!("List Level: {}", current.num_ilvl));
     }
+    // R107 (2026-04-30): NEW non-R72 ppr axes — page_break_before,
+    // widow_control, contextual_spacing. All three are user-visible
+    // bool axes already populated by parser. Mirrors R98/R99 pattern
+    // for the rPr side. UI labels match Word's "Formatted:" balloon:
+    //   "Page Break Before" (Word's "Page break before" checkbox)
+    //   "Widow/Orphan Control" (Word's "Widow/Orphan control")
+    //   "Don't Add Space" (Word's "Don't add space between paragraphs
+    //                       of the same style")
+    if prior.page_break_before != current.page_break_before {
+        diffs.push(if current.page_break_before { "Page Break Before" } else { "Not Page Break Before" }.to_string());
+    }
+    if prior.widow_control != current.widow_control {
+        diffs.push(if current.widow_control { "Widow/Orphan Control" } else { "Not Widow/Orphan Control" }.to_string());
+    }
+    if prior.contextual_spacing != current.contextual_spacing {
+        diffs.push(if current.contextual_spacing { "Don't Add Space" } else { "Add Space Between Same-Style Paragraphs" }.to_string());
+    }
     if diffs.is_empty() {
         "Style".to_string()
     } else {

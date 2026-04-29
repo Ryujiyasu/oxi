@@ -123,5 +123,10 @@
     "file": "fixture_25_rPrChange_highlight_position.docx",
     "description": "rPrChange revision — run toggled to highlight=yellow + position=3pt + emphasis_mark=dot; prior rPr empty.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_26_pPrChange_pageBreak_widow.docx",
+    "description": "pPrChange revision — page_break_before added + widow_control turned off; prior pPr defaults.",
+    "status": "OK"
   }
 ]

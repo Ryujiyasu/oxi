@@ -710,6 +710,31 @@ def f14_rPrChange_font() -> Fixture:
     )
 
 
+def f26_pPrChange_pageBreakBefore_widow() -> Fixture:
+    # Paragraph that gained page_break_before + lost widow_control via
+    # pPrChange. Current pPr has <w:pageBreakBefore/> and
+    # <w:widowControl w:val="0"/>; pPrChange's prior pPr is empty
+    # (defaults: no page-break-before, widow_control=true). R107
+    # surfaces "Page Break Before" + "Not Widow/Orphan Control".
+    body = (
+        '    <w:p>\n'
+        '      <w:pPr>\n'
+        '        <w:pageBreakBefore/>\n'
+        '        <w:widowControl w:val="0"/>\n'
+        '        <w:pPrChange w:id="1900" w:author="Alice Reviewer" w:date="' + DATE_A + '">\n'
+        '          <w:pPr/>\n'
+        '        </w:pPrChange>\n'
+        '      </w:pPr>\n'
+        '      <w:r><w:t xml:space="preserve">Now starts on new page; widow control off (was defaults).</w:t></w:r>\n'
+        '    </w:p>'
+    )
+    return Fixture(
+        name="fixture_26_pPrChange_pageBreak_widow.docx",
+        description="pPrChange revision — page_break_before added + widow_control turned off; prior pPr defaults.",
+        document_body=body,
+    )
+
+
 def f25_rPrChange_highlight_position_em() -> Fixture:
     # Run currently has highlight=yellow + position=6 (3pt raise) +
     # emphasis_mark=dot; rPrChange records prior rPr empty. Three more
@@ -1018,6 +1043,7 @@ ALL_FIXTURES = [
     f23_rPrChange_outline_emboss,
     f24_rPrChange_shadow_vanish_dstrike,
     f25_rPrChange_highlight_position_em,
+    f26_pPrChange_pageBreakBefore_widow,
 ]
 
 
