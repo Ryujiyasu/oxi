@@ -2036,14 +2036,16 @@ fn parse_paragraph_properties(
                             }
                         }
                         // *Chars attributes: store raw values; resolved at layout time.
-                        // When hanging coexists with leftChars, the twip `left` value
-                        // already includes hanging and is the correct body-text indent.
-                        // leftChars*10.5 gives only the first-line position, NOT the body.
-                        // Skip leftChars override to use the authoritative twip value.
-                        let has_hanging = style.indent_first_line.map_or(false, |f| f < 0.0)
-                            || hanging_chars.is_some();
+                        // Pre-2026-05-01: when hanging coexisted with leftChars, the
+                        // skip rationale assumed an authoritative twip `left`. But for
+                        // docx that have ONLY chars-based indent (no twip), skipping
+                        // leftChars left subsequent-line wrap width ~1 char too wide,
+                        // causing Oxi to fit 2 extra chars on line 1 vs Word
+                        // (wrap_point_diff num_hang_chars test, 2026-05-01).
+                        // Now: only skip when twip `left` is also present (twip wins).
+                        let has_twip_left = style.indent_left.is_some();
                         if let Some(lc) = left_chars {
-                            if !has_hanging {
+                            if !has_twip_left {
                                 style.indent_left_chars = Some(lc);
                             }
                         }
