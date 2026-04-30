@@ -6185,6 +6185,84 @@ impl LayoutEngine {
         }
 
         let num_rows = table.rows.len();
+
+        // Pre-pass: estimate every row's natural height (same logic as the
+        // inline first-pass below, replicated as a closure). Used only to
+        // size vMerge="restart" cells for v_align="center" — the cell's
+        // visual span is the SUM of its row + all subsequent vMerge="continue"
+        // rows in the same column, not just the restart row's height.
+        // Without this, content like the centred vertical 「連絡先」 label
+        // sticks to the top of the merged area instead of being centred
+        // (459f05f1e877 連絡先 cell, 2026-04-30).
+        let row_natural_heights: Vec<f32> = table.rows.iter().enumerate().map(|(ri, r)| {
+            let mut h: f32 = 0.0;
+            let mut gi = r.grid_before as usize;
+            for c in r.cells.iter() {
+                let sp = c.grid_span.max(1) as usize;
+                if matches!(c.v_merge.as_deref(), Some("continue") | Some("")) {
+                    gi += sp;
+                    continue;
+                }
+                let cw: f32 = col_widths[gi..gi + sp].iter().sum();
+                let mut pt = c.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
+                let pb = c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+                if pt == 0.0 && table.style.border {
+                    pt = table.style.border_width.unwrap_or(0.4);
+                }
+                let inner_w = cw.max(0.0);
+                let mut ch = pt;
+                for b in &c.blocks {
+                    match b {
+                        Block::Paragraph(p) => {
+                            ch += self.estimate_para_height(p, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                        }
+                        Block::Table(nested) => {
+                            let nw = inner_w.max(0.0);
+                            for nr in &nested.rows {
+                                let mut nrh = 0.0_f32;
+                                for nc in &nr.cells {
+                                    let mut nch = 0.0_f32;
+                                    for nb in &nc.blocks {
+                                        if let Block::Paragraph(np) = nb {
+                                            nch += self.estimate_para_height(np, nw / 2.0, table_grid_pitch, nested.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                                        }
+                                    }
+                                    nrh = nrh.max(nch);
+                                }
+                                if let Some(hh) = nr.height {
+                                    match nr.height_rule.as_deref() {
+                                        Some("exact") => { nrh = hh; }
+                                        Some("atLeast") => { nrh = nrh.max(hh); }
+                                        _ => {}
+                                    }
+                                }
+                                ch += nrh;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                ch += pb;
+                h = h.max(ch);
+                gi += sp;
+            }
+            let row_has_vmerge = r.cells.iter().any(|c| c.v_merge.is_some());
+            if let Some(pitch) = table_grid_pitch {
+                if pitch > 0.0 && h > 0.0 && grid_char_pitch.is_none() && h >= pitch && row_has_vmerge {
+                    let snapped = (h / pitch).ceil() * pitch;
+                    h = (snapped * 2.0).round() / 2.0;
+                }
+            }
+            if let Some(rh) = r.height {
+                match r.height_rule.as_deref() {
+                    Some("exact") => { h = rh; }
+                    _ => { h = h.max(rh); }
+                }
+            }
+            let _ = ri;
+            h
+        }).collect();
+
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
 
@@ -6454,7 +6532,20 @@ impl LayoutEngine {
                         // Replaces R59 conservative font_size (which was 3.5pt off
                         // per column for default MS Mincho).
                         let column_pitch = font_size * 4.0 / 3.0;
-                        let col0_x = cell_x + cell_w - pad_r - font_size;
+                        // For tbRlV, jc=center on the inner paragraph centers
+                        // the column(s) horizontally within the cell width
+                        // (perpendicular to the writing direction). Default =
+                        // RTL progression from the cell's right edge.
+                        let n_cols_for_x = ((chars.len() + chars_per_col - 1) / chars_per_col).max(1);
+                        let total_cols_w = n_cols_for_x as f32 * font_size
+                            + ((n_cols_for_x - 1) as f32) * (column_pitch - font_size);
+                        let col0_x = if jc_center {
+                            // Center the column block horizontally; col 0 (rightmost)
+                            // sits at center + half-block-width - font_size.
+                            cell_x + (cell_w - total_cols_w) / 2.0 + (n_cols_for_x - 1) as f32 * column_pitch
+                        } else {
+                            cell_x + cell_w - pad_r - font_size
+                        };
                         if needs_multi {
                             // Multi-column: RTL progression, per-column vertical
                             // centering when jc=center. R61 (2026-04-29): COM-confirmed
@@ -7001,9 +7092,42 @@ impl LayoutEngine {
                 }
 
                 // Apply vAlign offset
+                // For vMerge="restart" cells, the cell's visual span is the
+                // sum of this row's height + all subsequent vMerge="continue"
+                // rows in the same grid column. Without this, centred content
+                // (e.g. vertical 「連絡先」 label spanning 5 rows) anchors to
+                // the top of just the restart row instead of the merged span.
+                let effective_h_for_align = if cell.v_merge.as_deref() == Some("restart") {
+                    let mut h = row_height;
+                    for nri in row_idx + 1..num_rows {
+                        let nr = &table.rows[nri];
+                        let mut nc_grid = nr.grid_before as usize;
+                        let mut continues = false;
+                        let mut ended = false;
+                        for nc in &nr.cells {
+                            if nc_grid == cell_start_grid {
+                                if matches!(nc.v_merge.as_deref(), Some("continue") | Some("")) {
+                                    continues = true;
+                                } else {
+                                    ended = true;
+                                }
+                                break;
+                            }
+                            nc_grid += nc.grid_span.max(1) as usize;
+                        }
+                        if continues {
+                            h += row_natural_heights.get(nri).copied().unwrap_or(0.0);
+                        } else if ended || nc_grid > cell_start_grid {
+                            break;
+                        }
+                    }
+                    h
+                } else {
+                    row_height
+                };
                 let v_offset = match cell.v_align.as_deref() {
-                    Some("center") => ((row_height - pad_t - pad_b - content_h) / 2.0).max(0.0),
-                    Some("bottom") => (row_height - pad_t - pad_b - content_h).max(0.0),
+                    Some("center") => ((effective_h_for_align - pad_t - pad_b - content_h) / 2.0).max(0.0),
+                    Some("bottom") => (effective_h_for_align - pad_t - pad_b - content_h).max(0.0),
                     _ => 0.0, // top (default)
                 };
 
