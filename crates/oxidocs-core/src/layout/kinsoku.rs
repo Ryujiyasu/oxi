@@ -174,6 +174,8 @@ pub fn is_cjk(ch: char) -> bool {
         0x31F0..=0x31FF |
         // CJK Symbols and Punctuation
         0x3000..=0x303F |
+        // Enclosed Alphanumerics (①, ②, …, ⑳, ⒈, ⒉, …)
+        0x2460..=0x24FF |
         // Enclosed CJK Letters and Months (㊀, ㈱, etc.)
         0x3200..=0x32FF |
         // CJK Compatibility (㎡, ㎞, ㎏, etc.)
