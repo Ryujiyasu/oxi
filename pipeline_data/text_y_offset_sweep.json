@@ -1,0 +1,2306 @@
+{
+  "MSMincho_sz16_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 84.0,
+      "anchor2_y": 96.0,
+      "stride_p1_p2": 12.0,
+      "stride_p2_p3": 12.0
+    }
+  },
+  "MSMincho_sz16_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 90.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 16.0
+    }
+  },
+  "MSMincho_sz16_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 93.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "MSMincho_sz16_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 96.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSMincho_sz20_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.5,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 19.5
+    }
+  },
+  "MSMincho_sz20_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 88.5,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 14.5,
+      "stride_p2_p3": 17.5
+    }
+  },
+  "MSMincho_sz20_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.5,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 19.5
+    }
+  },
+  "MSMincho_sz20_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 94.5,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 18.5,
+      "stride_p2_p3": 21.5
+    }
+  },
+  "MSMincho_sz21_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSMincho_sz21_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 88.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 14.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "MSMincho_sz21_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSMincho_sz21_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 94.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "MSMincho_sz22_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSMincho_sz22_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 88.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 14.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "MSMincho_sz22_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSMincho_sz22_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 94.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "MSMincho_sz24_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 87.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 15.0,
+      "stride_p2_p3": 21.0
+    }
+  },
+  "MSMincho_sz24_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 87.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 13.0,
+      "stride_p2_p3": 19.0
+    }
+  },
+  "MSMincho_sz24_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 90.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 15.0,
+      "stride_p2_p3": 21.0
+    }
+  },
+  "MSMincho_sz24_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 93.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 17.0,
+      "stride_p2_p3": 23.0
+    }
+  },
+  "MSMincho_sz28_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 86.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 14.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "MSMincho_sz28_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 94.0,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 28.0
+    }
+  },
+  "MSMincho_sz28_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 98.0,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 23.0,
+      "stride_p2_p3": 31.0
+    }
+  },
+  "MSMincho_sz28_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 92.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 24.0
+    }
+  },
+  "MSMincho_sz36_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 83.5,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 11.5,
+      "stride_p2_p3": 24.5
+    }
+  },
+  "MSMincho_sz36_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 91.5,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 17.5,
+      "stride_p2_p3": 30.5
+    }
+  },
+  "MSMincho_sz36_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 95.5,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 33.5
+    }
+  },
+  "MSMincho_sz36_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 99.5,
+      "anchor2_y": 136.0,
+      "stride_p1_p2": 23.5,
+      "stride_p2_p3": 36.5
+    }
+  },
+  "MSMincho_sz40_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.0,
+      "anchor2_y": 120.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 32.0
+    }
+  },
+  "MSMincho_sz40_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 90.0,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 32.0
+    }
+  },
+  "MSMincho_sz40_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 94.0,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 19.0,
+      "stride_p2_p3": 35.0
+    }
+  },
+  "MSMincho_sz40_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 98.0,
+      "anchor2_y": 136.0,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 38.0
+    }
+  },
+  "MSMincho_sz48_pitch240": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 85.5,
+      "anchor2_y": 120.0,
+      "stride_p1_p2": 13.5,
+      "stride_p2_p3": 34.5
+    }
+  },
+  "MSMincho_sz48_pitch320": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 87.5,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 13.5,
+      "stride_p2_p3": 34.5
+    }
+  },
+  "MSMincho_sz48_pitch360": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.5,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 37.5
+    }
+  },
+  "MSMincho_sz48_pitch400": {
+    "config": {
+      "font": "ＭＳ 明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 95.5,
+      "anchor2_y": 136.0,
+      "stride_p1_p2": 19.5,
+      "stride_p2_p3": 40.5
+    }
+  },
+  "MSGothic_sz16_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 84.0,
+      "anchor2_y": 96.0,
+      "stride_p1_p2": 12.0,
+      "stride_p2_p3": 12.0
+    }
+  },
+  "MSGothic_sz16_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 90.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 16.0
+    }
+  },
+  "MSGothic_sz16_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 93.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "MSGothic_sz16_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 96.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSGothic_sz20_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.5,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 19.5
+    }
+  },
+  "MSGothic_sz20_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 88.5,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 14.5,
+      "stride_p2_p3": 17.5
+    }
+  },
+  "MSGothic_sz20_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.5,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 19.5
+    }
+  },
+  "MSGothic_sz20_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 94.5,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 18.5,
+      "stride_p2_p3": 21.5
+    }
+  },
+  "MSGothic_sz21_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSGothic_sz21_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 88.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 14.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "MSGothic_sz21_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSGothic_sz21_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 94.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "MSGothic_sz22_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSGothic_sz22_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 88.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 14.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "MSGothic_sz22_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "MSGothic_sz22_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 94.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "MSGothic_sz24_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 87.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 15.0,
+      "stride_p2_p3": 21.0
+    }
+  },
+  "MSGothic_sz24_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 87.0,
+      "anchor2_y": 106.0,
+      "stride_p1_p2": 13.0,
+      "stride_p2_p3": 19.0
+    }
+  },
+  "MSGothic_sz24_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 90.0,
+      "anchor2_y": 111.0,
+      "stride_p1_p2": 15.0,
+      "stride_p2_p3": 21.0
+    }
+  },
+  "MSGothic_sz24_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 93.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 17.0,
+      "stride_p2_p3": 23.0
+    }
+  },
+  "MSGothic_sz28_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 86.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 14.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "MSGothic_sz28_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 94.0,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 28.0
+    }
+  },
+  "MSGothic_sz28_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 98.0,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 23.0,
+      "stride_p2_p3": 31.0
+    }
+  },
+  "MSGothic_sz28_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 92.0,
+      "anchor2_y": 116.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 24.0
+    }
+  },
+  "MSGothic_sz36_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 83.5,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 11.5,
+      "stride_p2_p3": 24.5
+    }
+  },
+  "MSGothic_sz36_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 91.5,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 17.5,
+      "stride_p2_p3": 30.5
+    }
+  },
+  "MSGothic_sz36_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 95.5,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 33.5
+    }
+  },
+  "MSGothic_sz36_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 99.5,
+      "anchor2_y": 136.0,
+      "stride_p1_p2": 23.5,
+      "stride_p2_p3": 36.5
+    }
+  },
+  "MSGothic_sz40_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 88.0,
+      "anchor2_y": 120.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 32.0
+    }
+  },
+  "MSGothic_sz40_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 90.0,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 32.0
+    }
+  },
+  "MSGothic_sz40_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 94.0,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 19.0,
+      "stride_p2_p3": 35.0
+    }
+  },
+  "MSGothic_sz40_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 98.0,
+      "anchor2_y": 136.0,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 38.0
+    }
+  },
+  "MSGothic_sz48_pitch240": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 85.5,
+      "anchor2_y": 120.0,
+      "stride_p1_p2": 13.5,
+      "stride_p2_p3": 34.5
+    }
+  },
+  "MSGothic_sz48_pitch320": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 74.0,
+      "test_y": 87.5,
+      "anchor2_y": 122.0,
+      "stride_p1_p2": 13.5,
+      "stride_p2_p3": 34.5
+    }
+  },
+  "MSGothic_sz48_pitch360": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 91.5,
+      "anchor2_y": 129.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 37.5
+    }
+  },
+  "MSGothic_sz48_pitch400": {
+    "config": {
+      "font": "ＭＳ ゴシック",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 76.0,
+      "test_y": 95.5,
+      "anchor2_y": 136.0,
+      "stride_p1_p2": 19.5,
+      "stride_p2_p3": 40.5
+    }
+  },
+  "YuMincho_sz16_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 100.5,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 24.0,
+      "stride_p2_p3": 24.0
+    }
+  },
+  "YuMincho_sz16_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 88.5,
+      "anchor2_y": 104.5,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 16.0
+    }
+  },
+  "YuMincho_sz16_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 91.5,
+      "anchor2_y": 109.5,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "YuMincho_sz16_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 94.5,
+      "anchor2_y": 114.5,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "YuMincho_sz20_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 98.5,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 26.0
+    }
+  },
+  "YuMincho_sz20_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 94.5,
+      "anchor2_y": 120.5,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 26.0
+    }
+  },
+  "YuMincho_sz20_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 89.5,
+      "anchor2_y": 109.5,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "YuMincho_sz20_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 92.5,
+      "anchor2_y": 114.5,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "YuMincho_sz21_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 98.0,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 26.5
+    }
+  },
+  "YuMincho_sz21_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 94.0,
+      "anchor2_y": 120.5,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 26.5
+    }
+  },
+  "YuMincho_sz21_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 89.0,
+      "anchor2_y": 109.5,
+      "stride_p1_p2": 15.5,
+      "stride_p2_p3": 20.5
+    }
+  },
+  "YuMincho_sz21_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 92.0,
+      "anchor2_y": 114.5,
+      "stride_p1_p2": 17.5,
+      "stride_p2_p3": 22.5
+    }
+  },
+  "YuMincho_sz22_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 98.0,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 26.5
+    }
+  },
+  "YuMincho_sz22_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 94.0,
+      "anchor2_y": 120.5,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 26.5
+    }
+  },
+  "YuMincho_sz22_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 98.0,
+      "anchor2_y": 127.5,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 29.5
+    }
+  },
+  "YuMincho_sz22_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 92.0,
+      "anchor2_y": 114.5,
+      "stride_p1_p2": 17.5,
+      "stride_p2_p3": 22.5
+    }
+  },
+  "YuMincho_sz24_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 97.0,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 27.5
+    }
+  },
+  "YuMincho_sz24_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 93.0,
+      "anchor2_y": 120.5,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 27.5
+    }
+  },
+  "YuMincho_sz24_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 97.0,
+      "anchor2_y": 127.5,
+      "stride_p1_p2": 23.5,
+      "stride_p2_p3": 30.5
+    }
+  },
+  "YuMincho_sz24_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 101.0,
+      "anchor2_y": 134.5,
+      "stride_p1_p2": 26.5,
+      "stride_p2_p3": 33.5
+    }
+  },
+  "YuMincho_sz28_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 95.5,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 19.0,
+      "stride_p2_p3": 29.0
+    }
+  },
+  "YuMincho_sz28_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 91.5,
+      "anchor2_y": 120.5,
+      "stride_p1_p2": 19.0,
+      "stride_p2_p3": 29.0
+    }
+  },
+  "YuMincho_sz28_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 95.5,
+      "anchor2_y": 127.5,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 32.0
+    }
+  },
+  "YuMincho_sz28_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 99.5,
+      "anchor2_y": 134.5,
+      "stride_p1_p2": 25.0,
+      "stride_p2_p3": 35.0
+    }
+  },
+  "YuMincho_sz36_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 98.0,
+      "anchor2_y": 136.5,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 38.5
+    }
+  },
+  "YuMincho_sz36_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 88.0,
+      "anchor2_y": 120.5,
+      "stride_p1_p2": 15.5,
+      "stride_p2_p3": 32.5
+    }
+  },
+  "YuMincho_sz36_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 92.0,
+      "anchor2_y": 127.5,
+      "stride_p1_p2": 18.5,
+      "stride_p2_p3": 35.5
+    }
+  },
+  "YuMincho_sz36_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 96.0,
+      "anchor2_y": 134.5,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 38.5
+    }
+  },
+  "YuMincho_sz40_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 96.5,
+      "anchor2_y": 136.5,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 40.0
+    }
+  },
+  "YuMincho_sz40_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 94.5,
+      "anchor2_y": 136.5,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 42.0
+    }
+  },
+  "YuMincho_sz40_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 90.5,
+      "anchor2_y": 127.5,
+      "stride_p1_p2": 17.0,
+      "stride_p2_p3": 37.0
+    }
+  },
+  "YuMincho_sz40_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 94.5,
+      "anchor2_y": 134.5,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 40.0
+    }
+  },
+  "YuMincho_sz48_pitch240": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 99.0,
+      "anchor2_y": 148.5,
+      "stride_p1_p2": 22.5,
+      "stride_p2_p3": 49.5
+    }
+  },
+  "YuMincho_sz48_pitch320": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 72.5,
+      "test_y": 91.0,
+      "anchor2_y": 136.5,
+      "stride_p1_p2": 18.5,
+      "stride_p2_p3": 45.5
+    }
+  },
+  "YuMincho_sz48_pitch360": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 73.5,
+      "test_y": 96.0,
+      "anchor2_y": 145.5,
+      "stride_p1_p2": 22.5,
+      "stride_p2_p3": 49.5
+    }
+  },
+  "YuMincho_sz48_pitch400": {
+    "config": {
+      "font": "游明朝",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 74.5,
+      "test_y": 101.0,
+      "anchor2_y": 154.5,
+      "stride_p1_p2": 26.5,
+      "stride_p2_p3": 53.5
+    }
+  },
+  "Meiryo_sz16_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 76.5,
+      "test_y": 99.0,
+      "anchor2_y": 124.5,
+      "stride_p1_p2": 22.5,
+      "stride_p2_p3": 25.5
+    }
+  },
+  "Meiryo_sz16_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 87.0,
+      "anchor2_y": 103.0,
+      "stride_p1_p2": 16.0,
+      "stride_p2_p3": 16.0
+    }
+  },
+  "Meiryo_sz16_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 90.0,
+      "anchor2_y": 108.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 18.0
+    }
+  },
+  "Meiryo_sz16_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 16,
+      "size_pt": 8.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 93.0,
+      "anchor2_y": 113.0,
+      "stride_p1_p2": 20.0,
+      "stride_p2_p3": 20.0
+    }
+  },
+  "Meiryo_sz20_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 97.0,
+      "anchor2_y": 123.0,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 26.0
+    }
+  },
+  "Meiryo_sz20_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 93.0,
+      "anchor2_y": 119.0,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 26.0
+    }
+  },
+  "Meiryo_sz20_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 97.0,
+      "anchor2_y": 126.0,
+      "stride_p1_p2": 25.0,
+      "stride_p2_p3": 29.0
+    }
+  },
+  "Meiryo_sz20_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 20,
+      "size_pt": 10.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 91.0,
+      "anchor2_y": 113.0,
+      "stride_p1_p2": 18.0,
+      "stride_p2_p3": 22.0
+    }
+  },
+  "Meiryo_sz21_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 97.0,
+      "anchor2_y": 123.0,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 26.0
+    }
+  },
+  "Meiryo_sz21_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 93.0,
+      "anchor2_y": 119.0,
+      "stride_p1_p2": 22.0,
+      "stride_p2_p3": 26.0
+    }
+  },
+  "Meiryo_sz21_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 97.0,
+      "anchor2_y": 126.0,
+      "stride_p1_p2": 25.0,
+      "stride_p2_p3": 29.0
+    }
+  },
+  "Meiryo_sz21_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 21,
+      "size_pt": 10.5,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 101.0,
+      "anchor2_y": 133.0,
+      "stride_p1_p2": 28.0,
+      "stride_p2_p3": 32.0
+    }
+  },
+  "Meiryo_sz22_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 96.5,
+      "anchor2_y": 123.0,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 26.5
+    }
+  },
+  "Meiryo_sz22_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 92.5,
+      "anchor2_y": 119.0,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 26.5
+    }
+  },
+  "Meiryo_sz22_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 96.5,
+      "anchor2_y": 126.0,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 29.5
+    }
+  },
+  "Meiryo_sz22_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 22,
+      "size_pt": 11.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 100.5,
+      "anchor2_y": 133.0,
+      "stride_p1_p2": 27.5,
+      "stride_p2_p3": 32.5
+    }
+  },
+  "Meiryo_sz24_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 95.5,
+      "anchor2_y": 123.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 27.5
+    }
+  },
+  "Meiryo_sz24_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 91.5,
+      "anchor2_y": 119.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 27.5
+    }
+  },
+  "Meiryo_sz24_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 95.5,
+      "anchor2_y": 126.0,
+      "stride_p1_p2": 23.5,
+      "stride_p2_p3": 30.5
+    }
+  },
+  "Meiryo_sz24_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 24,
+      "size_pt": 12.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 99.5,
+      "anchor2_y": 133.0,
+      "stride_p1_p2": 26.5,
+      "stride_p2_p3": 33.5
+    }
+  },
+  "Meiryo_sz28_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 99.5,
+      "anchor2_y": 135.0,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 35.5
+    }
+  },
+  "Meiryo_sz28_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 89.5,
+      "anchor2_y": 119.0,
+      "stride_p1_p2": 18.5,
+      "stride_p2_p3": 29.5
+    }
+  },
+  "Meiryo_sz28_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 93.5,
+      "anchor2_y": 126.0,
+      "stride_p1_p2": 21.5,
+      "stride_p2_p3": 32.5
+    }
+  },
+  "Meiryo_sz28_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 28,
+      "size_pt": 14.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 97.5,
+      "anchor2_y": 133.0,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 35.5
+    }
+  },
+  "Meiryo_sz36_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 95.5,
+      "anchor2_y": 135.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 39.5
+    }
+  },
+  "Meiryo_sz36_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 93.5,
+      "anchor2_y": 135.0,
+      "stride_p1_p2": 22.5,
+      "stride_p2_p3": 41.5
+    }
+  },
+  "Meiryo_sz36_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 89.5,
+      "anchor2_y": 126.0,
+      "stride_p1_p2": 17.5,
+      "stride_p2_p3": 36.5
+    }
+  },
+  "Meiryo_sz36_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 36,
+      "size_pt": 18.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 93.5,
+      "anchor2_y": 133.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 39.5
+    }
+  },
+  "Meiryo_sz40_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 99.5,
+      "anchor2_y": 147.0,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 47.5
+    }
+  },
+  "Meiryo_sz40_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 91.5,
+      "anchor2_y": 135.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 43.5
+    }
+  },
+  "Meiryo_sz40_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 96.5,
+      "anchor2_y": 144.0,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 47.5
+    }
+  },
+  "Meiryo_sz40_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 40,
+      "size_pt": 20.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 91.5,
+      "anchor2_y": 133.0,
+      "stride_p1_p2": 18.5,
+      "stride_p2_p3": 41.5
+    }
+  },
+  "Meiryo_sz48_pitch240": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 240,
+      "pitch_pt": 12.0
+    },
+    "measure": {
+      "anchor1_y": 75.0,
+      "test_y": 95.5,
+      "anchor2_y": 147.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 51.5
+    }
+  },
+  "Meiryo_sz48_pitch320": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 320,
+      "pitch_pt": 16.0
+    },
+    "measure": {
+      "anchor1_y": 71.0,
+      "test_y": 87.5,
+      "anchor2_y": 135.0,
+      "stride_p1_p2": 16.5,
+      "stride_p2_p3": 47.5
+    }
+  },
+  "Meiryo_sz48_pitch360": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 360,
+      "pitch_pt": 18.0
+    },
+    "measure": {
+      "anchor1_y": 72.0,
+      "test_y": 92.5,
+      "anchor2_y": 144.0,
+      "stride_p1_p2": 20.5,
+      "stride_p2_p3": 51.5
+    }
+  },
+  "Meiryo_sz48_pitch400": {
+    "config": {
+      "font": "Meiryo",
+      "size_hp": 48,
+      "size_pt": 24.0,
+      "pitch_tw": 400,
+      "pitch_pt": 20.0
+    },
+    "measure": {
+      "anchor1_y": 73.0,
+      "test_y": 97.5,
+      "anchor2_y": 153.0,
+      "stride_p1_p2": 24.5,
+      "stride_p2_p3": 55.5
+    }
+  }
+}

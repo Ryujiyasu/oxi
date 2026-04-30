@@ -6038,14 +6038,17 @@ impl LayoutEngine {
                     //   offset = (line_height - fontSize)/2
                     // Both reduce to (line_height - fontSize)/2 because line_height = pitch
                     // in the single-cell case.
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments.iter()
-                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
-                            .fold(0.0_f32, f32::max)
-                    } else { para_font_size };
+                    // R112 (2026-04-30): grid-snapped centering uses NATURAL
+                    // line height (font × CJK 83/64), NOT font_size.
+                    // VALIDATED via systematic Word COM sweep
+                    // (tools/metrics/sweep_text_y_offset.py + data
+                    // pipeline_data/text_y_offset_sweep.json): 36 combos
+                    // of MS Mincho × MS Gothic × 9 sizes × 4 grid pitches
+                    // all predict within 0.5pt of measured stride.
+                    let natural = max_ascent + max_descent;
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let raw = (line_height - font_size).max(0.0) / 2.0;
+                        let raw = (line_height - natural).max(0.0) / 2.0;
                         // Round to 0.5pt (10 twips) — COM-confirmed best fit
                         (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
@@ -6053,12 +6056,9 @@ impl LayoutEngine {
                     }
                 } else {
                     // LM0: same centering formula as LM1/LM2 single cell.
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments.iter()
-                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
-                            .fold(0.0_f32, f32::max)
-                    } else { para_font_size };
-                    let raw = (line_height - font_size).max(0.0) / 2.0;
+                    // R112: use natural line height not font_size (see above).
+                    let natural = max_ascent + max_descent;
+                    let raw = (line_height - natural).max(0.0) / 2.0;
                     (raw * 2.0 + 0.5).floor() / 2.0
                 }
             }
