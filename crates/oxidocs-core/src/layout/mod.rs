@@ -2710,6 +2710,7 @@ impl LayoutEngine {
                             _ => cursor_y + pos.y, // "text": offset from anchor para bottom
                         };
                     }
+                    let cursor_y_table_start = cursor_y;
                     let pages_before = pages.len();
                     let table_elements = self.layout_table(
                         table,
@@ -2730,8 +2731,37 @@ impl LayoutEngine {
                     elements.extend(table_elements);
 
                     if is_floating {
-                        // Floating tables don't advance the text flow
-                        cursor_y = saved_cursor_y;
+                        let table_consumed = cursor_y - cursor_y_table_start;
+                        let pages_added = pages.len() - pages_before;
+                        let large_table = table_consumed > content_height * 0.5;
+                        if pages_added > 0 || large_table {
+                            // Floating table consumed substantial layout space.
+                            // Body flow + any subsequent floating tables must move
+                            // to the next page; otherwise multiple page-anchored
+                            // floating tables on the same page overlap each other.
+                            // Observed on 459f05f1e877: 2 floating tables
+                            // (tblpY=98pt, 149pt) both encountered while body
+                            // cursor was on page 1 collapsed 3 pages of form
+                            // content into a single page.
+                            if pages_added == 0 {
+                                pages.push(LayoutPage {
+                                    width: page.size.width,
+                                    height: page.size.height,
+                                    elements: std::mem::take(&mut elements),
+                                });
+                                current_page_idx += 1;
+                                cursor_y = start_y;
+                            } else {
+                                current_page_idx += pages_added;
+                            }
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                        } else {
+                            // Small floating table — preserve text-wrap-around
+                            // semantics: body cursor unchanged so subsequent
+                            // paragraphs flow at the original Y.
+                            cursor_y = saved_cursor_y;
+                        }
                     } else {
                         let pages_added = pages.len() - pages_before;
                         if pages_added > 0 {
