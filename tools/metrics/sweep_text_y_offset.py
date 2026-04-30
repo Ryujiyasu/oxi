@@ -123,7 +123,12 @@ def make_docx(path: str, font_name: str, font_size_halfpt: int,
         z.writestr('[Content_Types].xml', CONTENT_TYPES)
         z.writestr('_rels/.rels', ROOT_RELS)
         z.writestr('word/_rels/document.xml.rels', DOC_RELS)
-        z.writestr('word/styles.xml', styles_xml(font_name))
+        # Bug fix R113 (2026-04-30): styles.xml default eastAsia
+        # ALWAYS set to ＭＳ 明朝 so anchor paragraphs render with a
+        # fixed baseline. Test paragraph overrides via its own rPr.
+        # Previously default was set to test font, contaminating
+        # anchor measurements.
+        z.writestr('word/styles.xml', styles_xml('ＭＳ 明朝'))
         z.writestr('word/document.xml',
                    build_doc_xml(font_name, font_size_halfpt, line_pitch_twips))
 
