@@ -7821,7 +7821,21 @@ impl LayoutEngine {
             let metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             if is_single_empty {
-                height += metrics.word_line_height_table_cell(empty_fs);
+                let mut h = metrics.word_line_height_table_cell(empty_fs);
+                // Empty in-cell paragraphs grid-snap to docGrid linePitch.
+                // Verified on cb8be71 「研究計画内容」 row: cell 1 contains 18 empty
+                // paragraphs which Word renders at 18pt each (grid pitch),
+                // not the ~13pt natural line height. Without this snap, the
+                // tall cell on the left ends up shorter than Word's, and
+                // vAlign=center positions content above the visual centre.
+                if in_cell {
+                    if let Some(pitch) = grid_pitch {
+                        if pitch > 0.0 && h < pitch {
+                            h = pitch;
+                        }
+                    }
+                }
+                height += h;
             } else {
                 height += self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true);
             }
