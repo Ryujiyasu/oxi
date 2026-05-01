@@ -13,6 +13,92 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — investigation — Run fragment merging policy: NO merging, but per-fragment yakumono loop misses cross-<w:r> adjacency
+- context: User question — "break_into_lines に渡される fragments は <w:r> 単位ではなく
+  Oxi が同 style ones を merge した結果。これが cross-run yakumono detection を無効化
+  している可能性"
+- hypothesis tested: Oxi has a same-style run merging pass before break_into_lines
+- evidence (code review):
+  - `crates/oxidocs-core/src/parser/ooxml.rs:1046-1064`: parser pushes one Run per
+    `<w:r>`. Within a single `<w:r>`, multiple `<w:t>` text elements are
+    concatenated in `parse_run` (line 2407-2413), but cross-run text is NOT combined.
+  - `crates/oxidocs-core/src/layout/mod.rs:3218-3223`: fragments built as 1:1 from
+    `para.runs.iter().enumerate()`. No filtering, no merging.
+  - Only IR `Vec<Run>` mutations post-parse: `revisions.rs:57` (retain_mut filter
+    for tracked changes), `parser/ooxml.rs:5769` (mutate-in-place), `layout/mod.rs:685`
+    (filter for tracked changes), `layout/mod.rs:1345` (`resolve_fit_text_runs` reads
+    groups, doesn't merge).
+- outcome:
+  1. **User's "merging" premise is INCORRECT**: there is no same-style merging pass.
+     IR `Run` count = `<w:r>` count (modulo tracked-change filter).
+  2. **The functional issue user describes IS real**: yakumono detection at
+     `layout/mod.rs:4322` builds `chars_vec` per-fragment, so neighbor lookups
+     `chars_vec[i+1]` / `chars_vec[i-1]` are bounded to within a single `<w:r>`.
+     Cross-`<w:r>` adjacencies (e.g., `」` ending run A + `、` starting run B)
+     fail both `i+1 < n` and `i > 0` boundary checks → no compression.
+  3. **Real-world impact**: any docx with `<w:r>` boundaries from track-changes,
+     comment markers, formatting toggles, hyperlink boundaries, or field codes
+     can have undetected yakumono adjacencies. Word's renderer compresses based
+     on character identity (Type A/B/C per session 51 R0), independent of style
+     boundaries.
+- recommended fix (deferred to oxi-2 implementation session, ~50 LOC):
+  Pre-compute yakumono flags on paragraph-wide concatenated character sequence,
+  store paragraph-level + index map, look up by (frag_idx, char_idx_in_frag) in
+  the fragment loop. O(n) extra pass, negligible cost.
+- risks to verify before shipping:
+  (a) Style-boundary semantics — does Word fire yakumono compression when adjacent
+      chars have different fonts/sizes? Likely yes (character-driven), but COM
+      verification on `<w:r>「</w:r><w:r font=B>、</w:r>` minimal repro is needed.
+  (b) Revisions ordering — pre-pass must run AFTER tracked-change filtering, else
+      it'd see deleted/inserted text incorrectly.
+  (c) Field code boundary respect — pre-pass must honour `field_result_depth`
+      suppression at parser/ooxml.rs:1059-1063.
+- references: detail memo at memory/investigation_run_fragment_merging_2026_05_02.md
+  (text-only, no code change). Master's session 51 R0 yakumono Type A/B/C tables
+  in MEMORY.md provide the character-driven compression rule baseline.
+
+## 2026-05-02 — oxi-1 — confirmed — §15.1 leftChars char_width source: docDefault.rPr.sz, not pPr/run
+
+- context: §15.1 defined `effective_indent = leftChars / 100 * char_width`
+  for chars-based indents but did NOT specify which font's size determines
+  `char_width`. The 2026-03-29 confirmation used 10.5pt as char_width but
+  did not note its source.
+- hypothesis options:
+  (a) docDefault.rPrDefault.rPr.sz
+  (b) Paragraph pPr.rPr.sz
+  (c) Run rPr.sz
+  (d) Some inheritance chain (style > pPr > docDefault > fallback)
+- evidence — IC_* axis-isolation:
+  - `tools/metrics/ic_repro/` (no styles.xml): 9 variants × {pPr.sz, run.sz}
+    in {21, 28, mixed, empty}. ALL gave LeftIndent = 10.50pt regardless
+    of pPr.rPr.sz / run.rPr.sz. Conclusion: pPr/run rPr.sz are NOT used.
+    The 10.5pt default is Word's fallback when styles.xml is absent
+    (Japanese-localized Word implementation default).
+  - `tools/metrics/ic_docdef_repro/` (explicit styles.xml): 5 docDefault
+    sz values × variants. Linear scaling confirmed:
+    docDef sz=20 → LeftIndent=10.00pt
+    docDef sz=21 → 10.50pt
+    docDef sz=24 → 12.00pt
+    docDef sz=28 → 14.00pt
+    docDef sz=44 → 22.00pt
+  - Cross-check with run-override: IC_dd20_run44 (docDef=20, run sz=44)
+    gives LeftIndent=10.00pt. IC_dd44_run21 gives 22.00pt. **docDefault
+    always wins**.
+- outcome:
+  - char_width source CONFIRMED as `docDefault.rPrDefault.rPr.sz`.
+    NOT inherited via style/Normal chain (style hierarchy not tested
+    here; defer to follow-up).
+  - Refined §15.1.1 formula:
+    `char_width_pt = docDefault.rPr.sz_val / 2 (= sz_pt)`
+    `effective_indent_pt = leftChars / 100.0 * char_width_pt`
+  - Applies to all *Chars attributes (leftChars/rightChars/
+    firstLineChars/hangingChars).
+  - Implication for Oxi: parser must read docDefault.rPr.sz when
+    computing chars-based indents; current Oxi behavior likely uses
+    pPr/run.rPr.sz which is incorrect (need to verify).
+- code change: NONE. Audit needed of Oxi's `*Chars` indent computation
+  in `crates/oxidocs-core/src/layout/mod.rs`.
+
 ## 2026-05-02 — oxi-1 — confirmed — §17 Shape Positioning expansion: positionV/posOffset formula + RelativeVerticalPosition enum mapping + baseline survey
 
 - context: §17 had only 2 minimal sub-sections (§17.1 reference table,
