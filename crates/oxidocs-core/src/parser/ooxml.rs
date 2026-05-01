@@ -1384,6 +1384,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
+    // 2026-05-01 R12: snapshot pPr-explicit indent BEFORE style inheritance.
+    // LibreOffice algorithm (ndtxt.cxx:AreListLevelIndentsApplicable, line 4820)
+    // applies numbering's indent ONLY when paragraph has NO hard-set indent (in
+    // pPr) AND no style in the basedOn chain has hard-set indent. This snapshot
+    // captures pPr-explicit; the style chain check is implicit in the order of
+    // operations below.
+    let ppr_explicit_indent_left =
+        style.indent_left.is_some() || style.indent_left_chars.is_some();
+    let ppr_explicit_first_line =
+        style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
+
     // Apply style inheritance from StyleSheet (basedOn already resolved)
     // ECMA-376: paragraph with no pStyle implicitly uses the default paragraph style (w:default="1")
     let effective_style_id = style_id.clone()
@@ -1576,6 +1587,31 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
                         style.indent_left = Some(left);
                     }
+                }
+            }
+            // 2026-05-01 R12: numbering's left/hanging indent OVERRIDES
+            // style-inherited indent (but NOT pPr-explicit indent). Implements
+            // LibreOffice's `AreListLevelIndentsApplicable` algorithm
+            // (sw/source/core/txtnode/ndtxt.cxx:4820): when paragraph has direct
+            // numPr in pPr and no hard-set indent in pPr, the list-level indents
+            // apply (i.e., numbering's `ind left/hanging` wins over the style
+            // chain's indent). Pixel-verified on d77a58485f16 p10 p5: numbering
+            // num=1 ilvl=0 has ind left=780tw=39pt hanging=360tw=18pt. Word
+            // visually renders L1 body at margin+21pt, L2+ at margin+39pt
+            // (standard hanging-indent), NOT at style a9's ind left=720tw=36pt.
+            // Note: COM Format.LeftIndent / Information(5) for Range.Characters
+            // are unreliable for hanging-indent paragraphs — pixel measurement
+            // of Word PNG required to verify visual position.
+            if !ppr_explicit_indent_left {
+                if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
+                    style.indent_left = Some(left);
+                    style.indent_left_chars = None;
+                }
+            }
+            if !ppr_explicit_first_line {
+                if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
+                    style.indent_first_line = Some(-hanging);
+                    style.indent_first_line_chars = None;
                 }
             }
         }

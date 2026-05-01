@@ -3851,9 +3851,18 @@ impl LayoutEngine {
         // character at `left` — the hanging area is consumed by the marker+tab,
         // not used to pull the first line leftward. Treating `first_line_indent`
         // as 0 here prevents the marker and text from overlapping.
+        // 2026-05-01 R12: only consume hanging when there's an explicit
+        // list_tab_stop in numbering. Without a tab stop, Word's renderer leaves
+        // L1 body at the L1 effective indent (= indent_left + first_line_indent),
+        // with the marker visually overlapping or sitting right next to body.
+        // With an explicit tab stop, the tab pushes body to indent_left.
+        // Pixel-verified on d77a58485f16 p10 p5: numbering num=1 ilvl=0 has
+        // no <w:tabs/> defined, body L1 visually at margin+21pt (= indent_left
+        // + first_line_indent), NOT at margin+39pt (= indent_left).
         let list_consumes_hanging = para.style.list_marker.is_some()
             && first_line_indent_raw < 0.0
-            && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
+            && matches!(para.style.list_suff.as_deref(), None | Some("tab"))
+            && para.style.list_tab_stop.is_some();
         let first_line_indent = if list_consumes_hanging { 0.0 } else { first_line_indent_raw };
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
@@ -4014,7 +4023,21 @@ impl LayoutEngine {
 
         // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
         // NOT shift start position. Text starts at margin, line is shorter.
-        let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
+        // 2026-05-01 R12: for list paragraphs with hanging from numbering, the
+        // hanging area is occupied by the marker — L1 body wrap width equals
+        // L2+ wrap width (NOT L2+ width + |hanging|). Without this gating, Oxi
+        // fits ~1 extra char on L1 (e.g. d77a p10 p5: 40 vs Word 39), forcing
+        // an extra line and cascading +18pt drift downstream.
+        let list_hanging_marker = para.style.list_marker.is_some()
+            && first_line_indent < 0.0
+            && para.style.list_indent.is_some();
+        let effective_first_indent = if effective_char_pitch.is_some() {
+            0.0
+        } else if list_hanging_marker {
+            0.0
+        } else {
+            first_line_indent
+        };
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
