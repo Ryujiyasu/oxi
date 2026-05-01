@@ -5056,9 +5056,50 @@ impl LayoutEngine {
             };
         }
 
-        for &(text, style, frag_field_type, frag_run_index, frag_char_start) in fragments {
+        // R31 (2026-05-02): refined R30. Gate yakumono on:
+        //   list_marker.is_some()  OR  (chars-indent AND has_cross_run_pair)
+        // Rationale: R30 (chars-indent gate alone) over-fires on docs whose
+        // chars-indent paragraphs have no cross-run yakumono pairs (3a4f_p23,
+        // d77a p6/p8 broke). Cross-run pair existence is a per-paragraph signal
+        // that Word's compression actually applies in this context.
+        let para_chars: Vec<char> = fragments
+            .iter()
+            .flat_map(|(t, _, _, _, _)| t.chars())
+            .collect();
+        let mut frag_offsets: Vec<usize> = Vec::with_capacity(fragments.len());
+        let mut acc: usize = 0;
+        for (t, _, _, _, _) in fragments {
+            frag_offsets.push(acc);
+            acc += t.chars().count();
+        }
+
+        // Detect any cross-run yakumono pair in this paragraph.
+        let has_cross_run_yakumono_pair = {
+            let mut found = false;
+            for i in 0..frag_offsets.len().saturating_sub(1) {
+                let next_start = frag_offsets[i + 1];
+                if next_start == 0 || next_start >= para_chars.len() {
+                    continue;
+                }
+                let end_of_run = next_start - 1;
+                let c_end = para_chars[end_of_run];
+                let c_next = para_chars[next_start];
+                if (kinsoku::is_yakumono_closing(c_end)
+                    && kinsoku::is_yakumono_trigger(c_next))
+                    || (kinsoku::is_yakumono_opening(c_next)
+                        && kinsoku::is_yakumono_trigger(c_end))
+                {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+
+        for (frag_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
+            let para_offset = frag_offsets[frag_idx];
 
             // fitText runs: skip GDI snap to preserve exact target width
             let cs = if style.fit_text.is_some() {
@@ -5115,20 +5156,32 @@ impl LayoutEngine {
             // pre-fix compression saved 10.5pt × 2 = 21pt, allowing +1 char/line
             // and shifting 4 cumulative lines (-17.5pt → -35.5pt cascade in p3-p7).
             // Same differentiator as R16 (list paragraph absorb).
-            let yakumono_enabled = self.compress_punctuation && para_style.list_marker.is_some();
+            // R31: refined gate (chars-indent admitted only when paragraph
+            // also has at least one cross-run yakumono pair).
+            let has_chars_indent = para_style.indent_first_line_chars.is_some()
+                || para_style.indent_left_chars.is_some();
+            let yakumono_enabled = self.compress_punctuation
+                && (para_style.list_marker.is_some()
+                    || (has_chars_indent && has_cross_run_yakumono_pair));
             let chars_vec: Vec<char> = text.chars().collect();
-            // Yakumono pair compression for line break width calculation.
+            // R31: cross-run yakumono detection (R29 mechanism).
             let yakumono_compressed: Vec<bool> = if yakumono_enabled {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
+                let para_n = para_chars.len();
                 for i in 0..n {
                     let c = chars_vec[i];
+                    let pi = para_offset + i;
                     if kinsoku::is_yakumono_closing(c) {
-                        if i + 1 < n && kinsoku::is_yakumono_trigger(chars_vec[i + 1]) {
+                        if pi + 1 < para_n && kinsoku::is_yakumono_trigger(para_chars[pi + 1]) {
                             v[i] = true;
                         }
                     } else if kinsoku::is_yakumono_opening(c) {
-                        if i > 0 && kinsoku::is_yakumono_trigger(chars_vec[i - 1]) && !v[i - 1] {
+                        let prev_in_run_compressed = i > 0 && v[i - 1];
+                        if pi > 0
+                            && kinsoku::is_yakumono_trigger(para_chars[pi - 1])
+                            && !prev_in_run_compressed
+                        {
                             v[i] = true;
                         }
                     }
