@@ -13,6 +13,44 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — §9 Footnote 17.5pt floor is HARDCODED in renderer (not from style)
+- context: prior §9.1 entry left open question "what's the origin of the 17.5pt floor?".
+  Hypothesis was hidden default FootnoteText style with `<w:spacing line="350" atLeast/>`
+  or similar.
+- hypothesis tested: explicit FootnoteText style with `<w:spacing line="240" auto/>`
+  ("Single") will override the floor and produce natural_lh = 13.617pt for MS Mincho 10.5pt.
+- evidence:
+  - 8-variant sweep: tools/metrics/measure_footnote_floor_origin.py
+  - Data: tools/metrics/output/footnote_floor_origin.json
+  - V1 no styles → 17.5pt (baseline)
+  - V2 explicit FootnoteText with `line=240 auto` → **17.5pt** (NOT 13.617pt!)
+  - V3 explicit `line=200 auto` → 15.0pt (sub-default, formula TBD)
+  - V4 explicit `line=200 exact` → 10.0pt (= line/20, exact wins)
+  - V5 explicit FootnoteText with empty pPr → 17.5pt
+  - V6 explicit `line=400 atLeast` (=20pt > floor) → 20.0pt (atLeast wins above floor)
+  - V7 explicit `line=350 atLeast` (=17.5pt = floor) → 17.5pt
+  - V8 styles.xml present, no pStyle ref on footnote → 17.5pt
+- outcome:
+  1. **17.5pt floor is HARDCODED in Word's footnote renderer**, NOT from a default style.
+     Even when docx provides FootnoteText style with explicit "Single" line spacing,
+     Word ignores it.
+  2. **lineRule precedence in footnote area**:
+     - `exact`: always wins precisely (lh = line/20)
+     - `atLeast`: wins only when line/20 > 17.5pt
+     - `auto`: silently overridden by floor when line ≥ 240 (= "Single" or higher)
+       For line < 240, produces a sub-default rule (15pt for line=200, formula TBD).
+  3. **17.5pt = 350tw** likely tied to Word's legacy footnote area allocation default.
+  4. **Spec §9.1 needs rewrite**: not just "12pt Single" correction (already known
+     wrong) but adding the explicit hardcoded floor + override precedence rules.
+- next: (a) pin "size-extra" formula for natural_lh > 17pt (decreasing 1.64→0.16pt
+  with size 13→18pt); (b) test cross-language (English Word) — is 17.5pt locale-
+  independent?; (c) test docGrid present in section — does footnote area inherit
+  body grid pitch?
+- references:
+  - memory/spec_footnote_floor_hardcoded_2026_05_02.md (full memo with recommended
+    spec rewrite text)
+  - earlier: memory/spec_footnote_lh_2026_05_02.md (initial finding showing 17.5pt floor)
+
 ## 2026-05-02 — oxi-4 — investigation — Run fragment merging policy: NO merging, but per-fragment yakumono loop misses cross-<w:r> adjacency
 - context: User question — "break_into_lines に渡される fragments は <w:r> 単位ではなく
   Oxi が同 style ones を merge した結果。これが cross-run yakumono detection を無効化
