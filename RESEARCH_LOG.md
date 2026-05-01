@@ -13,6 +13,48 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §15.1 leftChars char_width source: docDefault.rPr.sz, not pPr/run
+
+- context: §15.1 defined `effective_indent = leftChars / 100 * char_width`
+  for chars-based indents but did NOT specify which font's size determines
+  `char_width`. The 2026-03-29 confirmation used 10.5pt as char_width but
+  did not note its source.
+- hypothesis options:
+  (a) docDefault.rPrDefault.rPr.sz
+  (b) Paragraph pPr.rPr.sz
+  (c) Run rPr.sz
+  (d) Some inheritance chain (style > pPr > docDefault > fallback)
+- evidence — IC_* axis-isolation:
+  - `tools/metrics/ic_repro/` (no styles.xml): 9 variants × {pPr.sz, run.sz}
+    in {21, 28, mixed, empty}. ALL gave LeftIndent = 10.50pt regardless
+    of pPr.rPr.sz / run.rPr.sz. Conclusion: pPr/run rPr.sz are NOT used.
+    The 10.5pt default is Word's fallback when styles.xml is absent
+    (Japanese-localized Word implementation default).
+  - `tools/metrics/ic_docdef_repro/` (explicit styles.xml): 5 docDefault
+    sz values × variants. Linear scaling confirmed:
+    docDef sz=20 → LeftIndent=10.00pt
+    docDef sz=21 → 10.50pt
+    docDef sz=24 → 12.00pt
+    docDef sz=28 → 14.00pt
+    docDef sz=44 → 22.00pt
+  - Cross-check with run-override: IC_dd20_run44 (docDef=20, run sz=44)
+    gives LeftIndent=10.00pt. IC_dd44_run21 gives 22.00pt. **docDefault
+    always wins**.
+- outcome:
+  - char_width source CONFIRMED as `docDefault.rPrDefault.rPr.sz`.
+    NOT inherited via style/Normal chain (style hierarchy not tested
+    here; defer to follow-up).
+  - Refined §15.1.1 formula:
+    `char_width_pt = docDefault.rPr.sz_val / 2 (= sz_pt)`
+    `effective_indent_pt = leftChars / 100.0 * char_width_pt`
+  - Applies to all *Chars attributes (leftChars/rightChars/
+    firstLineChars/hangingChars).
+  - Implication for Oxi: parser must read docDefault.rPr.sz when
+    computing chars-based indents; current Oxi behavior likely uses
+    pPr/run.rPr.sz which is incorrect (need to verify).
+- code change: NONE. Audit needed of Oxi's `*Chars` indent computation
+  in `crates/oxidocs-core/src/layout/mod.rs`.
+
 ## 2026-05-02 — oxi-1 — confirmed — §17 Shape Positioning expansion: positionV/posOffset formula + RelativeVerticalPosition enum mapping + baseline survey
 
 - context: §17 had only 2 minimal sub-sections (§17.1 reference table,
