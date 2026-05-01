@@ -5001,6 +5001,11 @@ impl LayoutEngine {
         let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
         let mut compress_used = false; // true after compression-based overflow absorption
         let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
+        // 2026-05-01 R14: track total yakumono compression saved on current line.
+        // Used as overflow tolerance budget — Word allows justified lines to
+        // overflow wrap_width by up to the compression already realized
+        // (re-compress on render). Resets on every line push.
+        let mut line_yakumono_saved_tw: i32 = 0;
 
         // Word buffer spans across fragment boundaries so that a single word
         // split across two runs (e.g. "te" in Run1 + "st" in Run2) is kept
@@ -5027,7 +5032,7 @@ impl LayoutEngine {
                     let word_width_tw = pt_to_tw(word_width);
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
                         current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
@@ -5298,7 +5303,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -5423,10 +5428,25 @@ impl LayoutEngine {
                     // 18 over-wraps cluster in 10-50tw and are gated by
                     // has_pair so d77a over-wraps (has_pair=false) remain
                     // unaffected.
-                    let absorb = if overflow_tw > 0 && overflow_tw <= 50
+                    // 2026-05-01 R16: yakumono-budget absorb fires ONLY for list
+                    // paragraphs (list_marker present). Pin: d77a58485f16 p10 p5
+                    // (List Paragraph + numId=1) — Word absorbs 1 char of overflow.
+                    // 3a4f9fbe1a83 p42 p2 (plain hanging indent, no list_marker) —
+                    // Word does NOT absorb. Same yakumono-savings condition, opposite
+                    // Word behavior. The differentiator is list_marker presence.
+                    // Capped at 1 fullwidth char advance to prevent runaway absorb on
+                    // lines with many yakumono (R14 8-yakumono case = -0.11 SSIM).
+                    let one_char_tw = pt_to_tw(font_size);
+                    let absorb_yakumono_budget = para_style.list_marker.is_some()
+                        && self.compress_punctuation
+                        && self.compat_mode >= 15
+                        && line_yakumono_saved_tw > 0
+                        && overflow_tw > 0
+                        && overflow_tw <= line_yakumono_saved_tw.min(one_char_tw);
+                    let absorb = absorb_yakumono_budget || (if overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
                         && (has_pair || has_linestart_narrow_yakumono)
-                    { true } else { false };
+                    { true } else { false });
                     let _ = line_compress_count;
                     if absorb {
                         compress_used = true;
@@ -5457,7 +5477,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
                             continue;
                         }
 
@@ -5482,7 +5502,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
@@ -5504,6 +5524,7 @@ impl LayoutEngine {
                     current_width += char_width;
                     current_width_tw += pt_to_tw(char_width);
                     current_grid_extra += char_grid_extra;
+                    line_yakumono_saved_tw += pt_to_tw(yakumono_saved);
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -5549,7 +5570,7 @@ impl LayoutEngine {
             let wft = word_field_type.take();
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
