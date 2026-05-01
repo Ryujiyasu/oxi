@@ -921,6 +921,149 @@ Format:
 
 ---
 
+## 2026-05-02 — oxi-3 — confirmed — R17 gate per-char validation: Type A/B/C in losers, Mech 2 in "winners"
+
+**Direct measurement of user's 4 target paragraphs** via per-char
+`Information(5)` advances:
+
+| Doc | User label | Word compression observed |
+|---|---|---|
+| ed025 p1 para 13 | big_LOSER | `）（` (B→A) and `））` (B→B) → 5.5pt half ✓ FINAL RULE Type A/B/C |
+| 7f272a p1 para 13 | big_LOSER | Mech 2 distributed: yakumono → 8.0pt mid-line |
+| 683f p2 para 30 | WINNER | All `、` followed by CJK → 10.5pt full (no compress) ✓ FINAL RULE |
+| 3a4f p23 para 475 | WINNER (?) | Word compresses `、` → 8.0/7.5pt (Mech 2) — refutes user's "Word は compress しない" expectation |
+
+### Key conclusions
+
+1. **Type A/B/C FINAL RULE is the proper Mech 1 spec.** ed025 follows
+   it exactly. R17's list_marker gate suppresses Mech 1 in plain
+   paragraphs → big_loser SSIM regressions.
+2. **Mech 2 fires without Mech 1 anchor.** Earlier finding REFUTED
+   — 7f272a + 3a4f have only B→CJK chars yet Mech 2 fires.
+3. **R17 list_marker gate is wrong in 3/4 cases.** Correctly matches
+   Word only when neither Mech 1 nor Mech 2 triggers (683f).
+4. **Replacement**: kern-gated FINAL RULE (Mech 1) + Mech 2 reactive
+   absorb (already in Phase 2). R17 `dc7104c` should be removed.
+
+### Source data
+
+- `tools/metrics/measure_r17_yakumono_per_char_advances.py`
+- `pipeline_data/r17_per_char_advances.log`
+- `pipeline_data/r17_per_char_advances_2026-05-02.json`
+
+Memory: `session_51_r17_gate_per_char_validation.md`
+
+---
+
+## 2026-05-02 — oxi-3 — confirmed — Yakumono compression has TWO mechanisms; Mech 1 trigger PINPOINTED to `<w:kern>` in styles.xml docDefaults
+
+**TL;DR for master**: 2026-04-18 architectural-validation entry below is correct
+about Mech 2 (line-wrap heuristic / reactive). But it MISSED a separate
+always-on adjacency mechanism (Mech 1) that fires per Type A/B/C rule whenever
+`<w:kern w:val="N"/>` (N≥1) is in `word/styles.xml`'s docDefaults rPr.
+The 2026-04-18 Tier 2 cascade test ("rPrDefault rFonts/lang cascade
+FALSIFIED — no combination triggers") didn't include `w:kern` as a tested
+property. R17's list_marker gate (`dc7104c`) is a workaround; the proper
+gate is doc-level kern.
+
+### Mechanism 1 — adjacency rule (always-on, kern-gated)
+- context: 4 fonts × 2 settings × 14 probes = 112 sample pairs measured on
+  isolated 3-4 char paragraphs (no overflow, no justify)
+- hypothesis: Type A/B/C compression rules fire per FINAL RULE table
+  regardless of layout pressure
+- evidence: ALL 14 probes match the spec §4.7 FINAL RULE table for ＭＳ
+  明朝/ゴシック/Yu Mincho 10.5pt; doNotCompress and compressPunctuation
+  produce IDENTICAL advances (56 sample pairs, 100% match)
+- 5-step bisection (clone-and-replace → swap-files → inverse-swap →
+  styles-bisect → element-bisect) → `<w:kern w:val="2"/>` ALONE
+  is necessary and sufficient
+  - V_only_kern (kern as sole non-default prop): 」=5.5pt (compressed) ✓
+  - V_no_kern (every other prop except kern): 」=10.5pt (full) ✓
+  - All my prior OOXML-direct tests lacked kern → no compression observed
+- outcome: Mech 1 is gated by docDefaults `<w:kern>`, NOT by neighbor
+  type alone. Per-pair Type A/B/C rule applies on top of the kern gate.
+- artifacts: `tools/metrics/measure_yakumono_setting_contrast.py`,
+  `bisect_yakumono_clone_com.py`, `bisect_yakumono_swap_files.py`,
+  `bisect_yakumono_inverse_swap.py`, `bisect_styles_xml_trigger.py`
+
+### Mechanism 2 — justify-time slack distribution (line-wrap heuristic)
+- context: jc=both narrow content with 27-char probe `漢漢漢「漢漢漢」漢漢漢「...」漢漢漢、漢漢漢、漢漢漢`
+- hypothesis: separate from Mech 1, Word redistributes overflow slack
+  across yakumono on the line, also gated by kern
+- evidence:
+  - cw=320 (slack=4pt) jc=both: 6 yakumono compressed by 0.5-1.0pt
+    each, total reduction = exactly 4pt ✓
+  - cw=290 (slack=10pt) jc=both: 6 yakumono compressed by 1.5-2.0pt
+    each, total = exactly 10pt ✓
+  - cw=300: drops 2 chars instead of compressing (per-char cap ≈ 2pt)
+- algorithm: `distribute slack in 0.5pt steps to total = slack
+  exactly; cap per-char compression at ~2pt (≈17%); else drop a char`
+- outcome: this IS the master's 2026-04-18 line-wrap heuristic finding,
+  fully characterized. Confirms architectural-validation conclusion that
+  Phase 2 reactive absorb is correct. NEW: per-char ≤2pt cap and
+  drop-vs-compress threshold explain the non-monotonic width dependency.
+- artifacts: `tools/metrics/measure_yakumono_justify_interaction.py`,
+  `measure_mechanism2_slack_distribution.py`
+
+### NEW orthogonal findings
+- **em-dash (U+2014) classification is FONT-DEPENDENT** (8 fonts × 4 sizes):
+  ＭＳ 明朝 / ＭＳ ゴシック treat as Type B (compresses). Yu Mincho /
+  Yu Gothic / Meiryo / HGゴシックE / HGS明朝E / HG明朝B treat as Type C
+  (no compression). Hbar (U+2015) is universal Type C.
+  Spec §4.7 line 640's font-agnostic claim is WRONG.
+- **§4.6.2 (kana→Latin alphanumeric autoSpaceDE) is NOT gated by kern**:
+  fires identically with kern on/off (probe `はMでs`: は=13.0, M=8.0
+  with both kern states).
+- **§4.6.3 (CJK-adjacent space widening) does NOT EXIST in current Word**:
+  7 OOXML rPr variants + 6 multi-run + jfmb on-disk vs runtime-saved
+  comparison + kern on/off — ALL show space=3.0-3.5pt natural Latin
+  width. Spec §4.6.3 is REFUTED. The c45c1fc fix should be reverted.
+
+### kern semantics finalized 2026-05-02 evening
+
+`<w:kern w:val="N"/>` per ECMA-376 §17.3.2.18 is "Font Kerning Threshold"
+= minimum font size in **half-points** at which kerning applies.
+
+| val | Behavior at 10.5pt (21 hp) |
+|---|---|
+| 0 (or absent) | NO compression |
+| 1, 2 | COMPRESSION (21 ≥ val) |
+| 100 (=50pt threshold) | NO compression (21 < 100) |
+| ≥21 | COMPRESSION when font_size_hp ≥ val |
+
+Resolution priority: run rPr > paragraph style rPr > docDefaults rPr.
+pPr/rPr/kern affects only the paragraph mark glyph, NOT runs.
+
+Both Mech 1 (Type A/B/C) AND Mech 2 (justify slack distribution) gated
+by per-run kern resolution. Mech 2 additionally requires at least one
+Mech 1 trigger on the line (e.g., a `」（` pair) before it activates
+to compress non-trigger chars (e.g., the `（` at A→CJK).
+
+### Recommended next actions
+1. **Implement per-run kern resolution** in Oxi parser:
+   ```rust
+   let kern_hp = run_rpr.kern.or(style.kern).or(doc_defaults.kern).unwrap_or(0);
+   let yakumono_enabled = kern_hp > 0 && font_size_half_pt >= kern_hp;
+   ```
+   Subsumes R17 list_marker gate (dc7104c) entirely.
+2. **Update spec §4.7**: replace PROVISIONAL marker with the kern-based
+   gate. Note Mech 1 vs Mech 2 distinction with Mech 2's anchor requirement.
+3. **Update spec §4.7 line 640**: em-dash classification is font-dependent.
+4. **Update spec §4.6.3**: REFUTED — CJK-adjacent space widening
+   doesn't exist in current Word.
+5. **Mech 2 algorithm in Oxi Phase 2**: refine reactive absorb to use
+   the 0.5pt-step slack distribution + 2pt per-char cap.
+
+Memory entries added today: `session_51_yakumono_kern_trigger.md`,
+`session_51_yakumono_4font_validation.md`,
+`session_51_yakumono_justify_two_mechanisms.md`,
+`session_51_mechanism2_slack_algorithm.md`,
+`session_51_emdash_font_dependency.md`,
+`session_51_easia_hint_attribute.md`,
+`session_51_chargrid_halfwidth_data.md`,
+`session_51_tall_header_pushdown.md`.
+
+---
 ## 2026-04-25 — oxi-2 — confirmed — R-10 paragraph_mark_revision path also test-covered
 
 - mirror of the ppr_change test landed: `r10_fires_for_paragraph_mark_revision` mutates fixture_05's IR to install a synthetic `paragraph_mark_revision = TrackedChange { change_type: "insert", author: "Alice Reviewer", … }` while clearing every other revision pointer. Asserts ≥1 #424242 BoxRect emerges.
