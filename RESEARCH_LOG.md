@@ -797,6 +797,40 @@ Format:
 
 ---
 
+## 2026-05-02 — oxi-3 — confirmed — R17 gate per-char validation: Type A/B/C in losers, Mech 2 in "winners"
+
+**Direct measurement of user's 4 target paragraphs** via per-char
+`Information(5)` advances:
+
+| Doc | User label | Word compression observed |
+|---|---|---|
+| ed025 p1 para 13 | big_LOSER | `）（` (B→A) and `））` (B→B) → 5.5pt half ✓ FINAL RULE Type A/B/C |
+| 7f272a p1 para 13 | big_LOSER | Mech 2 distributed: yakumono → 8.0pt mid-line |
+| 683f p2 para 30 | WINNER | All `、` followed by CJK → 10.5pt full (no compress) ✓ FINAL RULE |
+| 3a4f p23 para 475 | WINNER (?) | Word compresses `、` → 8.0/7.5pt (Mech 2) — refutes user's "Word は compress しない" expectation |
+
+### Key conclusions
+
+1. **Type A/B/C FINAL RULE is the proper Mech 1 spec.** ed025 follows
+   it exactly. R17's list_marker gate suppresses Mech 1 in plain
+   paragraphs → big_loser SSIM regressions.
+2. **Mech 2 fires without Mech 1 anchor.** Earlier finding REFUTED
+   — 7f272a + 3a4f have only B→CJK chars yet Mech 2 fires.
+3. **R17 list_marker gate is wrong in 3/4 cases.** Correctly matches
+   Word only when neither Mech 1 nor Mech 2 triggers (683f).
+4. **Replacement**: kern-gated FINAL RULE (Mech 1) + Mech 2 reactive
+   absorb (already in Phase 2). R17 `dc7104c` should be removed.
+
+### Source data
+
+- `tools/metrics/measure_r17_yakumono_per_char_advances.py`
+- `pipeline_data/r17_per_char_advances.log`
+- `pipeline_data/r17_per_char_advances_2026-05-02.json`
+
+Memory: `session_51_r17_gate_per_char_validation.md`
+
+---
+
 ## 2026-05-02 — oxi-3 — confirmed — Yakumono compression has TWO mechanisms; Mech 1 trigger PINPOINTED to `<w:kern>` in styles.xml docDefaults
 
 **TL;DR for master**: 2026-04-18 architectural-validation entry below is correct
