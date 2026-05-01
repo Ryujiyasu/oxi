@@ -13,6 +13,48 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — §9 Footnote line-height closed-form: max(17.5, max(size + 5.5, natural_lh)) for CJK 83/64
+- context: prior §9.1 footnote investigation (memory `spec_footnote_lh_2026_05_02.md`)
+  observed size-dependent "extra" decreasing from 1.64pt (13pt) to 0.16pt (18pt) but
+  didn't pin closed form.
+- hypothesis: extras reflect a clean `lh = font_size + 5.5pt` for CJK 83/64 family
+  in the "above floor" regime (i.e., when natural_lh < size+5.5).
+- evidence:
+  - Phase 3 sweep: 30 records covering MS Mincho {11.5, 12.5, 15, 20, 24}pt +
+    Calibri {12, 14, 18}pt + Yu Mincho {11, 14}pt
+  - Data: tools/metrics/output/footnote_lh_sweep_phase3.json
+  - Sweep: tools/metrics/measure_footnote_lh_sweep.py (phase 3 variants)
+  - All MS Mincho 12.5/13/14/15/16/18pt match `lh = size + 5.5` exactly
+    (12.5→18.0, 13→18.5, 14→19.5, 15→20.5, 16→21.5, 18→23.5)
+  - MS Mincho 20pt: natural=25.94 > size+5.5=25.5 → measured 26.0 ≈ natural ✓
+  - MS Mincho 24pt: natural=31.13 > size+5.5=29.5 → measured 31.0 ≈ natural ✓
+  - Yu Mincho 11pt: natural=18.5 > floor → measured 18.5 ✓ (no boost; natural-only)
+  - Yu Mincho 14pt: natural=23.59 → measured 23.5 ✓
+  - Calibri 14pt: measured 18.5, BUT size+5.5=19.5. natural=17.25 + 1.25 extra.
+    Linear fit Calibri extra = 5.625 - 0.3125 × size. NOT same as MS Mincho's
+    size+5.5 boost.
+  - Calibri 18pt: natural=22.0 → measured 22.0 ✓ (Calibri extra ≈ 0 here)
+- outcome:
+  1. **CJK 83/64 family (MS Mincho/Gothic UPM=256) closed-form**:
+     `lh_footnote = max(17.5pt, max(font_size + 5.5pt, natural_lh))` snapped to 0.5pt.
+     - size 12-19pt: size+5.5 wins (lh = size + 5.5)
+     - size ≥ 20pt: natural wins (lh ≈ 1.297 × size, snapped)
+     - size ≤ 11.5pt: floor 17.5 wins
+  2. **Latin (Calibri)**: natural-based with small per-font extra (5.625 - 0.3125×size
+     for Calibri). Different coefficients per Latin font likely. Needs more data
+     (Calibri 13/15/16pt) for full closed-form.
+  3. **Large-glyph CJK (Yu Mincho/Meiryo)**: natural_lh dominates always
+     (natural >> floor and natural >> size+5.5).
+  4. **Why "size + 5.5" is special for CJK 83/64**: natural_lh = 1.297 × size;
+     measured extra = 5.5 - 0.297 × size. Sum: lh = 1.297×size + 5.5 - 0.297×size
+     = size + 5.5. The CJK 83/64 ratio + footnote extra coefficient happen to
+     produce a clean linear formula.
+- next: (a) Calibri 13/15/16pt to verify Latin extra linearity; (b) cross-language
+  verification (English Word); (c) footnote with grid mode (does docGrid affect
+  footnote area?).
+- references: memory/spec_footnote_size_extra_2026_05_02.md (full memo with
+  recommended spec text).
+
 ## 2026-05-02 — oxi-4 — confirmed — §9 Footnote 17.5pt floor is HARDCODED in renderer (not from style)
 - context: prior §9.1 entry left open question "what's the origin of the 17.5pt floor?".
   Hypothesis was hidden default FootnoteText style with `<w:spacing line="350" atLeast/>`

@@ -18,7 +18,7 @@ import win32com.client
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT = Path(__file__).with_name("output") / "footnote_lh_sweep_phase2.json"
+OUT = Path(__file__).with_name("output") / "footnote_lh_sweep_phase3.json"
 TMP_DIR = Path("pipeline_data") / "_footnote_lh_tmp"
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -30,19 +30,21 @@ DOC_RELS = '<?xml version="1.0"?>\n<Relationships xmlns="http://schemas.openxmlf
 BODY_FONT = "ＭＳ 明朝"
 BODY_SZ = 21  # 10.5pt half
 
-# Phase 2: pin down 14pt 19.5pt rule + identify floor
+# Phase 3: verify lh = max(17.5, size + 5.5) formula
 FN_VARIANTS = [
-    # 14pt with explicit rules — does default == auto here?
-    {"label": "MSMin_14_line240auto", "fn_font": "ＭＳ 明朝", "fn_sz": 28, "fn_spacing": 'w:line="240" w:lineRule="auto"'},
-    {"label": "MSMin_14_line360at",   "fn_font": "ＭＳ 明朝", "fn_sz": 28, "fn_spacing": 'w:line="360" w:lineRule="atLeast"'},
-    {"label": "MSMin_14_line240at",   "fn_font": "ＭＳ 明朝", "fn_sz": 28, "fn_spacing": 'w:line="240" w:lineRule="atLeast"'},
-    # Test if default IS line=240 auto — probe with explicit small auto value
-    {"label": "MSMin_14_line200auto", "fn_font": "ＭＳ 明朝", "fn_sz": 28, "fn_spacing": 'w:line="200" w:lineRule="auto"'},
-    # Sweep around 14pt to pin floor
-    {"label": "MSMin_12_default",    "fn_font": "ＭＳ 明朝", "fn_sz": 24, "fn_spacing": None},
-    {"label": "MSMin_13_default",    "fn_font": "ＭＳ 明朝", "fn_sz": 26, "fn_spacing": None},
-    {"label": "MSMin_16_default",    "fn_font": "ＭＳ 明朝", "fn_sz": 32, "fn_spacing": None},
-    {"label": "MSMin_18_default",    "fn_font": "ＭＳ 明朝", "fn_sz": 36, "fn_spacing": None},
+    # Boundary tests: size 11/11.5/12/12.5 cross the floor
+    {"label": "MSMin_11.5_default",   "fn_font": "ＭＳ 明朝", "fn_sz": 23, "fn_spacing": None},  # 11.5+5.5=17 → floor 17.5
+    {"label": "MSMin_12.5_default",   "fn_font": "ＭＳ 明朝", "fn_sz": 25, "fn_spacing": None},  # 12.5+5.5=18 (above floor)
+    {"label": "MSMin_15_default",     "fn_font": "ＭＳ 明朝", "fn_sz": 30, "fn_spacing": None},  # 15+5.5=20.5
+    {"label": "MSMin_20_default",     "fn_font": "ＭＳ 明朝", "fn_sz": 40, "fn_spacing": None},  # 20+5.5=25.5
+    {"label": "MSMin_24_default",     "fn_font": "ＭＳ 明朝", "fn_sz": 48, "fn_spacing": None},  # 24+5.5=29.5
+    # Latin generalization tests
+    {"label": "Calibri_14_default",   "fn_font": "Calibri",  "fn_sz": 28, "fn_spacing": None},  # 14+5.5=19.5
+    {"label": "Calibri_18_default",   "fn_font": "Calibri",  "fn_sz": 36, "fn_spacing": None},  # 18+5.5=23.5
+    {"label": "Calibri_12_default",   "fn_font": "Calibri",  "fn_sz": 24, "fn_spacing": None},  # 12+5.5=17.5 floor
+    # Yu Mincho — has natural_lh = 1.685 × size, much larger than CJK 83/64
+    {"label": "YuMincho_11_default",  "fn_font": "Yu Mincho", "fn_sz": 22, "fn_spacing": None}, # natural=18.5, vs size+5.5=16.5
+    {"label": "YuMincho_14_default",  "fn_font": "Yu Mincho", "fn_sz": 28, "fn_spacing": None}, # natural=23.6, vs 19.5
 ]
 
 
