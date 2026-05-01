@@ -13,6 +13,77 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — vertAnchor=text floating-table tblpY behavior + parser-order quirk
+
+- context: §18 Floating Tables (`<w:tblpPr>`) was hypothesis-only, derived
+  from a single doc (2ea81a) with cross-table cross-verification but no
+  multi-doc convergence. §18.1 claimed slope=1.0 for `table_top` vs
+  `tblpY`; §18.2 claimed `+28.5pt = 2 line-heights` Y0 intercept based
+  on tbl#3.
+- hypothesis: (a) slope=1.0 is universal across pre-content kinds,
+  (b) Y0 intercept = `anchor_top + 1 line_height` (not 2), (c) prior
+  TP1-6 minimal repros (existing) showing slope=0 are caused by some
+  structural difference vs 2ea81a tbl#2.
+- evidence:
+  - `tools/metrics/build_ft_slope_repro.py` + `measure_ft_slope.py`:
+    25 minimal repros, 5 PreKinds (1para / 3para / 1empty / inline /
+    inline_p) × 5 tblpY values (0, 50, 600, 2000, 4000 twips). All 25
+    show clean slope=1.0. Y0 intercept = `anchor_top + ~14pt` for
+    body-para anchor (= line_height of MS Mincho 10.5pt single-line
+    auto-spacing). For empty-para anchor +18.5pt; for inline-cell
+    anchor +15.0pt.
+  - `tools/metrics/measure_tp_resweep.py`: re-measured TP1-6 (existing).
+    Reproduced prior slope=0 (TP1=71.0/TP2=71.0/TP3=71.0/TP4=98.0/
+    TP5=98.0/TP6=98.0). Confirms TP repros really do show slope=0.
+  - `tools/metrics/build_compat_test.py` + `measure_compat_test.py`:
+    10 minimal repros across compatMode ∈ {none, 11, 12, 14, 15} ×
+    tblpY ∈ {50, 600}. ALL show slope=1.0. **compatMode hypothesis
+    REJECTED** — that is not the cause.
+  - `tools/metrics/build_tp3_mutate.py` + `measure_tp3_mutate.py`:
+    18 variants from TP3 with single-axis mutations:
+    - `M_baseline / M_tblWdxa / M_noUseFE / M_noNumbering` → slope=0
+    - `M_noStyles / M_noTblStyle` → slope=1
+    Removing the `<w:tblStyle w:val="TableGrid"/>` reference is the
+    necessary and sufficient mutation to flip slope.
+  - `tools/metrics/build_order_test.py` + `measure_order_test.py`:
+    9 variants from TP3:
+    - `O_baseline` (tblpPr → tblStyle in source XML) → slope=0
+    - `O_swapped` (tblStyle → tblpPr, ECMA-376 §17.4.79 CT_TblPrBase
+      sequence) → slope=1
+    - `O_noStyle` (tblStyle removed) → slope=1
+    The single XML-order swap (no other change) flips slope from 0 to 1.
+  - Cross-check: 2ea81a tbl#3 has BOTH `<w:tblStyle w:val="aa"/>` AND
+    `<w:tblpPr>`, and is observed at slope=1.0. Its tblPr child order
+    is `tblStyle → tblpPr` (correct ECMA order). TP3's tblPr order is
+    `tblpPr → tblStyle` (incorrect). Same property, opposite order,
+    opposite slope.
+- outcome:
+  - §18.1 slope=1.0 finding is RECONFIRMED universally for ECMA-compliant
+    tblPr ordering, across 5 distinct PreKinds.
+  - §18.2 "+28.5pt = 2 line heights" hypothesis is LOCALLY REFUTED. The
+    universal Y0 intercept is `anchor_top + 1 line_height`. The 28.5pt
+    observation in 2ea81a tbl#3 is a separate phenomenon (likely
+    intervening-empty-para counted twice, or floating-table reserved
+    region — needs follow-up).
+  - **NEW §18.8 (CRITICAL undocumented quirk)**: Word's parser silently
+    drops `<w:tblpPr>` if its child-element ordering inside `<w:tblPr>`
+    violates ECMA-376 §17.4.79 CT_TblPrBase sequence. When dropped, the
+    table renders as inline at `anchor_bottom`. Single XML-order swap
+    is sufficient to flip behavior.
+  - Baseline survey: `tools/metrics/scan_baseline_tblpPr.py`-style scan
+    on 184 baseline docs finds 0 docs with order violations (375 total
+    `<w:tbl>`, 16 floating). So §18.8 quirk does NOT directly affect
+    baseline SSIM. Real-world Word-generated docs respect ECMA order;
+    only manually-authored repros (TP1-6) had the violation.
+  - **Implication for Oxi parser**: ooxml.rs currently honors `<w:tblpPr>`
+    regardless of its position within `<w:tblPr>`. To match Word strictly,
+    Oxi should drop tblpPr when it precedes tblStyle. Pre-existing impact
+    is zero on baseline (no order-violating docs), but defensively
+    important for hand-edited or non-Word-generated source files.
+  - All COM data: `pipeline_data/{ft_slope,tp_resweep,compat_test,
+    tp3_mutate,order_test}_measurements.json`. Spec updated with new
+    §18.6 / §18.7 / §18.8 / §18.9 sections.
+
 ## 2026-04-27 — oxi-main — partial — yakumono closing-punct compression fires regardless of useFELayout / kern (gate hypothesis narrowed)
 
 - context: post-loop-termination triage (3 deep dives across `adjacency_matrix_widths.json`,
