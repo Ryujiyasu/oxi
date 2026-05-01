@@ -13,6 +13,39 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — R31 narrow gate × kern cross-tab: 40/41 candidates have kern → R31 redundant under R32
+- context: User question — "R31 で SSIM 変化した 18 docs (3a4f_p64 +0.032 含む)
+  について kern presence 確認。あり → R32 kern gate で同 paragraph fire → R31
+  narrow path は冗長 → R32 ship 時削除可。なし → 残す価値あり。"
+- hypothesis: R31's narrow gate (chars-indent + cross-run pair + compressPunctuation)
+  is essentially a subset of R32's kern gate. Almost all R31-fire candidates have
+  effective kern.
+- evidence:
+  - Scan: tools/metrics/scan_r31_gate_candidates.py over 184-doc baseline
+  - Data: pipeline_data/r31_gate_candidates.json
+  - Cross-tab vs pipeline_data/kern_audit_2026-05-02.json
+  - **41 docs match R31's narrow gate conditions**
+    (chars-indent paragraph AND cross-<w:r> yakumono pair AND compressPunctuation)
+  - **40/41 (97.6%) have effective kern** (37 via docDefaults + 3 via Normal style)
+  - 1 outlier (9a8e8ddab85b_order_06-1.docx) has R31 conditions but NO effective kern
+  - Specifically: 3a4f9fbe1a83 (R31 winner p64 +0.032 + minor loser p42 -0.008)
+    has kern via Normal style val=2 → R32 will fire on both pages independently
+- outcome:
+  1. **R31 narrow path is essentially a subset of R32 kern gate**.
+  2. **3a4f_p64 (R31's only material winner +0.032) IS in the 40 with-kern set**.
+     R32 captures it independently. R31 not needed for this gain.
+  3. **17 minor-delta docs (|delta| ≤ 0.009) likely also in the 40-with-kern set**.
+     R32 will track or improve their micro-deltas.
+  4. **9a8e8ddab85b is R31's only no-kern fire** = potential false positive (Word
+     doesn't compress without kern, R31 does). R31 deletion CORRECTS this case.
+  5. **R32 ship-time R31 deletion is safe** — net impact predicted ≥ R31's
+     +0.000058, likely larger since R32 also catches R17 big_losers (7f272a, ed025).
+- next: pre-baseline measurement before R32 ship to verify mechanical prediction.
+  Specifically watch 9a8e8ddab85b for SSIM lift from removing R31's false fire.
+- references: memory/investigation_r31_kern_cross_tab_2026_05_02.md (full analysis +
+  41-doc list with kern source). Builds on session_51_kern_audit_177docs.md and
+  session_50_r31_chars_indent_cross_run_gate.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — §9 Footnote line-height closed-form: max(17.5, max(size + 5.5, natural_lh)) for CJK 83/64
 - context: prior §9.1 footnote investigation (memory `spec_footnote_lh_2026_05_02.md`)
   observed size-dependent "extra" decreasing from 1.64pt (13pt) to 0.16pt (18pt) but
