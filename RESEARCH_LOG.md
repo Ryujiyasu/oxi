@@ -13,6 +13,61 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed (correction) — §13.5 trHeight: ECMA-376 hRule default is "atLeast", not "auto"
+
+- context: §13.5 Round 22 (2026-04-08) stated "ECMA-376 default for w:hRule
+  is 'auto', NOT 'atLeast'. When <w:trHeight w:val="..."/> appears WITHOUT
+  a w:hRule attribute, the value is a hint and Word ignores it at render
+  time, using content height only."
+- hypothesis: This claim is incorrect. ECMA-376 Part 1 CT_Height schema
+  defines `hRule` with `default="atLeast"`. Word should follow this, in
+  which case `<w:trHeight w:val="N"/>` without hRule renders as
+  `max(content, N)` — specified wins when N > content.
+- evidence: `tools/metrics/build_tr_hrule_default.py` + ad-hoc HR_* repro
+  (5 variants, all with 1-line MS Mincho 10.5pt content ~14pt + 60pt
+  specified to maximize discrimination):
+  - `HR_missing` (`<w:trHeight w:val="1200"/>`, no hRule):
+    Word reports HeightRule=1 (atLeast), renders 60.5pt
+  - `HR_explicit_auto` (`hRule="auto"`):
+    Word reports HeightRule=0 (auto), renders 14.0pt (content)
+  - `HR_explicit_atLeast`: HeightRule=1, renders 60.5pt
+  - `HR_explicit_exact`:   HeightRule=2, renders 60.0pt
+  - `HR_no_trHeight` (no trHeight element):
+    HeightRule=0, renders 14.0pt
+  Conclusion: `<w:trHeight w:val="N"/>` no hRule → atLeast (specified wins
+  when N > content). Round 22's contrary statement was a misreading of
+  the schema or a measurement-condition artifact (their tests with
+  content > specified produced identical auto/atLeast results, blind to
+  the discrimination case spec > content).
+- evidence #2: 90-variant `TR_*` matrix
+  (`tools/metrics/{build,measure}_tr_height.py`, rule × spec_pt × content
+  lines × docGrid linePitch). Across 47 successful measurements (Word
+  COM session instability caused 43 RPC failures on the larger batch),
+  the post-table paragraph Y minus table-top Y proxy for rendered row
+  height confirms `atLeast = max(content, specified) + ~1.5pt border`.
+  Cell content line height ≈ font natural height (MS Mincho 10.5pt =
+  13.65pt) with slight (≤1pt) sensitivity to docGrid linePitch.
+- outcome:
+  - §13.5 corrected (this commit / next branch sync to main): default
+    hRule is `"atLeast"`. Round 22's "auto default" claim was incorrect.
+  - §19.4 (was §18.4) "Word does NOT grid-snap when trHeight present"
+    holds: rendered row in atLeast mode is `max(content_natural, spec) +
+    border`, NOT a grid-snapped value. Oxi divergence at
+    `crates/oxidocs-core/src/layout/mod.rs:4308` (grid-snapping content
+    to ceil(content/pitch)*pitch then taking max with trHeight) is
+    incorrect for atLeast/exact rules with trHeight present.
+  - Implication: any baseline doc using `<w:trHeight w:val="N"/>` without
+    explicit `hRule="auto"` is being rendered too tall by Oxi. This is
+    the structural cause of 2ea81a tbl#1's +35pt over-pack.
+  - Raw data: `pipeline_data/tr_height_measurements.json` + ad-hoc HR_*
+    output. Tools: `build_tr_height_matrix.py` / `measure_tr_height.py`
+    + `build_tr_hrule_default.py`.
+- code change: NONE (pure investigation). Oxi's
+  `crates/oxidocs-core/src/parser/ooxml.rs` trHeight parser should default
+  hRule to "atLeast" when the attribute is absent (matches Word). Layout
+  at `mod.rs:4308` should NOT grid-snap content height when trHeight is
+  set (atLeast or exact), per §19.4 / §13.5 corrected.
+
 ## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly explained: anchor empty para's pPr-rPr font
 
 - context: Spec §19.7 / §18.10 (this branch). Prior round 1 (top entry below)
