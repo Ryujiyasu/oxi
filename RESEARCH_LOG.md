@@ -13,6 +13,266 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §17 Shape Positioning expansion: positionV/posOffset formula + RelativeVerticalPosition enum mapping + baseline survey
+
+- context: §17 had only 2 minimal sub-sections (§17.1 reference table,
+  §17.2 wrap behavior) and no formula for positionV with posOffset, despite
+  shapes being heavily used in 18/184 baseline docs (177 anchors total).
+  Master had not investigated this area.
+- hypothesis: For `<wp:positionV relativeFrom="X"><wp:posOffset>N</wp:posOffset>`,
+  Shape.Top (pt, COM) = N / 12700 (linear), and absolute_Y =
+  ref_origin(X) + Shape.Top.
+- evidence:
+  - `tools/metrics/scan_baseline_shape_positioning.py` survey: 100% of
+    baseline anchors (177/177) use `positionV relativeFrom="paragraph"`.
+    Plus column-anchored horizontal (155/177), wrapNone (172/177),
+    layoutInCell (172/177), allowOverlap (177/177).
+  - `tools/metrics/build_sp_position_v.py` + `measure_sp_position_v.py`:
+    12 SP_* variants — 3 anchor positions × 4 posOffset values
+    {0, +9pt, +53.2pt, **−50pt**}. ALL show Shape.Top = posOffset_emu /
+    12700 EXACTLY (residual = 0.00pt). absolute_Y = anchor_paragraph_top
+    + Shape.Top, also exact across all 12.
+  - `tools/metrics/build_sp_relative_from.py` + `measure_sp_relative_from.py`:
+    12 SR_* variants — 6 relativeFrom values
+    {paragraph, page, margin, line, topMargin, bottomMargin} × 2 posOffset
+    {0, +100pt}. Linear conversion confirmed for all 6 references. COM's
+    `Shape.RelativeVerticalPosition` integer enum mapping pinned:
+    margin=0, page=1, paragraph=2, line=3, topMargin=4, bottomMargin=5.
+- outcome:
+  - §17 spec extended with §17.3 (positionV/posOffset formula) and §17.4
+    (baseline distribution survey).
+  - Confirmed formula for the 100%-of-baseline case
+    (`relativeFrom="paragraph"`):
+    `absolute_Y_pt = anchor_paragraph_top_y + (posOffset_emu / 12700)`.
+  - Other relativeFrom values follow the same `ref_origin + offset`
+    template; ref_origin Y values per relativeFrom are well-defined per
+    ECMA-376 §17.3.3.18 ST_RelFromV.
+  - Implication for Oxi: shape Y positioning must (a) parse posOffset as
+    EMU, divide by 12700 for pt, and (b) for paragraph-anchored shapes,
+    add the anchor paragraph's top y. The 5 non-paragraph relativeFrom
+    cases (out of 177) need ref_origin computed differently but are
+    edge cases.
+- code change: NONE (pure investigation + measurement). Oxi's existing
+  shape parsing/rendering should be reviewed against this rule;
+  particularly important for 459f, 2ea81a, 3a4f9f which contain shapes
+  on bottom-N-floor docs.
+
+## 2026-05-02 — oxi-4 — refuted — Spec §9.1 "Footnote LineSpacing 12pt Single"
+- context: spec §9.1 line 1141 claims footnote default "LineSpacing: 12pt (Single)".
+  Existing footnote_separator.json data showed inter-footnote lh = 17.5pt for
+  MS Mincho 10.5pt — contradicts spec.
+- hypothesis: footnote area applies a hidden floor (≥17.5pt) that overrides the
+  per-paragraph lineSpacing rule when the rule's value is below the floor.
+- evidence:
+  - 31 records: MS Mincho {9, 10.5, 12, 13, 14, 16, 18}pt + Calibri {10, 11}pt ×
+    n_footnotes ∈ {1, 3, 5} × 6 explicit lineRule cases
+  - Data: tools/metrics/output/footnote_lh_sweep.json (10 initial),
+          footnote_lh_sweep_phase2.json (24 follow-up)
+  - Sweep: tools/metrics/measure_footnote_lh_sweep.py
+  - Floor at 17.5pt for natural_lh < ~17pt (MS Mincho 9/10.5/12pt + Calibri 10/11pt)
+  - Above floor: lh = natural_lh + size-dependent extra (decreasing 1.64→0.16pt
+    as size grows 13→18pt)
+  - lineRule=auto with line=240 produces SAME lh as no spacing — Word silently
+    overrides
+  - lineRule=auto with line<240 (e.g., 200) produces below-natural lh (16-16.5pt
+    for 14pt MS Mincho — formula TBD)
+  - lineRule=exact precisely respected (lh = line/20 across all tested values)
+  - lineRule=atLeast respected only when line/20 > default (atLeast 360 = 18pt
+    < default 19.5pt → default wins; atLeast 240 = 12pt → default wins)
+- outcome:
+  1. **Spec §9.1 "12pt Single" REFUTED.** Default footnote lh has a floor at 17.5pt.
+  2. **Default formula**: `lh = max(17.5pt, natural_lh + extra(size))` where
+     extra is small and size-dependent. Possibly hidden default style with
+     `<w:spacing line="350" lineRule="atLeast"/>` accounts for floor.
+  3. **lineRule precedence**: Word respects `exact` always; respects `atLeast`
+     only when binding upward; silently ignores `auto` when line ≤ 240.
+  4. **Implication for Oxi**: `estimate_footnote_h` (`crates/oxidocs-core/src/layout/mod.rs`)
+     likely uses the spec's "12pt Single" assumption → reserves LESS area than Word.
+     Opposite to b837 issue (where Oxi reserves MORE) — suggests b837 has a
+     different code path bug.
+- next: (a) pin the exact "extra(size)" formula via more sizes (15, 17, 20, 24pt);
+  (b) verify floor is also 17.5pt with non-Japanese language; (c) measure
+  `<w:fnSep>` separator height directly; (d) measure `<w:continuationSeparator>`
+  for multi-page footnote behavior (related to b837 spill bug).
+- references: master's b837 footnote-area-spill blocker (RESEARCH_LOG line 1820),
+  see memory/spec_footnote_lh_2026_05_02.md for full data + recommended spec edit.
+
+## 2026-05-02 — oxi-4 — confirmed — §19.7 Y0 intercept residual explained via centering geometry
+- context: master's `## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly` left
+  "Residual 1–2.5pt unexplained — likely floating-table topFromText spacing constant
+  (default = 0 unless `topFromText`/`bottomFromText` set on tblpPr; needs separate
+  isolation)."
+- hypothesis: Y0 = (cell_h_anchor + centering_lh_anchor) / 2 + tblpY
+  (NOT line_height + topFromText; it's a geometric offset to anchor's cell BOTTOM)
+- evidence:
+  - Re-analyzed master's 7 K_* fe_match_repro variants in
+    `C:\Users\ryuji\oxi-1\pipeline_data\fe_match_measurements.json`
+  - Validation: tools/metrics/analyze_fe_y0_residual.py
+  - Results: 5/7 within 0.05pt (K_lp323, K_only_atLeast296, K_lp323_atLeast296_sz28
+    within 0.5pt residual); 3/7 at +0.55pt (K_baseline, K_only_sz28, K_tblWauto_only
+    — all `pitch=360tw=18.0pt + line=auto`); 1/7 at -0.53pt (K_lp323_atLeast296)
+  - All within 1pt; most within 0.5pt COM measurement quantization
+- outcome:
+  1. **Master's "residual 1-2.5pt" reduced to ~0.5-1pt**, attributable to pixel-snap
+     of integer-pt arithmetic, NOT to topFromText.
+  2. **Geometric basis**: floating table sits at anchor's grid cell BOTTOM (+ tblpY),
+     while anchor_y is the cell's first-character position (= cell_top + centering
+     offset above). Therefore Y0 = anchor_cell_h - centering_offset_above + tblpY
+     = (cell_h + centering_lh) / 2 + tblpY.
+  3. **Builds on §3.3 corrected formula** (centering_lh = round(max(natural_lh,
+     size × 83/64))). Master's "line_height" intuition was missing the centering
+     offset flip.
+  4. **topFromText hypothesis NOT needed** for the K_* observations (default=0).
+     A future sweep with non-zero topFromText would directly test linear addition
+     to Y0.
+- next: (a) test non-zero topFromText/bottomFromText and verify Y0 += topFromText;
+  (b) test inline-cell anchor case (master's slope=1 sweep showed +15.0pt Y0 for
+  inline anchor — should match (cell_h + centering_lh)/2 + cell_margin geometry);
+  (c) close the remaining +0.5pt jitter on integer-pt-pitch + auto cases.
+- references: master's §18.10 spec text in this branch, §19 follow-up planned for
+  main merge. Recommended spec edit text in
+  memory/spec_y0_intercept_explained_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed — §1.7 Mixed font run × grid centering extension
+- context: spec §1.7 says `lh = max(per-run lh)` after grid snap. Doesn't address how
+  the corrected §3.3 centering_lh formula interacts with mixed-font lines.
+- hypothesis: mixed-line centering_lh = max(per-run centering_lh)
+  where per-run centering_lh = round(max(natural_body_lh, size × 83/64))
+- evidence:
+  - 20 records: 10 combos × pitch ∈ {18, 24}pt
+  - Combos: Calibri-11/18, Yu Mincho-11, MS Mincho-10.5/18, Meiryo-11 × pure or mixed
+  - Data: tools/metrics/output/grid_mixed_font_centering.json
+  - Sweep: tools/metrics/measure_grid_mixed_font_centering.py
+  - Mixed Calibri-11 + Yu Mincho-11 → matches Yu Mincho-11 alone (centering=18 dominates)
+  - Mixed Calibri-18 + Yu Mincho-11 → matches Calibri-18 alone (centering=23 dominates
+    via universal 83/64 floor)
+  - Mixed MS Mincho-10.5 + Calibri-18 → matches Calibri-18 (centering=23)
+  - Mixed Meiryo-11 + Calibri-11 → matches Meiryo-11 (centering=21 dominates via
+    natural_lh > size × 83/64)
+- outcome:
+  1. **§1.7 extension**: mixed-line centering_lh = max(per-run centering_lh).
+  2. **Surprising consequence**: Latin fonts can dominate centering despite smaller
+     visual size (Calibri-18 size×83/64=23.34 > Yu Mincho-11 natural_lh=18.5).
+  3. **+0.5pt Latin residual** observed in mixed contexts — pure Calibri offset
+     produces 0.0pt error but mixed Calibri offset has +0.5pt extra. Likely Calibri
+     internal natural_lh = 22.5 (not 22) creating context-dependent half-pt rounding.
+- next: (a) test 3+ run mixes; (b) test mixed sizes within same font family;
+  (c) pin Calibri's exact internal natural_lh via dedicated single-font sub-pt sweep.
+
+## 2026-05-02 — oxi-4 — refuted — Spec §2.1 line 198 grid spacing snap claim
+- context: spec line 198 "sa=sb=10pt → 9.75pt due to grid snap" — long-standing
+  hand-wavy note. Wanted to pin exact behavior.
+- hypothesis tested: gap = line_h + sa (no grid snap on sa value)
+- evidence:
+  - 48 records: MS Mincho 10.5pt + Calibri 11pt × pitch ∈ {18, 24}pt × sa ∈
+    {0, 4, 5, 6, 7.5, 10, 10.5, 12, 15, 18, 20, 24}pt
+  - Data: tools/metrics/output/grid_paragraph_spacing.json
+  - Sweep: tools/metrics/measure_grid_paragraph_spacing.py
+  - All 48 records match `gap = pitch + sa` with 0.0pt error.
+  - sa=10pt at pitch=18 gives gap = 28pt EXACTLY. Spec predicted 27.75 → REFUTED.
+- outcome:
+  1. **Spec §2.1 line 198 REFUTED.** Modern Word does NOT grid-snap sa.
+  2. **sa is added directly** to the line gap as the exact pt value declared in
+     `<w:spacing w:after="...">`, regardless of whether grid mode is active.
+  3. **Latin/CJK identical** — Calibri and MS Mincho produce exact-same gaps for
+     same sa value.
+  4. **Paragraphs do NOT re-align to grid when sa>0** — only the first paragraph's
+     first line is grid-aligned (per §3.3). Subsequent paragraphs sit at line_h+sa
+     below previous, breaking grid alignment.
+  5. **Implication for Oxi**: if currently grid-snapping sa, that's a bug producing
+     cumulative Y drift in any document with non-zero paragraph spacing.
+- next: (a) verify sb-only and mixed sa/sb cases (§2.1 collapse rule unchanged?);
+  (b) verify with lineSpacingRule=exact/atLeast/multiple; (c) verify with
+  contextualSpacing=true (§2.3 should still zero out sa/sb).
+
+## 2026-05-02 — oxi-4 — confirmed — Grid centering lh formula (§3.3 / §13.4 correction)
+- context: Session 49 R109 hypothesized "text_y_offset uses font_size instead of natural
+  line height". Spec §3.3 says `inner_box = ceil(natural_lh)` for grid-centering inner box.
+- hypothesis: centering_lh = round(max(natural_body_lh, font_size × 83/64))
+  with universal 83/64 floor applied to ALL fonts (NOT just CJK whitelist)
+- evidence:
+  - 49 records: MS Mincho 10.5/14/18pt × Calibri 11/18pt × Yu Mincho/Meiryo 11pt ×
+    pitch ∈ {12,15,18,20,24,28,32}pt × 3 paras × 3 lines per para
+  - Data: tools/metrics/output/grid_per_line_y.json
+  - Sweep: tools/metrics/measure_grid_per_line_y.py
+  - Calibri 18pt at pitch=24 (single-cell): natural_lh=22, ceil=22 → predicted 1.0pt
+    offset; measured 0.5pt. Matches `round(max(22, 23.344))=23` formula.
+  - MS Mincho 18pt at pitch=24: natural_lh=23.344, ceil=24 → predicted 0.0pt; measured 0.5pt.
+    Matches `round(max(23.344, 23.344))=23`.
+  - Yu Mincho 11pt body lh=18.5 > 14.27 (size×83/64): centering uses 18 (font-specific).
+  - Meiryo 11pt body lh=21.5 > 14.27: centering uses 21 (font-specific).
+- outcome:
+  1. **Spec §3.3 inner_box formula correction**: `ceil(natural_lh)` → `round(max(natural_lh,
+     size × 83/64))`. Old formula coincidentally correct for MS Mincho/Gothic UPM=256
+     (where natural_lh = size × 83/64 exactly) but WRONG for Latin large-size and
+     CJK UPM=2048 with extra typo metrics.
+  2. **Universal 83/64 floor finding**: the 83/64 multiplier is applied to ALL fonts in
+     grid centering, not just CJK whitelist. This contradicts the §1.2 implication that
+     83/64 is a "CJK-specific multiplier" — it's actually a universal minimum.
+  3. **§13.4 TextBox same correction**: structural identical formula.
+  4. **Multi-paragraph grid behavior**: each line allocates exactly 1 grid_cell regardless
+     of paragraph boundaries (when sa=sb=0). Verified across all 49 records.
+  5. **Session 49 R109 indirectly resolved**: Oxi was using `font_size`; correct value
+     is `round(max(natural_lh, size × 83/64))`. The full fix touches both Latin and CJK
+     paths uniformly.
+- next: (a) verify TNR/HG-series follow same rule; (b) test exactly-.5 boundary cases
+  (round-half-up vs banker's vs half-down); (c) verify with mid-line font change (§1.7);
+  (d) compute Calibri 18pt + grid combo (master's Session 51 noted RPC errors there too).
+
+## 2026-05-02 — oxi-4 — confirmed — Tall-header pushdown (spec §8.2 TBD resolved)
+- context: word_layout_spec_ra.md line 936 long-standing TBD: "When header content
+  overflows headerDistance and crosses topMargin, body Y is pushed down. Earlier
+  note ('3-line 14pt header → body_y=90pt when topMargin=72') was measured for
+  noGrid; the formula has not been re-verified under the corrected spec."
+- hypothesis: body_y = max(top_margin, round_half(header_distance + n_lines × header_lh))
+- evidence:
+  - 90 records sweep: Calibri 11pt + MS Gothic 10.5pt × n_lines {1..5} ×
+    header_distance {18,36,54}pt × top_margin {36,72,108}pt
+  - Data: tools/metrics/output/tall_header_pushdown.json
+  - Validation: tools/metrics/analyze_tall_header_pushdown.py
+  - MS Gothic 10.5pt (CJK 83/64): 0.0pt error across all 45 records
+  - Calibri 11pt (lh=13.5pt): 0.0pt for n=1..3, systematic -0.5pt drift at n=4..5
+  - Boundary case (header_bottom_true == top_margin) treated as no-overflow
+- outcome:
+  1. **Formula confirmed for noGrid regime** with caveat for Latin UPM=2048 fonts at
+     n_header_lines ≥ 4 (cumulative sub-pt arithmetic produces -0.5pt drift).
+  2. **Spec §8.2 TBD resolved**. See memory/spec_tall_header_pushdown_2026_05_02.md
+     for the full formula text and recommended spec edit.
+  3. **Old "+~2.5pt offset" claim** (already retracted in spec) confirmed wrong
+     by full sweep data.
+- next: (a) measure with explicit grid (LM≥1) — likely body_y rounds up to next
+  grid cell; (b) measure with multi-paragraph header (separate <w:p> instead of
+  <w:br/>); (c) measure with custom header pPr (spaceBefore/After).
+  Cross-reference: master's Session 51 note (memory MEMORY.md) extended this to
+  docGrid (LM≥1) with 288 cases, also flagging Calibri 18pt RPC errors as open.
+
+## 2026-05-02 — oxi-4 — confirmed — LM0 cell row_h closed-form (cumulative two-endpoint snap)
+- context: Section 13.5 / oxi-4 active hypothesis "LM0 cell formula (investigating)"
+- hypothesis: row_h(n) = round_half(top_y + n * lh_natural) - round_half(top_y),
+  where lh_natural is the LM=0 body line height for (font, size).
+- evidence:
+  - 5 fonts × 7 sizes × 4 n_lines = 140 cell samples, +35 body samples
+  - Data: tools/metrics/output/lm0_multiline_cell_v3.json (MS Mincho/Gothic, 90 cells)
+          tools/metrics/output/lm0_multiline_cell_v5.json (Calibri/Yu Mincho/Meiryo/HGS Mincho E/TNR, 140 cells)
+  - Analysis: tools/metrics/analyze_lm0_cell_formula.py (H5: 0.0 total error on MS family)
+              tools/metrics/analyze_lm0_cell_formula_v5.py (H5a mean abs err ≤ 0.16pt across all 5 fonts)
+  - The previous research-log claim "10.5pt = 18n, 12pt = 28+36(n-1) — non-continuous formula"
+    referred to the docGrid (LM≥1) regime, NOT no-grid (LM=0). v3/v5 sweeps cover LM=0 only.
+- outcome:
+  1. **LM=0 cell row_h is fully closed-form** when lh_natural is correct.
+     `row_h = round_half(cell_top_y + n*lh) - round_half(cell_top_y)`
+  2. **Spec §1.2 simplification correction (separate finding)**: the rule
+     "lh = font_size × 83/64 for CJK whitelist" is wrong for Yu Mincho and Meiryo.
+     See memory `project_lm0_cell_formula_2026_05_02.md` for the per-font multipliers
+     and the corrected `lh = size × (typoAsc+typoDes+typoLineGap)/upm` general formula.
+  3. **HG-series partial revision**: HGS Mincho E (UPM=2048) measures ratio ≈ 1.30 ≈ 83/64,
+     contradicting spec §1.2 line 63 which generalizes "HG-series NOT in whitelist" from
+     a single HGGothicM measurement. Per-font measurement is required.
+  4. **LM≥1 (docGrid) cell row_h still TBD** — separate hypothesis chain.
+- next: (a) extend v5 to Yu Gothic / MS PMincho / MS PGothic / HGGothicM / HGGothicE for full
+    CJK whitelist coverage; (b) measure LM≥1 cell row_h with grid pitch sweep; (c) integrate
+    spec §13.5 with the closed-form once master approves.
+
 ## 2026-05-02 — oxi-1 — confirmed (correction) — §13.5 trHeight: ECMA-376 hRule default is "atLeast", not "auto"
 
 - context: §13.5 Round 22 (2026-04-08) stated "ECMA-376 default for w:hRule

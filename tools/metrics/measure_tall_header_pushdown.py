@@ -1,184 +1,186 @@
-"""§8.2 Tall-header pushdown — body Y position when header content overflows
-the gap between headerDistance and topMargin.
-
-Spec line 936 says: "Earlier note ('3-line 14pt header → body_y=90pt when
-topMargin=72') was measured for noGrid; the formula has not been re-verified
-under the corrected spec and remains a candidate for follow-up Ra2 measurement."
-
-This script sweeps:
-  - Header line count: 1..5
-  - Header font/size: Calibri 11pt, MS Mincho 10.5pt, 14pt, 18pt
-  - topMargin: 36, 72, 108pt
-  - headerDistance: 18, 36, 54pt
-  - Grid: noGrid vs LayoutMode=1 (linesAndChars) pitch=18pt
-
-For each combo, measures:
-  - header_top_y (Information(6) of header.Range.Paragraphs(1))
-  - header_bot_y (Information(6) of last header paragraph)
-  - body_y (Information(6) of body Paragraph 1)
-
-Then derives the relationship: body_y = max(topMargin, header_bot + something).
-
-Output: pipeline_data/ra_manual_measurements.json key
-"tall_header_pushdown_2026-05-02"
 """
-import win32com.client
-import os
-import time
+Ra: Tall-header pushdown formula (spec §8.2 TBD).
+
+Goal: derive body_y as a function of (header_lines, header_font, header_size,
+header_distance, top_margin) when the header content overflows the headerDistance
+and crosses topMargin.
+
+Hypothesis (initial): body_y = max(top_margin, header_distance + n * header_lh + buffer)
+
+Sweep:
+  header_n_lines ∈ {1, 2, 3, 4, 5}
+  header_font/size ∈ {(MS Gothic, 10.5), (Calibri, 11)}
+  header_distance_tw ∈ {360, 720, 1080}      # 18, 36, 54 pt
+  top_margin_tw ∈ {720, 1440, 2160}          # 36, 72, 108 pt
+  noGrid only (no docGrid element)
+
+Total: 5 * 2 * 3 * 3 = 90 records.
+
+Output: tools/metrics/output/tall_header_pushdown.json
+"""
 import json
+import os
 import sys
+import time
+import zipfile
+import uuid
+from pathlib import Path
+import pythoncom
+import win32com.client
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Configurations
-TOP_MARGINS = [36, 72, 108]
-HEADER_DISTS = [18, 36, 54]
-HEADER_LINE_COUNTS = [1, 2, 3, 4]
-HEADER_FONT_SIZES = [
-    ("Calibri", 11),
-    ("ＭＳ 明朝", 10.5),
-    ("Calibri", 14),
-    ("Calibri", 18),
-]
-GRID_MODES = ["noGrid", "linesAndChars_18"]
+OUT = Path(__file__).with_name("output") / "tall_header_pushdown.json"
+TMP_DIR = Path("pipeline_data") / "_tall_header_tmp"
+TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-RESULT_PATH = os.path.abspath("pipeline_data/ra_manual_measurements.json")
+CT = '''<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+</Types>'''
+
+RELS_PKG = '''<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>'''
+
+RELS_DOC = '''<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rIdH1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+</Relationships>'''
 
 
-def make_word():
-    w = win32com.client.Dispatch("Word.Application")
-    w.Visible = False
-    w.DisplayAlerts = False
-    return w
+def header_xml(font, sz_half, n_lines):
+    pieces = []
+    for i in range(n_lines):
+        pieces.append(
+            f'<w:r><w:rPr><w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
+            f'<w:sz w:val="{sz_half}"/><w:szCs w:val="{sz_half}"/></w:rPr>'
+            f'<w:t xml:space="preserve">H{i+1}.</w:t></w:r>'
+        )
+        if i < n_lines - 1:
+            pieces.append('<w:r><w:br/></w:r>')
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f'<w:p><w:pPr><w:rPr><w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
+        f'<w:sz w:val="{sz_half}"/><w:szCs w:val="{sz_half}"/></w:rPr></w:pPr>'
+        f'{"".join(pieces)}</w:p></w:hdr>'
+    )
 
 
-def measure_one(word, top_margin, hdr_dist, n_lines, font, size, grid_mode):
-    doc = word.Documents.Add()
-    try:
-        sec = doc.Sections(1)
-        ps = sec.PageSetup
-        ps.PageHeight = 841.9
-        ps.PageWidth = 595.3
-        ps.LeftMargin = 72
-        ps.RightMargin = 72
-        ps.TopMargin = top_margin
-        ps.BottomMargin = 72
-        ps.HeaderDistance = hdr_dist
-        ps.FooterDistance = 36
-        if grid_mode == "linesAndChars_18":
-            ps.LayoutMode = 2
-            ps.LinesPage = 41  # forces ~ pitch=18pt with topMargin=72
-        else:
-            ps.LayoutMode = 0  # default
+def body_xml(font, sz_half, top_tw, header_tw):
+    """Document body — 3 plain paragraphs, sectPr defines header link + margins."""
+    p = lambda i: (
+        f'<w:p><w:pPr><w:rPr><w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
+        f'<w:sz w:val="{sz_half}"/><w:szCs w:val="{sz_half}"/></w:rPr></w:pPr>'
+        f'<w:r><w:rPr><w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
+        f'<w:sz w:val="{sz_half}"/><w:szCs w:val="{sz_half}"/></w:rPr>'
+        f'<w:t xml:space="preserve">B{i}.</w:t></w:r></w:p>'
+    )
+    section = (
+        '<w:sectPr>'
+        f'<w:headerReference w:type="default" r:id="rIdH1"/>'
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        f'<w:pgMar w:top="{top_tw}" w:right="851" w:bottom="1134" w:left="851" '
+        f'w:header="{header_tw}" w:footer="992" w:gutter="0"/>'
+        '<w:cols w:space="425"/>'
+        '</w:sectPr>'
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<w:body>{p(1) + p(2) + p(3)}{section}</w:body></w:document>'
+    )
 
-        hdr = sec.Headers(1)
-        hdr_text = "\r".join(f"H{i + 1}" for i in range(n_lines))
-        hdr.Range.Text = hdr_text
-        hdr.Range.Font.Name = font
-        hdr.Range.Font.Size = size
-        for hp_i in range(1, hdr.Range.Paragraphs.Count + 1):
-            hp = hdr.Range.Paragraphs(hp_i)
-            hp.Format.SpaceBefore = 0
-            hp.Format.SpaceAfter = 0
-            hp.Format.LineSpacingRule = 0  # wdLineSpaceSingle
 
-        doc.Content.Text = "Body"
-        bp = doc.Paragraphs(1)
-        bp.Range.Font.Name = "Calibri"
-        bp.Range.Font.Size = 11
-        bp.Format.SpaceBefore = 0
-        bp.Format.SpaceAfter = 0
+def write_docx(path, font, sz_half, n_lines, top_tw, header_tw):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", CT)
+        z.writestr("_rels/.rels", RELS_PKG)
+        z.writestr("word/_rels/document.xml.rels", RELS_DOC)
+        z.writestr("word/document.xml", body_xml(font, sz_half, top_tw, header_tw))
+        z.writestr("word/header1.xml", header_xml(font, sz_half, n_lines))
 
-        doc.Repaginate()
-        time.sleep(0.10)
 
-        # Measure header paragraphs
-        hdr_paras = []
-        for i in range(1, hdr.Range.Paragraphs.Count + 1):
-            p = hdr.Range.Paragraphs(i)
-            try:
-                hdr_paras.append({
-                    "i": i,
-                    "y": round(float(p.Range.Information(6)), 4),
-                })
-            except Exception as e:
-                hdr_paras.append({"i": i, "err": str(e)})
+def open_measure(word, path):
+    last = None
+    for attempt in range(3):
+        try:
+            doc = word.Documents.Open(str(path.resolve()), ReadOnly=True)
+            time.sleep(0.2)
+            ys = []
+            for i in range(1, 4):
+                try:
+                    y = doc.Paragraphs(i).Range.Information(6)
+                    ys.append(round(y, 3))
+                except Exception:
+                    break
+            doc.Close(SaveChanges=False)
+            return ys
+        except Exception as e:
+            last = e
+            time.sleep(0.5 + attempt * 0.5)
+    raise last
 
-        body_y = round(float(bp.Range.Information(6)), 4)
-        # Estimate header_height from last_y - first_y + estimated line height
-        if hdr_paras and "y" in hdr_paras[0] and "y" in hdr_paras[-1]:
-            first_y = hdr_paras[0]["y"]
-            last_y = hdr_paras[-1]["y"]
-        else:
-            first_y = last_y = None
-        return {
-            "n_lines": n_lines,
-            "font": font,
-            "size": size,
-            "topMargin": top_margin,
-            "headerDistance": hdr_dist,
-            "grid": grid_mode,
-            "header_paras": hdr_paras,
-            "header_first_y": first_y,
-            "header_last_y": last_y,
-            "body_y": body_y,
-            "body_minus_topMargin": round(body_y - top_margin, 4),
-        }
-    finally:
-        doc.Close(SaveChanges=False)
+
+FONTS = [("Calibri", 11.0), ("MS Gothic", 10.5)]
+HEADER_LINES = [1, 2, 3, 4, 5]
+HEADER_DIST_TW = [360, 720, 1080]      # 18, 36, 54 pt
+TOP_MARGIN_TW = [720, 1440, 2160]      # 36, 72, 108 pt
 
 
 def main():
+    pythoncom.CoInitialize()
+    word = win32com.client.DispatchEx("Word.Application")
+    time.sleep(2.0)
+    word.Visible = False
+    word.DisplayAlerts = False
     results = []
-    for grid_mode in GRID_MODES:
-        word = make_word()
+    idx = 0
+    try:
+        total = len(FONTS) * len(HEADER_LINES) * len(HEADER_DIST_TW) * len(TOP_MARGIN_TW)
+        i = 0
+        for font, size in FONTS:
+            sz_half = int(round(size * 2))
+            for n in HEADER_LINES:
+                for hd_tw in HEADER_DIST_TW:
+                    for top_tw in TOP_MARGIN_TW:
+                        i += 1; idx += 1
+                        path = TMP_DIR / f"hd_{idx:04d}_{uuid.uuid4().hex[:8]}.docx"
+                        rec = {
+                            "font": font, "size": size, "n_lines": n,
+                            "header_dist_tw": hd_tw, "top_margin_tw": top_tw,
+                            "header_dist_pt": hd_tw / 20, "top_margin_pt": top_tw / 20,
+                        }
+                        try:
+                            write_docx(path, font, sz_half, n, top_tw, hd_tw)
+                            ys = open_measure(word, path)
+                            rec.update({"body_ys": ys, "p1_y": ys[0] if ys else None})
+                            print(f"[{i:3d}/{total}] {font:>9} {size:>4.1f}pt n={n} hd={hd_tw/20:>5.1f}pt top={top_tw/20:>5.1f}pt -> p1_y={ys[0] if ys else 'ERR'}")
+                        except Exception as e:
+                            rec["error"] = str(e)
+                            print(f"[{i:3d}/{total}] ERR: {e}")
+                        try:
+                            path.unlink()
+                        except Exception:
+                            pass
+                        results.append(rec)
+    finally:
         try:
-            for font, size in HEADER_FONT_SIZES:
-                for top_margin in TOP_MARGINS:
-                    for hdr_dist in HEADER_DISTS:
-                        for n_lines in HEADER_LINE_COUNTS:
-                            try:
-                                r = measure_one(word, top_margin, hdr_dist,
-                                                n_lines, font, size, grid_mode)
-                                results.append(r)
-                                line = (f"[{grid_mode}][{font}/{size}]"
-                                        f"[tm={top_margin} hd={hdr_dist} "
-                                        f"n={n_lines}] body_y={r['body_y']} "
-                                        f"(Δ={r['body_minus_topMargin']}) "
-                                        f"hdr_first={r['header_first_y']} "
-                                        f"last={r['header_last_y']}")
-                                print(line, flush=True)
-                            except Exception as e:
-                                err = {
-                                    "grid": grid_mode,
-                                    "font": font,
-                                    "size": size,
-                                    "topMargin": top_margin,
-                                    "headerDistance": hdr_dist,
-                                    "n_lines": n_lines,
-                                    "error": str(e),
-                                }
-                                results.append(err)
-                                print(f"  ERROR {err}", flush=True)
-        finally:
-            try:
-                word.Quit()
-            except Exception:
-                pass
-            time.sleep(1.0)
-
-    if os.path.exists(RESULT_PATH):
-        try:
-            with open(RESULT_PATH, encoding="utf-8") as f:
-                existing = json.load(f)
+            word.Quit()
         except Exception:
-            existing = {}
-    else:
-        existing = {}
-    existing["tall_header_pushdown_2026-05-02"] = results
-    with open(RESULT_PATH, "w", encoding="utf-8") as f:
-        json.dump(existing, f, ensure_ascii=False, indent=2)
-    print(f"\nWrote {len(results)} records to {RESULT_PATH}")
+            pass
+        for f in TMP_DIR.glob("*.docx"):
+            try: f.unlink()
+            except: pass
+
+    OUT.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\nSaved -> {OUT}")
 
 
 if __name__ == "__main__":
