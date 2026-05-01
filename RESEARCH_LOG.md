@@ -917,6 +917,109 @@ Memory: `session_51_r17_gate_per_char_validation.md`
 
 ---
 
+## 2026-05-02 — oxi-3 — confirmed (refinement) — kern audit + Normal-style override + 3a4f win/loser per-char + Oxi compression spec table
+
+Three follow-up tasks completed (依頼 1/3/4 from user):
+
+### 依頼 1: kern audit on 184 baseline docs (RESEARCH_LOG-readable)
+
+`tools/metrics/audit_kern_docDefaults.py` extracts effective kern via
+`run rPr > Normal style rPr > docDefaults rPr` resolution priority.
+
+| Metric | Value |
+|---|---|
+| Total docs | 184 |
+| Effective kern present | 62 (33.7%) |
+| Source: docDefaults | 38 |
+| **Source: Normal style** (NEW v2 finding) | 24 |
+
+**v1 claim REFUTED**: Initial audit only checked docDefaults and showed
+"kern perfectly discriminates R17 winners/losers". With Normal-style
+included, 4/6 R17 big_winners ALSO have effective kern=2 (d77a, 3a4f
+p23/p60 via Normal style). kern is necessary but NOT sufficient.
+
+R17 cross-tab refined:
+- big_winners: 3a4f p23/p60 (kern via Normal), d77a p3/p6 (kern via Normal),
+  683f p2 + 0e7af1 p6 (no kern)
+- big_losers: 7f272a/ed025 (kern via docDefaults), 3a4f p64 (kern via Normal)
+
+### 依頼 3: 3a4f p64 (R31 +0.032 winner) / p42 (R31 -0.008 loser) per-char
+
+`tools/metrics/measure_3a4f_p64_p42_v2.py` + `measure_3a4f_p42_only.py`
+using Selection.GoTo for direct page jump (full doc has 2386 paragraphs).
+
+Both pages show MIXED:
+- **Mech 1** at half-width (5.0–5.5pt) for `）（` `）。` `。）` `）`→`）` etc.
+  per FINAL RULE Type A/B/C
+- **Mech 2 partial** at 7.5/8.0/8.5pt for chars without Mech 1 trigger
+  on lines with overflow
+
+Difference between R31 win/loss is NOT mechanism choice; both pages
+have both mechanisms. R31's specific char-position decisions matter
+(needs R31 trace cross-reference to identify exact mismatches).
+
+3a4f activation source: **Normal style has `<w:kern w:val="2"/>`**
+(docDefaults has none). Resolution priority delivers kern=2 to all
+Normal-style paragraphs.
+
+### 依頼 4: Oxi compression spec table for ed025/7f272a
+
+`tools/metrics/extract_oxi_compress_spec_table.py` extracts char-level
+spec from existing JSON.
+
+ed025 paragraph 12 (R17 big_loser, kern=2):
+- 2 compressions: `）` at i=23 (B→A `）（`) and i=43 (B→B `）））`),
+  both at half-width 5.5pt
+- **Pure Mech 1 / FINAL RULE** ✓
+
+7f272a paragraph 12 (R17 big_loser, kern=2):
+- 6 compressions: all at Mech 2 partial 8.0–10.0pt
+- All chars have CJK neighbors (no Mech 1 trigger)
+- **Pure Mech 2**
+
+### Recommended Oxi rule (final form)
+
+```rust
+fn run_kern_active(run: &Run, doc: &Doc) -> bool {
+    let kern_hp = run.rpr.kern
+        .or(run.style.kern)        // Normal style or other paragraph style
+        .or(doc.doc_defaults.kern)
+        .unwrap_or(0);
+    kern_hp > 0 && (run.font_size * 2.0) as u32 >= kern_hp
+}
+
+// Mech 1: FINAL RULE Type A/B/C (validated by ed025)
+fn mech1_compress(prev_class, current, next_class) -> Option<f32> {
+    match classify_yakumono(current)? {
+        A if prev_class == Some(A) => Some(font_size / 2.0),
+        B if matches!(next_class, Some(A) | Some(B)) => Some(font_size / 2.0),
+        _ => None,
+    }
+}
+
+// Mech 2: justify-time slack distribution (validated by 7f272a + 3a4f)
+// 0.5pt-step distribution, total = slack exactly, per-char cap ~2pt
+// (already in Phase 2 reactive absorb mod.rs:2977; refine per
+// session_51_mechanism2_slack_algorithm)
+```
+
+### Source data
+
+- `tools/metrics/audit_kern_docDefaults.py` (Normal-style aware)
+- `tools/metrics/measure_3a4f_p64_p42_v2.py`,
+  `tools/metrics/measure_3a4f_p42_only.py`
+- `tools/metrics/extract_oxi_compress_spec_table.py`
+- `pipeline_data/kern_audit_2026-05-02.json`
+- `pipeline_data/3a4f_p42_per_char_2026-05-02.json`
+- `pipeline_data/oxi_compress_spec_table_2026-05-02.json`
+
+Memory:
+- `session_51_kern_audit_177docs.md`
+- `session_51_3a4f_p64_p42_validation.md`
+- `session_51_oxi_compress_spec_table.md`
+
+---
+
 ## 2026-05-02 — oxi-3 — confirmed — Yakumono compression has TWO mechanisms; Mech 1 trigger PINPOINTED to `<w:kern>` in styles.xml docDefaults
 
 **TL;DR for master**: 2026-04-18 architectural-validation entry below is correct
