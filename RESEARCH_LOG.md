@@ -494,6 +494,57 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 1 alignment-agnostic + Mech 1↔Mech 2 precedence
+
+Two follow-up investigations to §4.7b Mech 2 characterization:
+
+### Q6: Mech 1 alignment dependency
+
+- context: §4.7b confirmed Mech 2 fires only at jc=both. §4.7 (Mech 1
+  Type A/B/C) did not specify alignment requirement. ed025_p1 (R17
+  big_loser) showed Mech 1 firing in jc=center/right paragraph,
+  suggesting Mech 1 is alignment-agnostic.
+- evidence: `tools/metrics/build_m1_alignment_test.py` +
+  `measure_m1_alignment.py`. 2 docs × 5 alignment paragraphs each:
+  - kern OFF, all 5 alignments: ）= 10.5pt (no Mech 1)
+  - kern ON, all 5 alignments: ）= 5.0–5.5pt (Mech 1 fires)
+  Specifically: jc=both/left/(no jc) → 5.5pt; jc=center/right → 5.0pt
+  (minor 0.25pt difference likely measurement artifact at non-left
+  aligned glyph origins).
+- outcome: Mech 1 is **alignment-agnostic**. `<w:kern>` in docDefaults
+  is the SOLE gate (per session 51 yakumono_kern_trigger finding).
+  Spec §4.7b updated.
+
+### Q7: Mech 1 → Mech 2 precedence interaction
+
+- context: §4.7b stated "Mech 1 fires first, Mech 2 fires second on
+  residuals" but did not define "residuals" — char-set or slack-level.
+- evidence: `tools/metrics/measure_m1_m2_precedence.py` 9-slack sweep on
+  probe `漢漢漢」）漢漢「漢漢漢` (11 chars, MS Mincho 12pt). 」 fires Mech 1
+  (B→B trigger with `）` neighbor); `）` and `「` do NOT fire Mech 1
+  (B→CJK / single A in CJK). Post-Mech1 natural = 126pt.
+
+  | cw | slack | 」 (M1-comp) | ） (uncomp) | 「 (uncomp) |
+  |---|---|---|---|---|
+  | 200/132/126 | ≤0 | 6.0pt | 12.0 | 12.0 |
+  | 125 | +1 | 6.0pt | 11.5 | 11.5 |
+  | 124 | +2 | 6.0pt | 11.0 | 11.0 |
+  | 122 | +4 | 6.0pt | 10.0 | 10.0 |
+  | 120 | +6 | 6.0pt | 9.0 | 9.0 |
+  | 118 | +8 | 6.0pt | 8.0 | 8.0 (floor) |
+
+- outcome:
+  - Mech 2 NEVER touches Mech-1-compressed yakumono. `」=6.0pt` constant
+    across all slacks. Mech 1's output is final for those chars.
+  - Mech 2 distributes slack ONLY across uncompressed yakumono. Each gets
+    `slack / n_uncomp_yak`, in 0.5pt steps, sum = slack EXACTLY.
+  - "Residuals" = char-level subset (uncompressed yakumono), NOT
+    line-level slack continuation.
+  - The Mech 2 floor (`fontSize × 2/3 = 8.0pt` for 12pt) still applies
+    to the residuals-only set.
+- code change: NONE. Spec §4.7b's "Mech 1 vs Mech 2 interaction"
+  subsection refined with measured data.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 (justify-time) trigger / position / algorithm characterization
 
 - context: Session 51 R0 entries identified Mech 2 (justify-time
