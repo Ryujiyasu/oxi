@@ -5108,7 +5108,14 @@ impl LayoutEngine {
             // additional context (line position, surrounding chars, paragraph
             // structure?) NOT captured in the 8x8 grid. Reverted on 2026-04-27.
             // See RESEARCH_LOG 2026-04-27 falsified entry for full data.
-            let yakumono_enabled = self.compress_punctuation;
+            // 2026-05-01 R17: yakumono pair compression ALSO gated on list_marker.
+            // Pin: 683ffcab86e2 p2 p3 (plain pPr ind, no list_marker) — Word's
+            // per-char COM advance is uniform 10.5pt for all chars including 、,
+            // i.e., Word does NOT compress yakumono in plain paragraphs. Oxi's
+            // pre-fix compression saved 10.5pt × 2 = 21pt, allowing +1 char/line
+            // and shifting 4 cumulative lines (-17.5pt → -35.5pt cascade in p3-p7).
+            // Same differentiator as R16 (list paragraph absorb).
+            let yakumono_enabled = self.compress_punctuation && para_style.list_marker.is_some();
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
             let yakumono_compressed: Vec<bool> = if yakumono_enabled {
@@ -5443,8 +5450,15 @@ impl LayoutEngine {
                         && line_yakumono_saved_tw > 0
                         && overflow_tw > 0
                         && overflow_tw <= line_yakumono_saved_tw.min(one_char_tw);
+                    // 2026-05-01 R17: original 50tw absorb branch ALSO gated on
+                    // list_marker. Pin: 683ffcab86e2 p2 p3 — plain pPr ind (no
+                    // numPr/list_marker), Oxi packed 45 chars/L1 vs Word's 44 due
+                    // to has_pair=true (any 2 adjacent CJK is a yakumono pair).
+                    // Word doesn't absorb on plain paragraphs, only on list
+                    // paragraphs. Same differentiator as R16.
                     let absorb = absorb_yakumono_budget || (if overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
+                        && para_style.list_marker.is_some()
                         && (has_pair || has_linestart_narrow_yakumono)
                     { true } else { false });
                     let _ = line_compress_count;
