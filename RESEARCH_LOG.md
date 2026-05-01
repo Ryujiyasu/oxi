@@ -13,6 +13,60 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly explained: anchor empty para's pPr-rPr font
+
+- context: Spec §19.7 / §18.10 (this branch). Prior round 1 (top entry below)
+  established "Y0 = anchor_top + 1 line_height" universal across PreKinds for
+  body paragraphs with content. The 2ea81a tbl#3 case still showed Y0 = +28.55pt
+  (~2× the expected 14.5pt), unexplained.
+- hypothesis (round 1 — REFUTED): Each intervening empty paragraph between
+  the "real" preceding paragraph and the floating table adds +1 line_height
+  to the Y0 intercept.
+  → 30-variant FE_* repro (tools/metrics/fe_repro/, 5 PreKinds × 5 empty
+  counts × 2 tblpY values) shows Y0 = constant ~14pt regardless of empty
+  count. Hypothesis REFUTED.
+- hypothesis (round 2 — CONFIRMED): The anomaly is driven by the LAST
+  (anchor) empty paragraph's `<w:pPr><w:rPr><w:sz/></w:rPr></w:pPr>` font
+  size — Word resolves the empty paragraph's height via that pPr-rPr font,
+  not from default style.
+  → 7-variant K_* axis-isolation matrix (tools/metrics/fe_match_repro/):
+  - K_baseline (sz=21, lp=360, line=auto):       Y0 = +16.55pt
+  - K_only_sz28 (sz=28, lp=360, line=auto):       **Y0 = +27.55pt** (≈ 2ea81a's +28.55)
+  - K_only_atLeast296 (sz=21, lp=360, line=296atLeast): Y0 = +16.55pt (no effect)
+  - K_lp323 (sz=21, lp=323, line=auto):           Y0 = +15.05pt
+  - K_lp323_atLeast296_sz28 (sz=28, lp=323, line=296 atLeast): Y0 = +26.05pt
+  - K_tblWauto_only:                              Y0 = +16.55pt (no effect)
+  Single-axis: only `sz` change moves Y0 substantially. Reference
+  2ea81a tbl#3: anchor empty para has pPr-rPr `sz=28` (14pt), line=296
+  atLeast, docGrid lp=323 → reproduced as +26.05–27.55pt (within 1–2.5pt
+  of the +28.55pt observed value).
+- evidence:
+  - `pipeline_data/fe_intervening_measurements.json` (30 variants, refutes
+    intervening-empty-count hypothesis)
+  - `pipeline_data/fe_match_measurements.json` (7 variants, confirms
+    pPr-rPr-sz hypothesis)
+  - `pipeline_data/tblppr_anchor_measurements.json` (2ea81a baseline ref)
+  - `tools/metrics/{build,measure}_fe_intervening.py`
+  - `tools/metrics/build_fe_2ea81a_match.py` + `measure_fe_match.py`
+- outcome:
+  - §19.7's "+1 × line_height_of_anchor" universal was an over-generalization.
+    True for paragraphs with content; for empty paragraphs Y0 follows the
+    pPr-rPr font.
+  - Refined formula written to spec §18.10 (this branch) / will become §19.10
+    when merged to main:
+    `table_top = anchor_top + line_height_resolved_from(anchor.pPr.rPr.sz)
+              + ~2pt floor + tblpY_pt`
+  - Residual 1–2.5pt unexplained — likely floating-table topFromText spacing
+    constant (default = 0 unless `topFromText`/`bottomFromText` set on
+    tblpPr; needs separate isolation).
+  - §19.7 / §18.7 IS still correct for the body-para-anchor case; the
+    update is for empty-anchor case.
+  - `intervening empty paragraph count` not a factor — refuted via 30
+    variants. Only the LAST anchor's pPr-rPr matters.
+- code change: NONE (pure investigation). Oxi's current line-height-for-anchor
+  resolution should be checked against this rule when implementing §19
+  shippable fix.
+
 ## 2026-05-02 — oxi-1 — confirmed — vertAnchor=text floating-table tblpY behavior + parser-order quirk
 
 - context: §18 Floating Tables (`<w:tblpPr>`) was hypothesis-only, derived
