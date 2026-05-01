@@ -494,6 +494,55 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 (justify-time) trigger / position / algorithm characterization
+
+- context: Session 51 R0 entries identified Mech 2 (justify-time
+  yakumono compression) but left several questions open: which char
+  triggers fire (8.0/7.5/5.5pt usage), what does "mid-line" mean (% of
+  line length), are trigger pairs different from Mech 1 Type A/B/C, what
+  is "reactive" / overflow gating semantics? Required: 5-10 pair per-char
+  COM measurement.
+- evidence:
+  - `tools/metrics/measure_m2_trigger_pairs.py`: 10 yakumono-CJK pair
+    cases × 4 slack values (0/2/4/8pt) at jc=both, MS Mincho 12pt:
+    ALL 10 pairs (A→CJK, CJK→A, B→CJK, CJK→B for 「」（）、。) compress
+    identically: slack=0→12.0pt, slack=2→10.0pt, slack=4→8.0pt, slack=8→
+    line drops a char. Yakumono is the compressing char regardless of
+    neighbor type.
+  - `tools/metrics/measure_m2_position_and_charset.py`: position-axis
+    test (start/mid/end) × alignment (justify/left) + 16-char extended
+    set:
+    * jc=left at any position: NO compression (Mech 2 jc=both gated)
+    * jc=both at line-start position: Mech 2 NOT fire (drop instead)
+    * jc=both at mid/end positions: Mech 2 fires
+    * extended yakumono set { 「」（）［］【】〔〕、。 } all compress
+      to 8.0pt
+    * em-dash ―(U+2015) Type C: NO compression
+    * ASCII hyphen, Latin a, plain CJK: NO compression
+  - `tools/metrics/measure_m2_position_sweep.py`: yakumono position 1..20
+    sweep: position 1 (line-start) → no compression / line drops; positions
+    2..19 → all compress to 8.0pt. The "mid-line" position rule is
+    operationally **`position > 1`**, NOT a percentage threshold.
+- outcome:
+  - Spec §4.7b expanded with Mech 2 trigger conditions, compressible char
+    set (= Type A ∪ Type B from Mech 1, no Type C), position rule
+    (position > 1), compression algorithm with `min_yak_width =
+    fontSize × 2/3` cap, and 8.0/7.5/5.5pt value attribution table.
+  - Key formula:
+    `min_yak_width = fontSize × 2/3`
+    (8.0pt for 12pt font, 7.0pt for 10.5pt font)
+  - Per-yak compression cap = fontSize − min_yak_width = fontSize/3
+    (4.0pt for 12pt, 3.5pt for 10.5pt). Beyond cap → drop char and refit.
+  - 5.5pt = Mech 1 half-width (11pt font /2). 6.0pt = Mech 1 half (12pt).
+    7.0pt = Mech 2 floor (10.5pt × 2/3). 8.0pt = Mech 2 floor (12pt × 2/3).
+    7.5pt etc = Mech 2 distributed partial.
+  - Mech 1 fires first (line-break time, neighbor-pair-based);
+    Mech 2 fires second (layout time, slack-distribution-based).
+- code change: NONE (pure investigation). Oxi's Phase 2 reactive absorb
+  (per 1f8b5f2) should be reviewed against the spec §4.7b algorithm:
+  honour the position>1 gate, use fontSize×2/3 floor, distribute in 0.5pt
+  steps with sum-to-slack invariant.
+
 ## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly explained: anchor empty para's pPr-rPr font
 
 - context: Spec §19.7 / §18.10 (this branch). Prior round 1 (top entry below)
