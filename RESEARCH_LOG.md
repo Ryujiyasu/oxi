@@ -13,6 +13,50 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §17 Shape Positioning expansion: positionV/posOffset formula + RelativeVerticalPosition enum mapping + baseline survey
+
+- context: §17 had only 2 minimal sub-sections (§17.1 reference table,
+  §17.2 wrap behavior) and no formula for positionV with posOffset, despite
+  shapes being heavily used in 18/184 baseline docs (177 anchors total).
+  Master had not investigated this area.
+- hypothesis: For `<wp:positionV relativeFrom="X"><wp:posOffset>N</wp:posOffset>`,
+  Shape.Top (pt, COM) = N / 12700 (linear), and absolute_Y =
+  ref_origin(X) + Shape.Top.
+- evidence:
+  - `tools/metrics/scan_baseline_shape_positioning.py` survey: 100% of
+    baseline anchors (177/177) use `positionV relativeFrom="paragraph"`.
+    Plus column-anchored horizontal (155/177), wrapNone (172/177),
+    layoutInCell (172/177), allowOverlap (177/177).
+  - `tools/metrics/build_sp_position_v.py` + `measure_sp_position_v.py`:
+    12 SP_* variants — 3 anchor positions × 4 posOffset values
+    {0, +9pt, +53.2pt, **−50pt**}. ALL show Shape.Top = posOffset_emu /
+    12700 EXACTLY (residual = 0.00pt). absolute_Y = anchor_paragraph_top
+    + Shape.Top, also exact across all 12.
+  - `tools/metrics/build_sp_relative_from.py` + `measure_sp_relative_from.py`:
+    12 SR_* variants — 6 relativeFrom values
+    {paragraph, page, margin, line, topMargin, bottomMargin} × 2 posOffset
+    {0, +100pt}. Linear conversion confirmed for all 6 references. COM's
+    `Shape.RelativeVerticalPosition` integer enum mapping pinned:
+    margin=0, page=1, paragraph=2, line=3, topMargin=4, bottomMargin=5.
+- outcome:
+  - §17 spec extended with §17.3 (positionV/posOffset formula) and §17.4
+    (baseline distribution survey).
+  - Confirmed formula for the 100%-of-baseline case
+    (`relativeFrom="paragraph"`):
+    `absolute_Y_pt = anchor_paragraph_top_y + (posOffset_emu / 12700)`.
+  - Other relativeFrom values follow the same `ref_origin + offset`
+    template; ref_origin Y values per relativeFrom are well-defined per
+    ECMA-376 §17.3.3.18 ST_RelFromV.
+  - Implication for Oxi: shape Y positioning must (a) parse posOffset as
+    EMU, divide by 12700 for pt, and (b) for paragraph-anchored shapes,
+    add the anchor paragraph's top y. The 5 non-paragraph relativeFrom
+    cases (out of 177) need ref_origin computed differently but are
+    edge cases.
+- code change: NONE (pure investigation + measurement). Oxi's existing
+  shape parsing/rendering should be reviewed against this rule;
+  particularly important for 459f, 2ea81a, 3a4f9f which contain shapes
+  on bottom-N-floor docs.
+
 ## 2026-05-02 — oxi-1 — confirmed (correction) — §13.5 trHeight: ECMA-376 hRule default is "atLeast", not "auto"
 
 - context: §13.5 Round 22 (2026-04-08) stated "ECMA-376 default for w:hRule
