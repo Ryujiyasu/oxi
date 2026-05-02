@@ -13,6 +13,58 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — RESOLVED — 1ec1 □３ root cause: paragraph DOES have <w:ind w:left="105"/>; H_F was inverse direction; remaining +2.4pt is pure LSB pipeline diff
+- context: deep dive after H_F empirical refutation. Use direct Shape geometry
+  + per-paragraph XML scan + reconciliation against all 3 measured points.
+- evidence:
+  - **□３ paragraph XML inspection** (tools/metrics/deep_dive_1ec1_box3_geometry.py
+    + python regex on 1ec1's document.xml inside <w:txbxContent>):
+    ```xml
+    <w:p>
+      <w:pPr>
+        ...
+        <w:ind w:leftChars="50" w:left="105"/>  ← 5.25pt twip-priority
+        ...
+      </w:pPr>
+      <w:r><w:t>□３ ...</w:t></w:r>
+    </w:p>
+    ```
+    Earlier paragraph dumps showed only □１/□２ (no ind). The specific □３
+    AND □４ AND □(1) AND □(2) DO have ind set. Original investigation looked
+    at wrong paragraph or assumed first paragraph applied.
+  - **Geometric reconstruction** matches all 3 measured points:
+    ```
+    advance = shape_left(36.275) + lIns(2.83) + ind:left(5.25) = 44.36pt
+    Word visible:        44.36 + 4.14pt LSB = 48.50pt  ✓ matches PNG 48.48
+    Oxi pre-fix:         44.36 + 1.74pt LSB = 46.10pt  ✓ matches memo 46.1
+    Oxi post-fix (no ind): 39.11 + 1.74pt   = 40.85pt  ✓ matches user 40.80
+    ```
+  - **Master's 5b8d07c finding context**: was for SYNTHETIC DML wsp without
+    rounded-rect. Word's COM Information(5)=39pt for that synthetic setup.
+    1ec1 uses VML rounded-rect; COM Information(5)=-1 (not applicable);
+    visual PNG x=48.48pt with ind APPLIED.
+- outcome:
+  1. **Word DOES apply w:ind in 1ec1 rounded-rect textbox** (advance includes
+     ind:left=5.25pt). Master's "Word ignores ind" rule is **synthetic-only**.
+  2. **H_F fix MUST BE REVERTED**. Pre-fix Oxi was closer to Word.
+  3. **The remaining +2.4pt diff** (Word visible 48.5 vs Oxi pre-fix 46.1)
+     is a pure **glyph LSB rendering pipeline difference**:
+     - Word: DirectWrite/Direct2D produces 4.14pt LSB for □ at MS Gothic 14pt
+     - Oxi: GDI TextOutW produces 1.74pt LSB (= abcA=2 verified in Investigation B)
+  4. **The "□ LSB diff" framing was correct** (per Investigation B's pivot).
+     Just the master memo's "Word visual x=39pt" was COM-derived for synthetic
+     test, not actual rendering position.
+  5. **Master's session_51_textbox_ind_rule.md needs scope qualification**:
+     "applies to DML wsp without rounded-rect; DOES NOT apply to VML rounded-rect".
+- action items:
+  - Revert H_F fix at `crates/oxidocs-core/src/layout/mod.rs:3094-3102`
+  - Update master's textbox ind rule with scope qualification
+  - +2.4pt LSB residual is sub-pt DirectWrite vs GDI difference, structural
+    (would require DirectWrite renderer port to fully match Word)
+- references: memory/investigation_1ec1_box3_root_cause_finally_2026_05_02.md
+  (full geometric reconstruction + all 3 measured points reconciled).
+  Supersedes investigation_oxi_textbox_indent_gap_*, _REFUTED_, _phase_a/b memos.
+
 ## 2026-05-02 — oxi-4 — refuted (empirical) — H_F fix REGRESSED 1ec1: Oxi suppressing w:ind in textbox moved □ 5.3pt FURTHER from Word (SSIM 0.6453→0.6389)
 - context: H_F memo (entry below) recommended gating indent_left/right/first_line
   computation on in_textbox=true. User implemented the fix and tested.
