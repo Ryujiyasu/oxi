@@ -1108,6 +1108,33 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 16: cap = last CJK run/2 (yak fs irrelevant); distribution = uniform-gap-above-half
+
+- context: Round 15 found cap depends on "last run/yak fs" but couldn't
+  discriminate. Round 16 forces yak fs ≠ surrounding CJK fs.
+- evidence: `measure_cap_disambiguation.py` 3 suites:
+  E1 (CJK all 12pt, last yak forced 14pt): cap = 6.0pt = CJK/2
+  E2 (CJK 12→14pt, all yak 12pt): cap = 7.0pt = last CJK run/2
+  E3 (CJK 12pt, yak 10/12/14pt): cap = 6.0 = CJK/2
+- finding (cap source): **cap = (last CJK run's font size) / 2**.
+  Yak's own fs does NOT drive cap.
+- finding (distribution): refines "proportional to yak fs"
+  (Round 15) to **uniform-gap-above-half-width**:
+  Each yak's final advance = yak_fs/2 + C, where C is a line-uniform
+  constant chosen so total compression equals cap:
+    C = (sum(yak_fs/2) - cap) / N
+    per_yak_comp_i = yak_fs_i/2 - C
+  Verified on Round 16 E3 and Round 15 Suite B.
+- outcome:
+  - Spec §4.7b round 16 added with disambiguated cap rule + exact
+    distribution formula.
+  - Implementation:
+    fn mech2_cap_pt(last_cjk_run_sz_val) -> last_cjk_run/2 quantized
+    fn mech2_distribute(yak_fontsizes, cap):
+      C = (sum(fs/2) - cap) / N
+      for each yak: per_yak_comp = round_to_0.5pt(fs/2 - C)
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 15: mixed CJK sizes — cap from last run + proportional yak distribution
 
 - context: Round 13 found "cap = CJK fs/2" for mixed yak-size case.
