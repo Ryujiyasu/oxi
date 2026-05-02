@@ -1108,6 +1108,39 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7 round 11: smart quotes Type A/B confirmed, em-dash REFRAMED as glyph metric
+
+- context: §4.7 lists smart quotes (U+2018-201D) and em-dash (U+2014)
+  as Type A/B without thorough verification under Mech 2. Session 51
+  found em-dash "compresses" in MS Mincho but not Yu Mincho.
+- evidence: `measure_smart_quotes_emdash_mech2.py`:
+  Suite A — 7 chars × 4 slacks at MS Mincho 12pt:
+    Smart quotes ‘ ’ " " (U+2018-201D): all behave as Type A/B,
+      adv 12→10→8→6 across slack 0..cap. Mech 2 fires correctly.
+    Em-dash (U+2014): adv = 6.0pt UNCHANGED across slack -1, +2, +4, +6.
+      Word reports compression but it's glyph design, not Mech 2.
+    Hbar (U+2015): adv = 12.5pt, no compression at any slack. Type C ✓.
+    」 (control): standard B behavior.
+  Suite B — em-dash × 3 fonts at slack=4:
+    MS Mincho em-dash adv = 6.0pt
+    Yu Mincho em-dash adv = 12.5pt
+    Meiryo em-dash adv = 12.50pt
+- key reframing:
+  Session 51's "MS compresses em-dash, Yu doesn't" is more precisely:
+  - MS 明朝/ゴシック em-dash glyph natural width = fontSize/2 (half-
+    width BY DESIGN). NOT compressed by Mech 2; it's a font metric.
+  - Yu Mincho / Meiryo em-dash glyph natural width = fontSize × 1.04
+    (full-width). Mech 2 does NOT compress it (effectively Type C).
+- outcome:
+  - §4.7 Type A/B/C list updated with em-dash font-dependency note.
+    U+2014 is **glyph half-width in MS branded fonts**, NOT Type B
+    compression rule.
+  - All 4 smart quotes (U+2018-201D) confirmed Type A/B as listed.
+  - Hbar (U+2015) confirmed Type C universal.
+  - Implementation: Oxi must use font-dependent em-dash natural width
+    AND exclude em-dash from Mech 2 candidate set.
+- code change: NONE. Spec §4.7 round 11 added.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 10: N=1 cap fillers complete 3-way universality
 
 - context: Round 7/8 had remaining sweep gaps for fs=10.5/11/12/14 N=1
