@@ -1135,10 +1135,33 @@ impl LayoutEngine {
         let total_pages = pages.len();
         for (page_idx, page) in pages.iter_mut().enumerate() {
             for elem in &mut page.elements {
-                if let LayoutContent::Text { text, field_type: Some(ft), .. } = &mut elem.content {
-                    match ft {
-                        FieldType::Page => *text = format!("{}", page_idx + 1),
-                        FieldType::NumPages => *text = format!("{}", total_pages),
+                if let LayoutContent::Text { text, field_type: Some(ft), font_size, .. } = &mut elem.content {
+                    let new_text = match ft {
+                        FieldType::Page => format!("{}", page_idx + 1),
+                        FieldType::NumPages => format!("{}", total_pages),
+                    };
+                    if &new_text != text {
+                        // Estimate new width: each digit is ~size/2 pt for typical fonts.
+                        // Old width is `elem.width`. The element's text already reflects
+                        // the placeholder text length (typically "1") used during layout.
+                        // 2026-05-03: per spec_page_field_width_gap_2026_05_02.md.
+                        let old_text = text.clone();
+                        let fs = *font_size;
+                        // Approximate digit width ≈ fs * 0.5 (for digits 0-9 in typical fonts)
+                        let old_w = elem.width;
+                        let digit_w = if !old_text.is_empty() {
+                            old_w / old_text.chars().count() as f32
+                        } else {
+                            fs * 0.5
+                        };
+                        let new_w = digit_w * new_text.chars().count() as f32;
+                        let dw = new_w - old_w;
+                        // For centered text, shift x by half the width diff to keep
+                        // the visual center aligned. This relies on the placeholder
+                        // having been positioned with intended centering.
+                        elem.x -= dw / 2.0;
+                        elem.width = new_w;
+                        *text = new_text;
                     }
                 }
             }
