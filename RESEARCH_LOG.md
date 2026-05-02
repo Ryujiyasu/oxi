@@ -623,6 +623,59 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — partial — §4.7b Mech 2 wrap-budget intertwined design + Oxi implementation sketch
+
+- context: §4.7b Mech 2 algorithm confirmed (0.5pt step, fontSize×2/3
+  floor) but "drop char + refit" is wrap-decision intertwined. R32's
+  alignment-gated 0.583x hack is a middle ground; proper
+  implementation needs the full wrap algorithm.
+- evidence: 3 probe sweeps at jc=both, MS Mincho 12pt:
+  - P_yak3 (21 chars, 3 yak): 2 transitions found
+  - P_yak6 (20 chars, 6 yak): partial (Word died, ~10 datapoints)
+  - P_yak12 (22 chars, 10 yak, 9 compressible): 130 datapoints — clean
+  Tools: `measure_m2_wrap_budget.py` + `_chunked.py` (Word-restart
+  on RPC failure).
+- findings:
+  - **Drop trigger**: each "drop 1 char" boundary at slack ≈ fontSize
+    (=12pt for 12pt MS Mincho). Word refuses total-line compression
+    > 1×fontSize → drops a char.
+  - **Per-yak distribution cap (multi-yak)**: 9 yak absorbed 22pt
+    total at cw=206; refused 23pt at cw=205. Cap ≈ 2.5pt =
+    fontSize × 5/24.
+  - **Per-yak cap (single-yak)**: from §4.7b round 1 — 1 yak can
+    absorb 4pt = fontSize/3. Asymmetric with multi-yak case.
+  - **N→N-2 jump at cw=205**: Word skipped 18-char fit, dropping
+    directly to 17 chars (natural=204 ≈ cw). Suggests Word uses
+    natural-fit-greedy as base, with optional +1 char Mech 2
+    extension.
+- inferred algorithm:
+  ```
+  natural_fit_n = max N s.t. sum(natural[0..N]) <= cw
+  while extend_n < len(chars):
+      candidate_n = extend_n + 1
+      new_slack = sum(natural[0..candidate_n]) - cw
+      if new_slack <= 0: extend; continue
+      if new_slack >= fontSize: break    # drop threshold
+      compressible = count_yak_skipping_pos1
+      cap_per_yak = fontSize/3 if 1 yak else fontSize*5/24
+      if new_slack > compressible * cap_per_yak: break
+      extend_n = candidate_n
+  ```
+- outcome:
+  - Spec §4.7b extended with "Mech 2 + wrap-budget intertwined design"
+    subsection, including observed regularities table, inferred
+    algorithm, and ~80-LOC Oxi implementation sketch
+    (`try_extend_with_mech2` + `distribute_mech2`).
+  - Open: per-yak cap formula `fontSize × 5/24` is empirical; may need
+    refinement at 10.5pt and other sizes. Need 2/3/4/5 yak data to
+    pin the linear-vs-stepped relationship.
+  - Open: 19→17 jump at cw=205 — exact "skip" rule between adjacent
+    drops not fully characterized.
+- code change: NONE (pure investigation + sketch). Implementation
+  sketch provided in spec §4.7b for review. R32's alignment-gated
+  0.583x hack can be replaced by the full Mech 2 wrap-budget
+  algorithm.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 1 alignment-agnostic + Mech 1↔Mech 2 precedence
 
 Two follow-up investigations to §4.7b Mech 2 characterization:
