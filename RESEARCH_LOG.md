@@ -13,6 +13,44 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — Cluster A: Oxi adds +2.5pt offset to first cell content y (Word: cell text y = table top y)
+- context: bottom-bucket Cluster A (heavy-table layout) verification on b35123
+  (min SSIM 0.666 page 1, 22 in survey was regex artifact — actually 2 large
+  tables with 13r+10r×2c = 46 cells covering most of doc).
+- hypothesis: Oxi mis-positions first cell content y due to cellMar.top default
+  or border thickness applied incorrectly.
+- evidence:
+  - **Word's UNIVERSAL rule**: first cell first-character y == tbl.Range.Information(6)
+    (= table top y). Verified on 8 tables / 3 docs:
+    b35123 (2 tables, dy=0), 2ea81a (4 tables, dy=0), 1ec1091 (1 table, dy=0)
+  - **Oxi b35123 measurement**: first cell text at +2.5pt below Word's table top:
+    - Table 1 page 1: Word=126.0, Oxi=128.5, dy=+2.50
+    - Table 2 page 2: Word= 91.0, Oxi= 93.5, dy=+2.50
+    - Consistent across both tables (not noise)
+  - b35123 OOXML: tblStyle "af" (Table Grid 0.5pt borders), no tcMar override,
+    docDefault tblCellMar top=0, bottom=0, left/right=108tw
+  - Word's first cell content sits at cell top (consistent with master's recent
+    §13.3 RETRACT: "border has ZERO effect on text position")
+- outcome:
+  1. **Oxi has spurious +2.5pt offset** for first cell content y. Likely sources:
+     (a) default cellMar.top set to 50tw instead of 0
+     (b) unconditional vertical centering of first row text
+     (c) border thickness mis-application (less likely, doesn't fit 2.5pt)
+  2. **Universal Word rule** (8/8 tables): first_cell_text_y = table_top_y.
+     No cellMar.top offset, no border offset.
+  3. **High-leverage fix**: 13 of 15 bottom-bucket docs have tables. If same
+     +2.5pt bug applies universally, fixing it lifts 5+ docs simultaneously.
+- next: (a) re-render 2ea81a / 1ec1091 / e3c545 with current Oxi to verify
+  +2.5pt is universal vs b35123-specific; (b) code review
+  crates/oxidocs-core/src/layout/mod.rs for cell first-paragraph y formula —
+  search for `pad_t`, `cellMar.top`, default values; (c) cross-reference §3.3
+  grid centering: should NOT apply to first-row table content.
+- references: memory/investigation_table_first_cell_y_2026_05_02.md (full
+  comparison table + hypothesis ranking + recommended investigation steps).
+  Related: master's §13.3 RETRACT (commit 8913593, X-axis); this is Y-axis
+  analog. Cluster A from
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — Oxi yakumono cascade implementation has gap with Word's proportional Mech 2 (37% of justified body lines)
 - context: Cross-doc Mech 2 audit (RESEARCH_LOG entry below) confirmed 65 of 175
   audited lines (37%) show Word's proportional Mech 2 (yakumono partial compression
