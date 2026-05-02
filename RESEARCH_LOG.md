@@ -761,6 +761,51 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b/§4.7c UNIFIED: Mech 2 = Mech 3 (single mechanism, alignment-agnostic, cSC-gated)
+
+- context: §4.7b stated "Mech 2 = jc=both required". §4.7c stated
+  "Mech 3 = same algorithm, also fires at jc=left". The "alignment-gate
+  difference" was a key remaining nuance.
+- evidence:
+  - `bisect_mech3_alignment_full.py`: 10 variants × 5 alignments × 2 cSC
+    values on 7f272a clone:
+    cSC=compressPunctuation + jc ∈ {left, both, center, right, distribute}
+      → ALL 5 FIRE (Mech 2 active in all alignments)
+    cSC=doNotCompress + any jc → NONE fire
+  - `verify_mech2_csc_dependence.py`: 8 variants of CONTROLLED docx
+    (direct zip, no Word.Documents.Add() inheritance) × 4 cSC states
+    × 2 jc:
+    cSC=compressPunctuation + jc=both → FIRE
+    cSC=compressPunctuation + jc=left → FIRE
+    cSC=doNotCompress + jc=both → no fire ← KEY
+    cSC=doNotCompress + jc=left → no fire
+    No settings.xml → no fire (default doNotCompress)
+    Empty settings.xml → no fire
+- root cause of §4.7b's "jc=both" mistake:
+  §4.7b's synthesized minimal docs were built with
+  `Word.Documents.Add()`, which inherits cSC=compressPunctuation from
+  the Japanese Normal.dotm template. So §4.7b's measurements were
+  always under cSC=compressPunctuation, but only jc=both was tested.
+  When §4.7c was investigated with explicit cSC control (direct-zip
+  docx + clone of 7f272a), the alignment-agnostic behavior emerged.
+- outcome:
+  - Mech 2 and Mech 3 are the SAME mechanism. Trigger = cSC. Alignment
+    is irrelevant.
+  - Spec §4.7b's "jc=both gate" claim CORRECTED. Other §4.7b findings
+    (algorithm, position rule, charset, floor, wrap-budget) are
+    alignment-agnostic and remain correct.
+  - Spec §4.7c reframed as unification, with full 5-alignment matrix
+    + Mech 2/3 unification verification subsection.
+  - Implementation simplification (R34):
+    `should_apply_mech_2(doc_compresses_punct: bool) -> bool {
+       doc_compresses_punct  // alignment irrelevant
+    }`
+  - Practical implication: any cSC=compressPunctuation document compresses
+    yakumono on overflowing lines under any alignment. R32's
+    alignment-gated 0.583x hack should be removed; the gate is doc-level
+    cSC, not alignment.
+- code change: NONE. Spec § 4.7b/§4.7c unified.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 trigger PINNED: characterSpacingControl="compressPunctuation"
 
 - context: Session 51 R0 found Mech 3 needs "real-doc supporting files"
