@@ -13,6 +13,66 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — survey — Bottom-bucket post-R32: 15 docs, 5 hypothesis clusters
+- context: User question "R32 後 bottom-bucket survey, SSIM < 0.70 の docs 抽出 →
+  structural feature 分類 → cluster → 次 hypothesis 3-5 件 propose"
+- method:
+  - Source: ssim_baseline.json (PRE-R32 — R32 baseline-refresh not yet committed
+    but R31→R32 mean delta tiny, bottom-bucket composition stable)
+  - Bottom 30 worst-SSIM pages → deduplicated to 15 unique docs
+  - Per-doc XML feature scan: kern, jc, numPr, chars-indent, tbl, floating shape,
+    footnote, n_paras, doc_grid, compat_mode
+  - Sweep: tools/metrics/survey_bottom_bucket.py
+  - Data: pipeline_data/bottom_bucket_survey.json
+- structural pattern findings:
+  - **100% have effective kern** (15/15) — R32 kern gate fires here
+  - **100% have chars-indent** (15/15, avg 76 paras/doc with chars indent)
+  - **0% jc=both** — Mech 2 (justify-time slack) does NOT fire in bottom bucket;
+    only Mech 1 active
+  - **87% have tables** (13/15) — table-heavy template style
+  - **67% have floating shapes** (10/15)
+  - **33% have list paragraphs** (5/15)
+  - **20% have footnotes** (3/15) — but b837 has 26 fn (extreme density)
+- hypothesis clusters (predicted gain order):
+  1. **Cluster D — b837 footnote spill** (1 doc, KNOWN BLOCKER): Oxi reserves full
+     footnote area, Word splits across pages. Already in RESEARCH_LOG ## Active
+     hypotheses, assigned to oxi-2.
+  2. **Cluster A — heavy table internal layout** (5+ docs: 2ea81a, b35123, 1ec1091,
+     e3c545, 6514f214): table cell vertical Y, vAlign, cellMar, line stride within
+     cell. Multi-doc leverage.
+  3. **Cluster B — long-doc cumulative Y drift** (4-6 docs: e3c545 541p, 34140b
+     499p, 04b88e 386p, a1d6e4 317p, 6514f214 350p, d4d126 313p): each para small
+     Y drift accumulates over hundreds of paragraphs. Bottom pages downstream of
+     accumulated drift.
+  4. **Cluster E — chars-indent precise measurement** (universal, 100%): master's
+     active §15.1.1 work suggests not yet fully resolved. d77a 137 chars-indent
+     paragraphs (70% of 197 paras) is densest case.
+  5. **Cluster C — floating shape wrap-around** (3+ docs: 2ea81a 21fs, 459f, 1ec1091,
+     6514f214): body Y when text crosses floating shape zone. Master's §17 expansion
+     covered positionV/posOffset formula; wrap-effect on body Y still TBD.
+- specific bottom-bucket high-impact docs:
+  - d77a58485f16 p7 SSIM 0.627 (worst overall) — 137 chars-indent + 10 tables
+  - b837808d0555 p6 SSIM 0.645 — 26 footnotes (b837 spill case)
+  - 2ea81a8441cc p2 SSIM 0.664 — 21 floating shapes (master's §19.7 work doc)
+  - e3c545fac7a7 p11 SSIM 0.665 — 541 paras (longest doc, cumulative drift)
+  - b35123fe8efc p1 SSIM 0.666 — 22 tables in only 78 paras (28% in tables)
+- outcome:
+  1. **R32 kern gate already targets all 15** (100% kern coverage) — R32's
+     improvement here likely shows up post-baseline-refresh.
+  2. **5 distinct cluster axes** identified beyond kern. Each cluster has 1+ docs
+     where targeted fix could unlock major SSIM gains.
+  3. **Mech 2 (justify) not relevant in bottom bucket** — 0/15 use jc=both.
+     Future Mech 2 work won't help these docs.
+  4. **Long-doc drift hypothesis is novel** — was not in master's recent investigation
+     queue. If confirmed, single fix could lift 4-6 docs simultaneously.
+- next: rank cluster investigations. Cluster D (b837) already assigned. Cluster A
+  (table cell) and B (cumulative drift) are highest-leverage next steps.
+  Cluster E (chars-indent) should sync with master's §15.1.1 active work.
+- references:
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md (full table + per-doc
+  details + recommended priority order). Builds on
+  memory/investigation_r31_kern_cross_tab_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — R31 narrow gate × kern cross-tab: 40/41 candidates have kern → R31 redundant under R32
 - context: User question — "R31 で SSIM 変化した 18 docs (3a4f_p64 +0.032 含む)
   について kern presence 確認。あり → R32 kern gate で同 paragraph fire → R31
