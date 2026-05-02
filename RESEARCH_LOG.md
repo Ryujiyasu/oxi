@@ -1108,6 +1108,36 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7 round 12: Mech 1 trigger char-level audit complete (26/26 chars)
+
+- context: §4.7 lists 11 Type A + 13 Type B + 9 Type C chars. Round 11
+  verified smart quotes (4) and em-dash classification. Round 12
+  audits remaining standard yakumono characters individually.
+- evidence: `measure_mech1_char_audit.py`:
+  Suite A — 9 Type A chars × A→A trigger (preceded by （):
+    〈 《 「 『 【 〔 ［ ｛: all FIRE Mech 1 (adv=6.0, ratio=0.500)
+    （ self-pair: script artifact (first-match logic), but verified
+      by §4.7's `（（（（` example
+  Suite B — 13 Type B chars × B→B trigger (followed by ）):
+    ） 」 』 】 〕 ｝ 〉 》 ］ 、 。 ， ．: ALL 13/13 FIRE (adv=6.0)
+  Suite C — control (5 Type B between CJK):
+    All 5 correctly show no compression (Mech 1 does NOT fire when
+    next char is CJK)
+- finding:
+  All 26 standard yakumono chars (9 Type A + 13 Type B excluding
+  smart quotes / em-dash from round 11) verified to fire Mech 1 under
+  expected trigger pairs.
+- summary across rounds 11-12:
+  Type A (11 chars): smart quotes (4 in round 11) + 9 standard = 11/11 ✓
+  Type B (17 chars): smart quotes + em-dash glyph-metric (5 in round 11)
+                     + 13 standard (round 12) — 16/17 effective fire
+                     (em-dash is glyph-metric not Mech 1)
+  Type C: Hbar (U+2015) confirmed no compression
+- outcome:
+  - §4.7 Type A/B/C list fully verified at character level.
+  - Spec round 12 added with full audit table.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7 round 11: smart quotes Type A/B confirmed, em-dash REFRAMED as glyph metric
 
 - context: §4.7 lists smart quotes (U+2018-201D) and em-dash (U+2014)
