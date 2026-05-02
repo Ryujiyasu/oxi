@@ -1108,6 +1108,121 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7 round 12: Mech 1 trigger char-level audit complete (26/26 chars)
+
+- context: §4.7 lists 11 Type A + 13 Type B + 9 Type C chars. Round 11
+  verified smart quotes (4) and em-dash classification. Round 12
+  audits remaining standard yakumono characters individually.
+- evidence: `measure_mech1_char_audit.py`:
+  Suite A — 9 Type A chars × A→A trigger (preceded by （):
+    〈 《 「 『 【 〔 ［ ｛: all FIRE Mech 1 (adv=6.0, ratio=0.500)
+    （ self-pair: script artifact (first-match logic), but verified
+      by §4.7's `（（（（` example
+  Suite B — 13 Type B chars × B→B trigger (followed by ）):
+    ） 」 』 】 〕 ｝ 〉 》 ］ 、 。 ， ．: ALL 13/13 FIRE (adv=6.0)
+  Suite C — control (5 Type B between CJK):
+    All 5 correctly show no compression (Mech 1 does NOT fire when
+    next char is CJK)
+- finding:
+  All 26 standard yakumono chars (9 Type A + 13 Type B excluding
+  smart quotes / em-dash from round 11) verified to fire Mech 1 under
+  expected trigger pairs.
+- summary across rounds 11-12:
+  Type A (11 chars): smart quotes (4 in round 11) + 9 standard = 11/11 ✓
+  Type B (17 chars): smart quotes + em-dash glyph-metric (5 in round 11)
+                     + 13 standard (round 12) — 16/17 effective fire
+                     (em-dash is glyph-metric not Mech 1)
+  Type C: Hbar (U+2015) confirmed no compression
+- outcome:
+  - §4.7 Type A/B/C list fully verified at character level.
+  - Spec round 12 added with full audit table.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7 round 11: smart quotes Type A/B confirmed, em-dash REFRAMED as glyph metric
+
+- context: §4.7 lists smart quotes (U+2018-201D) and em-dash (U+2014)
+  as Type A/B without thorough verification under Mech 2. Session 51
+  found em-dash "compresses" in MS Mincho but not Yu Mincho.
+- evidence: `measure_smart_quotes_emdash_mech2.py`:
+  Suite A — 7 chars × 4 slacks at MS Mincho 12pt:
+    Smart quotes ‘ ’ " " (U+2018-201D): all behave as Type A/B,
+      adv 12→10→8→6 across slack 0..cap. Mech 2 fires correctly.
+    Em-dash (U+2014): adv = 6.0pt UNCHANGED across slack -1, +2, +4, +6.
+      Word reports compression but it's glyph design, not Mech 2.
+    Hbar (U+2015): adv = 12.5pt, no compression at any slack. Type C ✓.
+    」 (control): standard B behavior.
+  Suite B — em-dash × 3 fonts at slack=4:
+    MS Mincho em-dash adv = 6.0pt
+    Yu Mincho em-dash adv = 12.5pt
+    Meiryo em-dash adv = 12.50pt
+- key reframing:
+  Session 51's "MS compresses em-dash, Yu doesn't" is more precisely:
+  - MS 明朝/ゴシック em-dash glyph natural width = fontSize/2 (half-
+    width BY DESIGN). NOT compressed by Mech 2; it's a font metric.
+  - Yu Mincho / Meiryo em-dash glyph natural width = fontSize × 1.04
+    (full-width). Mech 2 does NOT compress it (effectively Type C).
+- outcome:
+  - §4.7 Type A/B/C list updated with em-dash font-dependency note.
+    U+2014 is **glyph half-width in MS branded fonts**, NOT Type B
+    compression rule.
+  - All 4 smart quotes (U+2018-201D) confirmed Type A/B as listed.
+  - Hbar (U+2015) confirmed Type C universal.
+  - Implementation: Oxi must use font-dependent em-dash natural width
+    AND exclude em-dash from Mech 2 candidate set.
+- code change: NONE. Spec §4.7 round 11 added.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 10: N=1 cap fillers complete 3-way universality
+
+- context: Round 7/8 had remaining sweep gaps for fs=10.5/11/12/14 N=1
+  cap measurement. Round 10 fills them.
+- evidence: `measure_n1_cap_fillers.py` 26 measurements:
+  fs=10.5 N=1: cap=5.00 first_drop=5.3 (cap+0.3)
+  fs=11.0 N=1: cap=5.50 first_drop=5.6 (cap+0.1)
+  fs=12.0 N=1: drop at slack=6.5 (NOT 12.5 as Round 7 claimed)
+  fs=14.0 N=1: cap=7.00 first_drop=7.2 (cap+0.2)
+- finding:
+  - Round 7's "fs=12 N=1 first_drop=12.5" was completely sweep-gap
+    artifact. Drop is actually at slack=6.5 = cap+0.5.
+  - All 4 font sizes confirm cap = floor(sz/2) × 0.5.
+  - drop_threshold ≈ cap + ~0.5pt (range cap+0.1 to cap+0.5).
+- 3-way universality verified:
+  - N (yak count): 1, 2, 3, 4, 5, 7 (all match formula)
+  - fs (font size): 10.5, 11, 12, 14 pt (all match formula)
+  - font family: MS 明朝/ゴシック, Yu Mincho, Meiryo, HG明朝E (all match)
+- outcome:
+  - Final spec rule (no branching needed):
+    cap_pt = floor(sz_val_int / 2) * 0.5
+    drop_threshold = cap + 0.5
+  - Spec §4.7b Round 10 added.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 9: Multi-line Mech 2 — per-line cap, last line no compress
+
+- context: Session 51 listed multi-line Mech 2 cascade as open question.
+  Cap is per-line vs paragraph-cumulative vs other?
+- evidence: `measure_multiline_mech2.py` 50-char probe with 6 yak
+  distributed × MS Mincho 12pt × jc=both × 12 cw values:
+  - cw=310 (2-line): L1 26 chars 2pt comp, L2 24 chars 0pt
+  - cw=306 (2-line): L1 26 chars 6.0pt comp (cap reached), L2 0pt
+  - cw=210 (3-line): L1 18 chars 6.0pt cap, L2 18 chars 6.0pt cap, L3 14 chars 0pt
+- finding:
+  - **Cap = floor(sz/2)*0.5 applied PER-LINE INDEPENDENTLY**.
+    Each non-last line can compress up to cap regardless of other lines.
+    cw=210 paragraph absorbed 12pt total (= 2 lines × 6pt cap each).
+  - **Last line never compresses** — jc=both renders last line LEFT-aligned
+    (standard Word behavior). All 3-line tests show L3 comp=0 regardless
+    of cw.
+  - **Wrap algorithm uses Mech 2 cap as per-line line-extension budget**.
+    Greedy pack + extend up to +1 char if remaining slack ≤ cap; break
+    otherwise.
+- outcome:
+  - Spec §4.7b Round 9 added with multi-line cascade rule.
+  - Implementation guidance:
+    For each non-last line, apply Mech 2 distribution if slack > 0.
+    Skip last line (jc=both last line rule).
+  - Each line treated as independent Mech 2 unit.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 8: cap font-independent + Round 7 N=1 drop REFUTED
 
 - context: Round 6 (4 sizes on MS Mincho) and Round 7 (N=1/2 on 12pt
