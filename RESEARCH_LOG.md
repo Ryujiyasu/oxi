@@ -13,6 +13,88 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — correction — e3c545 pagination "divergence" was para_idx mapping artifact (cell paragraphs share table block_idx)
+- context: previous entry "Cluster B: e3c545 has CATASTROPHIC pagination divergence
+  (130 paras / 12 Oxi pages vs 550 / 12 Word pages)" claimed Oxi paginates 4× slower
+  than Word. Investigation continued to identify the over-reserved content type.
+- correction: discovered that Oxi's `paragraph_index` field for table cell elements
+  is set to the TABLE BLOCK's index (per layout/mod.rs:6038, with comment "Attribute
+  to the table's source block index so diff tools can localize cell text"). NOT the
+  cell paragraph's own index.
+- evidence:
+  - tools/metrics/inspect_e3c545_para83.py → para_idx=83 has 121 elements, 74 unique y
+  - But OOXML `<w:p>` 84 (= idx 83 1-based) is a single short PreformattedText
+    paragraph (just "@prefix cc:&lt;http://creativecommons.org/ns#&gt;.")
+  - Mismatch resolved by code review: para_idx aliasing for table cell content
+  - Oxi has 541 `<w:p>` total; 119 of those are inside tables (3 `<w:tbl>` opens
+    before the data-set-definition position, 2 `</w:tbl>` closes — i.e., inside
+    one of 9 tables)
+- corrected interpretation:
+  - Oxi IR has ~130 Body Blocks for e3c545 (each table is ONE Block containing
+    many cell paragraphs)
+  - Word's `Paragraphs(i)` includes all 541 (body + cell) paragraphs; Oxi's
+    para_idx in layout JSON is a body Block index for body content but aliases
+    to table block_idx for cell content
+  - Mapping `Word p_i = Oxi para_idx (p_i - 1)` breaks for cell paragraphs
+  - The "5-page divergence at p100" was Oxi's body para 99 vs Word's cell para 100
+    (different entities)
+- what's still real:
+  - Word p1-p4 dy = 0.0pt (body, perfect match)
+  - Word p5 dy = -3.5pt
+  - **Word p50 dy = +21pt** (body paragraph, cumulative drift)
+  - This implies ~0.4pt per body paragraph drift accumulating over the first 50
+    body paragraphs. Cluster B (per-para drift) hypothesis remains valid at this
+    smaller scale.
+- outcome:
+  1. **PREVIOUS ENTRY's "catastrophic divergence" claim is RETRACTED**. The data
+     was misinterpreted via an incorrect Word↔Oxi paragraph mapping.
+  2. **Body paragraph drift IS real** at ~0.4pt/para in early paragraphs of e3c545.
+  3. **Cluster B (per-para drift) hypothesis remains valid** — magnitude smaller
+     than claimed but real. Need text-match-based comparison (not index mapping)
+     to quantify cumulative drift accurately for full p1-p550 range.
+- next: (a) build text-content-based Word↔Oxi paragraph mapping; (b) compute
+  cumulative Y drift across all body paragraphs (excluding cell paragraphs);
+  (c) identify which body paragraphs show step-changes in dy (suggesting specific
+  feature triggers).
+- references: memory/investigation_e3c545_pagination_correction_2026_05_02.md
+  (correction memo). Supersedes investigation_e3c545_pagination_divergence_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed (revised mechanism) — Cluster B: e3c545 has CATASTROPHIC pagination divergence (130 paras / 12 Oxi pages vs 550 / 12 Word pages)
+- context: bottom-bucket survey Cluster B (long-doc cumulative Y drift) hypothesis.
+  Tested on e3c545 (550 paras, min SSIM 0.665 page 11).
+- hypothesis tested: small per-paragraph Y drift accumulates over hundreds of paras
+- evidence:
+  - Word COM Y measurement (tools/metrics/measure_long_doc_drift.py) on 20 sampled
+    paragraphs across e3c545
+  - Oxi cached layout comparison (tools/metrics/compare_long_doc_drift.py) using
+    pipeline_data/_e3c545_layout.json
+  - Result: Oxi 12 pages cover only paras 0-129. Word 12 pages cover all 550.
+  - dy progression: 0pt (paras 1-4) → -3.5pt (p5) → +21pt (p50) → 5-page
+    divergence (p100: Word page 4, Oxi page 9)
+  - Oxi page 5 contains ONLY 1 paragraph (para_idx=83) — single para fills full page
+- outcome:
+  1. **Cluster B mechanism REVISED**: NOT linear per-para drift. Oxi paginates
+     ~4× slower than Word due to catastrophic over-reservation of specific content
+     blocks (likely code blocks, nested tables, or specific OOXML features).
+  2. **Single-paragraph-fills-page anomaly** at para_idx=83 indicates a content
+     block that Oxi grossly over-reserves. e3c545 is a TTL/RDF technical
+     handbook with monospace code blocks — likely candidate.
+  3. **Why bottom-page SSIM is low**: Oxi page 11 contains paras 109-118 while
+     Word page 11 contains paras ~470-490 (completely DIFFERENT content). The
+     pixel-comparison sees totally different text → SSIM crashes.
+  4. **Cluster B should be re-classified** as "block over-reservation" not
+     "per-para drift". Aligns more with Cluster A (table cell layout) than the
+     original per-para hypothesis.
+- next: (a) identify para_idx=83 content type in e3c545 (code block? table?);
+  (b) trace per-paragraph cursor_y advance through paras 70-100 to find where
+  over-reservation kicks in; (c) verify pattern on 04b88e / 34140b (no Oxi cache
+  yet); (d) hypothesis: specific element (`<w:pre>`-style? grid charSpace?
+  monospace font lh formula?) over-reserves vertically.
+- references:
+  memory/investigation_e3c545_pagination_divergence_2026_05_02.md (full data + per-page
+  para_idx range + revised mechanism). Builds on
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — survey — Bottom-bucket post-R32: 15 docs, 5 hypothesis clusters
 - context: User question "R32 後 bottom-bucket survey, SSIM < 0.70 の docs 抽出 →
   structural feature 分類 → cluster → 次 hypothesis 3-5 件 propose"
@@ -586,6 +668,59 @@ Format:
   hRule to "atLeast" when the attribute is absent (matches Word). Layout
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — partial — §4.7b Mech 2 wrap-budget intertwined design + Oxi implementation sketch
+
+- context: §4.7b Mech 2 algorithm confirmed (0.5pt step, fontSize×2/3
+  floor) but "drop char + refit" is wrap-decision intertwined. R32's
+  alignment-gated 0.583x hack is a middle ground; proper
+  implementation needs the full wrap algorithm.
+- evidence: 3 probe sweeps at jc=both, MS Mincho 12pt:
+  - P_yak3 (21 chars, 3 yak): 2 transitions found
+  - P_yak6 (20 chars, 6 yak): partial (Word died, ~10 datapoints)
+  - P_yak12 (22 chars, 10 yak, 9 compressible): 130 datapoints — clean
+  Tools: `measure_m2_wrap_budget.py` + `_chunked.py` (Word-restart
+  on RPC failure).
+- findings:
+  - **Drop trigger**: each "drop 1 char" boundary at slack ≈ fontSize
+    (=12pt for 12pt MS Mincho). Word refuses total-line compression
+    > 1×fontSize → drops a char.
+  - **Per-yak distribution cap (multi-yak)**: 9 yak absorbed 22pt
+    total at cw=206; refused 23pt at cw=205. Cap ≈ 2.5pt =
+    fontSize × 5/24.
+  - **Per-yak cap (single-yak)**: from §4.7b round 1 — 1 yak can
+    absorb 4pt = fontSize/3. Asymmetric with multi-yak case.
+  - **N→N-2 jump at cw=205**: Word skipped 18-char fit, dropping
+    directly to 17 chars (natural=204 ≈ cw). Suggests Word uses
+    natural-fit-greedy as base, with optional +1 char Mech 2
+    extension.
+- inferred algorithm:
+  ```
+  natural_fit_n = max N s.t. sum(natural[0..N]) <= cw
+  while extend_n < len(chars):
+      candidate_n = extend_n + 1
+      new_slack = sum(natural[0..candidate_n]) - cw
+      if new_slack <= 0: extend; continue
+      if new_slack >= fontSize: break    # drop threshold
+      compressible = count_yak_skipping_pos1
+      cap_per_yak = fontSize/3 if 1 yak else fontSize*5/24
+      if new_slack > compressible * cap_per_yak: break
+      extend_n = candidate_n
+  ```
+- outcome:
+  - Spec §4.7b extended with "Mech 2 + wrap-budget intertwined design"
+    subsection, including observed regularities table, inferred
+    algorithm, and ~80-LOC Oxi implementation sketch
+    (`try_extend_with_mech2` + `distribute_mech2`).
+  - Open: per-yak cap formula `fontSize × 5/24` is empirical; may need
+    refinement at 10.5pt and other sizes. Need 2/3/4/5 yak data to
+    pin the linear-vs-stepped relationship.
+  - Open: 19→17 jump at cw=205 — exact "skip" rule between adjacent
+    drops not fully characterized.
+- code change: NONE (pure investigation + sketch). Implementation
+  sketch provided in spec §4.7b for review. R32's alignment-gated
+  0.583x hack can be replaced by the full Mech 2 wrap-budget
+  algorithm.
 
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 1 alignment-agnostic + Mech 1↔Mech 2 precedence
 
