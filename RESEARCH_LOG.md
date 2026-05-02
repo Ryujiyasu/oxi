@@ -889,6 +889,36 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b per-yak cap REVISED: line-level cap = fontSize/2, divided by N
+
+- context: §4.7b round 3 derived per-yak cap = fontSize × 5/24 (≈2.5pt
+  for 12pt) from a single N=9 datapoint. Round 5 (per-yak cap regression
+  on N ∈ {2, 3, 4, 5, 7}) reveals this was wrong.
+- evidence: `measure_per_yak_cap_sweep.py` controlled-cSC direct-zip
+  docx, 24-char probe with N evenly-distributed yakumono, jc=both,
+  16 cw values per N:
+  - N=3: drop boundary slack=7, max comp at 24 chars = 6.0pt
+  - N=4: drop boundary slack=7, max comp = 6.0pt
+  - N=5: drop boundary slack=7, max comp = 6.0pt
+  - N=7: drop boundary slack=7, max comp = 6.0pt
+  - N=2: line-end yak anomaly (non-monotonic drop pattern)
+- finding: Line-level total compression cap = fontSize/2 (= 6pt for
+  12pt font), CONSTANT across N ≥ 3. Per-yak cap = (fontSize/2) / N.
+- reconciliation:
+  - Round 3 N=9 datapoint gave 22pt total comp at cw=205. The 19-char
+    line at that scenario was POST-DROP (line dropped 3 chars from 22
+    to 19), so larger compression budget applies in heavy-overflow
+    regime. The "5/24" was a coincidence in that specific scenario.
+  - Round 5 measures the clean "1-line, before drop" cap = fontSize/2.
+- outcome:
+  - Spec §4.7b corrected:
+    `total_cap = fontSize/3 if N=1, fontSize/2 if N≥2 (line-level)`
+  - Per-yak cap = total_cap / N (derived).
+  - Implementation simpler: just compute line total cap.
+  - Round 3's per-yak average (22/9 = 2.44pt) reframed as "post-drop
+    behavior, larger budget" — separate from the standard wrap-fit cap.
+- code change: NONE. Spec §4.7b implementation sketch revised.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b/§4.7c UNIFIED: Mech 2 = Mech 3 (single mechanism, alignment-agnostic, cSC-gated)
 
 - context: §4.7b stated "Mech 2 = jc=both required". §4.7c stated
