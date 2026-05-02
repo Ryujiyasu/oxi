@@ -13,6 +13,52 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — correction — e3c545 pagination "divergence" was para_idx mapping artifact (cell paragraphs share table block_idx)
+- context: previous entry "Cluster B: e3c545 has CATASTROPHIC pagination divergence
+  (130 paras / 12 Oxi pages vs 550 / 12 Word pages)" claimed Oxi paginates 4× slower
+  than Word. Investigation continued to identify the over-reserved content type.
+- correction: discovered that Oxi's `paragraph_index` field for table cell elements
+  is set to the TABLE BLOCK's index (per layout/mod.rs:6038, with comment "Attribute
+  to the table's source block index so diff tools can localize cell text"). NOT the
+  cell paragraph's own index.
+- evidence:
+  - tools/metrics/inspect_e3c545_para83.py → para_idx=83 has 121 elements, 74 unique y
+  - But OOXML `<w:p>` 84 (= idx 83 1-based) is a single short PreformattedText
+    paragraph (just "@prefix cc:&lt;http://creativecommons.org/ns#&gt;.")
+  - Mismatch resolved by code review: para_idx aliasing for table cell content
+  - Oxi has 541 `<w:p>` total; 119 of those are inside tables (3 `<w:tbl>` opens
+    before the data-set-definition position, 2 `</w:tbl>` closes — i.e., inside
+    one of 9 tables)
+- corrected interpretation:
+  - Oxi IR has ~130 Body Blocks for e3c545 (each table is ONE Block containing
+    many cell paragraphs)
+  - Word's `Paragraphs(i)` includes all 541 (body + cell) paragraphs; Oxi's
+    para_idx in layout JSON is a body Block index for body content but aliases
+    to table block_idx for cell content
+  - Mapping `Word p_i = Oxi para_idx (p_i - 1)` breaks for cell paragraphs
+  - The "5-page divergence at p100" was Oxi's body para 99 vs Word's cell para 100
+    (different entities)
+- what's still real:
+  - Word p1-p4 dy = 0.0pt (body, perfect match)
+  - Word p5 dy = -3.5pt
+  - **Word p50 dy = +21pt** (body paragraph, cumulative drift)
+  - This implies ~0.4pt per body paragraph drift accumulating over the first 50
+    body paragraphs. Cluster B (per-para drift) hypothesis remains valid at this
+    smaller scale.
+- outcome:
+  1. **PREVIOUS ENTRY's "catastrophic divergence" claim is RETRACTED**. The data
+     was misinterpreted via an incorrect Word↔Oxi paragraph mapping.
+  2. **Body paragraph drift IS real** at ~0.4pt/para in early paragraphs of e3c545.
+  3. **Cluster B (per-para drift) hypothesis remains valid** — magnitude smaller
+     than claimed but real. Need text-match-based comparison (not index mapping)
+     to quantify cumulative drift accurately for full p1-p550 range.
+- next: (a) build text-content-based Word↔Oxi paragraph mapping; (b) compute
+  cumulative Y drift across all body paragraphs (excluding cell paragraphs);
+  (c) identify which body paragraphs show step-changes in dy (suggesting specific
+  feature triggers).
+- references: memory/investigation_e3c545_pagination_correction_2026_05_02.md
+  (correction memo). Supersedes investigation_e3c545_pagination_divergence_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed (revised mechanism) — Cluster B: e3c545 has CATASTROPHIC pagination divergence (130 paras / 12 Oxi pages vs 550 / 12 Word pages)
 - context: bottom-bucket survey Cluster B (long-doc cumulative Y drift) hypothesis.
   Tested on e3c545 (550 paras, min SSIM 0.665 page 11).
