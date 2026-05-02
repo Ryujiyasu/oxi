@@ -13,6 +13,55 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — Oxi yakumono cascade implementation has gap with Word's proportional Mech 2 (37% of justified body lines)
+- context: Cross-doc Mech 2 audit (RESEARCH_LOG entry below) confirmed 65 of 175
+  audited lines (37%) show Word's proportional Mech 2 (yakumono partial compression
+  to 7-9pt range). Code review of Oxi's break_into_lines to check if cascade matches.
+- hypothesis: Oxi implements Mech 1 + ASCII slack distribution but lacks proportional
+  Mech 2 (partial yakumono compression on residual overflow).
+- evidence (code review):
+  - `crates/oxidocs-core/src/layout/mod.rs:4321` — break_into_lines yakumono pre-pass:
+    builds yakumono_compressed[] boolean (Mech 1 Type A/B detection); applies
+    ×0.5 to compressed yakumono, ×0.583 to standalone 、。
+  - `crates/oxidocs-core/src/layout/mod.rs:3589` (Phase 1 overflow Mech 1):
+    on `slack < 0`, re-applies ×0.5 to remaining CJK punctuation. **Binary
+    compression — full or half**, no partial.
+  - `crates/oxidocs-core/src/layout/mod.rs:3645` (Stage 2b decompress):
+    on `slack > 0.5`, restores compressed 、。 toward natural. UNDOES Mech 1.
+  - `crates/oxidocs-core/src/layout/mod.rs:3677` (Phase 2 slack):
+    on `slack > 0`, distributes positive slack to ASCII spaces or as uniform
+    per-char gap. **Adds spacing, not compresses**.
+  - **Missing stage** between line 3618 and 3621: proportional Mech 2 that
+    distributes residual NEGATIVE slack across full-width yakumono with
+    per-char cap (font_size × 1/3 per spec).
+- outcome:
+  1. **Oxi can produce SELECTIVE behavior** (26 lines = 15% of audited) — matches Word.
+     Mech 1 fires on neighbor patterns; others stay full.
+  2. **Oxi can produce PURE FULL** (76 lines = 43%) — matches Word when no overflow.
+  3. **Oxi CANNOT produce PROPORTIONAL Mech 2** (65 lines = 37%) where Word
+     compresses yakumono partially to 7-9pt range. Oxi's options:
+     - Phase 1 forces ×0.5 (5.25pt for 10.5pt font) → over-compressed
+     - OR leaves full → still overflowing
+     - Net mismatch: ~2pt difference per yakumono in 37% of justified lines
+  4. **Recommended fix** (for oxi-2 implementation session):
+     ```
+     // Add Stage 2.5 between line 3618 and 3621:
+     if slack < 0 && !in_textbox {
+         compressible: yakumono still at full width (not Mech 1 hit yet)
+         per_char_reduction = (-slack / n_compressible).min(font_size × 0.5)
+         apply to each, recompute slack
+     }
+     ```
+- next: (a) targeted SSIM measurement: implement Stage 2.5, run pipeline.verify,
+  expect lift on 3a4f / d77a / b35123 (have most proportional Mech 2 lines);
+  (b) cross-reference master's §4.7b spec (a8d70c2) — likely already specifies
+  cascade with per-char cap formula; (c) consider Mech 3 (jc=left, master's
+  §4.7c) as separate axis from this Mech 2 gap.
+- references:
+  memory/investigation_oxi_yakumono_cascade_gap_2026_05_02.md (full code references
+  + recommended fix + caveats). Builds on
+  memory/investigation_mech2_selective_cross_doc_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — Cross-doc Mech 2 selective behavior is GENERAL (5 docs / 175 lines / 486 yakumono)
 - context: User question "paragraph 10 L4 ('Mech 1 hit + 3 yak full') pattern が他 doc
   にも共通か。selective rule の一般性確認。"
@@ -711,6 +760,51 @@ Format:
   hRule to "atLeast" when the attribute is absent (matches Word). Layout
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 trigger PINNED: characterSpacingControl="compressPunctuation"
+
+- context: Session 51 R0 found Mech 3 needs "real-doc supporting files"
+  but did not identify the discriminator. R34 implementation needs the
+  exact gate.
+- evidence — bisect_mech3_trigger.py (15 variants):
+  Removing 11 different elements/files from 7f272a clone, only one
+  disabled Mech 3:
+  - `<w:characterSpacingControl w:val="compressPunctuation"/>` removal
+    → Mech 3 NO LONGER FIRES
+  - `<w:useFELayout/>` removal → still fires
+  - `<w:balanceSingleByteDoubleByteWidth/>` removal → still fires
+  - `<w:adjustLineHeightInTable/>` removal → still fires
+  - compatMode 14→15 → still fires
+  - `<w:compat>` block fully removed → still fires
+  - `<w:kern>` removed from docDefaults → **STILL FIRES**
+  - `themeFontLang` removed → still fires
+  - `fontTable.xml` removed → still fires
+  - bare-minimum `settings.xml` (no cSC) → does NOT fire (consistent)
+- evidence — bisect_mech3_csc_values.py (10 variants):
+  cSC value matrix × kern × jc:
+  - `compressPunctuation` + any kern + jc=left/both → fires
+  - `compressPunctuationAndJapaneseKana` + kern=yes + jc=left → fires (equivalent)
+  - `doNotCompress` + any kern + jc=left/both → does NOT fire
+  - cSC element absent + kern=yes + jc=left → does NOT fire (default = doNotCompress)
+- outcome:
+  - **Mech 3 trigger = `<w:characterSpacingControl w:val="V"/>` with
+    V ∈ {"compressPunctuation", "compressPunctuationAndJapaneseKana"}**
+    in `word/settings.xml`. SOLE necessary and sufficient condition.
+  - **Mech 1 (kern gate) and Mech 2/3 (cSC gate) are INDEPENDENT.**
+    Both can fire concurrently or one without the other.
+  - Why Session 51 minimal repros never fired: synthesized minimal docx
+    lacked `word/settings.xml` entirely → cSC default = doNotCompress
+    → no Mech 3. The "real-doc supporting files" requirement was a
+    red herring — only one element matters.
+  - ECMA-376 §17.15.1.10 documents `characterSpacingControl` as
+    "applied only at justify" but Word also fires it at jc=left
+    (undocumented).
+  - Spec §4.7c updated with full trigger spec, bisect tables, ECMA
+    reference, and concrete Oxi implementation gate code.
+  - For R34 implementation: gate yakumono compression on the
+    document-level cSC setting, NOT on real-doc heuristics or kern
+    presence.
+- code change: NONE. Implementation guidance refined in spec §4.7c.
 
 ## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 compression formula = same as Mech 2 (slack 0.5pt-step), only alignment gate differs
 
