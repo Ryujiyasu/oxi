@@ -13,6 +13,32 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 cap inside table cell = body cap (Round 28)
+
+- context: Round 16/22 closed §4.7b Mech 2 cap formulas at body
+  level (mixed: fs/2, pure-yak: floor(sz×3/4)*0.5). Open question:
+  does cell context (cellMar, border, jc inheritance) modify cap?
+- evidence — `pipeline_data/mech2_cell.json` (12 m):
+  6 slacks × {body, cell}. Cell setup: 1×1 table with default
+  cellMar=4.95pt, content width = tcW - 2×cellMar = same as body cw.
+  Probe: `「漢」漢` × 6 (24 chars, 12 mid-line yak, cap_pred=fs/2=6pt
+  at fs=12).
+  | slack | body n/m2 | cell n/m2 | match |
+  |   3.0 | 24/+3.0   | 24/+3.0   | ✓
+  |   5.0 | 24/+5.0   | 24/+5.0   | ✓
+  |   6.0 | 24/+6.0   | 24/+6.0   | ✓ (cap)
+  |   7.0 | 23/wrap   | 23/wrap   | ✓
+  |   8.0 | 23/wrap   | 23/wrap   | ✓
+  |  10.0 | 23/wrap   | 23/wrap   | ✓
+- formula: cell's Mech 2 line width = tcW - 2×cellMar; cap dispatcher
+  identical to body (Round 16 mixed / Round 22 pure-yak rules).
+- outcome: Oxi's cell layout can use existing §4.7b cap dispatcher
+  unchanged. Cell-internal Mech 2 fires on cell_inner_content_width
+  computed per §13.1.
+- caveats: default cellMar=4.95pt only; custom paddings, asymmetric
+  L/R, and border presence untested but expected to follow same
+  structural rule.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.6.2 Latin→kana asymmetry RESOLVED via RSB (Round 25)
 
 - context: Round 24 found Latin→kana boundary extra varies by glyph
