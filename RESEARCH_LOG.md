@@ -1108,6 +1108,35 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 13: cap formula at 16pt + mixed-size = CJK-dominant-fs/2
+
+- context: Round 6/7/8/10 verified cap formula for 10.5/11/12/14pt MS
+  Mincho. Round 13 extends to 16/18pt + tests mixed-size lines.
+- evidence: `measure_cap_large_mixed.py` 4 suites × ~11 cw values:
+  Suite A (pure 16pt N=3):
+    cap = 8.0pt = floor(sz_val/2)*0.5 ✓ formula confirmed
+  Suite B (pure 18pt N=3):
+    formula predicts 9.0pt cap; observed max=8.5pt at slack=8.5;
+    slack=9.0 produced 2-char wrap anomaly (Word edge case)
+  Suite C (CJK=12pt, yak=10.5pt mixed):
+    cap = 6.0pt = CJK fs/2 (NOT yak fs/2 = 5.25)
+  Suite D (CJK=12pt, yak=14pt mixed):
+    cap = 6.0pt = CJK fs/2 (NOT yak fs/2 = 7.0)
+- KEY finding: **Mixed-size cap is determined by CJK (non-yak) font
+  size, NOT yakumono's own font size.**
+- per-yak compression mechanics:
+  Suite C (yak fs=10.5): per-yak comp = 2pt → yak adv = 10.5-2 = 8.5pt
+  Suite D (yak fs=14):   per-yak comp = 2pt → yak adv = 14-2 = 12.0pt
+  Each yak compresses by cap/N within own glyph metric.
+- outcome:
+  - Spec §4.7b round 13 added with mixed-size finding.
+  - Implementation guidance: cap_pt = CJK dominant sz/2, NOT yak's.
+    Per-yak compression = cap/N from yak's own font size.
+  - 16pt cap formula verified clean.
+  - 18pt has Word measurement edge case at exactly slack=9.0;
+    formula likely correct (9.0pt) but needs careful filler sweep.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7 round 12: Mech 1 trigger char-level audit complete (26/26 chars)
 
 - context: §4.7 lists 11 Type A + 13 Type B + 9 Type C chars. Round 11
