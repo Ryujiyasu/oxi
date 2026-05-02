@@ -1444,6 +1444,39 @@ pub struct BalloonReply {
     pub body: String,
 }
 
+/// Convert an IR `Shape` to the right `LayoutContent` variant.
+/// Filled prstGeom shapes (rect, roundRect, ellipse) become `BoxRect` so the
+/// fill color is preserved through the renderer; outline-only preset shapes
+/// (bracketPair, line, leftBracket, rightBracket, etc.) stay as
+/// `PresetShape`. roundRect uses OOXML's default adj of 16.667% × min(w,h)
+/// for corner radius.
+fn shape_to_layout_content(shape: &crate::ir::Shape) -> LayoutContent {
+    match shape.shape_type.as_str() {
+        // Filled rect / roundRect / ellipse: route to BoxRect so fill renders.
+        // Note: ellipse is rendered as a rectangle by BoxRect — geometry
+        // approximation, but better than dropping the fill entirely.
+        "rect" | "roundRect" | "ellipse" => {
+            let corner_radius = if shape.shape_type == "roundRect" {
+                shape.width.min(shape.height) * 0.16667
+            } else {
+                0.0
+            };
+            LayoutContent::BoxRect {
+                fill: shape.fill.clone(),
+                stroke_color: shape.stroke_color.clone(),
+                stroke_width: shape.stroke_width.unwrap_or(0.75),
+                corner_radius,
+            }
+        }
+        // Outline-only / decorative shapes: keep current path.
+        _ => LayoutContent::PresetShape {
+            shape_type: shape.shape_type.clone(),
+            stroke_color: shape.stroke_color.clone(),
+            stroke_width: shape.stroke_width.unwrap_or(0.75),
+        },
+    }
+}
+
 pub struct LayoutEngine {
     default_font_size: f32,
     default_font_family: Option<String>,
@@ -2688,11 +2721,7 @@ impl LayoutEngine {
                             let sy = para_anchor_y + pos.y;
                             elements.push(LayoutElement::new(
                                 sx, sy, shape.width, shape.height,
-                                LayoutContent::PresetShape {
-                                    shape_type: shape.shape_type.clone(),
-                                    stroke_color: shape.stroke_color.clone(),
-                                    stroke_width: shape.stroke_width.unwrap_or(0.75),
-                                },
+                                shape_to_layout_content(shape),
                             ));
                         }
                     }
@@ -3361,11 +3390,10 @@ impl LayoutEngine {
                         // v_relative="paragraph": y = anchor_paragraph_y + offset
                         let sx = start_x + pos.x;
                         let sy = anchor_y + pos.y;
-                        lp.elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, LayoutContent::PresetShape {
-                                shape_type: shape.shape_type.clone(),
-                                stroke_color: shape.stroke_color.clone(),
-                                stroke_width: shape.stroke_width.unwrap_or(0.75),
-                        }));
+                        lp.elements.push(LayoutElement::new(
+                            sx, sy, shape.width, shape.height,
+                            shape_to_layout_content(shape),
+                        ));
                     }
                 }
             }
@@ -3612,11 +3640,7 @@ impl LayoutEngine {
                             let sy = para_start_y + pos.y;
                             elements.push(LayoutElement::new(
                                 sx, sy, shape.width, shape.height,
-                                LayoutContent::PresetShape {
-                                    shape_type: shape.shape_type.clone(),
-                                    stroke_color: shape.stroke_color.clone(),
-                                    stroke_width: shape.stroke_width.unwrap_or(0.75),
-                                },
+                                shape_to_layout_content(shape),
                             ));
                         }
                     }
@@ -7308,11 +7332,12 @@ impl LayoutEngine {
                         // pos.y = offset from paragraph start (Word COM confirmed)
                         for shape in &para.shapes {
                             if let Some(ref pos) = shape.position {
-                                cell_elements.push(LayoutElement::new(cell_x + pad_l + pos.x, para_content_start_h + pos.y, shape.width, shape.height, LayoutContent::PresetShape {
-                                        shape_type: shape.shape_type.clone(),
-                                        stroke_color: shape.stroke_color.clone(),
-                                        stroke_width: shape.stroke_width.unwrap_or(0.5),
-                                }));
+                                cell_elements.push(LayoutElement::new(
+                                    cell_x + pad_l + pos.x,
+                                    para_content_start_h + pos.y,
+                                    shape.width, shape.height,
+                                    shape_to_layout_content(shape),
+                                ));
                             }
                         }
                     }
