@@ -13,6 +13,50 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — refuted — 1ec1 □ glyph LSB +2.4pt H_A (font fallback): both Word and Oxi resolve to MS Gothic
+- context: 依頼書 Investigation A. 1ec1091177b1_006.docx Shape 4 textbox □3
+  paragraph: Oxi's □ visible glyph at +2.4pt LEFT of Word's. H_A hypothesis:
+  Oxi resolves theme major eastAsia to a different physical font (e.g., Yu
+  Mincho Light) than Word.
+- evidence:
+  - Word COM measurement (tools/metrics/investigate_1ec1_box3_font.py):
+    □ char Font.Name = ＭＳ ゴシック (MS Gothic). NameAscii/FarEast =
+    "+見出しのフォント - 日本語" (= asciiTheme="majorEastAsia" placeholder).
+  - Theme1.xml: `<a:ea typeface=""/>` (empty) BUT `<a:font script="Jpan"
+    typeface="ＭＳ ゴシック"/>` provides Japanese-specific value.
+  - Run XML rFonts: `asciiTheme=eastAsiaTheme=hAnsiTheme="majorEastAsia"`
+    + `hint="eastAsia"` for ALL chars in □3 paragraph.
+  - Oxi code review trace:
+    1. theme.rs parses `<a:font script="Jpan">` → major_font_ea = Some("ＭＳ ゴシック")
+    2. Final fallback "Meiryo" at line 251 doesn't trigger (already Some)
+    3. ooxml.rs:4193-4200 resolves eastAsiaTheme="majorEastAsia" via
+       resolve_theme_font_pub → returns Some("ＭＳ ゴシック")
+    4. style.font_family_east_asia = Some("ＭＳ ゴシック")
+    5. resolve_font_family_for_text("□", ...) → has_cjk(□)=true → returns
+       run_style.font_family_east_asia = "ＭＳ ゴシック"
+    6. font/mod.rs:824 normalize: "ＭＳ ゴシック" → "MS Gothic" (registered)
+- outcome:
+  1. **H_A FALSIFIED**. Both Word and Oxi resolve to MS Gothic.
+  2. The +2.4pt LSB diff is NOT a font selection bug.
+  3. **H_B promoted to top hypothesis**: same font, GDI rendering produces
+     different glyph LSB.
+  4. **Suspect identified**: `tools/oxi-gdi-renderer/src/main.rs:193`
+     uses `DEFAULT_CHARSET (1)` in CreateFontW. Word likely uses
+     `SHIFTJIS_CHARSET (128)` for Japanese fonts. With DEFAULT_CHARSET,
+     GDI may resolve "MS Gothic" to a slightly different physical font
+     instance with different LSB metrics for □ U+25A1.
+  5. Also noted: MS Gothic in `font_metrics_compact.json` does NOT have
+     U+25A1 width entry (only common CJK chars). Doesn't matter for LSB
+     calculation since GDI handles glyph metrics at render time, but
+     could affect other paths.
+- next: Investigation B (依頼書 1 hour scope) — minimal docx with single □
+  in MS Gothic 14pt. Render Word + Oxi, pixel-measure □ visible left edge.
+  If diff persists → modify CreateFontW charset to SHIFTJIS_CHARSET. Then
+  Investigation C for cumulative drift.
+- references: memory/investigation_1ec1_box_font_phase_a_2026_05_02.md
+  (full code-review trace + B/C plan). Builds on
+  session_50_1ec1_phase3_findings.md (original measurement).
+
 ## 2026-05-02 — oxi-4 — confirmed — Cluster A root cause: Oxi cell first text y = top_bw + implicit pad_t + cell_text_y_off (3 cumulative additions = +2.5pt)
 - context: continuation of Cluster A finding (+2.5pt offset on b35123 first cell).
   Source-level decomposition of Oxi's `crates/oxidocs-core/src/layout/mod.rs`
