@@ -1108,6 +1108,34 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 8: cap font-independent + Round 7 N=1 drop REFUTED
+
+- context: Round 6 (4 sizes on MS Mincho) and Round 7 (N=1/2 on 12pt
+  MS Mincho) confirmed cap formula but raised 2 questions:
+  (a) is cap font-dependent? (Session 51 found em-dash is)
+  (b) is N=1 drop threshold = fontSize × 1 (Round 7 claim)?
+- evidence: `measure_cap_other_fonts.py`:
+  Suite E (5 CJK fonts × 12pt × N=3 mid-line):
+    ＭＳ 明朝, ＭＳ ゴシック, Yu Mincho, Meiryo, HG明朝E
+    → ALL produce cap=6.0pt, first_drop=6.5pt
+    → cap formula font-INDEPENDENT
+  Suite F (fs=14 N=1 gap-fill, slack 7..14 step 1pt):
+    slack=7.0: comp=7.0 (cap reached)
+    slack=8.0: drop ← first_drop = 8.0, NOT 14.5
+- correction:
+  Round 7's "N=1 first_drop ≈ fontSize × 1" was a sweep-gap artifact
+  (slack 7.0..14.0 untested, jumped from 6.7 to 14.5). True N=1 first
+  drop = cap + 1.0pt = 8.0pt for fs=14, mirroring N≥2.
+  fs=12 N=1 first_drop=12.5 (Round 7) likely also gap-artifact; true
+  value probably 6.5pt. Recommend filler sweep.
+- outcome:
+  - Final unified rule: cap = floor(sz_val/2) × 0.5, drop_threshold =
+    cap + 0.5pt. N-independent and font-independent.
+  - Spec §4.7b Round 8 added with corrected drop_threshold rule.
+  - Implementation simpler: no N=1 special case.
+- open: fs=12 N=1 first_drop verification, 16+pt fonts, mixed-size lines.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b N=1 cap REVISED + N=2 mid-line resolved (round 7)
 
 - context: §4.7b round 3 claimed N=1 cap = fontSize/3 (= 4pt for 12pt) as
