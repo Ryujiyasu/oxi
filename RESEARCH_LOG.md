@@ -13,6 +13,28 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.7 topLinePunct = unconditional half-width line-start yak (Round 34)
+
+- context: ECMA-376 §17.3.1.43 paragraph topLinePunct property.
+  Open: does it conditionally or unconditionally compress?
+- evidence — `pipeline_data/top_line_punct.json` (12 m at fs=12 MSM):
+  Probe 「+漢×20.
+  | cw | def | on | off |
+  | 252 | 「=12 n=21 | **「=6** n=21 | 「=12 n=21
+  | 248 | n=20 wrap   | **「=6** n=21 fits | n=20 wrap
+  | 246 | n=20 wrap   | **「=6** n=21 fits | n=20 wrap
+  | 240 | n=20 wrap   | 「=6 n=20 wrap | n=20 wrap
+- formula:
+  - default = OFF
+  - ON: line-start Type A yak (「『（) UNCONDITIONALLY compressed
+    to half-width (= fs/2). Fires even when no overflow pressure.
+  - Saves fs/2 of line width; further slack wraps regardless.
+- outcome: Oxi must parse `<w:topLinePunct>` from pPr/style chain,
+  apply half-width at line-start Type A yak when ON.
+- impact: ECMA's "if needed to allow another character" wording
+  is misleading — actual behavior is unconditional compression
+  whenever the flag is on for the paragraph.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.6.6 w:vanish hidden text = ZERO layout width (Round 33)
 
 - context: ECMA-376 §17.3.2.43 vanish run property hides text from
