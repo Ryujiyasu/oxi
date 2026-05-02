@@ -1108,6 +1108,37 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — partial — §4.6.1 Kinsoku Retreat × Mech 2: retreat causes visible overflow (round 17 partial)
+
+- context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
+  causes retreat. Question: when retreat causes line-1 overflow > Mech 2
+  cap, does Word retain retreat with overflow, or drop chars?
+- evidence: `tools/metrics/measure_kinsoku_remeasure.py` (50-char probe
+  with 」 at pos 24, 8 cw values; 3/8 measured, 5/8 RPC errored due to
+  Word COM session instability):
+  cw=264 (slack 336): L1 = 22 chars w=264 (no overflow); 」 in L2 pos 2
+    (between CJK, not at line-start)
+  cw=284 (slack 16): L1 = 24 chars including 」 at pos 24, w=290pt
+    → **L1 overflows content_w by 6pt** (visible overflow!)
+    L2 = 23 chars w=284, L3 = 3 chars
+  cw=300: L1 = 11 chars (measurement issue — likely y-grouping artifact)
+- finding: Kinsoku retreat OVERRIDES Mech 2 cap. Word allows visible
+  overflow on the line-1 to keep 」 at line-end (preventing line-start
+  prohibition violation). The 6pt overflow at cw=284 is past the cap
+  of 6pt (12pt × 0.5) — Word does NOT drop a char to fit; it retains
+  the natural-width line with visible overflow.
+- outcome:
+  - Spec §4.6.1 to note: kinsoku retreat takes precedence over Mech 2
+    drop-trigger. When kinsoku constraints conflict with cap, Word
+    chooses kinsoku conformance (line-end overflow) over cap conformance.
+  - This is a critical distinction: typical wrap-fit drops at slack
+    > cap, but kinsoku-driven layout doesn't drop.
+- followup: re-run with stable Word session for 5 missing cw values
+  (276, 288, 292, 294, 296). The cap-vs-overflow boundary needs more
+  data points. Probe builder + remeasurer scripts ready in
+  tools/metrics/.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — blocked — §4.6.1 Kinsoku Retreat × Mech 2 (round 17, blocked by Word COM failure)
 
 - context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
