@@ -13,6 +13,160 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.2 Latin→kana asymmetry RESOLVED via RSB (Round 25)
+
+- context: Round 24 found Latin→kana boundary extra varies by glyph
+  (M=+3.0, a=+2.0, 1=+2.5 at fs=12 TNR), unlike kana→Latin which
+  is constant +3.0pt. Open question: per-glyph rule.
+- evidence — `pipeline_data/autospace_glyph.json` (36 m):
+  18 glyphs × {natural advance, boundary advance}.
+  Result table:
+    nat=3.5 (i,l,t):  bnd=5.5  extra=2.0 → rsb=1.0
+    nat=5.5 (c,e,a):  bnd=7.5  extra=2.0 → rsb=1.0
+    nat=6.0 (n,o,0,1,4,8): bnd=8.5 extra=2.5 → rsb=0.5
+    nat=7.5 (T):      bnd=9.5  extra=2.0 → rsb=1.0
+    nat=8.5 (A):      bnd=11.0 extra=2.5 → rsb=0.5
+    nat=9.5 (m):      bnd=11.5 extra=2.0 → rsb=1.0
+    nat=10.5 (M):     bnd=13.0 extra=2.5 → rsb=0.5
+    nat=11.5 (W):     bnd=13.5 extra=2.0 → rsb=1.0
+- formula:
+  `boundary_advance = natural_advance + extra_pt - rsb(glyph)`
+  where extra_pt = §4.6.2 formula = +3.0pt at fs=12, and rsb
+  is the Latin glyph's right side bearing (positive for narrow
+  glyphs in TNR).
+  Geometric: kana left edge = Latin's INKED right edge + 3.0pt.
+- outcome:
+  - Resolves Round 24 asymmetry: kana glyphs have ~0 RSB so
+    kana→Latin formula collapses to constant +3.0pt; Latin
+    glyphs have variable RSB so Latin→kana varies.
+  - Oxi implementation: needs per-glyph RSB lookup (GDI
+    GetCharABCWidths.cWidth or DWrite GlyphMetrics.rightSideBearing).
+  - Font-metrics table at crates/oxidocs-core/src/font/data/
+    may need extension to include rsb_du per glyph.
+- impact: Documents with mixed Latin+CJK text get correct boundary
+  spacing; SSIM for those pages currently has 0.5-1.0pt drift per
+  Latin→kana boundary.
+- caveats: TNR-only at fs=12 measured; other fonts and sizes
+  need Round 26+ confirmation.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.6.2.1 autoSpaceDE/DN gate orthogonality (Round 23-24)
+
+- context: §4.6.2 measured kana↔Latin boundary extra (formula
+  +floor(fs/2+0.5)*0.5) but did not characterize when the flag
+  fires. Open question was whether autoSpaceDE/DN controls the
+  boundary at all and where the flag belongs.
+- evidence — 40 measurements:
+  - `pipeline_data/autospace_dn.json` (Round 23, settings.xml-level):
+    `<w:autoSpaceDE>`/`<w:autoSpaceDN>` placed in word/settings.xml
+    root had ZERO effect across 5 probes × 4 settings combinations.
+  - `pipeline_data/autospace_ppr.json` (Round 24, pPr+styles):
+    Same flags placed inside `<w:pPr>` (per-paragraph) or
+    styles.xml docDefaults pPrDefault DO disable boundary spacing.
+- formula:
+  - autoSpaceDE controls letter↔kana boundary ONLY (not digit)
+  - autoSpaceDN controls digit↔kana boundary ONLY (not letter)
+  - Two flags INDEPENDENT (DE=0 does NOT imply DN=0)
+  - Both default to ON. Disable with explicit `w:val="0"`
+- glyph asymmetry (open Round 25+):
+  fs=12 TNR + MSM, kana→Latin always +3.0pt; Latin→kana varies:
+  M→kana +3.0pt, a→kana +2.0pt, 1→kana +2.5pt. Per-glyph rule.
+- outcome — Oxi must:
+  1. Parse `w:autoSpaceDE` / `w:autoSpaceDN` from pPr / style chain
+     (NOT from settings.xml — that location is a no-op)
+  2. Apply boundary spacing only when corresponding flag = true
+  3. Use §4.6.2 formula for kana→Latin; Latin→kana needs glyph-
+     aware refinement (Round 25)
+- impact: Documents with autoSpaceDE=0 or DN=0 at pPr/style level
+  will have Oxi over-applying boundary spacing if not parsed.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b mixed-fs pure-yak cap driven by LAST yak run (Round 22)
+
+- context: Round 21 confirmed pure-yak cap = 0.75 × fs at single-fs.
+  Round 22 disambiguates which run drives cap when pure-yak line has
+  multiple yak runs at different sizes.
+- evidence — `pipeline_data/pure_yak_mixed.json` (24 measurements,
+  4 suites × 6 slacks):
+  - Suite A (12→14pt): cap_max=10.0pt, predict_last=10.5
+  - Suite B (14→12pt): cap_max=8.5pt,  predict_last=9.0
+  - Suite C (12→16pt): cap_max=11.5pt, predict_last=12.0
+  - Suite D (16→12pt): cap_max=8.5pt,  predict_last=9.0
+  Decisive: same fs set swapped → different cap → last drives.
+  cap rank (C, A) > (B, D) aligns with last_run_fs rank (16, 14) > (12, 12).
+- formula (FINAL §4.7b, both branches use last-relevant-char):
+  - Mixed line: `cap = (last_CJK.sz_val/2) × 0.5pt` (Round 16)
+  - Pure-yak:   `cap = floor(last_yak.sz_val × 3/4) × 0.5pt` (Round 22)
+- outcome — §4.7b cap formula completely closed across:
+  - 6 fs values (10.5, 11, 12, 14, 16, 18 from Round 14)
+  - 5 line lengths (12-30 chars)
+  - 4 mixed-fs configurations
+  - 5 CJK fonts (Round 8/14)
+  - Both alignment modes (jc=both/left, alignment-irrelevant per Round 4)
+- impact: §4.7b implementation in Oxi can dispatch on
+  `any_non_yak_cjk` and apply matching formula.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b pure-yak Mech 2 cap = floor(sz_val × 3 / 4) × 0.5pt
+
+- context: Following Round 19 partial finding (pure-yak Mech 2 fires
+  with cap > 0), Round 20+21 derive the universal cap formula via
+  fs sweep + line-length sweep.
+- evidence — `pipeline_data/pure_yak_fs.json` (35) + `pure_yak_n.json` (27):
+  - Round 20: fs ∈ {10.5, 11, 12, 14, 16} on 24-char pure-yak probe
+    cap_max in {5.2 coarse, 8.2, 9.0, 10.5, 12.0} ≈ 0.75 × fs
+  - Round 21 Q1: fs=10.5 fine sweep — slack=7.5 fits, 7.875 wraps
+    → cap = 7.5pt EXACT (confirms snap-floor: floor(21×3/4)×0.5 = 7.5)
+  - Round 21 Q2: n_compressible sweep at fs=12 — L ∈ {12,16,20,24,30}
+    all fit at slack=9, all wrap at slack=12 → cap=9.0pt CONSTANT,
+    INDEPENDENT of mid-line yak count
+- formula (CONFIRMED 6 fs × 5 lengths): `cap_pure_yak_pt =
+  floor(sz_val_int × 3 / 4) × 0.5` ≈ 0.75 × fs (snap to 0.5pt grid)
+- outcome — §4.7b spec dispatcher updated with 2-branch:
+  - Mixed yak+CJK: cap = (last_CJK.sz_val/2) × 0.5pt (Round 16, fs/2)
+  - Pure-yak: cap = floor(yak.sz_val × 3/4) × 0.5pt (Round 21, ~0.75×fs)
+- impact: implementations using only Round 16 formula on lines with
+  no CJK will under-fit (return cap=0 or undefined → premature wrap).
+  Pure-yak lines occur in headings, decorative text, table headers
+  with CJK quotation marks. Estimate few baseline docs affected
+  (most lines have CJK), but correctness for §4.7b is now closed.
+- next: Round 22 should test mixed-fs pure-yak (multiple yak runs at
+  different sizes within one line) to determine which fs drives cap.
+
+## 2026-05-02 — oxi-1 — partial — §4.7b Mech 2 cap on pure-yak line: NOT zero (no-CJK fallback exists)
+
+- context: §4.7b Round 16 confirmed `cap = last_CJK_run.fs/2` for Mech 2
+  slack distribution. Open question: what happens on pure-yak lines (no
+  CJK chars at all)? Round 16 formula would predict cap = 0 (undefined),
+  meaning Mech 2 would not fire and the line should wrap immediately on
+  any overflow beyond Mech 1's compression.
+- hypothesis: Mech 2 cap requires CJK presence; pure-yak lines fall back
+  to wrap-only (no Mech 2 contribution).
+- evidence — `tools/metrics/measure_pure_yak_line.py`,
+  `pipeline_data/pure_yak.json`:
+  - Suite A: probe `「」「」「」「」「」「」「」「」「」「」「」「」` (24 chars,
+    pure yak, MS Mincho 12pt, cSC=compressPunctuation, jc=both, kern=2).
+    Mech 1 makes 」=6pt half-width (B preceded by A); 「 stay at 12pt.
+    Line natural after Mech 1 = 12×12pt + 12×6pt = 216pt.
+    - cw=288/250/216 (slack ≤ 0): all 「=12.0 」=6.0 (Mech 1 only)
+    - cw=215 (slack=1): `「(pos3)=11.5, 「(pos5)=11.0` — Mech 2 fires
+      on Type A 「 (which Mech 1 leaves untouched)
+    - cw=210 (slack=6): persistent 「 compression
+    - cw=208 (slack=8): `「(pos3)=10.5` n=24 fits
+    - cw=205 (slack=11): n=22 (line wrapped, Mech 2 cap exceeded)
+  - Suite B (control): probe `「漢」漢「漢」漢「漢」漢「漢」漢「漢」漢「漢」漢`
+    (12 yak + 12 CJK alternating, no Mech 1 firing).
+    - slack=6 fits at cap = fs/2 = 6pt (matches Round 16)
+    - slack=8 wraps (n=23) — cap < 8pt confirmed for mixed line at 12pt
+- outcome — Round 16 cap formula INCOMPLETE:
+  - Mixed yak+CJK: cap = last_CJK_run.fs/2 ✓ (Round 16)
+  - Pure yak (no CJK): Mech 2 STILL fires on Type A chars; cap > fs/2
+    of yak (≥ 8pt at 12pt fs, vs 6pt mixed-line cap)
+  - Pure-yak cap formula NOT yet pinned; need fs sweep across pure-yak
+    probes to characterize. Round 20 target: vary fs (10.5/11/12/14)
+    and n_compressible (11/9/7/5 mid-line 「 chars) on pure-yak probes
+    to derive the no-CJK cap rule
+- impact: spec change needed in §4.7b — current formula
+  `cap = last_CJK_run.fs/2` returns undefined on pure-yak lines but
+  Word does NOT collapse to wrap-only; Mech 2 has a distinct pure-yak
+  branch. Implementation must not fall through to "no compression".
 ## 2026-05-02 — oxi-4 — partial + correction — 1ec1 +9pt offset variant test (Baseline only); previous "RESOLVED" claim was WRONG (Word ignores ind both □1 and □3, +5.5pt gap structural)
 - context: User's R37 measurement (post H_F fix): both □1 (no ind) and □3
   (ind=5.25pt) render at SAME Word x=48pt → Word ignores ind in 1ec1 textbox

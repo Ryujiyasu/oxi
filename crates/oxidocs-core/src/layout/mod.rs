@@ -31,19 +31,14 @@ fn is_break_after(ch: char) -> bool {
 ///   - Slot 0 → #D03337 (Alice in fixture_05/06/07/10)
 ///   - Slot 1 → #5B2C90 (Bob in fixture_10)
 ///
-/// Slot 2 was COM-confirmed 2026-04-29 in the R65 pixel pass:
-/// `tools/metrics/output/comments_tracked_changes_pixels.json` records
-/// Carol's CAROL INS run in fixture_12 as RGB (71, 129, 3) = #478103.
-/// The earlier placeholder #2B6033 was the move-runs color, not slot 2 —
-/// the two are distinct in Word even though they're both green.
-///
-/// Slots 3..7 are still Word's documented rotation defaults; they need
-/// a 6+author fixture or a per-slot probe. If a future measurement
-/// contradicts a specific slot, replace just that entry.
+/// Slots 2..7 are Word's documented rotation defaults but not yet COM-confirmed
+/// — they need a 3+author fixture. The list below is the Word/Office reviewing
+/// palette as published by Microsoft; if a future measurement contradicts a
+/// specific slot, replace just that entry.
 const REVISION_AUTHOR_PALETTE: [&str; 8] = [
-    "#D03337", // 0 — confirmed (Alice fixture_05/06/07/10)
-    "#5B2C90", // 1 — confirmed (Bob fixture_10)
-    "#478103", // 2 — confirmed (Carol fixture_12, R65 2026-04-29)
+    "#D03337", // 0 — confirmed
+    "#5B2C90", // 1 — confirmed
+    "#2B6033", // 2 — green (also used for moves regardless of author)
     "#ED7D31", // 3 — orange
     "#4472C4", // 4 — blue
     "#843C0C", // 5 — brown
@@ -68,7 +63,7 @@ const REVISION_MOVE_COLOR: &str = "#2B6033";
 const COMMENT_HIGHLIGHT_TINT_PALETTE: [&str; 8] = [
     "#FAE6E7", // 0 — Alice, COM-confirmed
     "#EFEAF4", // 1 — Bob (derived from #5B2C90)
-    "#E9F0E1", // 2 — derived from #478103 (R65 base correction)
+    "#EAEFEA", // 2 — derived from #2B6033
     "#FCEEE0", // 3 — derived from #ED7D31
     "#E8ECF6", // 4 — derived from #4472C4
     "#F2EAE4", // 5 — derived from #843C0C
@@ -103,7 +98,7 @@ pub fn comment_balloon_fill(author_color_index: usize, resolved: bool) -> &'stat
 const COMMENT_HIGHLIGHT_RESOLVED_PALETTE: [&str; 8] = [
     "#F1EDEC", // 0 — Alice resolved, COM-confirmed
     "#EFEEF1", // 1 — Bob resolved
-    "#EBEDE9", // 2 — derived from #E9F0E1 (R65 base correction)
+    "#EEEEEC", // 2 — derived green
     "#F2EDE6", // 3 — derived orange
     "#EBEDF1", // 4 — derived blue
     "#EFECEA", // 5 — derived brown
@@ -316,7 +311,6 @@ fn emit_balloons_for_layout_page(
     layout_page: &mut LayoutPage,
     doc: &Document,
     ir_page_idx: usize,
-    show_rpr_change_balloons: bool,
 ) {
     use std::collections::HashMap;
 
@@ -326,27 +320,7 @@ fn emit_balloons_for_layout_page(
         .iter()
         .map(|c| (c.id.as_str(), c))
         .collect();
-
-    let ir_page = match doc.pages.get(ir_page_idx) {
-        Some(p) => p,
-        None => return,
-    };
-
-    // R-12 v1 / v2 (R67 + R69): does this page carry any rPrChange runs OR
-    // pPrChange paragraphs that need a formatting-change margin balloon?
-    // Only emit when the caller signals revisions should display ("All"
-    // markup view); under Simple / Original / Final the change annotations
-    // are suppressed.
-    let has_format_change_on_page = show_rpr_change_balloons
-        && ir_page.blocks.iter().any(|block| {
-            if let Block::Paragraph(p) = block {
-                p.ppr_change.is_some() || p.runs.iter().any(|r| r.rpr_change.is_some())
-            } else {
-                false
-            }
-        });
-
-    if id_to_comment.is_empty() && !has_format_change_on_page {
+    if id_to_comment.is_empty() {
         return;
     }
     // Map author display → palette index (slot 0 fallback for unknown authors).
@@ -355,6 +329,11 @@ fn emit_balloons_for_layout_page(
         .iter()
         .map(|a| (a.display.as_str(), a.color_index))
         .collect();
+
+    let ir_page = match doc.pages.get(ir_page_idx) {
+        Some(p) => p,
+        None => return,
+    };
 
     // First pass: build `paragraph_index → first-rendered (x, y)` map by
     // walking LayoutElements. This handles the case where a comment's
@@ -392,7 +371,7 @@ fn emit_balloons_for_layout_page(
         }
     }
 
-    if anchors.is_empty() && !has_format_change_on_page {
+    if anchors.is_empty() {
         return;
     }
 
@@ -536,111 +515,6 @@ fn emit_balloons_for_layout_page(
         });
     }
 
-    // R-12 v1 (R67) + v2 (R69): rPrChange + pPrChange margin balloons.
-    // Walk paragraphs looking for `ppr_change` (paragraph-level) and runs
-    // for `rpr_change` (run-level). Anchor at the paragraph's first-rendered
-    // Y. Build a "Formatted: …" body from the style diff. Emit a narrow
-    // balloon (resolved-width geometry mirrors Word's "Formatted" balloon —
-    // fixture_09 pixel pass: balloon column starts at x≈401pt = page_w − 4
-    // − 190.1). Skipped when `show_rpr_change_balloons` is false (Simple /
-    // Original / Final markup views).
-    //
-    // Helper closure to keep the per-balloon push DRY across the
-    // pPr/rPr branches.
-    if show_rpr_change_balloons {
-        let push_format_balloon =
-            |pending: &mut Vec<PendingBalloon>,
-             cid: String,
-             author: String,
-             color_idx: usize,
-             body: String,
-             para_anchor: (f32, f32)| {
-                let balloon_width = balloon_width_resolved;
-                let balloon_left = (page_w - balloon_right_inset - balloon_width).max(0.0);
-                // Quick line estimate: ~31 chars fit on the 190pt narrow balloon.
-                let line_count = ((body.chars().count() + 30) / 31).max(1);
-                let line_height = 14.0_f32;
-                let outer_pad = 8.0_f32;
-                let chip_h = 14.0_f32;
-                let section_pad = 4.0_f32;
-                let balloon_height = outer_pad
-                    + chip_h
-                    + section_pad
-                    + (line_count as f32) * line_height
-                    + outer_pad;
-                pending.push(PendingBalloon {
-                    cid,
-                    author,
-                    author_color_index: color_idx,
-                    resolved: true,
-                    body,
-                    replies: Vec::new(),
-                    anchor_x: para_anchor.0,
-                    anchor_y: para_anchor.1,
-                    balloon_left,
-                    balloon_width,
-                    balloon_height,
-                    y: para_anchor.1,
-                });
-            };
-
-        for (pi, block) in ir_page.blocks.iter().enumerate() {
-            let p = match block {
-                Block::Paragraph(p) => p,
-                _ => continue,
-            };
-            let para_anchor = match para_first_xy.get(&pi) {
-                Some(&xy) => xy,
-                None => continue,
-            };
-            // Paragraph-level pPrChange first (one balloon per paragraph,
-            // anchored at the paragraph's first-rendered Y).
-            if let Some(pc) = p.ppr_change.as_ref() {
-                let author = pc.author.clone().unwrap_or_default();
-                let color_idx = author_to_idx
-                    .get(author.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let prior = pc.prior_paragraph_style.as_deref();
-                let prior_alignment = pc.prior_alignment;
-                let body = format!(
-                    "Formatted: {}",
-                    describe_ppr_diff(prior, &p.style, prior_alignment, p.alignment)
-                );
-                let cid = format!(
-                    "pprchange:p{}:{}",
-                    pi,
-                    pc.id.clone().unwrap_or_default()
-                );
-                push_format_balloon(&mut pending, cid, author, color_idx, body, para_anchor);
-            }
-            // Run-level rPrChange after — order matters only for stacking
-            // determinism; same paragraph anchor either way.
-            for run in &p.runs {
-                let rpc = match run.rpr_change.as_ref() {
-                    Some(r) => r,
-                    None => continue,
-                };
-                let author = rpc.author.clone().unwrap_or_default();
-                let color_idx = author_to_idx
-                    .get(author.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let prior = rpc.prior_run_style.as_deref();
-                let body = format!(
-                    "Formatted: {}",
-                    describe_rpr_diff(prior, &run.style)
-                );
-                let cid = format!(
-                    "rprchange:p{}:{}",
-                    pi,
-                    rpc.id.clone().unwrap_or_default()
-                );
-                push_format_balloon(&mut pending, cid, author, color_idx, body, para_anchor);
-            }
-        }
-    } // end `if show_rpr_change_balloons`
-
     // R-05d: stack to prevent overlap. Sort by anchor Y ascending; pure
     // helper handles the per-element Y resolution. See `stack_balloon_ys`
     // below for the algorithm.
@@ -732,446 +606,6 @@ fn stack_balloon_ys(positions: &mut [(f32, f32)], gap: f32) {
     }
 }
 
-/// R-12: build a human-readable description of an `rPrChange` style diff.
-///
-/// Compares `current` against `prior` (the run-style stored inside
-/// `rpr_change.prior_run_style`) and emits a comma-separated list of toggled
-/// properties — e.g. `"Bold"` / `"Italic, Color: #FF0000"` /
-/// `"Font Size: 14pt"`. Only the v1 minimum-viable set is covered (bold,
-/// italic, underline, strikethrough, color, font_size); enough properties
-/// to make fixture_09 (bold toggle) read correctly. Extend per fixture as
-/// new property changes are exercised.
-///
-/// When `prior` is `None`, the run's prior style was empty (`<w:rPr/>`) →
-/// every set property in `current` becomes a "now X" diff. When the diff
-/// would be empty (defensive — Word should never write an rPrChange with
-/// no change), falls back to a generic "Style" label so the balloon still
-/// signals "something changed."
-fn describe_rpr_diff(prior: Option<&RunStyle>, current: &RunStyle) -> String {
-    let prior_default = RunStyle::default();
-    let prior = prior.unwrap_or(&prior_default);
-    let mut diffs: Vec<String> = Vec::new();
-    if prior.bold != current.bold {
-        diffs.push(if current.bold { "Bold" } else { "Not Bold" }.to_string());
-    }
-    if prior.italic != current.italic {
-        diffs.push(if current.italic { "Italic" } else { "Not Italic" }.to_string());
-    }
-    if prior.underline != current.underline {
-        diffs.push(if current.underline { "Underline" } else { "Not Underline" }.to_string());
-    }
-    if prior.strikethrough != current.strikethrough {
-        diffs.push(
-            if current.strikethrough { "Strikethrough" } else { "Not Strikethrough" }
-                .to_string(),
-        );
-    }
-    if prior.color != current.color {
-        match current.color.as_deref() {
-            Some(c) => diffs.push(format!("Color: {}", c)),
-            None => {
-                if prior.color.is_some() {
-                    diffs.push("Color: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.font_size != current.font_size {
-        if let Some(fs) = current.font_size {
-            diffs.push(format!("Font Size: {}pt", fs));
-        }
-    }
-    // R71: font_family extension. Mirrors Word's "Formatted: Font: Times
-    // New Roman" string when an rPrChange toggles the run's typeface.
-    // Compares ascii/hAnsi font (`font_family`) only — the eastAsia font
-    // can be a separate change that surfaces in a future fixture.
-    if prior.font_family != current.font_family {
-        match current.font_family.as_deref() {
-            Some(name) => diffs.push(format!("Font: {}", name)),
-            None => {
-                if prior.font_family.is_some() {
-                    diffs.push("Font: Default".to_string());
-                }
-            }
-        }
-    }
-    // R86 (2026-04-29): small_caps / all_caps / character_spacing axes.
-    // Mirrors Word's "Formatted: All Caps" / "Small Caps" / "Character
-    // Spacing: 1.0pt" strings when an rPrChange toggles these props.
-    if prior.small_caps != current.small_caps {
-        diffs.push(if current.small_caps { "Small Caps" } else { "Not Small Caps" }.to_string());
-    }
-    if prior.all_caps != current.all_caps {
-        diffs.push(if current.all_caps { "All Caps" } else { "Not All Caps" }.to_string());
-    }
-    if prior.character_spacing != current.character_spacing {
-        match current.character_spacing {
-            Some(v) => diffs.push(format!("Character Spacing: {}pt", v)),
-            None => {
-                if prior.character_spacing.is_some() {
-                    diffs.push("Character Spacing: Default".to_string());
-                }
-            }
-        }
-    }
-    // R87 (2026-04-29): font_family_east_asia + vertical_align + shading.
-    // Closes the remaining R72 §19.47.5 axes — describe_rpr_diff now
-    // covers 12 axes total (full R72 list).
-    if prior.font_family_east_asia != current.font_family_east_asia {
-        match current.font_family_east_asia.as_deref() {
-            Some(name) => diffs.push(format!("East Asia Font: {}", name)),
-            None => {
-                if prior.font_family_east_asia.is_some() {
-                    diffs.push("East Asia Font: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.vertical_align != current.vertical_align {
-        match current.vertical_align {
-            Some(VerticalAlign::Superscript) => diffs.push("Superscript".to_string()),
-            Some(VerticalAlign::Subscript) => diffs.push("Subscript".to_string()),
-            Some(VerticalAlign::Baseline) | None => {
-                // None or back-to-baseline → "Baseline" (matches Word's UI label).
-                if prior.vertical_align.is_some()
-                    && prior.vertical_align != Some(VerticalAlign::Baseline)
-                {
-                    diffs.push("Baseline".to_string());
-                }
-            }
-        }
-    }
-    if prior.shading != current.shading {
-        match current.shading.as_deref() {
-            Some(hex) => diffs.push(format!("Shading: {}", hex)),
-            None => {
-                if prior.shading.is_some() {
-                    diffs.push("Shading: Default".to_string());
-                }
-            }
-        }
-    }
-    // R98 (2026-04-30): outline, emboss, imprint — NEW rPr properties
-    // beyond R72 §19.47.5 list (R87 §19.62.6 noted these as future
-    // additions when fixture work surfaces them). All three are
-    // direct bools on RunStyle; same pattern as R86 small_caps/all_caps.
-    if prior.outline != current.outline {
-        diffs.push(if current.outline { "Outline" } else { "Not Outline" }.to_string());
-    }
-    if prior.emboss != current.emboss {
-        diffs.push(if current.emboss { "Emboss" } else { "Not Emboss" }.to_string());
-    }
-    if prior.imprint != current.imprint {
-        diffs.push(if current.imprint { "Imprint" } else { "Not Imprint" }.to_string());
-    }
-    // R99 (2026-04-30): shadow, vanish, double_strikethrough — three more
-    // bool axes peer to R98 outline/emboss/imprint. shadow is the missing
-    // 4th text-effect (outline/shadow/emboss/imprint family); vanish is
-    // hidden-text toggle; double_strikethrough mirrors strikethrough.
-    if prior.shadow != current.shadow {
-        diffs.push(if current.shadow { "Shadow" } else { "Not Shadow" }.to_string());
-    }
-    if prior.vanish != current.vanish {
-        diffs.push(if current.vanish { "Hidden" } else { "Not Hidden" }.to_string());
-    }
-    if prior.double_strikethrough != current.double_strikethrough {
-        diffs.push(
-            if current.double_strikethrough { "Double Strikethrough" } else { "Not Double Strikethrough" }
-                .to_string(),
-        );
-    }
-    // R100 (2026-04-30): highlight, position, emphasis_mark — three more
-    // user-visible Word properties. Option-typed (like R86 character_spacing
-    // and R87 shading) — surface name/value when set, "Default" when cleared.
-    if prior.highlight != current.highlight {
-        match current.highlight.as_deref() {
-            Some(name) => diffs.push(format!("Highlight: {}", name)),
-            None => {
-                if prior.highlight.is_some() {
-                    diffs.push("Highlight: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.position != current.position {
-        match current.position {
-            Some(v) => diffs.push(format!("Position: {}pt", v)),
-            None => {
-                if prior.position.is_some() {
-                    diffs.push("Position: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.emphasis_mark != current.emphasis_mark {
-        match current.emphasis_mark.as_deref() {
-            Some(name) => diffs.push(format!("Emphasis Mark: {}", name)),
-            None => {
-                if prior.emphasis_mark.is_some() {
-                    diffs.push("Emphasis Mark: Default".to_string());
-                }
-            }
-        }
-    }
-    if diffs.is_empty() {
-        "Style".to_string()
-    } else {
-        diffs.join(", ")
-    }
-}
-
-/// R-12 v2 (R69) + v3.5 (R72): build a human-readable description of a
-/// `pPrChange` style diff. Companion to `describe_rpr_diff`.
-///
-/// Compares the paragraph's current style against `prior` (the
-/// ParagraphStyle stored inside `ppr_change.prior_paragraph_style`) and
-/// emits a comma-separated list of toggled properties. v1 covers
-/// `indent_left`, `indent_right`, `indent_first_line`, `line_spacing`,
-/// `space_before`, `space_after`. R72 adds the alignment axis via
-/// `prior_alignment` / `current_alignment` parameters — the
-/// `Paragraph.alignment` field lives outside `ParagraphStyle`, so the
-/// caller must surface it explicitly.
-///
-/// `prior_alignment = None` means the prior `<w:pPr>` had no `<w:jc>`
-/// child (= inherited alignment); only emit a diff when the current
-/// alignment differs from `prior_alignment` AND `prior_alignment` is
-/// explicit (i.e. the change actually toggled `<w:jc>`).
-fn describe_ppr_diff(
-    prior: Option<&ParagraphStyle>,
-    current: &ParagraphStyle,
-    prior_alignment: Option<Alignment>,
-    current_alignment: Alignment,
-) -> String {
-    let mut diffs: Vec<String> = Vec::new();
-    let prior = match prior {
-        Some(p) => p,
-        None => {
-            // Empty prior → all set props on current become "now X" diffs,
-            // but emitting an exhaustive list would be noisy. Just say
-            // "Style" for now.
-            return "Style".to_string();
-        }
-    };
-    // R72: alignment axis. Only emit when prior_alignment was explicit and
-    // differs from the current alignment.
-    if let Some(pa) = prior_alignment {
-        if pa != current_alignment {
-            let label = match current_alignment {
-                Alignment::Left => "Left",
-                Alignment::Center => "Centered",
-                Alignment::Right => "Right",
-                Alignment::Justify => "Justified",
-                Alignment::Distribute => "Distributed",
-            };
-            diffs.push(format!("Alignment: {}", label));
-        }
-    }
-    if prior.indent_left != current.indent_left {
-        match current.indent_left {
-            Some(v) => diffs.push(format!("Indent Left: {}pt", v)),
-            None => {
-                if prior.indent_left.is_some() {
-                    diffs.push("Indent Left: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.indent_right != current.indent_right {
-        match current.indent_right {
-            Some(v) => diffs.push(format!("Indent Right: {}pt", v)),
-            None => {
-                if prior.indent_right.is_some() {
-                    diffs.push("Indent Right: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.indent_first_line != current.indent_first_line {
-        match current.indent_first_line {
-            Some(v) => diffs.push(format!("First Line: {}pt", v)),
-            None => {
-                if prior.indent_first_line.is_some() {
-                    diffs.push("First Line: Default".to_string());
-                }
-            }
-        }
-    }
-    if prior.line_spacing != current.line_spacing {
-        if let Some(v) = current.line_spacing {
-            diffs.push(format!("Line Spacing: {}", v));
-        }
-    }
-    if prior.space_before != current.space_before {
-        if let Some(v) = current.space_before {
-            diffs.push(format!("Space Before: {}pt", v));
-        }
-    }
-    if prior.space_after != current.space_after {
-        if let Some(v) = current.space_after {
-            diffs.push(format!("Space After: {}pt", v));
-        }
-    }
-    // R88 (2026-04-29): paragraph shading axis. Mirrors the RunStyle
-    // shading branch in describe_rpr_diff (R87). Word's "Formatted"
-    // balloon shows "Paragraph Shading: <hex>" when a pPrChange
-    // toggles `<w:pPr>/<w:shd w:fill>`. The Run-level shading branch
-    // says just "Shading: <hex>"; the Paragraph-level prefix
-    // "Paragraph " disambiguates which scope changed when both run
-    // and paragraph shading toggle in the same paragraph.
-    if prior.shading != current.shading {
-        match current.shading.as_deref() {
-            Some(hex) => diffs.push(format!("Paragraph Shading: {}", hex)),
-            None => {
-                if prior.shading.is_some() {
-                    diffs.push("Paragraph Shading: Default".to_string());
-                }
-            }
-        }
-    }
-    // R89 (2026-04-29): keep_next + keep_lines axes (direct-only
-    // bools, not inherited from style). Mirrors Word's "Formatted:
-    // Keep With Next" / "Keep Lines Together" balloon when a pPrChange
-    // toggles these. Originally R89 attempted num_id/num_ilvl axes but
-    // numPr is parsed separately into a NumPrRef returned by
-    // parse_paragraph_properties as a 4th tuple element — it never
-    // populates ParagraphStyle.num_id, so the prior/current comparison
-    // would always be (None, None) on pPrChange's prior_paragraph_style.
-    // Wiring numPr through PropertyChange's prior_num_pr field is a
-    // future R72-style 3-layer extension; R89 ships the simpler
-    // keep_* bool axes which ARE direct-only on pPr and reliably
-    // surface in the diff.
-    if prior.keep_next != current.keep_next {
-        diffs.push(if current.keep_next { "Keep With Next" } else { "Not Keep With Next" }.to_string());
-    }
-    if prior.keep_lines != current.keep_lines {
-        diffs.push(if current.keep_lines { "Keep Lines Together" } else { "Not Keep Lines Together" }.to_string());
-    }
-    // R93 (2026-04-30): paragraph borders axis. ParagraphBorders is a
-    // 5-side struct (top/bottom/left/right/between) without PartialEq
-    // derive; compare via a side-presence summary. Three cases:
-    //   - prior=None, current=Some → "Borders Added"
-    //   - prior=Some, current=None → "Borders Removed"
-    //   - both Some, sides differ  → "Borders: <prior> → <current>"
-    // The summary is "top/bottom/left/right" (active sides joined),
-    // which captures the most common pPrChange patterns (add/remove a
-    // single side or all sides). Per-side style/width/color comparison
-    // is deferred — would require a PartialEq derive on BorderDef and
-    // a more verbose body string.
-    fn borders_summary(b: &ParagraphBorders) -> String {
-        let mut active: Vec<&str> = Vec::new();
-        if b.top.is_some()    { active.push("top"); }
-        if b.bottom.is_some() { active.push("bottom"); }
-        if b.left.is_some()   { active.push("left"); }
-        if b.right.is_some()  { active.push("right"); }
-        if active.is_empty() { "none".to_string() } else { active.join("/") }
-    }
-    match (prior.borders.as_ref(), current.borders.as_ref()) {
-        (None, Some(_)) => diffs.push("Borders Added".to_string()),
-        (Some(_), None) => diffs.push("Borders Removed".to_string()),
-        (Some(p), Some(c)) => {
-            let ps = borders_summary(p);
-            let cs = borders_summary(c);
-            if ps != cs {
-                diffs.push(format!("Borders: {} → {}", ps, cs));
-            }
-        }
-        (None, None) => {}
-    }
-    // R94 (2026-04-30): tab_stops Vec axis. Like R93's borders, TabStop
-    // has no PartialEq derive — use a position-only summary
-    // ("72/144/216pt" for tab stops at those positions). Three diff
-    // cases mirror borders: Added / Removed / Changed (with summary
-    // arrow). Position-only is enough to surface the most common
-    // pPrChange patterns (adding/removing tab stops, or moving them);
-    // alignment and leader changes within the same position set are
-    // deferred to a later round.
-    fn tab_stops_summary(ts: &[crate::ir::TabStop]) -> String {
-        if ts.is_empty() {
-            "none".to_string()
-        } else {
-            ts.iter()
-                .map(|t| format!("{:.0}pt", t.position))
-                .collect::<Vec<_>>()
-                .join("/")
-        }
-    }
-    match (prior.tab_stops.is_empty(), current.tab_stops.is_empty()) {
-        (true, false) => diffs.push("Tab Stops Added".to_string()),
-        (false, true) => diffs.push("Tab Stops Removed".to_string()),
-        (false, false) => {
-            let ps = tab_stops_summary(&prior.tab_stops);
-            let cs = tab_stops_summary(&current.tab_stops);
-            if ps != cs {
-                diffs.push(format!("Tab Stops: {} → {}", ps, cs));
-            }
-        }
-        (true, true) => {}
-    }
-    // R95 (2026-04-30): list / numbering axes (num_id + num_ilvl).
-    // Closes the last R72 §19.47.5 ppr-axis follow-up. R89 originally
-    // attempted these branches but the parser asymmetry prevented
-    // them from firing — parse_paragraph_properties returned numPr as
-    // a 4th tuple element without writing to style. R95 patches the
-    // parser to mirror inline numPr onto style.num_id/num_ilvl, which
-    // lets these branches fire reliably for both inline and pStyle-
-    // inherited numbering.
-    if prior.num_id != current.num_id {
-        match current.num_id.as_deref() {
-            Some(id) => diffs.push(format!("Numbering: list {}", id)),
-            None => {
-                if prior.num_id.is_some() {
-                    diffs.push("Numbering: None".to_string());
-                }
-            }
-        }
-    }
-    if prior.num_ilvl != current.num_ilvl {
-        diffs.push(format!("List Level: {}", current.num_ilvl));
-    }
-    // R107 (2026-04-30): NEW non-R72 ppr axes — page_break_before,
-    // widow_control, contextual_spacing. All three are user-visible
-    // bool axes already populated by parser. Mirrors R98/R99 pattern
-    // for the rPr side. UI labels match Word's "Formatted:" balloon:
-    //   "Page Break Before" (Word's "Page break before" checkbox)
-    //   "Widow/Orphan Control" (Word's "Widow/Orphan control")
-    //   "Don't Add Space" (Word's "Don't add space between paragraphs
-    //                       of the same style")
-    if prior.page_break_before != current.page_break_before {
-        diffs.push(if current.page_break_before { "Page Break Before" } else { "Not Page Break Before" }.to_string());
-    }
-    if prior.widow_control != current.widow_control {
-        diffs.push(if current.widow_control { "Widow/Orphan Control" } else { "Not Widow/Orphan Control" }.to_string());
-    }
-    if prior.contextual_spacing != current.contextual_spacing {
-        diffs.push(if current.contextual_spacing { "Don't Add Space" } else { "Add Space Between Same-Style Paragraphs" }.to_string());
-    }
-    // R108 (2026-04-30): three more NEW non-R72 ppr axes —
-    // bidi (RTL paragraph), page_break_after (less common pair to
-    // R107's page_break_before), text_alignment (Option<String>:
-    // "top"/"center"/"baseline"/"bottom"/"auto").
-    if prior.bidi != current.bidi {
-        diffs.push(if current.bidi { "Right-to-Left" } else { "Left-to-Right" }.to_string());
-    }
-    if prior.page_break_after != current.page_break_after {
-        diffs.push(if current.page_break_after { "Page Break After" } else { "Not Page Break After" }.to_string());
-    }
-    if prior.text_alignment != current.text_alignment {
-        match current.text_alignment.as_deref() {
-            Some(name) => diffs.push(format!("Text Alignment: {}", name)),
-            None => {
-                if prior.text_alignment.is_some() {
-                    diffs.push("Text Alignment: Default".to_string());
-                }
-            }
-        }
-    }
-    if diffs.is_empty() {
-        "Style".to_string()
-    } else {
-        diffs.join(", ")
-    }
-}
-
 /// Flatten a comment's `blocks` (paragraph runs) into a plain string for the
 /// balloon body. Replies / nested formatting are not preserved here — R-05g
 /// renderer can re-walk the structured form when it needs to.
@@ -1190,6 +624,47 @@ fn comment_body_text(blocks: &[Block]) -> String {
     out
 }
 
+/// S-02 (Simple mode): strip the parser's pre-applied tracked-change
+/// styling (underline + red on `<w:ins>` runs, strikethrough + red on
+/// `<w:del>` runs) WITHOUT removing `tracked_change` itself. Keeps R-10's
+/// margin change bar firing while letting the in-line text render plain.
+fn strip_parser_revision_styling(doc: &mut Document) {
+    fn visit(blocks: &mut Vec<Block>) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(p) => {
+                    for run in &mut p.runs {
+                        if let Some(tc) = run.tracked_change.as_ref() {
+                            match tc.change_type.as_str() {
+                                "insert" | "moveTo" => {
+                                    run.style.underline = false;
+                                    run.style.underline_style = None;
+                                }
+                                "delete" | "moveFrom" => {
+                                    run.style.strikethrough = false;
+                                }
+                                _ => {}
+                            }
+                            if run.style.color.as_deref() == Some("FF0000") {
+                                run.style.color = None;
+                            }
+                        }
+                    }
+                }
+                Block::Table(t) => {
+                    for row in &mut t.rows {
+                        for cell in &mut row.cells {
+                            visit(&mut cell.blocks);
+                        }
+                    }
+                }
+                Block::Image(_) | Block::UnsupportedElement(_) | Block::Math(_) => {}
+            }
+        }
+    }
+    for_each_block_tree(doc, |blocks| visit(blocks));
+}
+
 /// S-02: filter / clear tracked-change runs in-place for `Original` /
 /// `Final` view modes.
 ///
@@ -1202,8 +677,6 @@ fn comment_body_text(blocks: &[Block]) -> String {
 ///
 /// Recurses into table cells. After this pass `apply_revision_styling`
 /// is intentionally NOT called — surviving runs render as normal text.
-/// R62 (2026-04-29): parser no longer pre-applies revision styling, so
-/// surviving runs need only `tracked_change` cleared.
 fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
     fn visit(blocks: &mut Vec<Block>, final_view: bool) {
         for block in blocks.iter_mut() {
@@ -1218,11 +691,25 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
                             if drop {
                                 false
                             } else {
-                                // Run survives — clear tracked_change so the
-                                // run renders as plain body text. No style
-                                // strip needed (parser stores tracked_change
-                                // only since R62).
+                                // Run survives — strip the parser's
+                                // pre-applied tracked-change styling
+                                // (underline + red for ins, strike + red
+                                // for del) and the IR marker, so the run
+                                // renders as plain body text.
+                                let kind = tc.change_type.clone();
                                 run.tracked_change = None;
+                                if kind == "insert" || kind == "moveTo" {
+                                    run.style.underline = false;
+                                    run.style.underline_style = None;
+                                    if run.style.color.as_deref() == Some("FF0000") {
+                                        run.style.color = None;
+                                    }
+                                } else if kind == "delete" || kind == "moveFrom" {
+                                    run.style.strikethrough = false;
+                                    if run.style.color.as_deref() == Some("FF0000") {
+                                        run.style.color = None;
+                                    }
+                                }
                                 true
                             }
                         }
@@ -1276,25 +763,20 @@ fn apply_revision_styling_to_run(
             run.style.color = Some(color_hex);
         }
         "moveFrom" => {
-            // Word default: double-strikethrough in green (COM-confirmed
-            // 2026-04-29 in R66 — fixture_08 PNG shows two full-width green
-            // lines at y=164/165 and y=167/168 with a 1-px gap, on the
-            // "moved clause" run). The renderer reads `double_strikethrough`
-            // and draws two parallel lines; older renderers fall back to
-            // single-line strikethrough.
+            // Word default: double-strikethrough in green. The renderer's
+            // strikethrough primitive is single-line; settle for that in v1
+            // — visually distinguishable from a regular delete by the green
+            // tint. Upgrade to a "double" style when R-11 lands.
             run.style.strikethrough = true;
-            run.style.double_strikethrough = true;
             run.style.color = Some(color_hex);
         }
         "moveTo" => {
-            // Word default: double-underline in green (COM-confirmed
-            // 2026-04-29 in R66 — fixture_08 PNG shows two full-width green
-            // lines at y=220 and y=222 with a 1-px gap, below the "moved
-            // clause" run on the destination paragraph). Setting
-            // underline_style="double" routes through the existing GDI
-            // double-underline path (mod.rs:235-247).
+            // Word default: double-underline in green. Same rationale as
+            // moveFrom — single underline in green for v1, upgrade in R-11.
             run.style.underline = true;
-            run.style.underline_style = Some("double".to_string());
+            if run.style.underline_style.is_none() {
+                run.style.underline_style = Some("single".to_string());
+            }
             run.style.color = Some(color_hex);
         }
         _ => {
@@ -1354,13 +836,6 @@ pub enum LayoutContent {
         underline: bool,
         underline_style: Option<String>,
         strikethrough: bool,
-        /// When true, the renderer draws a double strikethrough line. Currently
-        /// used by R-11 to render `<w:moveFrom>` runs (Word's default styling)
-        /// and surfaces the OOXML `<w:dstrike>` run-property for any future
-        /// spec coverage. Falls back to single-line strikethrough behaviour if
-        /// the renderer doesn't support double, so older renderers stay
-        /// visually correct (just with one line instead of two).
-        double_strikethrough: bool,
         color: Option<String>,
         highlight: Option<String>,
         field_type: Option<FieldType>,
@@ -1444,39 +919,6 @@ pub struct BalloonReply {
     pub body: String,
 }
 
-/// Convert an IR `Shape` to the right `LayoutContent` variant.
-/// Filled prstGeom shapes (rect, roundRect, ellipse) become `BoxRect` so the
-/// fill color is preserved through the renderer; outline-only preset shapes
-/// (bracketPair, line, leftBracket, rightBracket, etc.) stay as
-/// `PresetShape`. roundRect uses OOXML's default adj of 16.667% × min(w,h)
-/// for corner radius.
-fn shape_to_layout_content(shape: &crate::ir::Shape) -> LayoutContent {
-    match shape.shape_type.as_str() {
-        // Filled rect / roundRect / ellipse: route to BoxRect so fill renders.
-        // Note: ellipse is rendered as a rectangle by BoxRect — geometry
-        // approximation, but better than dropping the fill entirely.
-        "rect" | "roundRect" | "ellipse" => {
-            let corner_radius = if shape.shape_type == "roundRect" {
-                shape.width.min(shape.height) * 0.16667
-            } else {
-                0.0
-            };
-            LayoutContent::BoxRect {
-                fill: shape.fill.clone(),
-                stroke_color: shape.stroke_color.clone(),
-                stroke_width: shape.stroke_width.unwrap_or(0.75),
-                corner_radius,
-            }
-        }
-        // Outline-only / decorative shapes: keep current path.
-        _ => LayoutContent::PresetShape {
-            shape_type: shape.shape_type.clone(),
-            stroke_color: shape.stroke_color.clone(),
-            stroke_width: shape.stroke_width.unwrap_or(0.75),
-        },
-    }
-}
-
 pub struct LayoutEngine {
     default_font_size: f32,
     default_font_family: Option<String>,
@@ -1492,11 +934,6 @@ pub struct LayoutEngine {
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
     compress_punctuation: bool,
-    /// R32 (2026-05-02): docDefaults rPrDefault rPr <w:kern> presence — Word's
-    /// yakumono Mech 1 (FINAL RULE pair compression) gate, alignment-agnostic
-    /// per Session 51 R0 + dispatch 5/6. Replaces R17 list_marker as primary
-    /// gate. R31 chars-indent + cross-run path retained as fallback.
-    has_effective_kern: bool,
     /// w:doNotExpandShiftReturn: don't justify lines ending with soft break (Shift+Enter)
     do_not_expand_shift_return: bool,
     /// R-05b: when the document has any comments, the body's available width
@@ -1570,7 +1007,6 @@ impl LayoutEngine {
             default_tab_stop: 36.0,
             compat_mode: 15,
             compress_punctuation: false,
-            has_effective_kern: false,
             do_not_expand_shift_return: false,
             balloon_column_width: 0.0,
             show_comments: true,
@@ -1613,26 +1049,6 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compress_punctuation: doc.compress_punctuation,
-            // R33 (2026-05-02): kern detection widened to also check the
-            // default paragraph style's run properties (typically "Normal").
-            // Session 51 R0 audit: 38 docs have kern in docDefaults + 24 docs
-            // have it only in Normal style (e.g., 7f272a, ed025). Earlier
-            // R32 only checked docDefaults and missed those 24 — covered by
-            // R17/R31 fallback gates. With Normal-style detection, kern is
-            // the SOLE Mech 1 (FINAL RULE) gate; fallbacks removed.
-            has_effective_kern: {
-                let from_doc_defaults = doc.styles.doc_default_run_style
-                    .as_ref()
-                    .and_then(|rs| rs.kern)
-                    .is_some();
-                let from_default_para_style = doc.styles.default_paragraph_style_id
-                    .as_ref()
-                    .and_then(|id| doc.styles.styles.get(id))
-                    .and_then(|sd| sd.paragraph.default_run_style.as_ref())
-                    .and_then(|rs| rs.kern)
-                    .is_some();
-                from_doc_defaults || from_default_para_style
-            },
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
             // R-05b: 293.8pt balloon column + 24pt buffer between body and
             // balloon = 317.8pt total. Width is COM-confirmed (fixture_01
@@ -1661,10 +1077,11 @@ impl LayoutEngine {
             }
             ShowRevisions::Simple => {
                 // Change bar only — keep tracked_change so R-10 still fires
-                // a margin bar per revision-bearing line. R62 (2026-04-29):
-                // no styling pass needed — parser stores tracked_change only
-                // (no pre-applied styling), so revision runs already render
-                // as plain body text. R-10 reads tracked_change directly.
+                // a margin bar per revision-bearing line, but DON'T apply the
+                // color / underline / strike pre-pass. Also strip the
+                // parser's pre-applied underline+red on ins / strike+red on
+                // del so the surviving runs read as plain body text.
+                strip_parser_revision_styling(&mut doc_resolved);
             }
             ShowRevisions::Original => {
                 // Pre-edit view — drop `ins` / `moveTo` runs entirely. Keep
@@ -1707,25 +1124,10 @@ impl LayoutEngine {
         // R-05c post-pass: emit one Balloon LayoutElement per visible
         // comment, anchored to the rendered Y of its `commentRangeStart`.
         // Gated by S-01.
-        // R-12 (R67): emit_balloons_for_layout_page now also handles
-        // `<w:rPrChange>` margin balloons. We must call it whenever
-        // `show_comments` is on (the gate the user controls for "show
-        // markup"), even when the doc has zero comments — the function
-        // walks runs for rpr_change separately. R-12 emission inside is
-        // gated on the second arg (true only under ShowRevisions::All).
-        let show_rpr_change_balloons = matches!(
-            self.show_revisions,
-            ShowRevisions::All
-        );
-        if self.show_comments {
+        if self.show_comments && !doc_resolved.comments.is_empty() {
             for (layout_idx, layout_page) in pages.iter_mut().enumerate() {
                 let ir_idx = layout_to_ir_page[layout_idx];
-                emit_balloons_for_layout_page(
-                    layout_page,
-                    &doc_resolved,
-                    ir_idx,
-                    show_rpr_change_balloons,
-                );
+                emit_balloons_for_layout_page(layout_page, &doc_resolved, ir_idx);
             }
         }
 
@@ -1970,7 +1372,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, Alignment::Left);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -2083,27 +1485,6 @@ impl LayoutEngine {
                     let lh = metrics.word_line_height(fs, 96.0);
                     hdr_h += lh;
                     hdr_h += para.style.space_after.unwrap_or(0.0);
-                } else if let Block::Math(math_block) = block {
-                    // R77 (2026-04-29): account for header-embedded OMML
-                    // math height when sizing the header band. Without
-                    // this, math in headers either overlaps body content
-                    // (bbox larger than reserved hdr_h) or leaves dead
-                    // space (bbox smaller). The bbox is used as a
-                    // height proxy with the same `font_size × 1.2` floor
-                    // and `× 0.3` descent leeway as the body and textbox
-                    // arms (mod.rs:2463+, mod.rs:3240+).
-                    let math_font_size: f32 = 10.5;
-                    let (_, bbox) = crate::layout::math::emit_math_block(
-                        math_block, 0.0, 0.0, math_font_size,
-                    );
-                    hdr_h += bbox.height().max(math_font_size * 1.2)
-                        + math_font_size * 0.3;
-                } else if let Block::Image(img) = block {
-                    // R78 (2026-04-29): header-embedded Image height
-                    // contribution. Mirrors the textbox arm at
-                    // mod.rs:3232+ — height is just `img.height` (no
-                    // grid snap or font-size leeway).
-                    hdr_h += img.height;
                 }
             }
             header_y + hdr_h
@@ -2198,17 +1579,10 @@ impl LayoutEngine {
                         // 14pt + 10.5pt in 18pt grid → each paragraph uses 18pt cell.
                         // COM-measured (2026-04-17, 04b88e): bridging to 5-page layout
                         // requires grid-aware footer height.
-                        // R37 (2026-04-28): switched ceil → round for empty footer
-                        // paragraph cell-count. ceil(14/13.6)=2 over-reserves by 1
-                        // grid cell when nat barely exceeds pitch, pushing the last
-                        // body paragraph (e.g. 備考 boilerplate) onto the next page.
-                        // Word does not consume an extra cell when the empty paragraph
-                        // marker just barely overflows the grid line. 7 baseline
-                        // pagination FAIL docs share this 備考-spill symptom.
                         if let Some(pitch) = gp {
                             if pitch > 0.0 {
                                 let nat = metrics.word_line_height_no_grid(empty_fs);
-                                let cells = (nat / pitch).round().max(1.0);
+                                let cells = (nat / pitch).ceil().max(1.0);
                                 cells * pitch
                             } else {
                                 metrics.word_line_height_no_grid(empty_fs)
@@ -2220,20 +1594,6 @@ impl LayoutEngine {
                         self.estimate_para_height(p, cw, gp, None, false, None, None)
                     };
                     footer_h += h;
-                } else if let Block::Math(math_block) = block {
-                    // R77 (2026-04-29): account for footer-embedded OMML
-                    // math height when sizing the footer reservation.
-                    // See header counterpart at mod.rs:1744+.
-                    let math_font_size: f32 = 10.5;
-                    let (_, bbox) = crate::layout::math::emit_math_block(
-                        math_block, 0.0, 0.0, math_font_size,
-                    );
-                    footer_h += bbox.height().max(math_font_size * 1.2)
-                        + math_font_size * 0.3;
-                } else if let Block::Image(img) = block {
-                    // R78 (2026-04-29): footer-embedded Image height
-                    // contribution. See header counterpart above.
-                    footer_h += img.height;
                 }
             }
             (footer_dist + footer_h).max(page.margin.bottom)
@@ -2283,19 +1643,6 @@ impl LayoutEngine {
                         } else {
                             h += self.estimate_para_height(p, cw, None, None, false, None, None);
                         }
-                    } else if let Block::Math(math_block) = nb {
-                        // R80 (2026-04-29): footnote-embedded OMML math height
-                        // contribution. Mirrors header/footer counterparts at
-                        // mod.rs:1744+ / 1854+.
-                        let math_font_size: f32 = 10.5;
-                        let (_, bbox) = crate::layout::math::emit_math_block(
-                            math_block, 0.0, 0.0, math_font_size,
-                        );
-                        h += bbox.height().max(math_font_size * 1.2)
-                            + math_font_size * 0.3;
-                    } else if let Block::Image(img) = nb {
-                        // R80 (2026-04-29): footnote-embedded Image height.
-                        h += img.height;
                     }
                 }
                 h
@@ -2721,7 +2068,11 @@ impl LayoutEngine {
                             let sy = para_anchor_y + pos.y;
                             elements.push(LayoutElement::new(
                                 sx, sy, shape.width, shape.height,
-                                shape_to_layout_content(shape),
+                                LayoutContent::PresetShape {
+                                    shape_type: shape.shape_type.clone(),
+                                    stroke_color: shape.stroke_color.clone(),
+                                    stroke_width: shape.stroke_width.unwrap_or(0.75),
+                                },
                             ));
                         }
                     }
@@ -2765,7 +2116,6 @@ impl LayoutEngine {
                             _ => cursor_y + pos.y, // "text": offset from anchor para bottom
                         };
                     }
-                    let cursor_y_table_start = cursor_y;
                     let pages_before = pages.len();
                     let table_elements = self.layout_table(
                         table,
@@ -2786,37 +2136,8 @@ impl LayoutEngine {
                     elements.extend(table_elements);
 
                     if is_floating {
-                        let table_consumed = cursor_y - cursor_y_table_start;
-                        let pages_added = pages.len() - pages_before;
-                        let large_table = table_consumed > content_height * 0.5;
-                        if pages_added > 0 || large_table {
-                            // Floating table consumed substantial layout space.
-                            // Body flow + any subsequent floating tables must move
-                            // to the next page; otherwise multiple page-anchored
-                            // floating tables on the same page overlap each other.
-                            // Observed on 459f05f1e877: 2 floating tables
-                            // (tblpY=98pt, 149pt) both encountered while body
-                            // cursor was on page 1 collapsed 3 pages of form
-                            // content into a single page.
-                            if pages_added == 0 {
-                                pages.push(LayoutPage {
-                                    width: page.size.width,
-                                    height: page.size.height,
-                                    elements: std::mem::take(&mut elements),
-                                });
-                                current_page_idx += 1;
-                                cursor_y = start_y;
-                            } else {
-                                current_page_idx += pages_added;
-                            }
-                            *block_page_indices.last_mut().unwrap() = current_page_idx;
-                            *block_y_positions.last_mut().unwrap() = cursor_y;
-                        } else {
-                            // Small floating table — preserve text-wrap-around
-                            // semantics: body cursor unchanged so subsequent
-                            // paragraphs flow at the original Y.
-                            cursor_y = saved_cursor_y;
-                        }
+                        // Floating tables don't advance the text flow
+                        cursor_y = saved_cursor_y;
                     } else {
                         let pages_added = pages.len() - pages_before;
                         if pages_added > 0 {
@@ -2954,33 +2275,6 @@ impl LayoutEngine {
                             false, None,
                         );
                         lp.elements.extend(hdr_elements);
-                    } else if let Block::Math(math_block) = block {
-                        // R77 (2026-04-29): render header-embedded OMML math.
-                        // Mirror the textbox arm at mod.rs:3240+ — math layout
-                        // doesn't depend on header context, so origin = hdr_x
-                        // and cursor advance = bbox height + same leeway.
-                        let math_font_size: f32 = 10.5;
-                        let (math_elems, bbox) = crate::layout::math::emit_math_block(
-                            math_block, hdr_x, cy, math_font_size,
-                        );
-                        if !math_elems.is_empty() {
-                            lp.elements.extend(math_elems);
-                            cy += bbox.height().max(math_font_size * 1.2)
-                                + math_font_size * 0.3;
-                        }
-                    } else if let Block::Image(img) = block {
-                        // R78 (2026-04-29): render header-embedded Image,
-                        // mirroring the textbox arm at mod.rs:3232+. Width
-                        // is clamped to the header content width.
-                        lp.elements.push(LayoutElement::new(
-                            hdr_x, cy,
-                            img.width.min(hdr_width), img.height,
-                            LayoutContent::Image {
-                                data: img.data.clone(),
-                                content_type: img.content_type.clone(),
-                            },
-                        ));
-                        cy += img.height;
                     }
                 }
             }
@@ -2990,18 +2284,6 @@ impl LayoutEngine {
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
                         footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
-                    } else if let Block::Math(math_block) = block {
-                        // R77 (2026-04-29): footer math estimation, mirroring
-                        // the height-reservation site at mod.rs:1848+.
-                        let math_font_size: f32 = 10.5;
-                        let (_, bbox) = crate::layout::math::emit_math_block(
-                            math_block, 0.0, 0.0, math_font_size,
-                        );
-                        footer_h += bbox.height().max(math_font_size * 1.2)
-                            + math_font_size * 0.3;
-                    } else if let Block::Image(img) = block {
-                        // R78 (2026-04-29): footer Image estimation.
-                        footer_h += img.height;
                     }
                 }
                 let footer_top = page.size.height - footer_dist - footer_h;
@@ -3016,30 +2298,6 @@ impl LayoutEngine {
                             false, None,
                         );
                         lp.elements.extend(ftr_elements);
-                    } else if let Block::Math(math_block) = block {
-                        // R77 (2026-04-29): render footer-embedded OMML math.
-                        // Same shape as the header rendering site above.
-                        let math_font_size: f32 = 10.5;
-                        let (math_elems, bbox) = crate::layout::math::emit_math_block(
-                            math_block, hdr_x, cy, math_font_size,
-                        );
-                        if !math_elems.is_empty() {
-                            lp.elements.extend(math_elems);
-                            cy += bbox.height().max(math_font_size * 1.2)
-                                + math_font_size * 0.3;
-                        }
-                    } else if let Block::Image(img) = block {
-                        // R78 (2026-04-29): render footer-embedded Image.
-                        // Same shape as the header rendering site above.
-                        lp.elements.push(LayoutElement::new(
-                            hdr_x, cy,
-                            img.width.min(hdr_width), img.height,
-                            LayoutContent::Image {
-                                data: img.data.clone(),
-                                content_type: img.content_type.clone(),
-                            },
-                        ));
-                        cy += img.height;
                     }
                 }
             }
@@ -3162,20 +2420,6 @@ impl LayoutEngine {
                                 if let Block::Paragraph(p) = nb {
                                     let (h, _) = grid_snap_para(p);
                                     nh += h;
-                                } else if let Block::Math(math_block) = nb {
-                                    // R80 (2026-04-29): footnote math grid-snap
-                                    // estimation. Math bbox doesn't grid-snap;
-                                    // use raw bbox + leeway like header/footer.
-                                    let math_font_size: f32 = 10.5;
-                                    let (_, bbox) = crate::layout::math::emit_math_block(
-                                        math_block, 0.0, 0.0, math_font_size,
-                                    );
-                                    nh += bbox.height().max(math_font_size * 1.2)
-                                        + math_font_size * 0.3;
-                                } else if let Block::Image(img) = nb {
-                                    // R80 (2026-04-29): footnote Image grid
-                                    // estimation. Image height is exact.
-                                    nh += img.height;
                                 }
                             }
                             note_heights.push(nh);
@@ -3342,34 +2586,6 @@ impl LayoutEngine {
                                         false, None,
                                     );
                                     lp.elements.extend(note_elements);
-                                } else if let Block::Math(math_block) = nb {
-                                    // R80 (2026-04-29): render footnote-embedded
-                                    // OMML math. Mirrors header/footer rendering
-                                    // sites. first_para flag is irrelevant for
-                                    // math (no seq number prefix on math glyphs).
-                                    let math_font_size: f32 = 10.5;
-                                    let (math_elems, bbox) = crate::layout::math::emit_math_block(
-                                        math_block, page.margin.left, cy, math_font_size,
-                                    );
-                                    if !math_elems.is_empty() {
-                                        lp.elements.extend(math_elems);
-                                        cy += bbox.height().max(math_font_size * 1.2)
-                                            + math_font_size * 0.3;
-                                    }
-                                } else if let Block::Image(img) = nb {
-                                    // R80 (2026-04-29): render footnote-embedded
-                                    // Image. Width clamped to footnote_width.
-                                    let footnote_width = page.size.width
-                                        - page.margin.left - page.margin.right;
-                                    lp.elements.push(LayoutElement::new(
-                                        page.margin.left, cy,
-                                        img.width.min(footnote_width), img.height,
-                                        LayoutContent::Image {
-                                            data: img.data.clone(),
-                                            content_type: img.content_type.clone(),
-                                        },
-                                    ));
-                                    cy += img.height;
                                 }
                             }
                         }
@@ -3390,10 +2606,11 @@ impl LayoutEngine {
                         // v_relative="paragraph": y = anchor_paragraph_y + offset
                         let sx = start_x + pos.x;
                         let sy = anchor_y + pos.y;
-                        lp.elements.push(LayoutElement::new(
-                            sx, sy, shape.width, shape.height,
-                            shape_to_layout_content(shape),
-                        ));
+                        lp.elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, LayoutContent::PresetShape {
+                                shape_type: shape.shape_type.clone(),
+                                stroke_color: shape.stroke_color.clone(),
+                                stroke_width: shape.stroke_width.unwrap_or(0.75),
+                        }));
                     }
                 }
             }
@@ -3585,12 +2802,8 @@ impl LayoutEngine {
         let inset_r = text_box.inset_right.unwrap_or(7.2);
         let inset_t = text_box.inset_top.unwrap_or(3.6);
         let inset_b = text_box.inset_bottom.unwrap_or(3.6);
-        // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
-        let corner_inset = text_box.corner_radius
-            .map(|r| r * (1.0 - std::f32::consts::FRAC_1_SQRT_2))
-            .unwrap_or(0.0);
-        let inner_x = abs_x + inset_l + corner_inset;
-        let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
+        let inner_x = abs_x + inset_l;
+        let inner_width = (text_box.width - inset_l - inset_r).max(0.0);
         let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
         // v-text-anchor: middle/bottom shifts content within textbox.
         // Initial cursor at top; for middle/bottom, compute content height first,
@@ -3644,7 +2857,11 @@ impl LayoutEngine {
                             let sy = para_start_y + pos.y;
                             elements.push(LayoutElement::new(
                                 sx, sy, shape.width, shape.height,
-                                shape_to_layout_content(shape),
+                                LayoutContent::PresetShape {
+                                    shape_type: shape.shape_type.clone(),
+                                    stroke_color: shape.stroke_color.clone(),
+                                    stroke_width: shape.stroke_width.unwrap_or(0.75),
+                                },
                             ));
                         }
                     }
@@ -3746,24 +2963,8 @@ impl LayoutEngine {
                     cursor_y += img.height;
                 }
                 Block::UnsupportedElement(_) => {}
-                Block::Math(math_block) => {
-                    // R76 (2026-04-29): textbox-embedded OMML math, mirroring
-                    // the body arm at mod.rs:2463+. The math layout pipeline
-                    // doesn't depend on textbox-specific context (math
-                    // expressions are atomic with their own bbox), so the
-                    // body call signature works as-is. Origin = inner_x,
-                    // cursor advance = bbox height (with the same leeway
-                    // factor as body so per-paragraph spacing is consistent).
-                    let math_font_size: f32 = 10.5;
-                    let (math_elems, bbox) = crate::layout::math::emit_math_block(
-                        math_block, inner_x, cursor_y, math_font_size,
-                    );
-                    if !math_elems.is_empty() {
-                        elements.extend(math_elems);
-                        let advance = bbox.height().max(math_font_size * 1.2)
-                            + math_font_size * 0.3;
-                        cursor_y += advance;
-                    }
+                Block::Math(_) => {
+                    // Phase 2 stub: textbox-embedded OMML math not yet rendered.
                 }
             }
         }
@@ -3905,18 +3106,9 @@ impl LayoutEngine {
         // character at `left` — the hanging area is consumed by the marker+tab,
         // not used to pull the first line leftward. Treating `first_line_indent`
         // as 0 here prevents the marker and text from overlapping.
-        // 2026-05-01 R12: only consume hanging when there's an explicit
-        // list_tab_stop in numbering. Without a tab stop, Word's renderer leaves
-        // L1 body at the L1 effective indent (= indent_left + first_line_indent),
-        // with the marker visually overlapping or sitting right next to body.
-        // With an explicit tab stop, the tab pushes body to indent_left.
-        // Pixel-verified on d77a58485f16 p10 p5: numbering num=1 ilvl=0 has
-        // no <w:tabs/> defined, body L1 visually at margin+21pt (= indent_left
-        // + first_line_indent), NOT at margin+39pt (= indent_left).
         let list_consumes_hanging = para.style.list_marker.is_some()
             && first_line_indent_raw < 0.0
-            && matches!(para.style.list_suff.as_deref(), None | Some("tab"))
-            && para.style.list_tab_stop.is_some();
+            && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
         let first_line_indent = if list_consumes_hanging { 0.0 } else { first_line_indent_raw };
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
@@ -4014,7 +3206,6 @@ impl LayoutEngine {
                     underline: marker_style.underline,
                     underline_style: marker_style.underline_style.clone(),
                     strikethrough: marker_style.strikethrough,
-                    double_strikethrough: marker_style.double_strikethrough,
                     color: marker_color,
                     highlight: marker_style.highlight.clone(),
                     field_type: None,
@@ -4077,24 +3268,10 @@ impl LayoutEngine {
 
         // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
         // NOT shift start position. Text starts at margin, line is shorter.
-        // 2026-05-01 R12: for list paragraphs with hanging from numbering, the
-        // hanging area is occupied by the marker — L1 body wrap width equals
-        // L2+ wrap width (NOT L2+ width + |hanging|). Without this gating, Oxi
-        // fits ~1 extra char on L1 (e.g. d77a p10 p5: 40 vs Word 39), forcing
-        // an extra line and cascading +18pt drift downstream.
-        let list_hanging_marker = para.style.list_marker.is_some()
-            && first_line_indent < 0.0
-            && para.style.list_indent.is_some();
-        let effective_first_indent = if effective_char_pitch.is_some() {
-            0.0
-        } else if list_hanging_marker {
-            0.0
-        } else {
-            first_line_indent
-        };
+        let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, para.alignment);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -4646,7 +3823,6 @@ impl LayoutEngine {
                         underline: frag.style.underline,
                         underline_style: frag.style.underline_style.clone(),
                         strikethrough: frag.style.strikethrough,
-                        double_strikethrough: frag.style.double_strikethrough,
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
@@ -4732,7 +3908,6 @@ impl LayoutEngine {
                                     underline: false,
                                     underline_style: None,
                                     strikethrough: false,
-                                    double_strikethrough: false,
                                     color: ruby_color,
                                     highlight: None,
                                     field_type: None,
@@ -4819,7 +3994,6 @@ impl LayoutEngine {
                             underline: false,
                             underline_style: None,
                             strikethrough: false,
-                            double_strikethrough: false,
                             color: None,
                             highlight: None,
                             field_type: None,
@@ -5029,24 +4203,10 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
-        para_alignment: Alignment,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
-
-        // R38 (2026-04-28): paragraphs whose fragments are entirely whitespace
-        // (incl. fullwidth space U+3000) render as a SINGLE empty line in Word.
-        // Pre-fix: Oxi treated each fullwidth space as a regular CJK char and
-        // wrapped 142 spaces over 4 lines (d77a58 i=129: Word 18pt, Oxi 72pt,
-        // +54pt over-render → page-8 cascade → i=135 spill to next page).
-        // Post-fix: collapse to 1 empty line matching Word.
-        let all_whitespace = !fragments.is_empty() && fragments.iter().all(|(text, _, _, _, _)| {
-            text.chars().all(|c| c.is_whitespace())
-        });
-        if all_whitespace {
-            return vec![Line { fragments: vec![], ..Default::default() }];
-        }
 
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
@@ -5056,17 +4216,6 @@ impl LayoutEngine {
         let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
         let mut compress_used = false; // true after compression-based overflow absorption
         let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
-        // 2026-05-01 R14: track total yakumono compression saved on current line.
-        // Used as overflow tolerance budget — Word allows justified lines to
-        // overflow wrap_width by up to the compression already realized
-        // (re-compress on render). Resets on every line push.
-        let mut line_yakumono_saved_tw: i32 = 0;
-        // R33 (2026-05-02): Mech 2 wrap-budget. Tracks remaining slack we can
-        // extract from non-Mech-1-compressed yakumono A/B chars on the line
-        // by compressing them down to 0.5×natural at render time (Stage 3).
-        // Increment per yakumono A/B char added that is NOT Mech-1 compressed.
-        // Only consulted when jc=Justify/Distribute and kern is active.
-        let mut line_mech2_capacity_tw: i32 = 0;
 
         // Word buffer spans across fragment boundaries so that a single word
         // split across two runs (e.g. "te" in Run1 + "st" in Run2) is kept
@@ -5093,7 +4242,7 @@ impl LayoutEngine {
                     let word_width_tw = pt_to_tw(word_width);
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
@@ -5117,80 +4266,9 @@ impl LayoutEngine {
             };
         }
 
-        // R33 (2026-05-02) refactor: Mech 1 (FINAL RULE per-pair, kern-gated)
-        // + Mech 2 (justify-time slack distribution). Replaces:
-        //   - R17 list_marker fallback gate (workaround for missing kern)
-        //   - R31 chars-indent + cross-run-pair fallback gate
-        //   - R32 standalone 0.583x hack approximating Mech 2
-        // Kern detection now includes Normal-style kern (see for_document)
-        // so the OR-fallback gates are no longer needed.
-        //
-        // Specs:
-        //   session_51_yakumono_kern_trigger.md       — kern is the Mech 1 trigger
-        //   session_51_yakumono_4font_validation.md   — FINAL RULE Type A/B/C
-        //   session_51_yakumono_justify_two_mechanisms.md — Mech 1 vs Mech 2
-        //   session_51_mechanism2_slack_algorithm.md  — slack distribution
-        //   session_51_d77a_p1_p3_root_cause.md       — R32 over-compression
-        //                                                root cause
-        let para_chars: Vec<char> = fragments
-            .iter()
-            .flat_map(|(t, _, _, _, _)| t.chars())
-            .collect();
-        let mut frag_offsets: Vec<usize> = Vec::with_capacity(fragments.len());
-        let mut acc: usize = 0;
-        for (t, _, _, _, _) in fragments {
-            frag_offsets.push(acc);
-            acc += t.chars().count();
-        }
-
-        // Mech 1 (FINAL RULE): per-pair, kern-gated, alignment-agnostic.
-        // Symmetric rule (matches Word's intra-pair compression):
-        //   Class A char (opening bracket): compress 0.5× iff prev is class A or B
-        //   Class B char (closing bracket OR 、。，．): compress 0.5× iff next is class A or B
-        //
-        // Note: oxi-3's 3a4f_p74 paragraph 10 L4 measurement showed `（`
-        // after `）` NOT compressed by Word, suggesting an asymmetric rule
-        // (A only compresses when prev is A). That holds for that doc but
-        // regresses R32 winners with `」「` patterns in d77a_p10 etc., so
-        // the per-doc Word behavior isn't a clean asymmetric rule. Keep
-        // symmetric; per-pair imperfections handled by Stage 3 demand-revert.
-        //
-        // Pre-compute over the whole paragraph (cross-run aware).
-        // Note: `is_yakumono_closing` already includes 、。，．
-        // (kinsoku.rs YAKUMONO_CLOSING) so these chars use the B rule.
-        let yakumono_enabled = self.compress_punctuation && self.has_effective_kern;
-        let mech1_compressed: Vec<bool> = if yakumono_enabled {
-            let n = para_chars.len();
-            let mut v = vec![false; n];
-            for i in 0..n {
-                let c = para_chars[i];
-                if kinsoku::is_yakumono_opening(c) {
-                    if i > 0 {
-                        let prev = para_chars[i - 1];
-                        if kinsoku::is_yakumono_opening(prev) {
-                            v[i] = true;
-                        }
-                    }
-                } else if kinsoku::is_yakumono_closing(c) {
-                    if i + 1 < n {
-                        let next = para_chars[i + 1];
-                        if kinsoku::is_yakumono_opening(next)
-                            || kinsoku::is_yakumono_closing(next)
-                        {
-                            v[i] = true;
-                        }
-                    }
-                }
-            }
-            v
-        } else {
-            vec![false; para_chars.len()]
-        };
-
-        for (frag_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
+        for &(text, style, frag_field_type, frag_run_index, frag_char_start) in fragments {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
-            let para_offset = frag_offsets[frag_idx];
 
             // fitText runs: skip GDI snap to preserve exact target width
             let cs = if style.fit_text.is_some() {
@@ -5240,14 +4318,28 @@ impl LayoutEngine {
             // additional context (line position, surrounding chars, paragraph
             // structure?) NOT captured in the 8x8 grid. Reverted on 2026-04-27.
             // See RESEARCH_LOG 2026-04-27 falsified entry for full data.
-            // R33 (2026-05-02): per-pair FINAL RULE precomputed at paragraph
-            // level (mech1_compressed). Per-fragment view is just a slice.
-            // Replaces the older per-run/per-fragment classification that
-            // mis-handled cross-run pairs vs intra-run pairs.
+            let yakumono_enabled = self.compress_punctuation;
             let chars_vec: Vec<char> = text.chars().collect();
-            let yakumono_compressed: Vec<bool> = (0..chars_vec.len())
-                .map(|i| mech1_compressed[para_offset + i])
-                .collect();
+            // Yakumono pair compression for line break width calculation.
+            let yakumono_compressed: Vec<bool> = if yakumono_enabled {
+                let n = chars_vec.len();
+                let mut v = vec![false; n];
+                for i in 0..n {
+                    let c = chars_vec[i];
+                    if kinsoku::is_yakumono_closing(c) {
+                        if i + 1 < n && kinsoku::is_yakumono_trigger(chars_vec[i + 1]) {
+                            v[i] = true;
+                        }
+                    } else if kinsoku::is_yakumono_opening(c) {
+                        if i > 0 && kinsoku::is_yakumono_trigger(chars_vec[i - 1]) && !v[i - 1] {
+                            v[i] = true;
+                        }
+                    }
+                }
+                v
+            } else {
+                vec![false; chars_vec.len()]
+            };
 
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
                 let (char_metrics, gdi_map) = if kinsoku::is_cjk(ch) {
@@ -5268,35 +4360,50 @@ impl LayoutEngine {
                 char_width += cs;
                 // 2-pass wrap: remember pre-yakumono width to compute yakumono savings.
                 let pre_yakumono_width = char_width;
-                // Mech 1 (FINAL RULE) application: 0.5× when classification
-                // says the char is part of an A→A/B/CJK or CJK/A/B→B pair.
-                // Both opening and closing brackets compress (paren_chain test
-                // confirms — Session 51 R0). The earlier `!is_opening_bracket`
-                // skip was a glyph-overlap workaround; Word actually does
-                // place adjacent chars at 6pt offset over the bracket glyph,
-                // so matching its advance is correct.
-                if yakumono_compressed[char_index] {
+                // Physical yakumono compression (COM-confirmed b837 2026-04-16):
+                //   Pair (both chars): 6pt (×0.5) — e.g., 。）→ 6+6pt
+                //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
+                //   Other brackets: use native font width (bracket shapes vary widely by
+                //     context in Word — 6, 10.5, 11, 11.5, 12pt — no simple compression rule)
+                // 2026-04-20: Opening brackets have visible glyph at right side of
+                // cell (ABC A-offset = 7.5pt for 「, 11pt for （). Compressing advance
+                // to 6pt would place next char at 6pt offset, overwriting the bracket
+                // glyph at 7.5-11.25pt. Skip compression for these — keep fullwidth
+                // advance so glyph fits within its cell. Closing brackets (A=0) are
+                // unaffected and still compress fine.
+                let is_opening_bracket = matches!(ch,
+                    '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［'
+                );
+                if yakumono_compressed[char_index] && !is_opening_bracket {
                     char_width *= 0.5;
-                } else if matches!(ch, '、' | '。' | '，' | '．')
-                    && matches!(para_alignment,
-                        Alignment::Justify | Alignment::Distribute)
-                {
-                    // Mech 2.5 (standalone 、。，． compression at jc=both).
-                    // Per d77a_p10 P6 per-char measurement (oxi-3 R33 diagnosis):
-                    // Word compresses standalone `、。` between non-trigger chars
-                    // (CJK / Latin) to ~0.54x ratio under jc=both, regardless of
-                    // line overflow. This is a fixed alignment-time compression
-                    // distinct from Mech 1 (FINAL RULE pair) and Mech 2 (slack
-                    // distribution). The 0.583× ratio (= 7pt at 12pt fontSize)
-                    // is the closest 12-tw multiple to Word's 0.54x; restoring
-                    // the R32 standalone hack (commit 91a1f94) which empirically
-                    // matched Word better than full uncompressed.
-                    let prev_non_tr = char_index == 0
-                        || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
-                    let next_non_tr = char_index + 1 >= chars_vec.len()
-                        || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
-                    if prev_non_tr && next_non_tr {
-                        char_width *= 0.583;
+                } else if yakumono_enabled {
+                    // Expand pair rule: when yakumono_compressed[neighbor] = true AND
+                    // this char is also yakumono, both compress.
+                    let is_yakumono_any = matches!(ch,
+                        '（' | '）' | '「' | '」' | '『' | '』' | '〔' | '〕' |
+                        '【' | '】' | '《' | '》' | '〈' | '〉' | '｛' | '｝' |
+                        '［' | '］' | '、' | '。' | '，' | '．'
+                    );
+                    if is_yakumono_any {
+                        let prev_compressed = char_index > 0
+                            && yakumono_compressed[char_index - 1];
+                        let next_compressed = char_index + 1 < chars_vec.len()
+                            && yakumono_compressed[char_index + 1];
+                        if (prev_compressed || next_compressed) && !is_opening_bracket {
+                            // Adjacent to pair-compressed yakumono: also compress
+                            // (except opening brackets — see explanation above)
+                            char_width *= 0.5;
+                        } else if matches!(ch, '、' | '。' | '，' | '．') {
+                            // Standalone 、 。 between non-triggers: spec §4.7b round 5
+                            // floor = fontSize × 2/3. Trying 0.667 instead of 0.583.
+                            let prev_non_tr = char_index == 0
+                                || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
+                            let next_non_tr = char_index + 1 >= chars_vec.len()
+                                || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
+                            if prev_non_tr && next_non_tr {
+                                char_width *= 0.6667;
+                            }
+                        }
                     }
                 }
                 // Line-start yakumono demand-driven compression (COM-verified 2026-04-21
@@ -5405,7 +4512,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -5530,47 +4637,10 @@ impl LayoutEngine {
                     // 18 over-wraps cluster in 10-50tw and are gated by
                     // has_pair so d77a over-wraps (has_pair=false) remain
                     // unaffected.
-                    // 2026-05-01 R16: yakumono-budget absorb fires ONLY for list
-                    // paragraphs (list_marker present). Pin: d77a58485f16 p10 p5
-                    // (List Paragraph + numId=1) — Word absorbs 1 char of overflow.
-                    // 3a4f9fbe1a83 p42 p2 (plain hanging indent, no list_marker) —
-                    // Word does NOT absorb. Same yakumono-savings condition, opposite
-                    // Word behavior. The differentiator is list_marker presence.
-                    // Capped at 1 fullwidth char advance to prevent runaway absorb on
-                    // lines with many yakumono (R14 8-yakumono case = -0.11 SSIM).
-                    let one_char_tw = pt_to_tw(font_size);
-                    let absorb_yakumono_budget = para_style.list_marker.is_some()
-                        && self.compress_punctuation
-                        && self.compat_mode >= 15
-                        && line_yakumono_saved_tw > 0
-                        && overflow_tw > 0
-                        && overflow_tw <= line_yakumono_saved_tw.min(one_char_tw);
-                    // 2026-05-01 R17: original 50tw absorb branch ALSO gated on
-                    // list_marker. Pin: 683ffcab86e2 p2 p3 — plain pPr ind (no
-                    // numPr/list_marker), Oxi packed 45 chars/L1 vs Word's 44 due
-                    // to has_pair=true (any 2 adjacent CJK is a yakumono pair).
-                    // Word doesn't absorb on plain paragraphs, only on list
-                    // paragraphs. Same differentiator as R16.
-                    //
-                    // R33 (2026-05-02): add Mech 2 wrap-budget. Under jc=both
-                    // + kern, allow overflow up to the line's Mech 2 capacity
-                    // (sum of 0.5×natural for non-Mech-1 yakumono A/B). The
-                    // overflow is absorbed by Stage 3 post-render compression.
-                    // This replaces the old break-time standalone 0.583x hack
-                    // (R32) which over-compressed prose paragraphs without
-                    // line overflow (d77a p3 P39 -0.079 catastrophic case).
-                    let absorb_mech2 = self.has_effective_kern
-                        && self.compress_punctuation
-                        && self.compat_mode >= 15
-                        && matches!(para_alignment,
-                            Alignment::Justify | Alignment::Distribute)
-                        && overflow_tw > 0
-                        && overflow_tw <= line_mech2_capacity_tw;
-                    let absorb = absorb_yakumono_budget || absorb_mech2 || (if overflow_tw > 0 && overflow_tw <= 50
+                    let absorb = if overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
-                        && para_style.list_marker.is_some()
                         && (has_pair || has_linestart_narrow_yakumono)
-                    { true } else { false });
+                    { true } else { false };
                     let _ = line_compress_count;
                     if absorb {
                         compress_used = true;
@@ -5601,7 +4671,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
+                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                             continue;
                         }
 
@@ -5626,7 +4696,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
@@ -5648,22 +4718,6 @@ impl LayoutEngine {
                     current_width += char_width;
                     current_width_tw += pt_to_tw(char_width);
                     current_grid_extra += char_grid_extra;
-                    line_yakumono_saved_tw += pt_to_tw(yakumono_saved);
-                    // R33: Mech 2 wrap-budget capacity tracking. The
-                    // per-yak typical absorption observed in 3a4f_p74 P1 L0
-                    // (oxi-3 measurement) is ~0.92pt avg — Word's wrap-budget
-                    // is more conservative than the 2pt absolute cap from
-                    // session_51_mechanism2_slack_algorithm. Use 1pt per yak
-                    // for break-time budget; Stage 3 can extend to the full
-                    // 2pt cap if demand requires (rare, narrow_justify-class
-                    // pressure cases).
-                    if !yakumono_compressed[char_index]
-                        && (kinsoku::is_yakumono_opening(ch)
-                            || kinsoku::is_yakumono_closing(ch))
-                    {
-                        let cap = 1.0_f32.min(char_width * 0.5);
-                        line_mech2_capacity_tw += pt_to_tw(cap);
-                    }
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -5709,7 +4763,7 @@ impl LayoutEngine {
             let wft = word_field_type.take();
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
+                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
@@ -5776,95 +4830,6 @@ impl LayoutEngine {
                     if f_saving > 0.0 {
                         f.width = f.natural_width - f_saving * keep_ratio;
                     }
-                }
-            }
-        }
-
-        // Stage 3 — Mech 2 (justify-time slack distribution).
-        // Spec: session_51_mechanism2_slack_algorithm.md.
-        // When jc=both/distribute AND a line's compressed width still exceeds
-        // available_width (Mech 1 was insufficient), Word distributes the
-        // remaining slack across yakumono on the line in 0.5pt steps. The
-        // per-yakumono floor is 0.5×natural (the Mech 1 target); chars
-        // already at that floor cannot compress further.
-        //
-        // This replaces the R32 standalone 0.583x hack which compressed
-        // 、。，． unconditionally under jc=both, over-compressing prose
-        // paragraphs that lacked any actual line overflow (d77a p3 P39
-        // catastrophic case — 14 yak at 0 needed compression).
-        if yakumono_enabled
-            && matches!(para_alignment, Alignment::Justify | Alignment::Distribute)
-        {
-            for line in &mut lines {
-                let total: f32 = line.fragments.iter().map(|f| f.width).sum();
-                let demand = total - available_width;
-                if demand <= 0.5 {
-                    continue;
-                }
-                // Find single-char yakumono fragments (A or B class).
-                let mut yak_indices: Vec<usize> = Vec::new();
-                for (i, f) in line.fragments.iter().enumerate() {
-                    if f.text.chars().count() != 1 {
-                        continue;
-                    }
-                    let c = f.text.chars().next().unwrap();
-                    if kinsoku::is_yakumono_opening(c) || kinsoku::is_yakumono_closing(c) {
-                        yak_indices.push(i);
-                    }
-                }
-                if yak_indices.is_empty() {
-                    continue;
-                }
-                // Per-yakumono compression cap = min(2pt, current_width − 0.5×natural).
-                // Chars already at the Mech 1 floor have cap=0. The 2pt
-                // cap is per session_51_mechanism2_slack_algorithm.md
-                // (Word's observed per-char cap before dropping a char).
-                let caps: Vec<f32> = yak_indices.iter().map(|&i| {
-                    let f = &line.fragments[i];
-                    let floor = (f.natural_width * 0.5).max(f.natural_width - 2.0);
-                    (f.width - floor).max(0.0)
-                }).collect();
-                let total_capacity: f32 = caps.iter().sum();
-                if total_capacity <= 0.5 {
-                    continue;
-                }
-                let actual_reduction = demand.min(total_capacity);
-                // Exact-sum 0.5pt-step distribution (Session 51 Mech 2 spec).
-                // Algorithm:
-                //   1. Compute proportional target per yak.
-                //   2. Round each DOWN to 0.5pt step.
-                //   3. Distribute the residual 0.5pt increments to yak with
-                //      highest remaining capacity (max-heap-like greedy)
-                //      until total = actual_reduction (snapped to 0.5).
-                let target_total = ((actual_reduction / 0.5).round()) * 0.5;
-                let mut allocations: Vec<f32> = caps.iter()
-                    .map(|&c| {
-                        let scaled = c * (actual_reduction / total_capacity);
-                        ((scaled / 0.5).floor() * 0.5).min(c).max(0.0)
-                    })
-                    .collect();
-                let mut allocated_so_far: f32 = allocations.iter().sum();
-                let n_yak = yak_indices.len();
-                // Distribute residual 0.5pt increments to highest remaining capacity.
-                while target_total - allocated_so_far >= 0.5 - 1e-3 {
-                    let mut best_k: Option<usize> = None;
-                    let mut best_rem = 0.0_f32;
-                    for k in 0..n_yak {
-                        let rem = caps[k] - allocations[k];
-                        if rem >= 0.5 - 1e-3 && rem > best_rem {
-                            best_rem = rem;
-                            best_k = Some(k);
-                        }
-                    }
-                    if let Some(k) = best_k {
-                        allocations[k] += 0.5;
-                        allocated_so_far += 0.5;
-                    } else {
-                        break;
-                    }
-                }
-                for (k, &i) in yak_indices.iter().enumerate() {
-                    line.fragments[i].width -= allocations[k];
                 }
             }
         }
@@ -6340,17 +5305,14 @@ impl LayoutEngine {
                     //   offset = (line_height - fontSize)/2
                     // Both reduce to (line_height - fontSize)/2 because line_height = pitch
                     // in the single-cell case.
-                    // R112 (2026-04-30): grid-snapped centering uses NATURAL
-                    // line height (font × CJK 83/64), NOT font_size.
-                    // VALIDATED via systematic Word COM sweep
-                    // (tools/metrics/sweep_text_y_offset.py + data
-                    // pipeline_data/text_y_offset_sweep.json): 36 combos
-                    // of MS Mincho × MS Gothic × 9 sizes × 4 grid pitches
-                    // all predict within 0.5pt of measured stride.
-                    let natural = max_ascent + max_descent;
+                    let font_size = if !line.fragments.is_empty() {
+                        line.fragments.iter()
+                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .fold(0.0_f32, f32::max)
+                    } else { para_font_size };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let raw = (line_height - natural).max(0.0) / 2.0;
+                        let raw = (line_height - font_size).max(0.0) / 2.0;
                         // Round to 0.5pt (10 twips) — COM-confirmed best fit
                         (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
@@ -6358,9 +5320,12 @@ impl LayoutEngine {
                     }
                 } else {
                     // LM0: same centering formula as LM1/LM2 single cell.
-                    // R112: use natural line height not font_size (see above).
-                    let natural = max_ascent + max_descent;
-                    let raw = (line_height - natural).max(0.0) / 2.0;
+                    let font_size = if !line.fragments.is_empty() {
+                        line.fragments.iter()
+                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .fold(0.0_f32, f32::max)
+                    } else { para_font_size };
+                    let raw = (line_height - font_size).max(0.0) / 2.0;
                     (raw * 2.0 + 0.5).floor() / 2.0
                 }
             }
@@ -6457,84 +5422,6 @@ impl LayoutEngine {
         }
 
         let num_rows = table.rows.len();
-
-        // Pre-pass: estimate every row's natural height (same logic as the
-        // inline first-pass below, replicated as a closure). Used only to
-        // size vMerge="restart" cells for v_align="center" — the cell's
-        // visual span is the SUM of its row + all subsequent vMerge="continue"
-        // rows in the same column, not just the restart row's height.
-        // Without this, content like the centred vertical 「連絡先」 label
-        // sticks to the top of the merged area instead of being centred
-        // (459f05f1e877 連絡先 cell, 2026-04-30).
-        let row_natural_heights: Vec<f32> = table.rows.iter().enumerate().map(|(ri, r)| {
-            let mut h: f32 = 0.0;
-            let mut gi = r.grid_before as usize;
-            for c in r.cells.iter() {
-                let sp = c.grid_span.max(1) as usize;
-                if matches!(c.v_merge.as_deref(), Some("continue") | Some("")) {
-                    gi += sp;
-                    continue;
-                }
-                let cw: f32 = col_widths[gi..gi + sp].iter().sum();
-                let mut pt = c.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
-                let pb = c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
-                if pt == 0.0 && table.style.border {
-                    pt = table.style.border_width.unwrap_or(0.4);
-                }
-                let inner_w = cw.max(0.0);
-                let mut ch = pt;
-                for b in &c.blocks {
-                    match b {
-                        Block::Paragraph(p) => {
-                            ch += self.estimate_para_height(p, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
-                        }
-                        Block::Table(nested) => {
-                            let nw = inner_w.max(0.0);
-                            for nr in &nested.rows {
-                                let mut nrh = 0.0_f32;
-                                for nc in &nr.cells {
-                                    let mut nch = 0.0_f32;
-                                    for nb in &nc.blocks {
-                                        if let Block::Paragraph(np) = nb {
-                                            nch += self.estimate_para_height(np, nw / 2.0, table_grid_pitch, nested.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
-                                        }
-                                    }
-                                    nrh = nrh.max(nch);
-                                }
-                                if let Some(hh) = nr.height {
-                                    match nr.height_rule.as_deref() {
-                                        Some("exact") => { nrh = hh; }
-                                        Some("atLeast") => { nrh = nrh.max(hh); }
-                                        _ => {}
-                                    }
-                                }
-                                ch += nrh;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                ch += pb;
-                h = h.max(ch);
-                gi += sp;
-            }
-            let row_has_vmerge = r.cells.iter().any(|c| c.v_merge.is_some());
-            if let Some(pitch) = table_grid_pitch {
-                if pitch > 0.0 && h > 0.0 && grid_char_pitch.is_none() && h >= pitch && row_has_vmerge {
-                    let snapped = (h / pitch).ceil() * pitch;
-                    h = (snapped * 2.0).round() / 2.0;
-                }
-            }
-            if let Some(rh) = r.height {
-                match r.height_rule.as_deref() {
-                    Some("exact") => { h = rh; }
-                    _ => { h = h.max(rh); }
-                }
-            }
-            let _ = ri;
-            h
-        }).collect();
-
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
 
@@ -6626,27 +5513,8 @@ impl LayoutEngine {
             // COM-confirmed: table row height = round_10tw(ceil(content / pitch) * pitch)
             // linesAndChars mode: Word does NOT grid-snap table row heights
             // (COM-measured: row heights are natural content height, not grid multiples)
-            // R40 (2026-04-28): only grid-snap when content >= pitch. COM-measured
-            // bd90 (lines pitch=16.5): table rows with sz=10.5 content render at
-            // 11pt natural in Word, not snapped to 16.5pt. Snapping when content
-            // < pitch over-reserves by (pitch - content) per row, causing cumulative
-            // drift that pushes the bottom 備考 paragraph to next page.
-            // Grid snap row content height, then round to 0.5pt (10tw)
-            // R40 (2026-04-28): only grid-snap when content >= pitch.
-            // R47 (2026-04-29): also skip snap when ANY cell in this row uses
-            // vMerge. Instrumentation-driven finding (R45/R46): snap removal
-            // collapses 459f05f p.3 (SSIM 0.86→0.00) because its heavy vMerge
-            // (30 across 2 tables) depends on snap-rounded row heights for
-            // vMerge-cell content positioning. Tables WITHOUT vMerge (bd90,
-            // d77a58, b837808, e3c545 — most baseline docs, 156/177) safely
-            // tolerate snap removal because their cells are independent rows.
-            // The vMerge gate isolates 459f05f and 21 similar vMerge docs
-            // from the snap behavior change.
-            let row_has_vmerge = row.cells.iter().any(|c| c.v_merge.is_some());
             if let Some(pitch) = table_grid_pitch {
-                if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none()
-                    && row_height >= pitch
-                    && row_has_vmerge {
+                if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none() {
                     let snapped = (row_height / pitch).ceil() * pitch;
                     // Round to 0.5pt (10 twips) — matches Word internal precision
                     row_height = (snapped * 2.0).round() / 2.0;
@@ -6763,147 +5631,7 @@ impl LayoutEngine {
 
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
                 let is_exact = row.height_rule.as_deref() == Some("exact");
-                // R57 (2026-04-29): Phase C #4 vertical writing — tbRlV cell layout.
-                // COM-confirmed (VW_V1_basic, MS Mincho 10.5pt): chars stacked at
-                // column_x = cell_right - pad_r - font_size, dy = font_size strict.
-                // jc=center → vertically centered; default → top-aligned.
-                // R57 covers single-column case only; multi-column wrap = R58.
-                let is_tbrlv = cell.text_direction.as_deref() == Some("tbRlV");
-                if !is_vmerge_continue && is_tbrlv {
-                    // Gather chars from all paragraphs/runs in cell
-                    let mut chars: Vec<(char, RunStyle, ParagraphStyle)> = Vec::new();
-                    let mut p_jc: Option<Alignment> = None;
-                    for block in &cell.blocks {
-                        if let Block::Paragraph(para) = block {
-                            if p_jc.is_none() {
-                                p_jc = Some(para.alignment);
-                            }
-                            for run in &para.runs {
-                                for ch in run.text.chars() {
-                                    chars.push((ch, run.style.clone(), para.style.clone()));
-                                }
-                            }
-                        }
-                    }
-                    if !chars.is_empty() {
-                        let (_, ref first_rs, ref first_ps) = chars[0];
-                        let font_size = self.resolve_font_size(first_rs, first_ps);
-                        let avail_h = (row_height - pad_t - pad_b).max(0.0);
-                        // jc=center/both/distribute maps to vertical centering in tbRlV mode
-                        let jc_center = matches!(p_jc,
-                            Some(Alignment::Center) | Some(Alignment::Justify) | Some(Alignment::Distribute));
-                        // R59 (2026-04-29): multi-column wrap. When chars overflow
-                        // single-column height, wrap to additional columns RTL
-                        // (right-to-left progression per ECMA-376 textDirection=tbRlV).
-                        // chars_per_column based on available cell content height.
-                        let chars_per_col = ((avail_h / font_size).floor() as usize).max(1);
-                        let needs_multi = chars.len() > chars_per_col;
-                        // R60 (2026-04-29): column_pitch = font_size × 4/3.
-                        // Empirically matches Word VW_V1_two_cols (10.5pt MS Mincho
-                        // → 14pt gap, observed col 0 x=133, col 1 x=119, col 2 x=104.5).
-                        // Replaces R59 conservative font_size (which was 3.5pt off
-                        // per column for default MS Mincho).
-                        let column_pitch = font_size * 4.0 / 3.0;
-                        // For tbRlV, jc=center on the inner paragraph centers
-                        // the column(s) horizontally within the cell width
-                        // (perpendicular to the writing direction). Default =
-                        // RTL progression from the cell's right edge.
-                        let n_cols_for_x = ((chars.len() + chars_per_col - 1) / chars_per_col).max(1);
-                        let total_cols_w = n_cols_for_x as f32 * font_size
-                            + ((n_cols_for_x - 1) as f32) * (column_pitch - font_size);
-                        let col0_x = if jc_center {
-                            // Center the column block horizontally; col 0 (rightmost)
-                            // sits at center + half-block-width - font_size.
-                            cell_x + (cell_w - total_cols_w) / 2.0 + (n_cols_for_x - 1) as f32 * column_pitch
-                        } else {
-                            cell_x + cell_w - pad_r - font_size
-                        };
-                        if needs_multi {
-                            // Multi-column: RTL progression, per-column vertical
-                            // centering when jc=center. R61 (2026-04-29): COM-confirmed
-                            // VW_V1_two_cols col 2 ("認", 1 char) at y=142.5 (centered
-                            // within 150pt cell), col 0/1 (14 chars each) at y=74-210.5
-                            // (block_h=147 centered in 150 → y_start=74). Each column
-                            // computes its own block_h based on chars in that column.
-                            let n_cols = (chars.len() + chars_per_col - 1) / chars_per_col;
-                            let last_col_n_chars = chars.len() - (n_cols - 1) * chars_per_col;
-                            for (i, (ch, rs, ps)) in chars.iter().enumerate() {
-                                let col_idx = i / chars_per_col;
-                                let char_in_col = i % chars_per_col;
-                                let column_x = col0_x - col_idx as f32 * column_pitch;
-                                let chars_in_this_col = if col_idx + 1 == n_cols {
-                                    last_col_n_chars
-                                } else {
-                                    chars_per_col
-                                };
-                                let col_block_h = chars_in_this_col as f32 * font_size;
-                                let y_offset_rel = if jc_center {
-                                    ((avail_h - col_block_h) / 2.0).max(0.0)
-                                } else {
-                                    0.0
-                                };
-                                let y_rel = y_offset_rel + char_in_col as f32 * font_size;
-                                let s: String = ch.to_string();
-                                cell_elements.push(LayoutElement::new(
-                                    column_x, y_rel, font_size, font_size,
-                                    LayoutContent::Text {
-                                        text: s,
-                                        font_size,
-                                        font_family: self.resolve_font_family_for_text(
-                                            &ch.to_string(), rs, ps
-                                        ).map(|s| s.to_string()),
-                                        bold: rs.bold,
-                                        italic: rs.italic,
-                                        underline: rs.underline,
-                                        underline_style: rs.underline_style.clone(),
-                                        strikethrough: rs.strikethrough,
-                                        double_strikethrough: rs.double_strikethrough,
-                                        color: self.resolve_color(rs, ps).map(|s| s.to_string()),
-                                        highlight: rs.highlight.clone(),
-                                        field_type: None,
-                                        character_spacing: 0.0,
-                                        text_scale: 100.0,
-                                    },
-                                ));
-                            }
-                            content_h = chars_per_col as f32 * font_size;
-                        } else {
-                            // Single column (R57 logic)
-                            let block_h = chars.len() as f32 * font_size;
-                            let y_offset_rel = if jc_center {
-                                ((avail_h - block_h) / 2.0).max(0.0)
-                            } else {
-                                0.0
-                            };
-                            for (i, (ch, rs, ps)) in chars.iter().enumerate() {
-                                let y_rel = y_offset_rel + i as f32 * font_size;
-                                let s: String = ch.to_string();
-                                cell_elements.push(LayoutElement::new(
-                                    col0_x, y_rel, font_size, font_size,
-                                    LayoutContent::Text {
-                                        text: s,
-                                        font_size,
-                                        font_family: self.resolve_font_family_for_text(
-                                            &ch.to_string(), rs, ps
-                                        ).map(|s| s.to_string()),
-                                        bold: rs.bold,
-                                        italic: rs.italic,
-                                        underline: rs.underline,
-                                        underline_style: rs.underline_style.clone(),
-                                        strikethrough: rs.strikethrough,
-                                        double_strikethrough: rs.double_strikethrough,
-                                        color: self.resolve_color(rs, ps).map(|s| s.to_string()),
-                                        highlight: rs.highlight.clone(),
-                                        field_type: None,
-                                        character_spacing: 0.0,
-                                        text_scale: 100.0,
-                                    },
-                                ));
-                            }
-                            content_h = block_h;
-                        }
-                    }
-                } else if !is_vmerge_continue {
+                if !is_vmerge_continue {
                 for block in &cell.blocks {
                 // Clip content that overflows exact row height
                 if is_exact && content_h + pad_t >= row_height {
@@ -7053,16 +5781,7 @@ impl LayoutEngine {
                                 // Previous formula (fs × pitch/default_fs) over-compressed
                                 // when fs<default_fs. Correct: cw = fs + charSpace_pt where
                                 // charSpace_pt = pitch − default_fs (negative for compressPunc).
-                                // R41 (2026-04-28): gate charGrid pitch widening on
-                                // para.style.snap_to_grid, mirroring body path
-                                // (mod.rs:3279 sets effective_cw_ratio=None when
-                                // snap_to_grid=false). Cell path was widening
-                                // unconditionally, causing extra-wrap cascade for
-                                // paragraphs with <w:snapToGrid w:val="0"/>.
-                                // 1636 i=70: 43 fullwidth chars × +0.20pt = +8.4pt
-                                // overflow → spurious 2-line wrap that pushes
-                                // 備考 (i=79) past page bottom.
-                                if run.style.fit_text.is_none() && para.style.snap_to_grid {
+                                if run.style.fit_text.is_none() {
                                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                                             && crate::font::is_fullwidth(ch)
@@ -7272,9 +5991,6 @@ impl LayoutEngine {
                                             underline: marker_style.underline,
                                             underline_style: marker_style.underline_style.clone(),
                                             strikethrough: marker_style.strikethrough,
-                                            // List markers don't carry revision state — moves
-                                            // attach to runs, not to the bullet glyph.
-                                            double_strikethrough: false,
                                             color: self.resolve_color(&marker_style, &para.style).map(|s| s.to_string()),
                                             highlight: marker_style.highlight.clone(),
                                             character_spacing: 0.0,
@@ -7309,12 +6025,6 @@ impl LayoutEngine {
                                         underline: *underline,
                                         underline_style: underline_style.clone(),
                                         strikethrough: *strikethrough,
-                                        // Cell-path 13-tuple line buffer doesn't carry
-                                        // double_strikethrough yet (rare in cells; move runs
-                                        // are typically body paragraphs). Body emissions at
-                                        // line ~3783 plumb the real value; extend cells when
-                                        // a fixture surfaces a table-cell move.
-                                        double_strikethrough: false,
                                         color: color.clone(),
                                         highlight: highlight.clone(),
                                         character_spacing: *cs + justify_char_spacing + grid_cs_adj,
@@ -7336,12 +6046,11 @@ impl LayoutEngine {
                         // pos.y = offset from paragraph start (Word COM confirmed)
                         for shape in &para.shapes {
                             if let Some(ref pos) = shape.position {
-                                cell_elements.push(LayoutElement::new(
-                                    cell_x + pad_l + pos.x,
-                                    para_content_start_h + pos.y,
-                                    shape.width, shape.height,
-                                    shape_to_layout_content(shape),
-                                ));
+                                cell_elements.push(LayoutElement::new(cell_x + pad_l + pos.x, para_content_start_h + pos.y, shape.width, shape.height, LayoutContent::PresetShape {
+                                        shape_type: shape.shape_type.clone(),
+                                        stroke_color: shape.stroke_color.clone(),
+                                        stroke_width: shape.stroke_width.unwrap_or(0.5),
+                                }));
                             }
                         }
                     }
@@ -7365,42 +6074,9 @@ impl LayoutEngine {
                 }
 
                 // Apply vAlign offset
-                // For vMerge="restart" cells, the cell's visual span is the
-                // sum of this row's height + all subsequent vMerge="continue"
-                // rows in the same grid column. Without this, centred content
-                // (e.g. vertical 「連絡先」 label spanning 5 rows) anchors to
-                // the top of just the restart row instead of the merged span.
-                let effective_h_for_align = if cell.v_merge.as_deref() == Some("restart") {
-                    let mut h = row_height;
-                    for nri in row_idx + 1..num_rows {
-                        let nr = &table.rows[nri];
-                        let mut nc_grid = nr.grid_before as usize;
-                        let mut continues = false;
-                        let mut ended = false;
-                        for nc in &nr.cells {
-                            if nc_grid == cell_start_grid {
-                                if matches!(nc.v_merge.as_deref(), Some("continue") | Some("")) {
-                                    continues = true;
-                                } else {
-                                    ended = true;
-                                }
-                                break;
-                            }
-                            nc_grid += nc.grid_span.max(1) as usize;
-                        }
-                        if continues {
-                            h += row_natural_heights.get(nri).copied().unwrap_or(0.0);
-                        } else if ended || nc_grid > cell_start_grid {
-                            break;
-                        }
-                    }
-                    h
-                } else {
-                    row_height
-                };
                 let v_offset = match cell.v_align.as_deref() {
-                    Some("center") => ((effective_h_for_align - pad_t - pad_b - content_h) / 2.0).max(0.0),
-                    Some("bottom") => (effective_h_for_align - pad_t - pad_b - content_h).max(0.0),
+                    Some("center") => ((row_height - pad_t - pad_b - content_h) / 2.0).max(0.0),
+                    Some("bottom") => (row_height - pad_t - pad_b - content_h).max(0.0),
                     _ => 0.0, // top (default)
                 };
 
@@ -7988,11 +6664,7 @@ impl LayoutEngine {
             for ch in run.text.chars() {
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
-                // R41 (2026-04-28): same snap_to_grid gate as the cell render
-                // path above (~line 5811) — count_cell_lines must match the
-                // render's wrap decision, otherwise estimate vs render diverge
-                // and cell content_h drifts.
-                if run.style.fit_text.is_none() && para.style.snap_to_grid {
+                if run.style.fit_text.is_none() {
                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                             && crate::font::is_fullwidth(ch)
@@ -8094,21 +6766,7 @@ impl LayoutEngine {
             let metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             if is_single_empty {
-                let mut h = metrics.word_line_height_table_cell(empty_fs);
-                // Empty in-cell paragraphs grid-snap to docGrid linePitch.
-                // Verified on cb8be71 「研究計画内容」 row: cell 1 contains 18 empty
-                // paragraphs which Word renders at 18pt each (grid pitch),
-                // not the ~13pt natural line height. Without this snap, the
-                // tall cell on the left ends up shorter than Word's, and
-                // vAlign=center positions content above the visual centre.
-                if in_cell {
-                    if let Some(pitch) = grid_pitch {
-                        if pitch > 0.0 && h < pitch {
-                            h = pitch;
-                        }
-                    }
-                }
-                height += h;
+                height += metrics.word_line_height_table_cell(empty_fs);
             } else {
                 height += self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true);
             }
@@ -8152,7 +6810,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, para.alignment);
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None);
                 lines.len().max(1)
             };
 
@@ -8571,53 +7229,5 @@ mod tests {
                 println!("  y={:.1} x={:.1} [{}c] \"{}\"", prev_y, line_x, chars, snippet);
             }
         }
-    }
-
-    /// R76 (2026-04-29): textbox-embedded OMML math renders via
-    /// `emit_math_block`, mirroring the body arm. Verifies the new
-    /// path emits at least one math element by calling the helper
-    /// directly (the integration concern — that
-    /// `layout_text_box`'s `Block::Math` arm wires correctly to the
-    /// helper — is covered by the simple structural check that the
-    /// arm now calls `emit_math_block` and not the prior stub).
-    #[test]
-    fn r76_emit_math_block_returns_elements_for_inline_fraction() {
-        use crate::ir::{MathBlock, MathExpr, FracBarType};
-
-        let math = MathBlock::Inline(vec![MathExpr::Fraction {
-            num: Box::new(MathExpr::Text("a".into())),
-            den: Box::new(MathExpr::Text("b".into())),
-            bar_type: FracBarType::Bar,
-        }]);
-        let (elems, bbox) = crate::layout::math::emit_math_block(&math, 0.0, 0.0, 10.5);
-        assert_eq!(elems.len(), 3, "fraction must emit 3 elements (num, den, bar); got {}", elems.len());
-        assert!(bbox.height() > 0.0, "fraction bbox must have positive height");
-        // OMML substitutes ASCII letters with Unicode Mathematical Italic
-        // (U+1D44E for 'a', U+1D44F for 'b') per Word's math font cascade.
-        // Numerator first, denominator second, bar last.
-        let mut saw_num = false;
-        let mut saw_den = false;
-        for el in &elems {
-            if let LayoutContent::Text { text, .. } = &el.content {
-                if text == "𝑎" { saw_num = true; }
-                if text == "𝑏" { saw_den = true; }
-            }
-        }
-        assert!(saw_num, "numerator (Mathematical Italic 'a') must be emitted");
-        assert!(saw_den, "denominator (Mathematical Italic 'b') must be emitted");
-        // Numerator y < denominator y (vertically stacked).
-        let num_y = elems.iter().find_map(|el| {
-            if let LayoutContent::Text { text, .. } = &el.content {
-                if text == "𝑎" { return Some(el.y); }
-            }
-            None
-        }).unwrap();
-        let den_y = elems.iter().find_map(|el| {
-            if let LayoutContent::Text { text, .. } = &el.content {
-                if text == "𝑏" { return Some(el.y); }
-            }
-            None
-        }).unwrap();
-        assert!(num_y < den_y, "numerator y ({num_y}) must be above denominator y ({den_y})");
     }
 }
