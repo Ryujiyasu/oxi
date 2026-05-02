@@ -203,7 +203,7 @@ unsafe fn render_page_elements(
             LayoutContent::Text {
                 text, font_size, font_family, bold, italic, color,
                 underline: _, underline_style: _, strikethrough,
-                double_strikethrough: _, highlight, character_spacing,
+                highlight, character_spacing,
                 text_scale: _, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
@@ -562,9 +562,17 @@ unsafe fn render_text(
         }
     }
 
+    // DWrite glyph-top alignment fix (2026-05-03): shift origin UP 1.0pt to
+    // align rendered glyph top with Oxi's IR element.y. DirectWrite's
+    // DrawTextLayout places baseline at origin.y + font_ascent, with leading
+    // gap above caps; the empirical 1.0pt offset is the residual between
+    // Oxi IR's intended glyph-top y and DirectWrite's actual glyph-top
+    // placement at default origin. Full-corpus canary swept -0.25 .. -1.25pt
+    // (5 values) and -1.0pt produced peak NET +2.2198 (110 wins / 41 regs)
+    // on 177-doc p.1 baseline. See pipeline_data/dwrite_origin_shift_2026-05-03.md.
     let origin = D2D_POINT_2F {
         x: x_pt * PT_TO_DIP,
-        y: y_pt * PT_TO_DIP,
+        y: (y_pt - 1.0) * PT_TO_DIP,
     };
 
     rt.DrawTextLayout(
