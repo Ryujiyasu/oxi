@@ -13,6 +13,51 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — H_F: Oxi applies w:ind in textbox content, but Word ignores ALL w:ind (master 5b8d07c)
+- context: Investigation B refuted glyph LSB hypothesis. Master's commit 5b8d07c
+  ("Word UNCONDITIONALLY ignores ALL <w:ind> attrs in textbox") provides direct
+  spec finding. Now verify Oxi's implementation matches this rule.
+- hypothesis (H_F): Oxi applies <w:ind> attrs in textbox content paragraphs.
+- evidence (Oxi code review):
+  - `crates/oxidocs-core/src/layout/mod.rs:2844`: layout_text_box passes
+    `in_textbox=true` to layout_paragraph
+  - `in_textbox` flag IS consulted at multiple places:
+    line 3120 (char_pitch), 3272 (cw_ratio), 3416 (page break), 3423 (widow),
+    3567 (justify), 3589 (overflow Mech 1), 3645 (decompress)
+  - **`in_textbox` is NOT consulted at lines 3094-3102** (indent_left,
+    indent_right, first_line_indent_raw computation):
+    ```rust
+    let indent_left = para.style.indent_left
+        .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
+        .unwrap_or(0.0);
+    ```
+  - Downstream at line 3522: `line_x = start_x + indent_left + extra_indent`
+    applies indent unconditionally
+  - Line 3038 has `#[allow(unused)] in_textbox: bool` confirming in_textbox
+    flag is partially-used (CJK compression suppression worked, indent gate
+    missed)
+- outcome:
+  1. **H_F CONFIRMED**: Oxi applies w:ind in textbox content; Word ignores it.
+     Clean spec-implementation mismatch.
+  2. **Recommended fix**: ~10-line change at line 3094-3102 to gate indent
+     computation on `in_textbox` (return 0 when in textbox).
+  3. **HIGH confidence**: master's 14+ variant test + direct code review
+     showing the gap. Path B (confidence merge) candidate.
+  4. **Decoupled from "□ glyph LSB" framing**: Investigation A/B refuted
+     the LSB-rendering interpretation. The "+1.47pt diff" master observed
+     is BORDER position (separate issue, not text indent). Indent bug applies
+     to ANY textbox paragraph with ind set.
+- predicted impact:
+  - 1ec1's specific □3 paragraph has no ind → no change for that paragraph
+  - 1ec1's OTHER textbox paragraphs with ind → shift left to match Word
+  - All docs with textbox + ind in textbox content → potentially affected
+- next: oxi-2 implementation session: apply fix, pre-baseline, verify,
+  ship via Path B (confidence merge) — empirical evidence is overwhelming.
+- references:
+  memory/investigation_oxi_textbox_indent_gap_2026_05_02.md (full code review
+  + recommended fix code + risk analysis). Builds on master's 5b8d07c +
+  Phase A/B refutation memos.
+
 ## 2026-05-02 — oxi-4 — refuted — 1ec1 □ glyph LSB Investigation B: charset hypothesis + font linking BOTH refuted; Word's 4.14pt LSB not explainable via GDI
 - context: 依頼書 Investigation B. After A refuted font fallback hypothesis,
   test if CreateFontW charset (DEFAULT vs SHIFTJIS) or font linking changes □
