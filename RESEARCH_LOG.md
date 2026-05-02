@@ -761,6 +761,51 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 trigger PINNED: characterSpacingControl="compressPunctuation"
+
+- context: Session 51 R0 found Mech 3 needs "real-doc supporting files"
+  but did not identify the discriminator. R34 implementation needs the
+  exact gate.
+- evidence — bisect_mech3_trigger.py (15 variants):
+  Removing 11 different elements/files from 7f272a clone, only one
+  disabled Mech 3:
+  - `<w:characterSpacingControl w:val="compressPunctuation"/>` removal
+    → Mech 3 NO LONGER FIRES
+  - `<w:useFELayout/>` removal → still fires
+  - `<w:balanceSingleByteDoubleByteWidth/>` removal → still fires
+  - `<w:adjustLineHeightInTable/>` removal → still fires
+  - compatMode 14→15 → still fires
+  - `<w:compat>` block fully removed → still fires
+  - `<w:kern>` removed from docDefaults → **STILL FIRES**
+  - `themeFontLang` removed → still fires
+  - `fontTable.xml` removed → still fires
+  - bare-minimum `settings.xml` (no cSC) → does NOT fire (consistent)
+- evidence — bisect_mech3_csc_values.py (10 variants):
+  cSC value matrix × kern × jc:
+  - `compressPunctuation` + any kern + jc=left/both → fires
+  - `compressPunctuationAndJapaneseKana` + kern=yes + jc=left → fires (equivalent)
+  - `doNotCompress` + any kern + jc=left/both → does NOT fire
+  - cSC element absent + kern=yes + jc=left → does NOT fire (default = doNotCompress)
+- outcome:
+  - **Mech 3 trigger = `<w:characterSpacingControl w:val="V"/>` with
+    V ∈ {"compressPunctuation", "compressPunctuationAndJapaneseKana"}**
+    in `word/settings.xml`. SOLE necessary and sufficient condition.
+  - **Mech 1 (kern gate) and Mech 2/3 (cSC gate) are INDEPENDENT.**
+    Both can fire concurrently or one without the other.
+  - Why Session 51 minimal repros never fired: synthesized minimal docx
+    lacked `word/settings.xml` entirely → cSC default = doNotCompress
+    → no Mech 3. The "real-doc supporting files" requirement was a
+    red herring — only one element matters.
+  - ECMA-376 §17.15.1.10 documents `characterSpacingControl` as
+    "applied only at justify" but Word also fires it at jc=left
+    (undocumented).
+  - Spec §4.7c updated with full trigger spec, bisect tables, ECMA
+    reference, and concrete Oxi implementation gate code.
+  - For R34 implementation: gate yakumono compression on the
+    document-level cSC setting, NOT on real-doc heuristics or kern
+    presence.
+- code change: NONE. Implementation guidance refined in spec §4.7c.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 compression formula = same as Mech 2 (slack 0.5pt-step), only alignment gate differs
 
 - context: Per-request B. Mech 3 compression amount formula. 7f272a_p1
