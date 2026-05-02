@@ -13,6 +13,36 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.2.1 autoSpaceDE/DN gate orthogonality (Round 23-24)
+
+- context: §4.6.2 measured kana↔Latin boundary extra (formula
+  +floor(fs/2+0.5)*0.5) but did not characterize when the flag
+  fires. Open question was whether autoSpaceDE/DN controls the
+  boundary at all and where the flag belongs.
+- evidence — 40 measurements:
+  - `pipeline_data/autospace_dn.json` (Round 23, settings.xml-level):
+    `<w:autoSpaceDE>`/`<w:autoSpaceDN>` placed in word/settings.xml
+    root had ZERO effect across 5 probes × 4 settings combinations.
+  - `pipeline_data/autospace_ppr.json` (Round 24, pPr+styles):
+    Same flags placed inside `<w:pPr>` (per-paragraph) or
+    styles.xml docDefaults pPrDefault DO disable boundary spacing.
+- formula:
+  - autoSpaceDE controls letter↔kana boundary ONLY (not digit)
+  - autoSpaceDN controls digit↔kana boundary ONLY (not letter)
+  - Two flags INDEPENDENT (DE=0 does NOT imply DN=0)
+  - Both default to ON. Disable with explicit `w:val="0"`
+- glyph asymmetry (open Round 25+):
+  fs=12 TNR + MSM, kana→Latin always +3.0pt; Latin→kana varies:
+  M→kana +3.0pt, a→kana +2.0pt, 1→kana +2.5pt. Per-glyph rule.
+- outcome — Oxi must:
+  1. Parse `w:autoSpaceDE` / `w:autoSpaceDN` from pPr / style chain
+     (NOT from settings.xml — that location is a no-op)
+  2. Apply boundary spacing only when corresponding flag = true
+  3. Use §4.6.2 formula for kana→Latin; Latin→kana needs glyph-
+     aware refinement (Round 25)
+- impact: Documents with autoSpaceDE=0 or DN=0 at pPr/style level
+  will have Oxi over-applying boundary spacing if not parsed.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b mixed-fs pure-yak cap driven by LAST yak run (Round 22)
 
 - context: Round 21 confirmed pure-yak cap = 0.75 × fs at single-fs.
