@@ -1108,6 +1108,27 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — blocked — §4.6.1 Kinsoku Retreat × Mech 2 (round 17, blocked by Word COM failure)
+
+- context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
+  causes retreat to previous line. Question: when retreat creates
+  line-1 overflow > Mech 2 cap, does Word (a) retain retreat with
+  visible overflow, (b) drop chars to avoid retreat, (c) multi-step
+  retreat?
+- approach: 50-char probe with 」 at pos 24, sweep cw forcing wrap.
+  `tools/metrics/measure_kinsoku_mech2.py` + remeasure variant.
+- result: BLOCKED. Word COM session entered unhealthy state after
+  many measurements (~280 prior). Multiple `Server execution failed`
+  errors. Word.Documents.Open succeeded only for first 3 cw values
+  (cw=294/296/300) before subsequent measurements all RPC-failed.
+  Probe docx generated successfully (8 docx in
+  `tools/metrics/kinsoku_mech2_repro/`); only need re-measurement.
+- followup: re-run after Word session reset (full reboot may be
+  needed, or run on a separate machine).
+- partial data: `pipeline_data/kinsoku_mech2.json` (5/8 measure_error
+  entries; 0 successful line-data results).
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 16: cap = last CJK run/2 (yak fs irrelevant); distribution = uniform-gap-above-half
 
 - context: Round 15 found cap depends on "last run/yak fs" but couldn't
