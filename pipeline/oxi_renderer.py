@@ -89,6 +89,13 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
                 src.rename(dst)
                 page_idx += 1
 
+            # When OXI_MAX_PAGES is set, drop extra pages (Oxi renders all
+            # internally; we only want p.1..N for the canary).
+            max_pages = int(os.environ.get("OXI_MAX_PAGES", "0") or "0")
+            if max_pages > 0:
+                for extra in sorted(out_dir.glob("page_*.png"))[max_pages:]:
+                    extra.unlink()
+
             png_paths = sorted(out_dir.glob("page_*.png"))
             results[docx_path] = [str(p) for p in png_paths]
             tag = "[WARN] partial" if timed_out else f"  Oxi {RENDERER_NAME}"
