@@ -4577,8 +4577,14 @@ impl LayoutEngine {
                     word_width += char_width; word_grid_extra += char_grid_extra;
                     word_natural_width += char_width + yakumono_saved;
                     flush_word!(style);
-                } else if kinsoku::is_cjk(ch) && para_style.word_wrap {
-                    // CJK characters can break at any point (when wordWrap=true, the default)
+                } else if kinsoku::is_cjk(ch) {
+                    // CJK characters always break at char boundaries (subject to kinsoku).
+                    // ECMA-376 §17.3.1.40: wordWrap controls LATIN word-break only.
+                    // V_JJ measurement (2026-05-02) confirmed: V_JJ2 (wordWrap=on) and
+                    // V_JJ3 (wordWrap=off) produce identical CJK break points.
+                    // Pre-2026-05-03: this branch was gated on `&& para_style.word_wrap`,
+                    // causing CJK to accumulate as a single non-breakable word in
+                    // wordWrap=off paragraphs (34 baseline docs / 108 instances).
                     // autoSpaceDE: add 2.5pt gap between Latin and CJK ideograph/kana.
                     // COM-confirmed (2026-04-07): only ideographs/kana trigger auto-space,
                     // not CJK punctuation (which gets no extra spacing from Latin).

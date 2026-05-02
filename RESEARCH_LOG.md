@@ -13,6 +13,135 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.7 topLinePunct = unconditional half-width line-start yak (Round 34)
+
+- context: ECMA-376 §17.3.1.43 paragraph topLinePunct property.
+  Open: does it conditionally or unconditionally compress?
+- evidence — `pipeline_data/top_line_punct.json` (12 m at fs=12 MSM):
+  Probe 「+漢×20.
+  | cw | def | on | off |
+  | 252 | 「=12 n=21 | **「=6** n=21 | 「=12 n=21
+  | 248 | n=20 wrap   | **「=6** n=21 fits | n=20 wrap
+  | 246 | n=20 wrap   | **「=6** n=21 fits | n=20 wrap
+  | 240 | n=20 wrap   | 「=6 n=20 wrap | n=20 wrap
+- formula:
+  - default = OFF
+  - ON: line-start Type A yak (「『（) UNCONDITIONALLY compressed
+    to half-width (= fs/2). Fires even when no overflow pressure.
+  - Saves fs/2 of line width; further slack wraps regardless.
+- outcome: Oxi must parse `<w:topLinePunct>` from pPr/style chain,
+  apply half-width at line-start Type A yak when ON.
+- impact: ECMA's "if needed to allow another character" wording
+  is misleading — actual behavior is unconditional compression
+  whenever the flag is on for the paragraph.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.6.6 w:vanish hidden text = ZERO layout width (Round 33)
+
+- context: ECMA-376 §17.3.2.43 vanish run property hides text from
+  display. Open: does it occupy layout space?
+- evidence — `pipeline_data/vanish.json` (5 m at fs=12 MSM):
+  V1 (5 visible): n=5, x=85,97,109,121,133
+  V2 (3v+3h+2v): n=5 visible, IDENTICAL positions to V1
+  V3 (3v+10h+2v): n=5 visible, IDENTICAL positions
+  V5 (3v+200h+3v): n=6 visible, all on line 1 (no wrap)
+- formula: hidden text takes ZERO layout width. Visible chars
+  positioned as if hidden runs don't exist. No line break impact.
+- outcome: Oxi must skip `<w:vanish/>` runs entirely from layout
+  computation. No line width contribution, no wrap influence.
+- impact: docs with revision tracking (deleted text marked vanish),
+  hidden notes, conditional content currently incorrect in Oxi if
+  not skipping vanish runs.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.6.5 line-start kinsoku retreat = 1 char (Round 32)
+
+- context: Round 31 showed 1-char retreat for 」 line-end wrap.
+  Round 32 explores depth with multi-yak / mixed tail variants.
+- evidence — `pipeline_data/kinsoku_retreat.json` (5 m):
+  Probes 漢×20 + tail, overflowPunct=off, cw forces tail first
+  char to be at line2 start.
+  | probe | tail | line2 first char | retreat |
+  | P1 | 」 | 漢 | 1 char
+  | P2 | 」」 | 漢 | 1 char
+  | P3 | 」、 | 漢 | 1 char
+  | P4 | 」、） | 漢 | 1 char
+  | P5 | 、漢 | 漢 | 0 char (、 OK at line end)
+- formula: retreat depth = 1 char when natural break would place
+  line-start-forbidden char at line2[0]. After retreat, line2
+  starts with the previously-line1-end char (CJK 漢 here, legal).
+  Subsequent forbidden chars in middle/end of line2 are fine.
+- outcome: simple Oxi algorithm — single 1-char retreat decision
+  at line break, no recursion or multi-char lookahead.
+- impact: any Japanese doc with line-end Type B yak overflow
+  (overflowPunct=off OR overflow > yak_advance) uses this rule.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.6.4 overflowPunct (ぶら下がり) line-end yak overflow (Round 31)
+
+- context: ECMA-376 §17.3.1.32 paragraph property overflowPunct
+  controls line-end punctuation overflow behavior (Japanese
+  typography "ぶら下がり"). Behavior pinned via Round 31.
+- evidence — `pipeline_data/overflow_punct.json` (12 m):
+  21-char probe (漢×20 + 」), fs=12 MSM, jc=left, 4 cw × 3 settings.
+  | cw | def | val=1 | val=0 |
+  | 252 | n=21 fits   | n=21 fits   | n=21 fits   |
+  | 246 | n=21 」at331 | n=21 」at331 | n=19 wrap   |
+  | 240 | n=21 」at325 | n=21 」at325 | n=19 wrap   |
+  | 235 | n=19 wrap   | n=19 wrap   | n=19 wrap   |
+- formula:
+  - default = ON (Japanese Word), `def` ≡ `val=1`
+  - ON: line-end Type B yak's left edge AT right_edge → yak
+    extends `yak_natural_advance` (= fs) past right margin
+  - OFF: yak must fit; wraps with line-start kinsoku retreat
+  - Overflow limited to ONE yak's full width; tighter cw forces
+    wrap regardless of flag
+- outcome: Oxi must parse `<w:overflowPunct>` from pPr/style
+  chain (default ON for Japanese), apply at line-break decision
+  for Type B yak with overflow tolerance ≤ yak_advance.
+- impact: documents using right-edge yakumono (book quotes,
+  letter formatters) currently incorrect in Oxi if flag not parsed.
+
+## 2026-05-02 — oxi-1 — confirmed — §13.1 cellMar variation validates effective_width formula (Round 29)
+
+- context: Round 28 confirmed Mech 2 inside cell = body at default
+  cellMar=4.95pt. Round 29 extends to 4 cellMar variants (0pt,
+  4.95pt default, 10pt symmetric, 2/10pt asymmetric).
+- evidence — `pipeline_data/mech2_cellmar.json` (12 m):
+  3 slacks × 4 variants × identical fit/wrap pattern.
+  At slack=3 (cw=285): all 4 variants n=24 m2=+3.0pt
+  At slack=6 (cap):    all 4 variants n=24 m2=+6.0pt
+  At slack=8 (wrap):   all 4 variants n=23 (wrap)
+- formula: §13.1 `inner_content_width = tcW - L_cellMar - R_cellMar`
+  fully validated. Asymmetric L/R correctly handled.
+- outcome: §4.7b cap dispatcher takes inner_content_width as input;
+  no cellMar-specific modifier needed.
+- impact: Oxi cell layout can compute Mech 2 with the standard
+  (paragraph-level) cap dispatcher using cell's effective inner width.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 cap inside table cell = body cap (Round 28)
+
+- context: Round 16/22 closed §4.7b Mech 2 cap formulas at body
+  level (mixed: fs/2, pure-yak: floor(sz×3/4)*0.5). Open question:
+  does cell context (cellMar, border, jc inheritance) modify cap?
+- evidence — `pipeline_data/mech2_cell.json` (12 m):
+  6 slacks × {body, cell}. Cell setup: 1×1 table with default
+  cellMar=4.95pt, content width = tcW - 2×cellMar = same as body cw.
+  Probe: `「漢」漢` × 6 (24 chars, 12 mid-line yak, cap_pred=fs/2=6pt
+  at fs=12).
+  | slack | body n/m2 | cell n/m2 | match |
+  |   3.0 | 24/+3.0   | 24/+3.0   | ✓
+  |   5.0 | 24/+5.0   | 24/+5.0   | ✓
+  |   6.0 | 24/+6.0   | 24/+6.0   | ✓ (cap)
+  |   7.0 | 23/wrap   | 23/wrap   | ✓
+  |   8.0 | 23/wrap   | 23/wrap   | ✓
+  |  10.0 | 23/wrap   | 23/wrap   | ✓
+- formula: cell's Mech 2 line width = tcW - 2×cellMar; cap dispatcher
+  identical to body (Round 16 mixed / Round 22 pure-yak rules).
+- outcome: Oxi's cell layout can use existing §4.7b cap dispatcher
+  unchanged. Cell-internal Mech 2 fires on cell_inner_content_width
+  computed per §13.1.
+- caveats: default cellMar=4.95pt only; custom paddings, asymmetric
+  L/R, and border presence untested but expected to follow same
+  structural rule.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.6.2 Latin→kana asymmetry RESOLVED via RSB (Round 25)
 
 - context: Round 24 found Latin→kana boundary extra varies by glyph
@@ -78,6 +207,29 @@ Format:
      aware refinement (Round 25)
 - impact: Documents with autoSpaceDE=0 or DN=0 at pPr/style level
   will have Oxi over-applying boundary spacing if not parsed.
+
+## 2026-05-02 — oxi-1 — MAJOR — §4.6.2 balanceSingleByteDoubleByteWidth disables RSB asymmetry (Round 42)
+
+- context: Round 25 derived Latin→kana boundary RSB-aware formula
+  `bnd = nat + extra - rsb`. Round 42 reveals this is conditional
+  on settings.xml `<w:balanceSingleByteDoubleByteWidth>` flag.
+- evidence — `pipeline_data/balance_byte.json` (3 m):
+  Probe 漢a漢b漢c at fs=12 TNR + MSM.
+  | variant | 'a' | 'b' |
+  | V1 default      | 7.5 | 8.5 (RSB-aware: 5.5+2.0, 6.0+2.5)
+  | V2 ON (val=1)   | 8.5 | 9.0 (symmetric: 5.5+3.0, 6.0+3.0)
+  | V3 OFF (val=0)  | 7.5 | 8.5 (= V1 default)
+- formula:
+  - default = OFF (V1 ≡ V3)
+  - OFF: Latin→kana = nat + extra - rsb (Round 25 RSB formula)
+  - ON: Latin→kana = nat + extra (symmetric, no RSB subtraction;
+    matches kana→Latin direction)
+- outcome: Round 25's RSB formula is conditional on this flag.
+  Modern Word docs with flag set will have ~0.5-1.0pt larger
+  Latin→kana boundaries than RSB formula predicts.
+- impact: Oxi must parse `<w:balanceSingleByteDoubleByteWidth>`
+  from settings.xml + dispatch boundary formula. Failure to do
+  so causes Latin width drift on documents using the flag.
 
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b mixed-fs pure-yak cap driven by LAST yak run (Round 22)
 
