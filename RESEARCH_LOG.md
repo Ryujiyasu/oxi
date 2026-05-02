@@ -1108,6 +1108,34 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 18: cap formula line-length-invariant; P13 discrepancy was attribution error
+
+- context: Round 17 noted P13 L2 (real doc) showed 7.5pt comp where
+  Round 6/14 formula predicts cap = 5.0pt. Hypothesis: line-length-
+  dependent cap?
+- evidence: `measure_cap_45char.py` — 45-char synthetic probe matching
+  P13 L2's yak positions exactly (「pos2, 」pos9, 、pos33) at MS
+  Mincho 10.5pt with cSC=compressPunctuation:
+  slack=5: comp=5.0pt, n=45 (cap reached)
+  slack=5.5+: drop to 44 chars
+  → **cap = 5.0pt for 45-char synthetic** = Round 6/14 formula ✓
+- conclusion: cap formula `floor(sz_val/2)*0.5` is INVARIANT to line
+  length (verified at 24-char and 45-char). P13 L2's "7.5pt over cap"
+  observation was an attribution error — P13's natural width
+  estimation didn't account for Latin "14" half-width digits in the
+  text. Real slack < estimated; real comp matches formula.
+- outcome:
+  - Spec §4.7b cross-validation discrepancy resolved.
+  - Cap formula now verified across:
+    N: 1,2,3,4,5,7; fs: 10.5,11,12,14,16,18; font: 5 CJK families;
+    **line length: 24 AND 45 chars**.
+  - Mech 2 specification is now complete and consistent.
+- side observation: at slack=5.5..10.0 (just over cap), Word drops
+  to 44 chars but does NOT apply Mech 2 to the new shorter line.
+  Compression returns at slack=12 (= fontSize), suggesting wrap-fit
+  re-cycles when overflow exceeds cap by ~fontSize.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 17 final: line-end yak EXEMPT from Mech 2 compression
 
 - context: Round 17 kinsoku × Mech 2 follow-up. After Word session
