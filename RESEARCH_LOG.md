@@ -13,6 +13,40 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — refuted (empirical) — H_F fix REGRESSED 1ec1: Oxi suppressing w:ind in textbox moved □ 5.3pt FURTHER from Word (SSIM 0.6453→0.6389)
+- context: H_F memo (entry below) recommended gating indent_left/right/first_line
+  computation on in_textbox=true. User implemented the fix and tested.
+- result (USER EMPIRICAL TEST):
+  - Pre-fix: Oxi □ at ~46.6pt vs Word 48pt → diff = -1.4pt
+  - Post-fix: Oxi □ at 40.80pt vs Word 48.48pt → diff = **-7.7pt** (5.3pt MORE LEFT)
+  - SSIM: 0.6453 → **0.6389** (regression)
+- diagnosis:
+  - Master's 5b8d07c established "Word ignores w:ind in textbox" via DML wsp
+    minimal repro (NOT rounded-rect). That finding is correct for that synthetic
+    setup.
+  - 1ec1 uses VML rounded-rect textbox structure. Word DOES apply (some of) the
+    ind for that structure → pre-fix Oxi was CLOSER to Word.
+  - The "memo Word visual x=39pt" measurement was COM Information(5), which
+    differs from PNG pixel x=48pt for □ in 1ec1's actual textbox.
+- outcome:
+  1. **H_F is REFUTED for 1ec1** (and likely other rounded-rect textbox docs).
+  2. **The fix must be REVERTED** — pre-fix Oxi was closer to truth.
+  3. Master's 5b8d07c finding is **narrower than originally framed** — applies
+     to DML wsp without rounded-rect, NOT generalizable.
+  4. The +1.4pt remaining 1ec1 □ diff is **still unexplained** — Investigation
+     A/B/H_F all failed. Need different pivot.
+- lesson: empirical evidence from minimal repros doesn't always generalize.
+  Pre-baseline pixel measurement on the ACTUAL target doc is critical before
+  recommending or applying fixes.
+- next: REVERT the H_F fix. Re-investigate by rendering 1ec1 with Oxi
+  (current code = unconditional ind), measuring □ pixel x, then comparing to
+  Word render at same fixed margin/scale. Diff at advance level → ind/lIns/
+  shape_left calculation issue. Diff at glyph level → DirectWrite vs GDI.
+- references:
+  memory/investigation_oxi_textbox_indent_REFUTED_2026_05_02.md (full lesson
+  + recommended next steps). Supersedes
+  memory/investigation_oxi_textbox_indent_gap_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — H_F: Oxi applies w:ind in textbox content, but Word ignores ALL w:ind (master 5b8d07c)
 - context: Investigation B refuted glyph LSB hypothesis. Master's commit 5b8d07c
   ("Word UNCONDITIONALLY ignores ALL <w:ind> attrs in textbox") provides direct
