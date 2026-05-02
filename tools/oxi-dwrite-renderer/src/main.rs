@@ -202,8 +202,8 @@ unsafe fn render_page_elements(
         match &el.content {
             LayoutContent::Text {
                 text, font_size, font_family, bold, italic, color,
-                underline: _, underline_style: _, strikethrough: _,
-                double_strikethrough: _, highlight: _, character_spacing: _,
+                underline: _, underline_style: _, strikethrough,
+                double_strikethrough: _, highlight, character_spacing,
                 text_scale: _, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
@@ -212,6 +212,7 @@ unsafe fn render_page_elements(
                     el.x, el.y, el.width, el.height,
                     text, font_family.as_deref().unwrap_or("Calibri"),
                     *font_size, *bold, *italic, color.as_deref(),
+                    *strikethrough, highlight.as_deref(), *character_spacing,
                 )?;
             }
             LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
@@ -479,6 +480,9 @@ unsafe fn render_text(
     bold: bool,
     italic: bool,
     color: Option<&str>,
+    strikethrough: bool,
+    highlight: Option<&str>,
+    character_spacing_pt: f32,
 ) -> windows::core::Result<()> {
     use windows::core::*;
     use windows::Win32::Graphics::Direct2D::*;
@@ -487,6 +491,19 @@ unsafe fn render_text(
 
     if text.is_empty() {
         return Ok(());
+    }
+
+    // Highlight background covers the element rect before glyphs are drawn.
+    if let Some(hl) = highlight {
+        let (hr, hg, hb) = parse_hex_rgb(hl);
+        let hl_brush = rt.CreateSolidColorBrush(&rgb_to_d2d_color(hr, hg, hb), None)?;
+        let rect = D2D_RECT_F {
+            left:   x_pt * PT_TO_DIP,
+            top:    y_pt * PT_TO_DIP,
+            right:  (x_pt + w_pt) * PT_TO_DIP,
+            bottom: (y_pt + h_pt) * PT_TO_DIP,
+        };
+        rt.FillRectangle(&rect, &hl_brush);
     }
 
     // Create IDWriteTextFormat. font_size in DIPs at 96 DPI standard.
@@ -531,11 +548,20 @@ unsafe fn render_text(
         layout_h_dip,
     )?;
 
-    // Get layout metrics to align baseline to element y.
-    // D2D's DrawTextLayout origin is the top-left of the layout box;
-    // text baseline is at y_origin + line_metrics.baseline.
-    // For Oxi's element y, treat it as the top of the line box (matches GDI
-    // TextOutW which also uses top-left). Direct2D should match.
+    // OOXML w:spacing val="N" gives extra inter-glyph advance in 20ths of a
+    // point. Oxi's IR converts that to points before reaching the renderer.
+    // GDI applies it via SetTextCharacterExtra (one int trailing pixels per
+    // char). DirectWrite's equivalent is IDWriteTextLayout1::SetCharacterSpacing
+    // (leading, trailing, minAdvance, range) — putting the whole offset on
+    // trailing matches GDI.
+    if character_spacing_pt.abs() > 0.001 {
+        if let Ok(layout1) = layout.cast::<IDWriteTextLayout1>() {
+            let trailing = character_spacing_pt * PT_TO_DIP;
+            let range = DWRITE_TEXT_RANGE { startPosition: 0, length: text_wide.len() as u32 };
+            let _ = layout1.SetCharacterSpacing(0.0, trailing, 0.0, range);
+        }
+    }
+
     let origin = D2D_POINT_2F {
         x: x_pt * PT_TO_DIP,
         y: y_pt * PT_TO_DIP,
@@ -547,6 +573,30 @@ unsafe fn render_text(
         &brush,
         D2D1_DRAW_TEXT_OPTIONS_NONE,
     );
+
+    // Strikethrough drawn manually as a horizontal line spanning the element
+    // width — matches GDI's MoveToEx/LineTo path. DirectWrite's SetStrikethrough
+    // skips whitespace, which breaks Oxi's per-char element model. (Underline
+    // intentionally not yet ported — both SetUnderline and DrawLine variants
+    // regress -0.18 to -0.20 net p.1 SSIM on the 19 underline-containing
+    // baseline docs; see pipeline_data/dwrite_underline_investigation_2026-05-02.md.)
+    if strikethrough {
+        let mut count: u32 = 0;
+        let _ = layout.GetLineMetrics(None, &mut count);
+        let baseline_dip = if count > 0 {
+            let mut metrics = vec![DWRITE_LINE_METRICS::default(); count as usize];
+            if layout.GetLineMetrics(Some(&mut metrics), &mut count).is_ok() {
+                metrics[0].baseline
+            } else { font_size_pt * PT_TO_DIP * 0.8 }
+        } else { font_size_pt * PT_TO_DIP * 0.8 };
+        let thickness = (font_size_pt * PT_TO_DIP * 0.06).max(1.0);
+        let y_dip = y_pt * PT_TO_DIP + baseline_dip - baseline_dip * 0.30;
+        rt.DrawLine(
+            D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: y_dip },
+            D2D_POINT_2F { x: (x_pt + w_pt) * PT_TO_DIP, y: y_dip },
+            &brush, thickness, None,
+        );
+    }
 
     Ok(())
 }
