@@ -1459,6 +1459,11 @@ pub struct LayoutEngine {
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
     compress_punctuation: bool,
+    /// R32 (2026-05-02): docDefaults rPrDefault rPr <w:kern> presence — Word's
+    /// yakumono Mech 1 (FINAL RULE pair compression) gate, alignment-agnostic
+    /// per Session 51 R0 + dispatch 5/6. Replaces R17 list_marker as primary
+    /// gate. R31 chars-indent + cross-run path retained as fallback.
+    has_effective_kern: bool,
     /// w:doNotExpandShiftReturn: don't justify lines ending with soft break (Shift+Enter)
     do_not_expand_shift_return: bool,
     /// R-05b: when the document has any comments, the body's available width
@@ -1532,6 +1537,7 @@ impl LayoutEngine {
             default_tab_stop: 36.0,
             compat_mode: 15,
             compress_punctuation: false,
+            has_effective_kern: false,
             do_not_expand_shift_return: false,
             balloon_column_width: 0.0,
             show_comments: true,
@@ -1574,6 +1580,10 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compress_punctuation: doc.compress_punctuation,
+            has_effective_kern: doc.styles.doc_default_run_style
+                .as_ref()
+                .and_then(|rs| rs.kern)
+                .is_some(),
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
             // R-05b: 293.8pt balloon column + 24pt buffer between body and
             // balloon = 317.8pt total. Width is COM-confirmed (fixture_01
@@ -1911,7 +1921,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, Alignment::Left);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -4040,7 +4050,7 @@ impl LayoutEngine {
         };
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, para.alignment);
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -4975,6 +4985,7 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
+        para_alignment: Alignment,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -5156,12 +5167,15 @@ impl LayoutEngine {
             // pre-fix compression saved 10.5pt × 2 = 21pt, allowing +1 char/line
             // and shifting 4 cumulative lines (-17.5pt → -35.5pt cascade in p3-p7).
             // Same differentiator as R16 (list paragraph absorb).
-            // R31: refined gate (chars-indent admitted only when paragraph
-            // also has at least one cross-run yakumono pair).
+            // R32 (2026-05-02): kern gate added (Session 51 R0 dispatch 5/6
+            // confirmed Mech 1 alignment-agnostic, only <w:kern> in docDefaults
+            // gates pair compression). R17 list_marker + R31 chars-indent
+            // retained as fallback (~10% of kern docs not in docDefaults).
             let has_chars_indent = para_style.indent_first_line_chars.is_some()
                 || para_style.indent_left_chars.is_some();
             let yakumono_enabled = self.compress_punctuation
-                && (para_style.list_marker.is_some()
+                && (self.has_effective_kern
+                    || para_style.list_marker.is_some()
                     || (has_chars_indent && has_cross_run_yakumono_pair));
             let chars_vec: Vec<char> = text.chars().collect();
             // R31: cross-run yakumono detection (R29 mechanism).
@@ -5244,15 +5258,26 @@ impl LayoutEngine {
                             // (except opening brackets — see explanation above)
                             char_width *= 0.5;
                         } else if matches!(ch, '、' | '。' | '，' | '．') {
-                            // Standalone 、 。 between non-triggers: compress to ≈7pt
-                            // (kept 0.583x for b837 p4 compatibility; v2 attempt to
-                            // remove compression regressed p4 -0.0347)
-                            let prev_non_tr = char_index == 0
-                                || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
-                            let next_non_tr = char_index + 1 >= chars_vec.len()
-                                || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
-                            if prev_non_tr && next_non_tr {
-                                char_width *= 0.583;
+                            // R32 (2026-05-02): standalone 、 。 between non-trigger
+                            // CJK chars approximates Word's Mech 2 (justify-time
+                            // slack distribution, §4.7b spec). Mech 2 fires only
+                            // on jc=both — so gate the standalone hack on
+                            // alignment to avoid over-compression in plain (jc=left)
+                            // paragraphs of kern-active docs (e.g., 683f).
+                            // Proper Mech 2 (0.5pt-step distribution capped at
+                            // fontSize/3 per yak) is deferred to a dedicated
+                            // implementation session; this alignment-gated hack
+                            // is a conservative middle ground.
+                            let mech2_eligible = matches!(para_alignment,
+                                Alignment::Justify | Alignment::Distribute);
+                            if mech2_eligible {
+                                let prev_non_tr = char_index == 0
+                                    || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
+                                let next_non_tr = char_index + 1 >= chars_vec.len()
+                                    || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
+                                if prev_non_tr && next_non_tr {
+                                    char_width *= 0.583;
+                                }
                             }
                         }
                     }
@@ -7990,7 +8015,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None);
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, para.alignment);
                 lines.len().max(1)
             };
 
