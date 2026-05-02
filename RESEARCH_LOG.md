@@ -13,6 +13,42 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed (revised mechanism) — Cluster B: e3c545 has CATASTROPHIC pagination divergence (130 paras / 12 Oxi pages vs 550 / 12 Word pages)
+- context: bottom-bucket survey Cluster B (long-doc cumulative Y drift) hypothesis.
+  Tested on e3c545 (550 paras, min SSIM 0.665 page 11).
+- hypothesis tested: small per-paragraph Y drift accumulates over hundreds of paras
+- evidence:
+  - Word COM Y measurement (tools/metrics/measure_long_doc_drift.py) on 20 sampled
+    paragraphs across e3c545
+  - Oxi cached layout comparison (tools/metrics/compare_long_doc_drift.py) using
+    pipeline_data/_e3c545_layout.json
+  - Result: Oxi 12 pages cover only paras 0-129. Word 12 pages cover all 550.
+  - dy progression: 0pt (paras 1-4) → -3.5pt (p5) → +21pt (p50) → 5-page
+    divergence (p100: Word page 4, Oxi page 9)
+  - Oxi page 5 contains ONLY 1 paragraph (para_idx=83) — single para fills full page
+- outcome:
+  1. **Cluster B mechanism REVISED**: NOT linear per-para drift. Oxi paginates
+     ~4× slower than Word due to catastrophic over-reservation of specific content
+     blocks (likely code blocks, nested tables, or specific OOXML features).
+  2. **Single-paragraph-fills-page anomaly** at para_idx=83 indicates a content
+     block that Oxi grossly over-reserves. e3c545 is a TTL/RDF technical
+     handbook with monospace code blocks — likely candidate.
+  3. **Why bottom-page SSIM is low**: Oxi page 11 contains paras 109-118 while
+     Word page 11 contains paras ~470-490 (completely DIFFERENT content). The
+     pixel-comparison sees totally different text → SSIM crashes.
+  4. **Cluster B should be re-classified** as "block over-reservation" not
+     "per-para drift". Aligns more with Cluster A (table cell layout) than the
+     original per-para hypothesis.
+- next: (a) identify para_idx=83 content type in e3c545 (code block? table?);
+  (b) trace per-paragraph cursor_y advance through paras 70-100 to find where
+  over-reservation kicks in; (c) verify pattern on 04b88e / 34140b (no Oxi cache
+  yet); (d) hypothesis: specific element (`<w:pre>`-style? grid charSpace?
+  monospace font lh formula?) over-reserves vertically.
+- references:
+  memory/investigation_e3c545_pagination_divergence_2026_05_02.md (full data + per-page
+  para_idx range + revised mechanism). Builds on
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — survey — Bottom-bucket post-R32: 15 docs, 5 hypothesis clusters
 - context: User question "R32 後 bottom-bucket survey, SSIM < 0.70 の docs 抽出 →
   structural feature 分類 → cluster → 次 hypothesis 3-5 件 propose"
