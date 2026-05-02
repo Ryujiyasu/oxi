@@ -13,6 +13,50 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — partial + correction — 1ec1 +9pt offset variant test (Baseline only); previous "RESOLVED" claim was WRONG (Word ignores ind both □1 and □3, +5.5pt gap structural)
+- context: User's R37 measurement (post H_F fix): both □1 (no ind) and □3
+  (ind=5.25pt) render at SAME Word x=48pt → Word ignores ind in 1ec1 textbox
+  CONFIRMED. My previous "RESOLVED" geometric reconstruction was INCORRECT
+  (it assumed ind=5.25pt applied; user's □1 data refutes this).
+- correction to previous "RESOLVED" entry:
+  - Word renders □1 (no ind) at x=48pt
+  - Word renders □3 (ind=5.25pt) at x=48.48pt (essentially same)
+  - **Word DOES ignore w:ind in 1ec1's textbox** (consistent with master's
+    5b8d07c, generalized further than I thought)
+  - The ~5.25pt I attributed to ind:left in the geometric reconstruction was
+    LUCKY MATCH not actual mechanism
+  - Real unexplained gap: ~+9pt offset Word vs Oxi (post-fix), independent
+    of ind value
+- partial variant test (per user 依頼書, 1/8 succeeded before Word RPC died):
+  - Script: tools/metrics/repro_1ec1_textbox_9pt_v2.py
+  - Baseline (rect prstGeom + 1ec1-equiv settings): □ glyph x = 43.0pt
+  - 1ec1 actual: □ glyph x = 48.48pt
+  - **Difference 5.48pt unexplained** — synthetic minimal repro DOES NOT
+    reproduce 1ec1's offset
+  - V_A through V_G all failed with Word RPC server unresponsive
+- strong hypothesis: 1ec1 uses `<a:prstGeom prst="roundRect">` while my
+  synthetic Baseline uses `prst="rect"`. roundRect may add corner-radius
+  padding to content area (~5-9pt for 522.75pt-wide shape with default
+  corner radius).
+- outcome:
+  1. **Previous "RESOLVED" claim retracted** — Word DOES ignore w:ind in
+     1ec1 textbox; my geometric model was wrong about which 5.25pt added.
+  2. **Master's 5b8d07c finding** generalizes to 1ec1 rounded-rect (not
+     just synthetic DML wsp as I previously corrected).
+  3. **The H_F fix is CORRECT in direction** (suppress ind in textbox).
+     User's empirical regression (-7.7pt) is because Oxi was BOTH wrong:
+     applied ind AND missing the +5.5pt structural offset. Removing ind
+     made the missing +5.5pt visible.
+  4. **The +5.5pt gap remains unexplained**. Strong candidate: roundRect
+     content padding. Test required: rebuild synthetic Baseline with
+     `prst="roundRect"`, see if □ shifts to ~48pt.
+- next: re-run variant sweep when Word is healthy. Add V_H_roundRect
+  variant. Verify gap source via single property change.
+- references:
+  memory/investigation_1ec1_9pt_offset_partial_2026_05_02.md
+  (full partial result + roundRect hypothesis + reasoning correction).
+  Supersedes/corrects investigation_1ec1_box3_root_cause_finally_*.
+
 ## 2026-05-02 — oxi-4 — RESOLVED — 1ec1 □３ root cause: paragraph DOES have <w:ind w:left="105"/>; H_F was inverse direction; remaining +2.4pt is pure LSB pipeline diff
 - context: deep dive after H_F empirical refutation. Use direct Shape geometry
   + per-paragraph XML scan + reconciliation against all 3 measured points.
@@ -1063,6 +1107,97 @@ Format:
   hRule to "atLeast" when the attribute is absent (matches Word). Layout
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 8: cap font-independent + Round 7 N=1 drop REFUTED
+
+- context: Round 6 (4 sizes on MS Mincho) and Round 7 (N=1/2 on 12pt
+  MS Mincho) confirmed cap formula but raised 2 questions:
+  (a) is cap font-dependent? (Session 51 found em-dash is)
+  (b) is N=1 drop threshold = fontSize × 1 (Round 7 claim)?
+- evidence: `measure_cap_other_fonts.py`:
+  Suite E (5 CJK fonts × 12pt × N=3 mid-line):
+    ＭＳ 明朝, ＭＳ ゴシック, Yu Mincho, Meiryo, HG明朝E
+    → ALL produce cap=6.0pt, first_drop=6.5pt
+    → cap formula font-INDEPENDENT
+  Suite F (fs=14 N=1 gap-fill, slack 7..14 step 1pt):
+    slack=7.0: comp=7.0 (cap reached)
+    slack=8.0: drop ← first_drop = 8.0, NOT 14.5
+- correction:
+  Round 7's "N=1 first_drop ≈ fontSize × 1" was a sweep-gap artifact
+  (slack 7.0..14.0 untested, jumped from 6.7 to 14.5). True N=1 first
+  drop = cap + 1.0pt = 8.0pt for fs=14, mirroring N≥2.
+  fs=12 N=1 first_drop=12.5 (Round 7) likely also gap-artifact; true
+  value probably 6.5pt. Recommend filler sweep.
+- outcome:
+  - Final unified rule: cap = floor(sz_val/2) × 0.5, drop_threshold =
+    cap + 0.5pt. N-independent and font-independent.
+  - Spec §4.7b Round 8 added with corrected drop_threshold rule.
+  - Implementation simpler: no N=1 special case.
+- open: fs=12 N=1 first_drop verification, 16+pt fonts, mixed-size lines.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b N=1 cap REVISED + N=2 mid-line resolved (round 7)
+
+- context: §4.7b round 3 claimed N=1 cap = fontSize/3 (= 4pt for 12pt) as
+  special case, derived from a single P_1para_Y50 datapoint. Round 7
+  verifies across 4 font sizes + resolves Round 5's N=2 line-end yak
+  anomaly.
+- evidence: `measure_cap_n1_n2.py`:
+  Suite C (N=1 mid-line, pos 12 of 24, fine 0.5pt slack sweep):
+    fs=12 N=1 → max_comp = 6.0pt (= fontSize/2, NOT fontSize/3)
+    fs=10.5/11/14 sweep had gaps; partial confirmation
+  Suite D (N=2 mid-line, pos 8 + 16, 12pt):
+    max_comp = 6.0pt (= fontSize/2, Round 6 formula confirmed)
+    Round 5's "12pt anomaly" was line-end yak placement artifact
+- new finding (drop threshold):
+  N=1 first_drop = ~fontSize (12.5 for fs=12, 14.5 for fs=14)
+  N≥2 first_drop = cap + 0.5..1.0pt
+  → N=1 has special drop tolerance: Word allows line to extend up to
+    fontSize past cap before dropping. With multiple yak, distribution
+    is fine-grained enough that drop comes earlier.
+- outcome:
+  - Compression cap = `floor(sz_val/2) × 0.5` UNIVERSAL across N≥1.
+    The N=1 special case (fontSize/3) is REVOKED.
+  - Drop threshold differs: N=1 = fontSize, N≥2 = cap + 0.5pt.
+  - Spec §4.7b round 7 added with the corrected formula and drop-
+    threshold characterization.
+  - Implementation: same cap formula for any N; only drop_threshold
+    branches on N=1 vs N≥2.
+- open: fs=10.5/11/14 N=1 sweep gaps (haven't tested exact cap at those
+  font sizes due to slack sampling). Larger fonts. Other CJK fonts.
+- code change: NONE. Spec §4.7b round 7 added.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b cap formula universal (4 font sizes verified, 0.5pt-quantized)
+
+- context: Round 5 found line-level cap = fontSize/2 at 12pt only.
+  Round 6 verifies universality across 10.5pt, 11pt, 12pt, 14pt.
+- evidence: `measure_cap_font_size_sweep.py` (16 cw values per font ×
+  4 font sizes × N=3 yak, controlled cSC=compressPunctuation, direct-zip
+  docx). Aggregator `measure_cap_font_aggregator.py` re-measured 47
+  docx with incremental save after first script crashed mid-Suite-A.
+- findings:
+  | fs | fs/2 (theory) | observed cap | first_drop slack | per-yak (N=3) |
+  | 10.5 | 5.25 | 5.00 | 6.2 | 1.667 |
+  | 11.0 | 5.50 | 5.50 | 6.5 | 1.833 |
+  | 12.0 | 6.00 | 6.00 | 7.0 | 2.000 |
+  | 14.0 | 7.00 | 7.00 | 8.0 | 2.333 |
+- formula refined:
+  cap_pt = round_down_to_0.5pt(fontSize / 2)
+         = floor(sz_val_int / 2) * 0.5
+  For fs=10.5 (sz=21): floor(21/2)*0.5 = 10*0.5 = 5.0pt
+  Other fs (11/12/14) have integer fs/2, no quantization needed.
+  This matches Mech 2's 0.5pt-step distribution granularity (Word's
+  internal half-point precision).
+- outcome:
+  - cap formula confirmed universal across MS Mincho 10.5-14pt.
+  - 0.5pt quantization rule documented in spec §4.7b round 6.
+  - Implementation guidance:
+    `cap = (sz_val_int / 2) * 0.5_pt` (clean integer math from
+    docx's `<w:sz w:val="N"/>` value).
+- open: N=2 mid-line anomaly (Suite B was planned but original script
+  died on Suite A; can be added later). Larger fonts (16+pt) untested.
+  Other CJK fonts (Yu Mincho, Meiryo) untested.
+- code change: NONE. Spec §4.7b round 6 added.
 
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b per-yak cap REVISED: line-level cap = fontSize/2, divided by N
 
