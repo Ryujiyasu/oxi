@@ -1108,6 +1108,42 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 17 final: line-end yak EXEMPT from Mech 2 compression
+
+- context: Round 17 kinsoku × Mech 2 follow-up. After Word session
+  recovery, additional cw values measured.
+- evidence: `measure_kinsoku_remeasure.py` — 50-char probe (」 at pos 24)
+  with 8 cw sweep:
+  - cw=300 (slack=0, 25 chars/L1): 」 at pos 24 (mid-line), adv=12.0,
+    line w=300 (no compression, no overflow)
+  - cw=294 (slack=6 = cap, 25 chars/L1): 」 at pos 24 mid-line,
+    **adv=6.0 (compressed to half-width = cap)**, line w=294 ✓
+    Mech 2 fires cleanly when yak is mid-line + slack within cap.
+  - cw=284 (24 chars/L1): 」 at L1 last position (line-end),
+    line w=290 (visible overflow +6pt), 」 NOT compressed.
+    **Word retains kinsoku retreat with overflow rather than compress
+    the line-end yak.**
+  - cw=264: wraps to L2, 」 at L2 pos 2 between CJK
+- finding (NEW spec rule): **Line-end yak EXEMPT from Mech 2**.
+  Round 6 confirmed line-start (pos 1) yak is exempt. Round 17 confirms
+  the SAME rule for line-end (last position). Both edges excluded.
+  Mech 2 candidates = mid-line yak only (positions 2..(n-1) of line).
+- clarification of cw=284 mechanism:
+  Without retreat: pack 23 CJK on L1, 」 starts L2 → kinsoku violation
+  With retreat: keep 」 at L1 end, but Mech 2 doesn't fire on line-end
+  → line accepts visible overflow (~6pt past content_w)
+  Word chose retreat with overflow over both alternatives.
+- outcome:
+  - Spec §4.7b position rule extended:
+    Mech 2 candidates = yak at line position ∈ [2, n-1]
+    (excluded both line-start AND line-end)
+  - Spec §4.6.1 kinsoku retreat takes precedence over Mech 2 cap
+    constraint (line accepts overflow when retreat conflicts with cap).
+  - Implementation:
+    fn is_mech2_candidate(yak_pos, n_chars):
+      yak_pos > 0 AND yak_pos < n_chars - 1
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — partial — §4.6.1 Kinsoku Retreat × Mech 2: retreat causes visible overflow (round 17 partial)
 
 - context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
