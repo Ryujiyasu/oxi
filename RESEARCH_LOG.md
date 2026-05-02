@@ -13,6 +13,28 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.5 line-start kinsoku retreat = 1 char (Round 32)
+
+- context: Round 31 showed 1-char retreat for 」 line-end wrap.
+  Round 32 explores depth with multi-yak / mixed tail variants.
+- evidence — `pipeline_data/kinsoku_retreat.json` (5 m):
+  Probes 漢×20 + tail, overflowPunct=off, cw forces tail first
+  char to be at line2 start.
+  | probe | tail | line2 first char | retreat |
+  | P1 | 」 | 漢 | 1 char
+  | P2 | 」」 | 漢 | 1 char
+  | P3 | 」、 | 漢 | 1 char
+  | P4 | 」、） | 漢 | 1 char
+  | P5 | 、漢 | 漢 | 0 char (、 OK at line end)
+- formula: retreat depth = 1 char when natural break would place
+  line-start-forbidden char at line2[0]. After retreat, line2
+  starts with the previously-line1-end char (CJK 漢 here, legal).
+  Subsequent forbidden chars in middle/end of line2 are fine.
+- outcome: simple Oxi algorithm — single 1-char retreat decision
+  at line break, no recursion or multi-char lookahead.
+- impact: any Japanese doc with line-end Type B yak overflow
+  (overflowPunct=off OR overflow > yak_advance) uses this rule.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.6.4 overflowPunct (ぶら下がり) line-end yak overflow (Round 31)
 
 - context: ECMA-376 §17.3.1.32 paragraph property overflowPunct
