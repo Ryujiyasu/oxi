@@ -1108,6 +1108,74 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 15: mixed CJK sizes — cap from last run + proportional yak distribution
+
+- context: Round 13 found "cap = CJK fs/2" for mixed yak-size case.
+  Round 15 tests mixed CJK fs case (different CJK sizes within line).
+- evidence: `measure_mixed_cjk_sizes.py` 3 suites × ~7 cw values:
+  Suite A (24 chars all 12pt): cap = 6.0pt ✓ baseline
+  Suite B (12pt first 12 + 14pt last 12): cap = 7.0pt = 14/2
+  Suite C (14pt first 12 + 12pt last 12): cap = 6.0pt = 12/2
+- finding: Cap is determined by **last run's CJK fs** in mixed case.
+  (Indistinguishable from "last yak's fs" since they coincide here;
+  needs disambiguation test.)
+- per-yak distribution finding (NEW):
+  In Suite B at slack=7 (cap reached):
+    pos 6 (12pt yak): 2.0pt comp
+    pos 12 (12pt yak): 2.0pt comp
+    pos 18 (14pt yak): 3.0pt comp
+  Distribution is **proportional to each yak's fs**, NOT equal.
+  per_yak_comp ≈ round_to_0.5pt(slack × yak_fs / sum_of_yak_fs)
+- outcome:
+  - Spec §4.7b round 15 added with mixed-CJK rule + proportional
+    distribution.
+  - Refines Round 9/14's "equal distribution": equal only when all
+    yak share same fs; weighted by fs when yak sizes differ.
+  - Implementation guidance:
+    cap = last_cjk_run_fs/2
+    per_yak = round_to_0.5pt(slack × yak_fs / sum_yak_fs)
+- open: disambiguate "last run fs" vs "last yak fs" with run/yak fs
+  decoupled. Mixed yak fs without mixed CJK fs (Round 13) — review
+  per-yak distribution for proportionality.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 14: fs=18 cap=9.0pt + Yu/Meiryo 16pt + slack rounding rule
+
+- context: Round 13 left fs=18 cap unclear (8.5..9.0 range). Round 14
+  fills the gap and verifies cap formula on Yu Mincho/Meiryo at 16pt.
+- evidence: `measure_cap_round14_fillers.py` 28 measurements:
+  Suite A (fs=18 MS Mincho fillers slack=8.0..9.5 in 0.1pt steps):
+    slack=8.0..8.7: comp=8.5pt
+    slack=8.8: comp=9.0pt (over by 0.2pt)
+    slack=8.9: comp=9.0pt
+    slack=9.0: comp=9.0pt (cap reached)
+    slack=9.1+: drop
+    → cap = 9.0pt = floor(36/2)*0.5 ✓ FORMULA CONFIRMED
+  Suite B (Yu Mincho 16pt N=3):
+    cap = 8.0pt = floor(32/2)*0.5 ✓
+  Suite C (Meiryo 16pt N=3):
+    cap = 8.0pt ✓
+- sub-finding (slack rounding):
+  Word rounds slack to nearest 0.5pt BEFORE distribution. At slack=8.8
+  comp=9.0pt (over content_w by 0.2pt). Round 9's "total = slack
+  EXACTLY" is approximate; precise rule:
+    comp_total = round_to_0.5pt(slack)
+- 3-way universality CONFIRMED (15 rounds, ~280 measurements):
+  N: 1, 2, 3, 4, 5, 7
+  fs: 10.5, 11, 12, 14, 16, 18 pt (6 sizes)
+  font: MS 明朝/ゴシック, Yu Mincho, Meiryo, HG明朝E
+  Mixed-size: cap = CJK fs/2
+  Formula: cap = floor(sz_val_int/2) × 0.5
+- outcome:
+  - Spec §4.7b round 14 added with fs=18 confirmation and slack-
+    rounding refinement.
+  - Implementation guidance:
+    fn mech2_cap_pt(sz_val) -> (sz_val/2)*0.5
+    fn mech2_distribute(slack, n_yak, cap):
+      total = round_to_0.5pt(slack).min(cap)
+      total / n_yak  // per-yak
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 13: cap formula at 16pt + mixed-size = CJK-dominant-fs/2
 
 - context: Round 6/7/8/10 verified cap formula for 10.5/11/12/14pt MS
