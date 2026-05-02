@@ -4394,15 +4394,14 @@ impl LayoutEngine {
                             // (except opening brackets — see explanation above)
                             char_width *= 0.5;
                         } else if matches!(ch, '、' | '。' | '，' | '．') {
-                            // Standalone 、 。 between non-triggers: compress to ≈7pt
-                            // (kept 0.583x for b837 p4 compatibility; v2 attempt to
-                            // remove compression regressed p4 -0.0347)
+                            // Standalone 、 。 between non-triggers: spec §4.7b round 5
+                            // floor = fontSize × 2/3. Trying 0.667 instead of 0.583.
                             let prev_non_tr = char_index == 0
                                 || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
                             let next_non_tr = char_index + 1 >= chars_vec.len()
                                 || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
                             if prev_non_tr && next_non_tr {
-                                char_width *= 0.583;
+                                char_width *= 0.6667;
                             }
                         }
                     }
