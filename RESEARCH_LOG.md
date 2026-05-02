@@ -1108,6 +1108,38 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b cap formula universal (4 font sizes verified, 0.5pt-quantized)
+
+- context: Round 5 found line-level cap = fontSize/2 at 12pt only.
+  Round 6 verifies universality across 10.5pt, 11pt, 12pt, 14pt.
+- evidence: `measure_cap_font_size_sweep.py` (16 cw values per font ×
+  4 font sizes × N=3 yak, controlled cSC=compressPunctuation, direct-zip
+  docx). Aggregator `measure_cap_font_aggregator.py` re-measured 47
+  docx with incremental save after first script crashed mid-Suite-A.
+- findings:
+  | fs | fs/2 (theory) | observed cap | first_drop slack | per-yak (N=3) |
+  | 10.5 | 5.25 | 5.00 | 6.2 | 1.667 |
+  | 11.0 | 5.50 | 5.50 | 6.5 | 1.833 |
+  | 12.0 | 6.00 | 6.00 | 7.0 | 2.000 |
+  | 14.0 | 7.00 | 7.00 | 8.0 | 2.333 |
+- formula refined:
+  cap_pt = round_down_to_0.5pt(fontSize / 2)
+         = floor(sz_val_int / 2) * 0.5
+  For fs=10.5 (sz=21): floor(21/2)*0.5 = 10*0.5 = 5.0pt
+  Other fs (11/12/14) have integer fs/2, no quantization needed.
+  This matches Mech 2's 0.5pt-step distribution granularity (Word's
+  internal half-point precision).
+- outcome:
+  - cap formula confirmed universal across MS Mincho 10.5-14pt.
+  - 0.5pt quantization rule documented in spec §4.7b round 6.
+  - Implementation guidance:
+    `cap = (sz_val_int / 2) * 0.5_pt` (clean integer math from
+    docx's `<w:sz w:val="N"/>` value).
+- open: N=2 mid-line anomaly (Suite B was planned but original script
+  died on Suite A; can be added later). Larger fonts (16+pt) untested.
+  Other CJK fonts (Yu Mincho, Meiryo) untested.
+- code change: NONE. Spec §4.7b round 6 added.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b per-yak cap REVISED: line-level cap = fontSize/2, divided by N
 
 - context: §4.7b round 3 derived per-yak cap = fontSize × 5/24 (≈2.5pt
