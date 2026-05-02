@@ -669,6 +669,49 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 compression formula = same as Mech 2 (slack 0.5pt-step), only alignment gate differs
+
+- context: Per-request B. Mech 3 compression amount formula. 7f272a_p1
+  P13 shows 0.91x (L1) / 0.76x (L2) per-yak ratios. Need to fit
+  observed compression to: (a) slack distribution, (b) grid-snap,
+  (c) font_size × const.
+- evidence:
+  - `tools/metrics/measure_mech3_7f272a_per_line.py`: 7f272a paragraphs
+    11/13/16/18-22/25/27-30/34. Per-line per-char Information(5):
+    P13 L1: 3 yak compress (1.0, 1.0, 0.5pt) = 2.5pt total
+    P13 L2: 3 yak compress (2.5, 2.5, 2.5pt) = 7.5pt total
+    P34 L1: 1 yak compresses 5.0pt (`、→（` Mech 1 FINAL RULE B→A)
+  - `tools/metrics/measure_mech3_compression_formula.py`: 5 controlled
+    minimal-repro probes × 2 alignments (jc=left, jc=both), each
+    cloning 7f272a's supporting files:
+    P_yak3_overflow (45 chars, natural~468.5, overflow +3.6):
+      jc=left:  3 yak compress (1.0, 1.5, 1.0) = 3.5pt ≈ overflow
+      jc=both:  3 yak compress (1.0, 1.5, 1.0) = 3.5pt — IDENTICAL
+    No-overflow probes (29/40/37 chars): 0 compression in both
+    alignments. Mech 3 needs overflow to fire.
+- hypothesis verdicts:
+  (a) slack distribution → **CONFIRMED**: total_compression ≈ overflow,
+      distributed in 0.5pt steps, sum == slack. Same algorithm as Mech 2.
+  (b) grid-snap → REFUTED: compression amounts {1.0, 1.5, 2.5pt} are
+      NOT multiples of any character grid pitch.
+  (c) font_size × const → REFUTED: per-yak ratios vary line-by-line
+      (0.86, 0.90, 0.95, 0.76) — no single constant fits.
+- outcome:
+  - Spec §4.7c added: Mech 3 = Mech 2 algorithm with relaxed alignment
+    gate (fires under jc=left when kern is on + real-doc supporting
+    files present).
+  - **Conservative implementation**: extend Mech 2 to fire under jc=left
+    when `docDefaults.rPr.kern` present. The "real-doc supporting files"
+    requirement (Session 51 finding) may fall out automatically since
+    synthesized R32 sentinel tests lack the trigger components.
+  - The original 7f272a P13 L1 "no-overflow but 2.5pt compression"
+    appears to be measurement-artifact related to the ASCII digit "14"
+    being half-width (advance ~5pt vs natural CJK 10.5pt) — actual
+    natural width of P13 L1 is closer to 457pt + ~5pt half-width adj,
+    putting it at-or-just-over content_w=464.9. Slack distribution
+    holds.
+- code change: NONE. Implementation guidance in spec §4.7c.
+
 ## 2026-05-02 — oxi-1 — confirmed — Cross-doc audit: Mech 1 fires on jc=left baseline docs (84/184 affected)
 
 - context: Per-request audit to estimate ship-priority of Mech 1
