@@ -13,6 +13,178 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — refuted — 1ec1 □ glyph LSB Investigation B: charset hypothesis + font linking BOTH refuted; Word's 4.14pt LSB not explainable via GDI
+- context: 依頼書 Investigation B. After A refuted font fallback hypothesis,
+  test if CreateFontW charset (DEFAULT vs SHIFTJIS) or font linking changes □
+  glyph LSB.
+- evidence (Python ctypes direct GDI tests):
+  - **Test 1 — CreateFontW charset effect** (`tools/metrics/test_gdi_charset_lsb.py`):
+    Render MS Gothic 14pt □ at x=20. DEFAULT_CHARSET / SHIFTJIS_CHARSET /
+    ANSI_CHARSET all produce IDENTICAL result: face=ＭＳ ゴシック, abcA=2,
+    leftmost pixel at x=22 (LSB=2px ≈ 1.5pt). Only SYMBOL_CHARSET substitutes
+    to Wingdings (irrelevant for our case).
+  - **Test 2 — Glyph existence** (`tools/metrics/test_gdi_glyph_existence.py`):
+    GetGlyphIndicesW with GGI_MARK_NONEXISTING_GLYPHS shows MS Gothic has NATIVE
+    □ glyph (idx=1703, abcA=2, abcB=15). No font linking / GDI fallback for □.
+  - Oxi's measured 1.74pt LSB matches GDI's abcA=2 (≈ 1.5pt at PPEM=19).
+    **Oxi behaves correctly** per GDI TextOutW path.
+  - Word's measured 4.14pt LSB cannot be reproduced via any GDI path I tested.
+- outcome:
+  1. **Charset hypothesis FALSIFIED**. Oxi's CreateFontW DEFAULT_CHARSET (1)
+     produces same result as SHIFTJIS_CHARSET (128).
+  2. **Font linking hypothesis FALSIFIED**. MS Gothic has native □ glyph.
+  3. **The "+2.4pt LSB diff" framing is likely wrong**. Word's 4.14pt LSB
+     can't come from standard GDI rendering. New candidate hypotheses:
+     - **H_D**: Word uses DirectWrite/Direct2D (not GDI) for typography,
+       producing different glyph LSB than GDI TextOutW.
+     - **H_E**: Original measurement methodology error — "44.36pt advance"
+       was COMPUTED from layout formula, not directly measured. Word's actual
+       advance may differ (e.g., ind:left or lIns inheritance bug).
+     - **H_F**: ind:left or lIns calculation issue — relevant given existing
+       1ec1 textbox bullet investigation (session_51_textbox_ind_rule.md).
+  4. **Investigation should pivot** from "glyph LSB" to "advance position".
+     Re-measure Word's rendered □ position directly and back-calculate what
+     advance Word actually used. Compare to Oxi's layout-time advance.
+- next: re-verify the "44.36pt advance" assumption. Either:
+  (a) Word's render at advance=44.36pt + LSB=4.14pt (= visible 48.5pt) — implies
+      DirectWrite vs GDI rendering pipeline difference, or
+  (b) Word's actual advance != 44.36pt — implies advance calculation error in
+      Oxi (ind:left, lIns, or shape_left).
+  Hypothesis (b) is more likely given existing textbox-related findings.
+  Defer investigation C (cumulative drift) until advance is verified.
+- references:
+  memory/investigation_1ec1_box_phase_b_2026_05_02.md (full GDI test data +
+  H_D/H_E/H_F hypotheses + recommended pivot to advance verification).
+  Phase A: memory/investigation_1ec1_box_font_phase_a_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — refuted — 1ec1 □ glyph LSB +2.4pt H_A (font fallback): both Word and Oxi resolve to MS Gothic
+- context: 依頼書 Investigation A. 1ec1091177b1_006.docx Shape 4 textbox □3
+  paragraph: Oxi's □ visible glyph at +2.4pt LEFT of Word's. H_A hypothesis:
+  Oxi resolves theme major eastAsia to a different physical font (e.g., Yu
+  Mincho Light) than Word.
+- evidence:
+  - Word COM measurement (tools/metrics/investigate_1ec1_box3_font.py):
+    □ char Font.Name = ＭＳ ゴシック (MS Gothic). NameAscii/FarEast =
+    "+見出しのフォント - 日本語" (= asciiTheme="majorEastAsia" placeholder).
+  - Theme1.xml: `<a:ea typeface=""/>` (empty) BUT `<a:font script="Jpan"
+    typeface="ＭＳ ゴシック"/>` provides Japanese-specific value.
+  - Run XML rFonts: `asciiTheme=eastAsiaTheme=hAnsiTheme="majorEastAsia"`
+    + `hint="eastAsia"` for ALL chars in □3 paragraph.
+  - Oxi code review trace:
+    1. theme.rs parses `<a:font script="Jpan">` → major_font_ea = Some("ＭＳ ゴシック")
+    2. Final fallback "Meiryo" at line 251 doesn't trigger (already Some)
+    3. ooxml.rs:4193-4200 resolves eastAsiaTheme="majorEastAsia" via
+       resolve_theme_font_pub → returns Some("ＭＳ ゴシック")
+    4. style.font_family_east_asia = Some("ＭＳ ゴシック")
+    5. resolve_font_family_for_text("□", ...) → has_cjk(□)=true → returns
+       run_style.font_family_east_asia = "ＭＳ ゴシック"
+    6. font/mod.rs:824 normalize: "ＭＳ ゴシック" → "MS Gothic" (registered)
+- outcome:
+  1. **H_A FALSIFIED**. Both Word and Oxi resolve to MS Gothic.
+  2. The +2.4pt LSB diff is NOT a font selection bug.
+  3. **H_B promoted to top hypothesis**: same font, GDI rendering produces
+     different glyph LSB.
+  4. **Suspect identified**: `tools/oxi-gdi-renderer/src/main.rs:193`
+     uses `DEFAULT_CHARSET (1)` in CreateFontW. Word likely uses
+     `SHIFTJIS_CHARSET (128)` for Japanese fonts. With DEFAULT_CHARSET,
+     GDI may resolve "MS Gothic" to a slightly different physical font
+     instance with different LSB metrics for □ U+25A1.
+  5. Also noted: MS Gothic in `font_metrics_compact.json` does NOT have
+     U+25A1 width entry (only common CJK chars). Doesn't matter for LSB
+     calculation since GDI handles glyph metrics at render time, but
+     could affect other paths.
+- next: Investigation B (依頼書 1 hour scope) — minimal docx with single □
+  in MS Gothic 14pt. Render Word + Oxi, pixel-measure □ visible left edge.
+  If diff persists → modify CreateFontW charset to SHIFTJIS_CHARSET. Then
+  Investigation C for cumulative drift.
+- references: memory/investigation_1ec1_box_font_phase_a_2026_05_02.md
+  (full code-review trace + B/C plan). Builds on
+  session_50_1ec1_phase3_findings.md (original measurement).
+
+## 2026-05-02 — oxi-4 — confirmed — Cluster A root cause: Oxi cell first text y = top_bw + implicit pad_t + cell_text_y_off (3 cumulative additions = +2.5pt)
+- context: continuation of Cluster A finding (+2.5pt offset on b35123 first cell).
+  Source-level decomposition of Oxi's `crates/oxidocs-core/src/layout/mod.rs`
+  to identify the 3 cumulative additions.
+- evidence: code review at:
+  - **Line 5420-5423**: `*cursor_y += top_bw` when table.style.border (Round 30
+    Apr 2026 logic). For sz=4 border: **+0.5pt**.
+  - **Line 5606-5609** (and 5444-5447 first pass): `pad_t = bw` when default
+    cellMar.top=0 + table has border (Round 30). **+0.5pt**.
+  - **Line 5965-5973**: cell_text_y_off = `(lh - cell_max_fs)/2` rounded for
+    Single/auto cells. For 10.5pt MS Mincho with lh=13.5 (= GDI tmHeight×83/64):
+    raw=1.5, rounded=**+1.5pt**.
+  - Total: 0.5 + 0.5 + 1.5 = **+2.5pt** ✓ matches measured offset.
+- assembly at line 6085-6087:
+  ```
+  let dy = *cursor_y + pad_t + v_offset;
+  for mut elem in cell_elements { elem.y += dy; ... }
+  ```
+- outcome:
+  1. **Three cumulative bugs** combine to produce the +2.5pt offset.
+  2. **Components 1 & 2 contradicted by master's §13.3 RETRACT** (commit 8913593).
+     Master's 40-fixture sweep showed border has ZERO effect on text X position;
+     same logic applies to Y. The Round 30 measurement that motivated these
+     additions was based on a misinterpretation (the cited "1row_outer4 marker_y=72,
+     cell_y=97.5 → offset=0.5" doesn't actually compute 0.5pt; 97.5-72=25.5pt).
+  3. **Component 3 incorrectly centers** fontSize within lh for default vAlign=top.
+     Word does NOT center per-line; text top sits at line top.
+  4. **Recommended fix** (for oxi-2 implementation):
+     - Remove `cursor_y += top_bw` at line 5420-5423
+     - Remove `pad_t = bw` defaults at line 5444-5447 and 5606-5609
+     - Replace cell_text_y_off centering with vAlign-conditional logic (only
+       center for vAlign=center, else 0)
+- expected impact:
+  - b35123 first cell shifts from y=128.5 to y=126.0 (matches Word)
+  - All cells in 13 of 15 bottom-bucket docs (those with tables) shift up 2.5pt
+  - SSIM lift expected on 5+ table-heavy docs (b35123, 2ea81a, 1ec1091, e3c545,
+    6514f214). Single fix lifts multiple docs.
+  - Risk: cells with vAlign=center may need separate handling; multi-line cell
+    behavior across line 1 → line 2 needs verification.
+- next: implementation in oxi-2 session, baseline pre-measurement before ship
+  (Path A bottom-N gate). Pre-measure b35123 / 2ea81a / 1ec1091 SSIM with each
+  of the 3 component fixes individually to identify which are correct.
+- references: memory/investigation_oxi_cell_first_y_root_cause_2026_05_02.md
+  (full source-level decomposition + recommended fix code).
+  Builds on memory/investigation_table_first_cell_y_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed — Cluster A: Oxi adds +2.5pt offset to first cell content y (Word: cell text y = table top y)
+- context: bottom-bucket Cluster A (heavy-table layout) verification on b35123
+  (min SSIM 0.666 page 1, 22 in survey was regex artifact — actually 2 large
+  tables with 13r+10r×2c = 46 cells covering most of doc).
+- hypothesis: Oxi mis-positions first cell content y due to cellMar.top default
+  or border thickness applied incorrectly.
+- evidence:
+  - **Word's UNIVERSAL rule**: first cell first-character y == tbl.Range.Information(6)
+    (= table top y). Verified on 8 tables / 3 docs:
+    b35123 (2 tables, dy=0), 2ea81a (4 tables, dy=0), 1ec1091 (1 table, dy=0)
+  - **Oxi b35123 measurement**: first cell text at +2.5pt below Word's table top:
+    - Table 1 page 1: Word=126.0, Oxi=128.5, dy=+2.50
+    - Table 2 page 2: Word= 91.0, Oxi= 93.5, dy=+2.50
+    - Consistent across both tables (not noise)
+  - b35123 OOXML: tblStyle "af" (Table Grid 0.5pt borders), no tcMar override,
+    docDefault tblCellMar top=0, bottom=0, left/right=108tw
+  - Word's first cell content sits at cell top (consistent with master's recent
+    §13.3 RETRACT: "border has ZERO effect on text position")
+- outcome:
+  1. **Oxi has spurious +2.5pt offset** for first cell content y. Likely sources:
+     (a) default cellMar.top set to 50tw instead of 0
+     (b) unconditional vertical centering of first row text
+     (c) border thickness mis-application (less likely, doesn't fit 2.5pt)
+  2. **Universal Word rule** (8/8 tables): first_cell_text_y = table_top_y.
+     No cellMar.top offset, no border offset.
+  3. **High-leverage fix**: 13 of 15 bottom-bucket docs have tables. If same
+     +2.5pt bug applies universally, fixing it lifts 5+ docs simultaneously.
+- next: (a) re-render 2ea81a / 1ec1091 / e3c545 with current Oxi to verify
+  +2.5pt is universal vs b35123-specific; (b) code review
+  crates/oxidocs-core/src/layout/mod.rs for cell first-paragraph y formula —
+  search for `pad_t`, `cellMar.top`, default values; (c) cross-reference §3.3
+  grid centering: should NOT apply to first-row table content.
+- references: memory/investigation_table_first_cell_y_2026_05_02.md (full
+  comparison table + hypothesis ranking + recommended investigation steps).
+  Related: master's §13.3 RETRACT (commit 8913593, X-axis); this is Y-axis
+  analog. Cluster A from
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — Oxi yakumono cascade implementation has gap with Word's proportional Mech 2 (37% of justified body lines)
 - context: Cross-doc Mech 2 audit (RESEARCH_LOG entry below) confirmed 65 of 175
   audited lines (37%) show Word's proportional Mech 2 (yakumono partial compression
@@ -760,6 +932,36 @@ Format:
   hRule to "atLeast" when the attribute is absent (matches Word). Layout
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b per-yak cap REVISED: line-level cap = fontSize/2, divided by N
+
+- context: §4.7b round 3 derived per-yak cap = fontSize × 5/24 (≈2.5pt
+  for 12pt) from a single N=9 datapoint. Round 5 (per-yak cap regression
+  on N ∈ {2, 3, 4, 5, 7}) reveals this was wrong.
+- evidence: `measure_per_yak_cap_sweep.py` controlled-cSC direct-zip
+  docx, 24-char probe with N evenly-distributed yakumono, jc=both,
+  16 cw values per N:
+  - N=3: drop boundary slack=7, max comp at 24 chars = 6.0pt
+  - N=4: drop boundary slack=7, max comp = 6.0pt
+  - N=5: drop boundary slack=7, max comp = 6.0pt
+  - N=7: drop boundary slack=7, max comp = 6.0pt
+  - N=2: line-end yak anomaly (non-monotonic drop pattern)
+- finding: Line-level total compression cap = fontSize/2 (= 6pt for
+  12pt font), CONSTANT across N ≥ 3. Per-yak cap = (fontSize/2) / N.
+- reconciliation:
+  - Round 3 N=9 datapoint gave 22pt total comp at cw=205. The 19-char
+    line at that scenario was POST-DROP (line dropped 3 chars from 22
+    to 19), so larger compression budget applies in heavy-overflow
+    regime. The "5/24" was a coincidence in that specific scenario.
+  - Round 5 measures the clean "1-line, before drop" cap = fontSize/2.
+- outcome:
+  - Spec §4.7b corrected:
+    `total_cap = fontSize/3 if N=1, fontSize/2 if N≥2 (line-level)`
+  - Per-yak cap = total_cap / N (derived).
+  - Implementation simpler: just compute line total cap.
+  - Round 3's per-yak average (22/9 = 2.44pt) reframed as "post-drop
+    behavior, larger budget" — separate from the standard wrap-fit cap.
+- code change: NONE. Spec §4.7b implementation sketch revised.
 
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b/§4.7c UNIFIED: Mech 2 = Mech 3 (single mechanism, alignment-agnostic, cSC-gated)
 
