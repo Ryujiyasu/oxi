@@ -13,6 +13,42 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.2 Latin→kana asymmetry RESOLVED via RSB (Round 25)
+
+- context: Round 24 found Latin→kana boundary extra varies by glyph
+  (M=+3.0, a=+2.0, 1=+2.5 at fs=12 TNR), unlike kana→Latin which
+  is constant +3.0pt. Open question: per-glyph rule.
+- evidence — `pipeline_data/autospace_glyph.json` (36 m):
+  18 glyphs × {natural advance, boundary advance}.
+  Result table:
+    nat=3.5 (i,l,t):  bnd=5.5  extra=2.0 → rsb=1.0
+    nat=5.5 (c,e,a):  bnd=7.5  extra=2.0 → rsb=1.0
+    nat=6.0 (n,o,0,1,4,8): bnd=8.5 extra=2.5 → rsb=0.5
+    nat=7.5 (T):      bnd=9.5  extra=2.0 → rsb=1.0
+    nat=8.5 (A):      bnd=11.0 extra=2.5 → rsb=0.5
+    nat=9.5 (m):      bnd=11.5 extra=2.0 → rsb=1.0
+    nat=10.5 (M):     bnd=13.0 extra=2.5 → rsb=0.5
+    nat=11.5 (W):     bnd=13.5 extra=2.0 → rsb=1.0
+- formula:
+  `boundary_advance = natural_advance + extra_pt - rsb(glyph)`
+  where extra_pt = §4.6.2 formula = +3.0pt at fs=12, and rsb
+  is the Latin glyph's right side bearing (positive for narrow
+  glyphs in TNR).
+  Geometric: kana left edge = Latin's INKED right edge + 3.0pt.
+- outcome:
+  - Resolves Round 24 asymmetry: kana glyphs have ~0 RSB so
+    kana→Latin formula collapses to constant +3.0pt; Latin
+    glyphs have variable RSB so Latin→kana varies.
+  - Oxi implementation: needs per-glyph RSB lookup (GDI
+    GetCharABCWidths.cWidth or DWrite GlyphMetrics.rightSideBearing).
+  - Font-metrics table at crates/oxidocs-core/src/font/data/
+    may need extension to include rsb_du per glyph.
+- impact: Documents with mixed Latin+CJK text get correct boundary
+  spacing; SSIM for those pages currently has 0.5-1.0pt drift per
+  Latin→kana boundary.
+- caveats: TNR-only at fs=12 measured; other fonts and sizes
+  need Round 26+ confirmation.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.6.2.1 autoSpaceDE/DN gate orthogonality (Round 23-24)
 
 - context: §4.6.2 measured kana↔Latin boundary extra (formula
