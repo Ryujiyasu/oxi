@@ -13,6 +13,52 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — Cluster A root cause: Oxi cell first text y = top_bw + implicit pad_t + cell_text_y_off (3 cumulative additions = +2.5pt)
+- context: continuation of Cluster A finding (+2.5pt offset on b35123 first cell).
+  Source-level decomposition of Oxi's `crates/oxidocs-core/src/layout/mod.rs`
+  to identify the 3 cumulative additions.
+- evidence: code review at:
+  - **Line 5420-5423**: `*cursor_y += top_bw` when table.style.border (Round 30
+    Apr 2026 logic). For sz=4 border: **+0.5pt**.
+  - **Line 5606-5609** (and 5444-5447 first pass): `pad_t = bw` when default
+    cellMar.top=0 + table has border (Round 30). **+0.5pt**.
+  - **Line 5965-5973**: cell_text_y_off = `(lh - cell_max_fs)/2` rounded for
+    Single/auto cells. For 10.5pt MS Mincho with lh=13.5 (= GDI tmHeight×83/64):
+    raw=1.5, rounded=**+1.5pt**.
+  - Total: 0.5 + 0.5 + 1.5 = **+2.5pt** ✓ matches measured offset.
+- assembly at line 6085-6087:
+  ```
+  let dy = *cursor_y + pad_t + v_offset;
+  for mut elem in cell_elements { elem.y += dy; ... }
+  ```
+- outcome:
+  1. **Three cumulative bugs** combine to produce the +2.5pt offset.
+  2. **Components 1 & 2 contradicted by master's §13.3 RETRACT** (commit 8913593).
+     Master's 40-fixture sweep showed border has ZERO effect on text X position;
+     same logic applies to Y. The Round 30 measurement that motivated these
+     additions was based on a misinterpretation (the cited "1row_outer4 marker_y=72,
+     cell_y=97.5 → offset=0.5" doesn't actually compute 0.5pt; 97.5-72=25.5pt).
+  3. **Component 3 incorrectly centers** fontSize within lh for default vAlign=top.
+     Word does NOT center per-line; text top sits at line top.
+  4. **Recommended fix** (for oxi-2 implementation):
+     - Remove `cursor_y += top_bw` at line 5420-5423
+     - Remove `pad_t = bw` defaults at line 5444-5447 and 5606-5609
+     - Replace cell_text_y_off centering with vAlign-conditional logic (only
+       center for vAlign=center, else 0)
+- expected impact:
+  - b35123 first cell shifts from y=128.5 to y=126.0 (matches Word)
+  - All cells in 13 of 15 bottom-bucket docs (those with tables) shift up 2.5pt
+  - SSIM lift expected on 5+ table-heavy docs (b35123, 2ea81a, 1ec1091, e3c545,
+    6514f214). Single fix lifts multiple docs.
+  - Risk: cells with vAlign=center may need separate handling; multi-line cell
+    behavior across line 1 → line 2 needs verification.
+- next: implementation in oxi-2 session, baseline pre-measurement before ship
+  (Path A bottom-N gate). Pre-measure b35123 / 2ea81a / 1ec1091 SSIM with each
+  of the 3 component fixes individually to identify which are correct.
+- references: memory/investigation_oxi_cell_first_y_root_cause_2026_05_02.md
+  (full source-level decomposition + recommended fix code).
+  Builds on memory/investigation_table_first_cell_y_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — Cluster A: Oxi adds +2.5pt offset to first cell content y (Word: cell text y = table top y)
 - context: bottom-bucket Cluster A (heavy-table layout) verification on b35123
   (min SSIM 0.666 page 1, 22 in survey was regex artifact — actually 2 large
