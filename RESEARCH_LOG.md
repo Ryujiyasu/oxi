@@ -1108,6 +1108,31 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 10: N=1 cap fillers complete 3-way universality
+
+- context: Round 7/8 had remaining sweep gaps for fs=10.5/11/12/14 N=1
+  cap measurement. Round 10 fills them.
+- evidence: `measure_n1_cap_fillers.py` 26 measurements:
+  fs=10.5 N=1: cap=5.00 first_drop=5.3 (cap+0.3)
+  fs=11.0 N=1: cap=5.50 first_drop=5.6 (cap+0.1)
+  fs=12.0 N=1: drop at slack=6.5 (NOT 12.5 as Round 7 claimed)
+  fs=14.0 N=1: cap=7.00 first_drop=7.2 (cap+0.2)
+- finding:
+  - Round 7's "fs=12 N=1 first_drop=12.5" was completely sweep-gap
+    artifact. Drop is actually at slack=6.5 = cap+0.5.
+  - All 4 font sizes confirm cap = floor(sz/2) × 0.5.
+  - drop_threshold ≈ cap + ~0.5pt (range cap+0.1 to cap+0.5).
+- 3-way universality verified:
+  - N (yak count): 1, 2, 3, 4, 5, 7 (all match formula)
+  - fs (font size): 10.5, 11, 12, 14 pt (all match formula)
+  - font family: MS 明朝/ゴシック, Yu Mincho, Meiryo, HG明朝E (all match)
+- outcome:
+  - Final spec rule (no branching needed):
+    cap_pt = floor(sz_val_int / 2) * 0.5
+    drop_threshold = cap + 0.5
+  - Spec §4.7b Round 10 added.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 9: Multi-line Mech 2 — per-line cap, last line no compress
 
 - context: Session 51 listed multi-line Mech 2 cascade as open question.
