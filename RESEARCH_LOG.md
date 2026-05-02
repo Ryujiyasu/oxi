@@ -13,6 +13,50 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — partial + correction — 1ec1 +9pt offset variant test (Baseline only); previous "RESOLVED" claim was WRONG (Word ignores ind both □1 and □3, +5.5pt gap structural)
+- context: User's R37 measurement (post H_F fix): both □1 (no ind) and □3
+  (ind=5.25pt) render at SAME Word x=48pt → Word ignores ind in 1ec1 textbox
+  CONFIRMED. My previous "RESOLVED" geometric reconstruction was INCORRECT
+  (it assumed ind=5.25pt applied; user's □1 data refutes this).
+- correction to previous "RESOLVED" entry:
+  - Word renders □1 (no ind) at x=48pt
+  - Word renders □3 (ind=5.25pt) at x=48.48pt (essentially same)
+  - **Word DOES ignore w:ind in 1ec1's textbox** (consistent with master's
+    5b8d07c, generalized further than I thought)
+  - The ~5.25pt I attributed to ind:left in the geometric reconstruction was
+    LUCKY MATCH not actual mechanism
+  - Real unexplained gap: ~+9pt offset Word vs Oxi (post-fix), independent
+    of ind value
+- partial variant test (per user 依頼書, 1/8 succeeded before Word RPC died):
+  - Script: tools/metrics/repro_1ec1_textbox_9pt_v2.py
+  - Baseline (rect prstGeom + 1ec1-equiv settings): □ glyph x = 43.0pt
+  - 1ec1 actual: □ glyph x = 48.48pt
+  - **Difference 5.48pt unexplained** — synthetic minimal repro DOES NOT
+    reproduce 1ec1's offset
+  - V_A through V_G all failed with Word RPC server unresponsive
+- strong hypothesis: 1ec1 uses `<a:prstGeom prst="roundRect">` while my
+  synthetic Baseline uses `prst="rect"`. roundRect may add corner-radius
+  padding to content area (~5-9pt for 522.75pt-wide shape with default
+  corner radius).
+- outcome:
+  1. **Previous "RESOLVED" claim retracted** — Word DOES ignore w:ind in
+     1ec1 textbox; my geometric model was wrong about which 5.25pt added.
+  2. **Master's 5b8d07c finding** generalizes to 1ec1 rounded-rect (not
+     just synthetic DML wsp as I previously corrected).
+  3. **The H_F fix is CORRECT in direction** (suppress ind in textbox).
+     User's empirical regression (-7.7pt) is because Oxi was BOTH wrong:
+     applied ind AND missing the +5.5pt structural offset. Removing ind
+     made the missing +5.5pt visible.
+  4. **The +5.5pt gap remains unexplained**. Strong candidate: roundRect
+     content padding. Test required: rebuild synthetic Baseline with
+     `prst="roundRect"`, see if □ shifts to ~48pt.
+- next: re-run variant sweep when Word is healthy. Add V_H_roundRect
+  variant. Verify gap source via single property change.
+- references:
+  memory/investigation_1ec1_9pt_offset_partial_2026_05_02.md
+  (full partial result + roundRect hypothesis + reasoning correction).
+  Supersedes/corrects investigation_1ec1_box3_root_cause_finally_*.
+
 ## 2026-05-02 — oxi-4 — RESOLVED — 1ec1 □３ root cause: paragraph DOES have <w:ind w:left="105"/>; H_F was inverse direction; remaining +2.4pt is pure LSB pipeline diff
 - context: deep dive after H_F empirical refutation. Use direct Shape geometry
   + per-paragraph XML scan + reconciliation against all 3 measured points.
