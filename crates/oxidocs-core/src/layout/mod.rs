@@ -1580,10 +1580,26 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compress_punctuation: doc.compress_punctuation,
-            has_effective_kern: doc.styles.doc_default_run_style
-                .as_ref()
-                .and_then(|rs| rs.kern)
-                .is_some(),
+            // R33 (2026-05-02): kern detection widened to also check the
+            // default paragraph style's run properties (typically "Normal").
+            // Session 51 R0 audit: 38 docs have kern in docDefaults + 24 docs
+            // have it only in Normal style (e.g., 7f272a, ed025). Earlier
+            // R32 only checked docDefaults and missed those 24 — covered by
+            // R17/R31 fallback gates. With Normal-style detection, kern is
+            // the SOLE Mech 1 (FINAL RULE) gate; fallbacks removed.
+            has_effective_kern: {
+                let from_doc_defaults = doc.styles.doc_default_run_style
+                    .as_ref()
+                    .and_then(|rs| rs.kern)
+                    .is_some();
+                let from_default_para_style = doc.styles.default_paragraph_style_id
+                    .as_ref()
+                    .and_then(|id| doc.styles.styles.get(id))
+                    .and_then(|sd| sd.paragraph.default_run_style.as_ref())
+                    .and_then(|rs| rs.kern)
+                    .is_some();
+                from_doc_defaults || from_default_para_style
+            },
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
             // R-05b: 293.8pt balloon column + 24pt buffer between body and
             // balloon = 317.8pt total. Width is COM-confirmed (fixture_01
@@ -5017,6 +5033,12 @@ impl LayoutEngine {
         // overflow wrap_width by up to the compression already realized
         // (re-compress on render). Resets on every line push.
         let mut line_yakumono_saved_tw: i32 = 0;
+        // R33 (2026-05-02): Mech 2 wrap-budget. Tracks remaining slack we can
+        // extract from non-Mech-1-compressed yakumono A/B chars on the line
+        // by compressing them down to 0.5×natural at render time (Stage 3).
+        // Increment per yakumono A/B char added that is NOT Mech-1 compressed.
+        // Only consulted when jc=Justify/Distribute and kern is active.
+        let mut line_mech2_capacity_tw: i32 = 0;
 
         // Word buffer spans across fragment boundaries so that a single word
         // split across two runs (e.g. "te" in Run1 + "st" in Run2) is kept
@@ -5043,7 +5065,7 @@ impl LayoutEngine {
                     let word_width_tw = pt_to_tw(word_width);
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
                         current_grid_extra = 0.0;
                     }
                     current_line.fragments.push(LineFragment {
@@ -5067,12 +5089,21 @@ impl LayoutEngine {
             };
         }
 
-        // R31 (2026-05-02): refined R30. Gate yakumono on:
-        //   list_marker.is_some()  OR  (chars-indent AND has_cross_run_pair)
-        // Rationale: R30 (chars-indent gate alone) over-fires on docs whose
-        // chars-indent paragraphs have no cross-run yakumono pairs (3a4f_p23,
-        // d77a p6/p8 broke). Cross-run pair existence is a per-paragraph signal
-        // that Word's compression actually applies in this context.
+        // R33 (2026-05-02) refactor: Mech 1 (FINAL RULE per-pair, kern-gated)
+        // + Mech 2 (justify-time slack distribution). Replaces:
+        //   - R17 list_marker fallback gate (workaround for missing kern)
+        //   - R31 chars-indent + cross-run-pair fallback gate
+        //   - R32 standalone 0.583x hack approximating Mech 2
+        // Kern detection now includes Normal-style kern (see for_document)
+        // so the OR-fallback gates are no longer needed.
+        //
+        // Specs:
+        //   session_51_yakumono_kern_trigger.md       — kern is the Mech 1 trigger
+        //   session_51_yakumono_4font_validation.md   — FINAL RULE Type A/B/C
+        //   session_51_yakumono_justify_two_mechanisms.md — Mech 1 vs Mech 2
+        //   session_51_mechanism2_slack_algorithm.md  — slack distribution
+        //   session_51_d77a_p1_p3_root_cause.md       — R32 over-compression
+        //                                                root cause
         let para_chars: Vec<char> = fragments
             .iter()
             .flat_map(|(t, _, _, _, _)| t.chars())
@@ -5084,27 +5115,48 @@ impl LayoutEngine {
             acc += t.chars().count();
         }
 
-        // Detect any cross-run yakumono pair in this paragraph.
-        let has_cross_run_yakumono_pair = {
-            let mut found = false;
-            for i in 0..frag_offsets.len().saturating_sub(1) {
-                let next_start = frag_offsets[i + 1];
-                if next_start == 0 || next_start >= para_chars.len() {
-                    continue;
-                }
-                let end_of_run = next_start - 1;
-                let c_end = para_chars[end_of_run];
-                let c_next = para_chars[next_start];
-                if (kinsoku::is_yakumono_closing(c_end)
-                    && kinsoku::is_yakumono_trigger(c_next))
-                    || (kinsoku::is_yakumono_opening(c_next)
-                        && kinsoku::is_yakumono_trigger(c_end))
-                {
-                    found = true;
-                    break;
+        // Mech 1 (FINAL RULE): per-pair, kern-gated, alignment-agnostic.
+        // Symmetric rule (matches Word's intra-pair compression):
+        //   Class A char (opening bracket): compress 0.5× iff prev is class A or B
+        //   Class B char (closing bracket OR 、。，．): compress 0.5× iff next is class A or B
+        //
+        // Note: oxi-3's 3a4f_p74 paragraph 10 L4 measurement showed `（`
+        // after `）` NOT compressed by Word, suggesting an asymmetric rule
+        // (A only compresses when prev is A). That holds for that doc but
+        // regresses R32 winners with `」「` patterns in d77a_p10 etc., so
+        // the per-doc Word behavior isn't a clean asymmetric rule. Keep
+        // symmetric; per-pair imperfections handled by Stage 3 demand-revert.
+        //
+        // Pre-compute over the whole paragraph (cross-run aware).
+        // Note: `is_yakumono_closing` already includes 、。，．
+        // (kinsoku.rs YAKUMONO_CLOSING) so these chars use the B rule.
+        let yakumono_enabled = self.compress_punctuation && self.has_effective_kern;
+        let mech1_compressed: Vec<bool> = if yakumono_enabled {
+            let n = para_chars.len();
+            let mut v = vec![false; n];
+            for i in 0..n {
+                let c = para_chars[i];
+                if kinsoku::is_yakumono_opening(c) {
+                    if i > 0 {
+                        let prev = para_chars[i - 1];
+                        if kinsoku::is_yakumono_opening(prev) {
+                            v[i] = true;
+                        }
+                    }
+                } else if kinsoku::is_yakumono_closing(c) {
+                    if i + 1 < n {
+                        let next = para_chars[i + 1];
+                        if kinsoku::is_yakumono_opening(next)
+                            || kinsoku::is_yakumono_closing(next)
+                        {
+                            v[i] = true;
+                        }
+                    }
                 }
             }
-            found
+            v
+        } else {
+            vec![false; para_chars.len()]
         };
 
         for (frag_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
@@ -5160,50 +5212,14 @@ impl LayoutEngine {
             // additional context (line position, surrounding chars, paragraph
             // structure?) NOT captured in the 8x8 grid. Reverted on 2026-04-27.
             // See RESEARCH_LOG 2026-04-27 falsified entry for full data.
-            // 2026-05-01 R17: yakumono pair compression ALSO gated on list_marker.
-            // Pin: 683ffcab86e2 p2 p3 (plain pPr ind, no list_marker) — Word's
-            // per-char COM advance is uniform 10.5pt for all chars including 、,
-            // i.e., Word does NOT compress yakumono in plain paragraphs. Oxi's
-            // pre-fix compression saved 10.5pt × 2 = 21pt, allowing +1 char/line
-            // and shifting 4 cumulative lines (-17.5pt → -35.5pt cascade in p3-p7).
-            // Same differentiator as R16 (list paragraph absorb).
-            // R32 (2026-05-02): kern gate added (Session 51 R0 dispatch 5/6
-            // confirmed Mech 1 alignment-agnostic, only <w:kern> in docDefaults
-            // gates pair compression). R17 list_marker + R31 chars-indent
-            // retained as fallback (~10% of kern docs not in docDefaults).
-            let has_chars_indent = para_style.indent_first_line_chars.is_some()
-                || para_style.indent_left_chars.is_some();
-            let yakumono_enabled = self.compress_punctuation
-                && (self.has_effective_kern
-                    || para_style.list_marker.is_some()
-                    || (has_chars_indent && has_cross_run_yakumono_pair));
+            // R33 (2026-05-02): per-pair FINAL RULE precomputed at paragraph
+            // level (mech1_compressed). Per-fragment view is just a slice.
+            // Replaces the older per-run/per-fragment classification that
+            // mis-handled cross-run pairs vs intra-run pairs.
             let chars_vec: Vec<char> = text.chars().collect();
-            // R31: cross-run yakumono detection (R29 mechanism).
-            let yakumono_compressed: Vec<bool> = if yakumono_enabled {
-                let n = chars_vec.len();
-                let mut v = vec![false; n];
-                let para_n = para_chars.len();
-                for i in 0..n {
-                    let c = chars_vec[i];
-                    let pi = para_offset + i;
-                    if kinsoku::is_yakumono_closing(c) {
-                        if pi + 1 < para_n && kinsoku::is_yakumono_trigger(para_chars[pi + 1]) {
-                            v[i] = true;
-                        }
-                    } else if kinsoku::is_yakumono_opening(c) {
-                        let prev_in_run_compressed = i > 0 && v[i - 1];
-                        if pi > 0
-                            && kinsoku::is_yakumono_trigger(para_chars[pi - 1])
-                            && !prev_in_run_compressed
-                        {
-                            v[i] = true;
-                        }
-                    }
-                }
-                v
-            } else {
-                vec![false; chars_vec.len()]
-            };
+            let yakumono_compressed: Vec<bool> = (0..chars_vec.len())
+                .map(|i| mech1_compressed[para_offset + i])
+                .collect();
 
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
                 let (char_metrics, gdi_map) = if kinsoku::is_cjk(ch) {
@@ -5224,62 +5240,35 @@ impl LayoutEngine {
                 char_width += cs;
                 // 2-pass wrap: remember pre-yakumono width to compute yakumono savings.
                 let pre_yakumono_width = char_width;
-                // Physical yakumono compression (COM-confirmed b837 2026-04-16):
-                //   Pair (both chars): 6pt (×0.5) — e.g., 。）→ 6+6pt
-                //   Standalone 、。 between non-trigger CJK: 7pt (×0.583)
-                //   Other brackets: use native font width (bracket shapes vary widely by
-                //     context in Word — 6, 10.5, 11, 11.5, 12pt — no simple compression rule)
-                // 2026-04-20: Opening brackets have visible glyph at right side of
-                // cell (ABC A-offset = 7.5pt for 「, 11pt for （). Compressing advance
-                // to 6pt would place next char at 6pt offset, overwriting the bracket
-                // glyph at 7.5-11.25pt. Skip compression for these — keep fullwidth
-                // advance so glyph fits within its cell. Closing brackets (A=0) are
-                // unaffected and still compress fine.
-                let is_opening_bracket = matches!(ch,
-                    '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［'
-                );
-                if yakumono_compressed[char_index] && !is_opening_bracket {
+                // Mech 1 (FINAL RULE) application: 0.5× when classification
+                // says the char is part of an A→A/B/CJK or CJK/A/B→B pair.
+                // Both opening and closing brackets compress (paren_chain test
+                // confirms — Session 51 R0). The earlier `!is_opening_bracket`
+                // skip was a glyph-overlap workaround; Word actually does
+                // place adjacent chars at 6pt offset over the bracket glyph,
+                // so matching its advance is correct.
+                if yakumono_compressed[char_index] {
                     char_width *= 0.5;
-                } else if yakumono_enabled {
-                    // Expand pair rule: when yakumono_compressed[neighbor] = true AND
-                    // this char is also yakumono, both compress.
-                    let is_yakumono_any = matches!(ch,
-                        '（' | '）' | '「' | '」' | '『' | '』' | '〔' | '〕' |
-                        '【' | '】' | '《' | '》' | '〈' | '〉' | '｛' | '｝' |
-                        '［' | '］' | '、' | '。' | '，' | '．'
-                    );
-                    if is_yakumono_any {
-                        let prev_compressed = char_index > 0
-                            && yakumono_compressed[char_index - 1];
-                        let next_compressed = char_index + 1 < chars_vec.len()
-                            && yakumono_compressed[char_index + 1];
-                        if (prev_compressed || next_compressed) && !is_opening_bracket {
-                            // Adjacent to pair-compressed yakumono: also compress
-                            // (except opening brackets — see explanation above)
-                            char_width *= 0.5;
-                        } else if matches!(ch, '、' | '。' | '，' | '．') {
-                            // R32 (2026-05-02): standalone 、 。 between non-trigger
-                            // CJK chars approximates Word's Mech 2 (justify-time
-                            // slack distribution, §4.7b spec). Mech 2 fires only
-                            // on jc=both — so gate the standalone hack on
-                            // alignment to avoid over-compression in plain (jc=left)
-                            // paragraphs of kern-active docs (e.g., 683f).
-                            // Proper Mech 2 (0.5pt-step distribution capped at
-                            // fontSize/3 per yak) is deferred to a dedicated
-                            // implementation session; this alignment-gated hack
-                            // is a conservative middle ground.
-                            let mech2_eligible = matches!(para_alignment,
-                                Alignment::Justify | Alignment::Distribute);
-                            if mech2_eligible {
-                                let prev_non_tr = char_index == 0
-                                    || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
-                                let next_non_tr = char_index + 1 >= chars_vec.len()
-                                    || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
-                                if prev_non_tr && next_non_tr {
-                                    char_width *= 0.583;
-                                }
-                            }
-                        }
+                } else if matches!(ch, '、' | '。' | '，' | '．')
+                    && matches!(para_alignment,
+                        Alignment::Justify | Alignment::Distribute)
+                {
+                    // Mech 2.5 (standalone 、。，． compression at jc=both).
+                    // Per d77a_p10 P6 per-char measurement (oxi-3 R33 diagnosis):
+                    // Word compresses standalone `、。` between non-trigger chars
+                    // (CJK / Latin) to ~0.54x ratio under jc=both, regardless of
+                    // line overflow. This is a fixed alignment-time compression
+                    // distinct from Mech 1 (FINAL RULE pair) and Mech 2 (slack
+                    // distribution). The 0.583× ratio (= 7pt at 12pt fontSize)
+                    // is the closest 12-tw multiple to Word's 0.54x; restoring
+                    // the R32 standalone hack (commit 91a1f94) which empirically
+                    // matched Word better than full uncompressed.
+                    let prev_non_tr = char_index == 0
+                        || !kinsoku::is_yakumono_trigger(chars_vec[char_index - 1]);
+                    let next_non_tr = char_index + 1 >= chars_vec.len()
+                        || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
+                    if prev_non_tr && next_non_tr {
+                        char_width *= 0.583;
                     }
                 }
                 // Line-start yakumono demand-driven compression (COM-verified 2026-04-21
@@ -5388,7 +5377,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -5534,7 +5523,22 @@ impl LayoutEngine {
                     // to has_pair=true (any 2 adjacent CJK is a yakumono pair).
                     // Word doesn't absorb on plain paragraphs, only on list
                     // paragraphs. Same differentiator as R16.
-                    let absorb = absorb_yakumono_budget || (if overflow_tw > 0 && overflow_tw <= 50
+                    //
+                    // R33 (2026-05-02): add Mech 2 wrap-budget. Under jc=both
+                    // + kern, allow overflow up to the line's Mech 2 capacity
+                    // (sum of 0.5×natural for non-Mech-1 yakumono A/B). The
+                    // overflow is absorbed by Stage 3 post-render compression.
+                    // This replaces the old break-time standalone 0.583x hack
+                    // (R32) which over-compressed prose paragraphs without
+                    // line overflow (d77a p3 P39 -0.079 catastrophic case).
+                    let absorb_mech2 = self.has_effective_kern
+                        && self.compress_punctuation
+                        && self.compat_mode >= 15
+                        && matches!(para_alignment,
+                            Alignment::Justify | Alignment::Distribute)
+                        && overflow_tw > 0
+                        && overflow_tw <= line_mech2_capacity_tw;
+                    let absorb = absorb_yakumono_budget || absorb_mech2 || (if overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
                         && para_style.list_marker.is_some()
                         && (has_pair || has_linestart_narrow_yakumono)
@@ -5569,7 +5573,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
+                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
                             continue;
                         }
 
@@ -5594,7 +5598,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
+                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
@@ -5617,6 +5621,21 @@ impl LayoutEngine {
                     current_width_tw += pt_to_tw(char_width);
                     current_grid_extra += char_grid_extra;
                     line_yakumono_saved_tw += pt_to_tw(yakumono_saved);
+                    // R33: Mech 2 wrap-budget capacity tracking. The
+                    // per-yak typical absorption observed in 3a4f_p74 P1 L0
+                    // (oxi-3 measurement) is ~0.92pt avg — Word's wrap-budget
+                    // is more conservative than the 2pt absolute cap from
+                    // session_51_mechanism2_slack_algorithm. Use 1pt per yak
+                    // for break-time budget; Stage 3 can extend to the full
+                    // 2pt cap if demand requires (rare, narrow_justify-class
+                    // pressure cases).
+                    if !yakumono_compressed[char_index]
+                        && (kinsoku::is_yakumono_opening(ch)
+                            || kinsoku::is_yakumono_closing(ch))
+                    {
+                        let cap = 1.0_f32.min(char_width * 0.5);
+                        line_mech2_capacity_tw += pt_to_tw(cap);
+                    }
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -5662,7 +5681,7 @@ impl LayoutEngine {
             let wft = word_field_type.take();
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0;
+                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false; line_yakumono_saved_tw = 0; line_mech2_capacity_tw = 0;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
@@ -5729,6 +5748,95 @@ impl LayoutEngine {
                     if f_saving > 0.0 {
                         f.width = f.natural_width - f_saving * keep_ratio;
                     }
+                }
+            }
+        }
+
+        // Stage 3 — Mech 2 (justify-time slack distribution).
+        // Spec: session_51_mechanism2_slack_algorithm.md.
+        // When jc=both/distribute AND a line's compressed width still exceeds
+        // available_width (Mech 1 was insufficient), Word distributes the
+        // remaining slack across yakumono on the line in 0.5pt steps. The
+        // per-yakumono floor is 0.5×natural (the Mech 1 target); chars
+        // already at that floor cannot compress further.
+        //
+        // This replaces the R32 standalone 0.583x hack which compressed
+        // 、。，． unconditionally under jc=both, over-compressing prose
+        // paragraphs that lacked any actual line overflow (d77a p3 P39
+        // catastrophic case — 14 yak at 0 needed compression).
+        if yakumono_enabled
+            && matches!(para_alignment, Alignment::Justify | Alignment::Distribute)
+        {
+            for line in &mut lines {
+                let total: f32 = line.fragments.iter().map(|f| f.width).sum();
+                let demand = total - available_width;
+                if demand <= 0.5 {
+                    continue;
+                }
+                // Find single-char yakumono fragments (A or B class).
+                let mut yak_indices: Vec<usize> = Vec::new();
+                for (i, f) in line.fragments.iter().enumerate() {
+                    if f.text.chars().count() != 1 {
+                        continue;
+                    }
+                    let c = f.text.chars().next().unwrap();
+                    if kinsoku::is_yakumono_opening(c) || kinsoku::is_yakumono_closing(c) {
+                        yak_indices.push(i);
+                    }
+                }
+                if yak_indices.is_empty() {
+                    continue;
+                }
+                // Per-yakumono compression cap = min(2pt, current_width − 0.5×natural).
+                // Chars already at the Mech 1 floor have cap=0. The 2pt
+                // cap is per session_51_mechanism2_slack_algorithm.md
+                // (Word's observed per-char cap before dropping a char).
+                let caps: Vec<f32> = yak_indices.iter().map(|&i| {
+                    let f = &line.fragments[i];
+                    let floor = (f.natural_width * 0.5).max(f.natural_width - 2.0);
+                    (f.width - floor).max(0.0)
+                }).collect();
+                let total_capacity: f32 = caps.iter().sum();
+                if total_capacity <= 0.5 {
+                    continue;
+                }
+                let actual_reduction = demand.min(total_capacity);
+                // Exact-sum 0.5pt-step distribution (Session 51 Mech 2 spec).
+                // Algorithm:
+                //   1. Compute proportional target per yak.
+                //   2. Round each DOWN to 0.5pt step.
+                //   3. Distribute the residual 0.5pt increments to yak with
+                //      highest remaining capacity (max-heap-like greedy)
+                //      until total = actual_reduction (snapped to 0.5).
+                let target_total = ((actual_reduction / 0.5).round()) * 0.5;
+                let mut allocations: Vec<f32> = caps.iter()
+                    .map(|&c| {
+                        let scaled = c * (actual_reduction / total_capacity);
+                        ((scaled / 0.5).floor() * 0.5).min(c).max(0.0)
+                    })
+                    .collect();
+                let mut allocated_so_far: f32 = allocations.iter().sum();
+                let n_yak = yak_indices.len();
+                // Distribute residual 0.5pt increments to highest remaining capacity.
+                while target_total - allocated_so_far >= 0.5 - 1e-3 {
+                    let mut best_k: Option<usize> = None;
+                    let mut best_rem = 0.0_f32;
+                    for k in 0..n_yak {
+                        let rem = caps[k] - allocations[k];
+                        if rem >= 0.5 - 1e-3 && rem > best_rem {
+                            best_rem = rem;
+                            best_k = Some(k);
+                        }
+                    }
+                    if let Some(k) = best_k {
+                        allocations[k] += 0.5;
+                        allocated_so_far += 0.5;
+                    } else {
+                        break;
+                    }
+                }
+                for (k, &i) in yak_indices.iter().enumerate() {
+                    line.fragments[i].width -= allocations[k];
                 }
             }
         }
