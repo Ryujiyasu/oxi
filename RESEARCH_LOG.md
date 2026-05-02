@@ -669,6 +669,57 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — Cross-doc audit: Mech 1 fires on jc=left baseline docs (84/184 affected)
+
+- context: Per-request audit to estimate ship-priority of Mech 1
+  alignment-agnostic rule (Q6) by sampling real baseline docs.
+- evidence:
+  - `tools/metrics/audit_mech_compression_jc_left.py`: scanned all 184
+    baseline docs. Found **84 docs (46%)** have all 3 requirements:
+    `<w:kern>` in docDefaults + ≥3 paragraphs with jc=left/none jc + yakumono content.
+    Top 5 by yak-content count: 3a4f9fbe1a83 (1011 paras), ed025cbecffb
+    (180), d77a58485f16 (129), 6514f214e482 (94), b837808d0555 (65).
+  - `tools/metrics/audit_mech_smart.py`: targeted Mech 1 trigger pair
+    detection (Type-A→A, B→A, B→B) in jc=left/none paragraphs of top-5
+    real baseline docs. Per-char COM measurement (Information(5)) of 5
+    such paragraphs each:
+
+    | Doc | trigger paras | measured | compressed | yak compressed |
+    |---|---|---|---|---|
+    | 3a4f9fbe1a83 | 188 | 5 | 0 | 0/5 |
+    | ed025cbecffb |  20 | 5 | 2 | 4/19 |
+    | d77a58485f16 |  40 | 5 | 4 | 8/33 |
+    | b837808d0555 |   8 | 2 | 2 | 6/13 |
+    | e3c545fac7a7 |   6 | 1 | 0 | 0/3 |
+
+  - **Direct jc=left + Word.Alignment=0 (left) + Mech 1 firing CONFIRMED**:
+    ed025 p13: ）=5.5pt at 10.5pt font (half-width Mech 1)
+    ed025 p25: 。=5.0pt, ）=5.0pt at 10.5pt font (Mech 1)
+  - Many paragraphs with XML `(no jc)` resolved by Word to Alignment=3
+    (justify) via style inheritance. Cannot cleanly distinguish Mech 1
+    vs Mech 2 in those, but compression IS present.
+  - b837 p39 shows mixed compression values (、=7.0, （=7.5, 。=6.0pt at
+    12pt) — characteristic of Mech 2's 0.5pt-step distribution (NOT
+    Mech 1 strict half-width).
+- outcome:
+  - Mech 1 alignment-agnostic rule (Q6) CONFIRMED on real baseline data
+    (ed025 p13/p25). Not only synthetic repros.
+  - **Estimated impact**: 46% of baseline (84 docs) potentially affected
+    by Mech 1 firing under any alignment when kern is on. Of those, the
+    bottom-N target docs (ed025, d77a, b837) already show measurable
+    Mech 1 compression. Ship-priority for Mech 1 alignment fix: HIGH.
+  - 3a4f9fbe1a83 (1011 jc=left/none paras) shows 0/5 compression in
+    measured sample — but only because the sampled paragraphs lack
+    Mech 1 trigger pairs adjacent to body content (most are 「規則」と
+    style with full-width 「」 between CJK ideographs which doesn't
+    fire Mech 1).
+  - Smart-audit methodology demonstrated: text-level trigger detection
+    + targeted COM measurement gives reliable corpus-wide picture in
+    ~20 paragraphs measured (vs naive sampling's 0% hit rate).
+- code change: NONE (pure investigation). Implementation impact:
+  Oxi's Mech 1 implementation gate must NOT be alignment-conditional;
+  current code may be over-suppressing under non-justify alignments.
+
 ## 2026-05-02 — oxi-1 — partial — §4.7b Mech 2 wrap-budget intertwined design + Oxi implementation sketch
 
 - context: §4.7b Mech 2 algorithm confirmed (0.5pt step, fontSize×2/3
