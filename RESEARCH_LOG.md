@@ -13,6 +13,99 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — survey — Bottom-bucket post-R32: 15 docs, 5 hypothesis clusters
+- context: User question "R32 後 bottom-bucket survey, SSIM < 0.70 の docs 抽出 →
+  structural feature 分類 → cluster → 次 hypothesis 3-5 件 propose"
+- method:
+  - Source: ssim_baseline.json (PRE-R32 — R32 baseline-refresh not yet committed
+    but R31→R32 mean delta tiny, bottom-bucket composition stable)
+  - Bottom 30 worst-SSIM pages → deduplicated to 15 unique docs
+  - Per-doc XML feature scan: kern, jc, numPr, chars-indent, tbl, floating shape,
+    footnote, n_paras, doc_grid, compat_mode
+  - Sweep: tools/metrics/survey_bottom_bucket.py
+  - Data: pipeline_data/bottom_bucket_survey.json
+- structural pattern findings:
+  - **100% have effective kern** (15/15) — R32 kern gate fires here
+  - **100% have chars-indent** (15/15, avg 76 paras/doc with chars indent)
+  - **0% jc=both** — Mech 2 (justify-time slack) does NOT fire in bottom bucket;
+    only Mech 1 active
+  - **87% have tables** (13/15) — table-heavy template style
+  - **67% have floating shapes** (10/15)
+  - **33% have list paragraphs** (5/15)
+  - **20% have footnotes** (3/15) — but b837 has 26 fn (extreme density)
+- hypothesis clusters (predicted gain order):
+  1. **Cluster D — b837 footnote spill** (1 doc, KNOWN BLOCKER): Oxi reserves full
+     footnote area, Word splits across pages. Already in RESEARCH_LOG ## Active
+     hypotheses, assigned to oxi-2.
+  2. **Cluster A — heavy table internal layout** (5+ docs: 2ea81a, b35123, 1ec1091,
+     e3c545, 6514f214): table cell vertical Y, vAlign, cellMar, line stride within
+     cell. Multi-doc leverage.
+  3. **Cluster B — long-doc cumulative Y drift** (4-6 docs: e3c545 541p, 34140b
+     499p, 04b88e 386p, a1d6e4 317p, 6514f214 350p, d4d126 313p): each para small
+     Y drift accumulates over hundreds of paragraphs. Bottom pages downstream of
+     accumulated drift.
+  4. **Cluster E — chars-indent precise measurement** (universal, 100%): master's
+     active §15.1.1 work suggests not yet fully resolved. d77a 137 chars-indent
+     paragraphs (70% of 197 paras) is densest case.
+  5. **Cluster C — floating shape wrap-around** (3+ docs: 2ea81a 21fs, 459f, 1ec1091,
+     6514f214): body Y when text crosses floating shape zone. Master's §17 expansion
+     covered positionV/posOffset formula; wrap-effect on body Y still TBD.
+- specific bottom-bucket high-impact docs:
+  - d77a58485f16 p7 SSIM 0.627 (worst overall) — 137 chars-indent + 10 tables
+  - b837808d0555 p6 SSIM 0.645 — 26 footnotes (b837 spill case)
+  - 2ea81a8441cc p2 SSIM 0.664 — 21 floating shapes (master's §19.7 work doc)
+  - e3c545fac7a7 p11 SSIM 0.665 — 541 paras (longest doc, cumulative drift)
+  - b35123fe8efc p1 SSIM 0.666 — 22 tables in only 78 paras (28% in tables)
+- outcome:
+  1. **R32 kern gate already targets all 15** (100% kern coverage) — R32's
+     improvement here likely shows up post-baseline-refresh.
+  2. **5 distinct cluster axes** identified beyond kern. Each cluster has 1+ docs
+     where targeted fix could unlock major SSIM gains.
+  3. **Mech 2 (justify) not relevant in bottom bucket** — 0/15 use jc=both.
+     Future Mech 2 work won't help these docs.
+  4. **Long-doc drift hypothesis is novel** — was not in master's recent investigation
+     queue. If confirmed, single fix could lift 4-6 docs simultaneously.
+- next: rank cluster investigations. Cluster D (b837) already assigned. Cluster A
+  (table cell) and B (cumulative drift) are highest-leverage next steps.
+  Cluster E (chars-indent) should sync with master's §15.1.1 active work.
+- references:
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md (full table + per-doc
+  details + recommended priority order). Builds on
+  memory/investigation_r31_kern_cross_tab_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed — R31 narrow gate × kern cross-tab: 40/41 candidates have kern → R31 redundant under R32
+- context: User question — "R31 で SSIM 変化した 18 docs (3a4f_p64 +0.032 含む)
+  について kern presence 確認。あり → R32 kern gate で同 paragraph fire → R31
+  narrow path は冗長 → R32 ship 時削除可。なし → 残す価値あり。"
+- hypothesis: R31's narrow gate (chars-indent + cross-run pair + compressPunctuation)
+  is essentially a subset of R32's kern gate. Almost all R31-fire candidates have
+  effective kern.
+- evidence:
+  - Scan: tools/metrics/scan_r31_gate_candidates.py over 184-doc baseline
+  - Data: pipeline_data/r31_gate_candidates.json
+  - Cross-tab vs pipeline_data/kern_audit_2026-05-02.json
+  - **41 docs match R31's narrow gate conditions**
+    (chars-indent paragraph AND cross-<w:r> yakumono pair AND compressPunctuation)
+  - **40/41 (97.6%) have effective kern** (37 via docDefaults + 3 via Normal style)
+  - 1 outlier (9a8e8ddab85b_order_06-1.docx) has R31 conditions but NO effective kern
+  - Specifically: 3a4f9fbe1a83 (R31 winner p64 +0.032 + minor loser p42 -0.008)
+    has kern via Normal style val=2 → R32 will fire on both pages independently
+- outcome:
+  1. **R31 narrow path is essentially a subset of R32 kern gate**.
+  2. **3a4f_p64 (R31's only material winner +0.032) IS in the 40 with-kern set**.
+     R32 captures it independently. R31 not needed for this gain.
+  3. **17 minor-delta docs (|delta| ≤ 0.009) likely also in the 40-with-kern set**.
+     R32 will track or improve their micro-deltas.
+  4. **9a8e8ddab85b is R31's only no-kern fire** = potential false positive (Word
+     doesn't compress without kern, R31 does). R31 deletion CORRECTS this case.
+  5. **R32 ship-time R31 deletion is safe** — net impact predicted ≥ R31's
+     +0.000058, likely larger since R32 also catches R17 big_losers (7f272a, ed025).
+- next: pre-baseline measurement before R32 ship to verify mechanical prediction.
+  Specifically watch 9a8e8ddab85b for SSIM lift from removing R31's false fire.
+- references: memory/investigation_r31_kern_cross_tab_2026_05_02.md (full analysis +
+  41-doc list with kern source). Builds on session_51_kern_audit_177docs.md and
+  session_50_r31_chars_indent_cross_run_gate.md.
+
 ## 2026-05-02 — oxi-4 — confirmed — §9 Footnote line-height closed-form: max(17.5, max(size + 5.5, natural_lh)) for CJK 83/64
 - context: prior §9.1 footnote investigation (memory `spec_footnote_lh_2026_05_02.md`)
   observed size-dependent "extra" decreasing from 1.64pt (13pt) to 0.16pt (18pt) but
@@ -493,6 +586,106 @@ Format:
   hRule to "atLeast" when the attribute is absent (matches Word). Layout
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 1 alignment-agnostic + Mech 1↔Mech 2 precedence
+
+Two follow-up investigations to §4.7b Mech 2 characterization:
+
+### Q6: Mech 1 alignment dependency
+
+- context: §4.7b confirmed Mech 2 fires only at jc=both. §4.7 (Mech 1
+  Type A/B/C) did not specify alignment requirement. ed025_p1 (R17
+  big_loser) showed Mech 1 firing in jc=center/right paragraph,
+  suggesting Mech 1 is alignment-agnostic.
+- evidence: `tools/metrics/build_m1_alignment_test.py` +
+  `measure_m1_alignment.py`. 2 docs × 5 alignment paragraphs each:
+  - kern OFF, all 5 alignments: ）= 10.5pt (no Mech 1)
+  - kern ON, all 5 alignments: ）= 5.0–5.5pt (Mech 1 fires)
+  Specifically: jc=both/left/(no jc) → 5.5pt; jc=center/right → 5.0pt
+  (minor 0.25pt difference likely measurement artifact at non-left
+  aligned glyph origins).
+- outcome: Mech 1 is **alignment-agnostic**. `<w:kern>` in docDefaults
+  is the SOLE gate (per session 51 yakumono_kern_trigger finding).
+  Spec §4.7b updated.
+
+### Q7: Mech 1 → Mech 2 precedence interaction
+
+- context: §4.7b stated "Mech 1 fires first, Mech 2 fires second on
+  residuals" but did not define "residuals" — char-set or slack-level.
+- evidence: `tools/metrics/measure_m1_m2_precedence.py` 9-slack sweep on
+  probe `漢漢漢」）漢漢「漢漢漢` (11 chars, MS Mincho 12pt). 」 fires Mech 1
+  (B→B trigger with `）` neighbor); `）` and `「` do NOT fire Mech 1
+  (B→CJK / single A in CJK). Post-Mech1 natural = 126pt.
+
+  | cw | slack | 」 (M1-comp) | ） (uncomp) | 「 (uncomp) |
+  |---|---|---|---|---|
+  | 200/132/126 | ≤0 | 6.0pt | 12.0 | 12.0 |
+  | 125 | +1 | 6.0pt | 11.5 | 11.5 |
+  | 124 | +2 | 6.0pt | 11.0 | 11.0 |
+  | 122 | +4 | 6.0pt | 10.0 | 10.0 |
+  | 120 | +6 | 6.0pt | 9.0 | 9.0 |
+  | 118 | +8 | 6.0pt | 8.0 | 8.0 (floor) |
+
+- outcome:
+  - Mech 2 NEVER touches Mech-1-compressed yakumono. `」=6.0pt` constant
+    across all slacks. Mech 1's output is final for those chars.
+  - Mech 2 distributes slack ONLY across uncompressed yakumono. Each gets
+    `slack / n_uncomp_yak`, in 0.5pt steps, sum = slack EXACTLY.
+  - "Residuals" = char-level subset (uncompressed yakumono), NOT
+    line-level slack continuation.
+  - The Mech 2 floor (`fontSize × 2/3 = 8.0pt` for 12pt) still applies
+    to the residuals-only set.
+- code change: NONE. Spec §4.7b's "Mech 1 vs Mech 2 interaction"
+  subsection refined with measured data.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 (justify-time) trigger / position / algorithm characterization
+
+- context: Session 51 R0 entries identified Mech 2 (justify-time
+  yakumono compression) but left several questions open: which char
+  triggers fire (8.0/7.5/5.5pt usage), what does "mid-line" mean (% of
+  line length), are trigger pairs different from Mech 1 Type A/B/C, what
+  is "reactive" / overflow gating semantics? Required: 5-10 pair per-char
+  COM measurement.
+- evidence:
+  - `tools/metrics/measure_m2_trigger_pairs.py`: 10 yakumono-CJK pair
+    cases × 4 slack values (0/2/4/8pt) at jc=both, MS Mincho 12pt:
+    ALL 10 pairs (A→CJK, CJK→A, B→CJK, CJK→B for 「」（）、。) compress
+    identically: slack=0→12.0pt, slack=2→10.0pt, slack=4→8.0pt, slack=8→
+    line drops a char. Yakumono is the compressing char regardless of
+    neighbor type.
+  - `tools/metrics/measure_m2_position_and_charset.py`: position-axis
+    test (start/mid/end) × alignment (justify/left) + 16-char extended
+    set:
+    * jc=left at any position: NO compression (Mech 2 jc=both gated)
+    * jc=both at line-start position: Mech 2 NOT fire (drop instead)
+    * jc=both at mid/end positions: Mech 2 fires
+    * extended yakumono set { 「」（）［］【】〔〕、。 } all compress
+      to 8.0pt
+    * em-dash ―(U+2015) Type C: NO compression
+    * ASCII hyphen, Latin a, plain CJK: NO compression
+  - `tools/metrics/measure_m2_position_sweep.py`: yakumono position 1..20
+    sweep: position 1 (line-start) → no compression / line drops; positions
+    2..19 → all compress to 8.0pt. The "mid-line" position rule is
+    operationally **`position > 1`**, NOT a percentage threshold.
+- outcome:
+  - Spec §4.7b expanded with Mech 2 trigger conditions, compressible char
+    set (= Type A ∪ Type B from Mech 1, no Type C), position rule
+    (position > 1), compression algorithm with `min_yak_width =
+    fontSize × 2/3` cap, and 8.0/7.5/5.5pt value attribution table.
+  - Key formula:
+    `min_yak_width = fontSize × 2/3`
+    (8.0pt for 12pt font, 7.0pt for 10.5pt font)
+  - Per-yak compression cap = fontSize − min_yak_width = fontSize/3
+    (4.0pt for 12pt, 3.5pt for 10.5pt). Beyond cap → drop char and refit.
+  - 5.5pt = Mech 1 half-width (11pt font /2). 6.0pt = Mech 1 half (12pt).
+    7.0pt = Mech 2 floor (10.5pt × 2/3). 8.0pt = Mech 2 floor (12pt × 2/3).
+    7.5pt etc = Mech 2 distributed partial.
+  - Mech 1 fires first (line-break time, neighbor-pair-based);
+    Mech 2 fires second (layout time, slack-distribution-based).
+- code change: NONE (pure investigation). Oxi's Phase 2 reactive absorb
+  (per 1f8b5f2) should be reviewed against the spec §4.7b algorithm:
+  honour the position>1 gate, use fontSize×2/3 floor, distribute in 0.5pt
+  steps with sum-to-slack invariant.
 
 ## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly explained: anchor empty para's pPr-rPr font
 
