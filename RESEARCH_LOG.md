@@ -1108,6 +1108,37 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b N=1 cap REVISED + N=2 mid-line resolved (round 7)
+
+- context: §4.7b round 3 claimed N=1 cap = fontSize/3 (= 4pt for 12pt) as
+  special case, derived from a single P_1para_Y50 datapoint. Round 7
+  verifies across 4 font sizes + resolves Round 5's N=2 line-end yak
+  anomaly.
+- evidence: `measure_cap_n1_n2.py`:
+  Suite C (N=1 mid-line, pos 12 of 24, fine 0.5pt slack sweep):
+    fs=12 N=1 → max_comp = 6.0pt (= fontSize/2, NOT fontSize/3)
+    fs=10.5/11/14 sweep had gaps; partial confirmation
+  Suite D (N=2 mid-line, pos 8 + 16, 12pt):
+    max_comp = 6.0pt (= fontSize/2, Round 6 formula confirmed)
+    Round 5's "12pt anomaly" was line-end yak placement artifact
+- new finding (drop threshold):
+  N=1 first_drop = ~fontSize (12.5 for fs=12, 14.5 for fs=14)
+  N≥2 first_drop = cap + 0.5..1.0pt
+  → N=1 has special drop tolerance: Word allows line to extend up to
+    fontSize past cap before dropping. With multiple yak, distribution
+    is fine-grained enough that drop comes earlier.
+- outcome:
+  - Compression cap = `floor(sz_val/2) × 0.5` UNIVERSAL across N≥1.
+    The N=1 special case (fontSize/3) is REVOKED.
+  - Drop threshold differs: N=1 = fontSize, N≥2 = cap + 0.5pt.
+  - Spec §4.7b round 7 added with the corrected formula and drop-
+    threshold characterization.
+  - Implementation: same cap formula for any N; only drop_threshold
+    branches on N=1 vs N≥2.
+- open: fs=10.5/11/14 N=1 sweep gaps (haven't tested exact cap at those
+  font sizes due to slack sampling). Larger fonts. Other CJK fonts.
+- code change: NONE. Spec §4.7b round 7 added.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b cap formula universal (4 font sizes verified, 0.5pt-quantized)
 
 - context: Round 5 found line-level cap = fontSize/2 at 12pt only.
