@@ -13,6 +13,23 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §13.1 cellMar variation validates effective_width formula (Round 29)
+
+- context: Round 28 confirmed Mech 2 inside cell = body at default
+  cellMar=4.95pt. Round 29 extends to 4 cellMar variants (0pt,
+  4.95pt default, 10pt symmetric, 2/10pt asymmetric).
+- evidence — `pipeline_data/mech2_cellmar.json` (12 m):
+  3 slacks × 4 variants × identical fit/wrap pattern.
+  At slack=3 (cw=285): all 4 variants n=24 m2=+3.0pt
+  At slack=6 (cap):    all 4 variants n=24 m2=+6.0pt
+  At slack=8 (wrap):   all 4 variants n=23 (wrap)
+- formula: §13.1 `inner_content_width = tcW - L_cellMar - R_cellMar`
+  fully validated. Asymmetric L/R correctly handled.
+- outcome: §4.7b cap dispatcher takes inner_content_width as input;
+  no cellMar-specific modifier needed.
+- impact: Oxi cell layout can compute Mech 2 with the standard
+  (paragraph-level) cap dispatcher using cell's effective inner width.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 cap inside table cell = body cap (Round 28)
 
 - context: Round 16/22 closed §4.7b Mech 2 cap formulas at body
