@@ -13,6 +13,23 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.6 w:vanish hidden text = ZERO layout width (Round 33)
+
+- context: ECMA-376 §17.3.2.43 vanish run property hides text from
+  display. Open: does it occupy layout space?
+- evidence — `pipeline_data/vanish.json` (5 m at fs=12 MSM):
+  V1 (5 visible): n=5, x=85,97,109,121,133
+  V2 (3v+3h+2v): n=5 visible, IDENTICAL positions to V1
+  V3 (3v+10h+2v): n=5 visible, IDENTICAL positions
+  V5 (3v+200h+3v): n=6 visible, all on line 1 (no wrap)
+- formula: hidden text takes ZERO layout width. Visible chars
+  positioned as if hidden runs don't exist. No line break impact.
+- outcome: Oxi must skip `<w:vanish/>` runs entirely from layout
+  computation. No line width contribution, no wrap influence.
+- impact: docs with revision tracking (deleted text marked vanish),
+  hidden notes, conditional content currently incorrect in Oxi if
+  not skipping vanish runs.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.6.5 line-start kinsoku retreat = 1 char (Round 32)
 
 - context: Round 31 showed 1-char retreat for 」 line-end wrap.
