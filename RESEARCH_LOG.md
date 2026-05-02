@@ -13,6 +13,31 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.4 overflowPunct (ぶら下がり) line-end yak overflow (Round 31)
+
+- context: ECMA-376 §17.3.1.32 paragraph property overflowPunct
+  controls line-end punctuation overflow behavior (Japanese
+  typography "ぶら下がり"). Behavior pinned via Round 31.
+- evidence — `pipeline_data/overflow_punct.json` (12 m):
+  21-char probe (漢×20 + 」), fs=12 MSM, jc=left, 4 cw × 3 settings.
+  | cw | def | val=1 | val=0 |
+  | 252 | n=21 fits   | n=21 fits   | n=21 fits   |
+  | 246 | n=21 」at331 | n=21 」at331 | n=19 wrap   |
+  | 240 | n=21 」at325 | n=21 」at325 | n=19 wrap   |
+  | 235 | n=19 wrap   | n=19 wrap   | n=19 wrap   |
+- formula:
+  - default = ON (Japanese Word), `def` ≡ `val=1`
+  - ON: line-end Type B yak's left edge AT right_edge → yak
+    extends `yak_natural_advance` (= fs) past right margin
+  - OFF: yak must fit; wraps with line-start kinsoku retreat
+  - Overflow limited to ONE yak's full width; tighter cw forces
+    wrap regardless of flag
+- outcome: Oxi must parse `<w:overflowPunct>` from pPr/style
+  chain (default ON for Japanese), apply at line-break decision
+  for Type B yak with overflow tolerance ≤ yak_advance.
+- impact: documents using right-edge yakumono (book quotes,
+  letter formatters) currently incorrect in Oxi if flag not parsed.
+
 ## 2026-05-02 — oxi-1 — confirmed — §13.1 cellMar variation validates effective_width formula (Round 29)
 
 - context: Round 28 confirmed Mech 2 inside cell = body at default
