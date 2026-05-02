@@ -4606,6 +4606,12 @@ impl LayoutEngine {
                     }
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
+                    // ed025 fix 2026-05-03: trailing U+3000 (fullwidth space) doesn't
+                    // trigger wrap in Word. Cell rendering already handles this at
+                    // mod.rs:5803 / 6685 ("is_space = ch==' ' || ch=='\\u{3000}'");
+                    // extend to break_into_lines CJK path. Para 10 = "32×　 + 法人番号: + 5×　"
+                    // wraps to 2 lines in Oxi but 1 in Word due to trailing 5×　.
+                    let is_immune_space = ch == '\u{3000}';
                     let line_compress_count = current_line.fragments.iter()
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
@@ -4645,7 +4651,7 @@ impl LayoutEngine {
                     if absorb {
                         compress_used = true;
                     }
-                    if overflow_tw > 0 && !absorb && !current_line.fragments.is_empty() {
+                    if overflow_tw > 0 && !absorb && !is_immune_space && !current_line.fragments.is_empty() {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
