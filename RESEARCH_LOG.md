@@ -1108,6 +1108,33 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 9: Multi-line Mech 2 — per-line cap, last line no compress
+
+- context: Session 51 listed multi-line Mech 2 cascade as open question.
+  Cap is per-line vs paragraph-cumulative vs other?
+- evidence: `measure_multiline_mech2.py` 50-char probe with 6 yak
+  distributed × MS Mincho 12pt × jc=both × 12 cw values:
+  - cw=310 (2-line): L1 26 chars 2pt comp, L2 24 chars 0pt
+  - cw=306 (2-line): L1 26 chars 6.0pt comp (cap reached), L2 0pt
+  - cw=210 (3-line): L1 18 chars 6.0pt cap, L2 18 chars 6.0pt cap, L3 14 chars 0pt
+- finding:
+  - **Cap = floor(sz/2)*0.5 applied PER-LINE INDEPENDENTLY**.
+    Each non-last line can compress up to cap regardless of other lines.
+    cw=210 paragraph absorbed 12pt total (= 2 lines × 6pt cap each).
+  - **Last line never compresses** — jc=both renders last line LEFT-aligned
+    (standard Word behavior). All 3-line tests show L3 comp=0 regardless
+    of cw.
+  - **Wrap algorithm uses Mech 2 cap as per-line line-extension budget**.
+    Greedy pack + extend up to +1 char if remaining slack ≤ cap; break
+    otherwise.
+- outcome:
+  - Spec §4.7b Round 9 added with multi-line cascade rule.
+  - Implementation guidance:
+    For each non-last line, apply Mech 2 distribution if slack > 0.
+    Skip last line (jc=both last line rule).
+  - Each line treated as independent Mech 2 unit.
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 8: cap font-independent + Round 7 N=1 drop REFUTED
 
 - context: Round 6 (4 sizes on MS Mincho) and Round 7 (N=1/2 on 12pt
