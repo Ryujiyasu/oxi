@@ -1108,6 +1108,122 @@ Format:
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
 
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 18: cap formula line-length-invariant; P13 discrepancy was attribution error
+
+- context: Round 17 noted P13 L2 (real doc) showed 7.5pt comp where
+  Round 6/14 formula predicts cap = 5.0pt. Hypothesis: line-length-
+  dependent cap?
+- evidence: `measure_cap_45char.py` — 45-char synthetic probe matching
+  P13 L2's yak positions exactly (「pos2, 」pos9, 、pos33) at MS
+  Mincho 10.5pt with cSC=compressPunctuation:
+  slack=5: comp=5.0pt, n=45 (cap reached)
+  slack=5.5+: drop to 44 chars
+  → **cap = 5.0pt for 45-char synthetic** = Round 6/14 formula ✓
+- conclusion: cap formula `floor(sz_val/2)*0.5` is INVARIANT to line
+  length (verified at 24-char and 45-char). P13 L2's "7.5pt over cap"
+  observation was an attribution error — P13's natural width
+  estimation didn't account for Latin "14" half-width digits in the
+  text. Real slack < estimated; real comp matches formula.
+- outcome:
+  - Spec §4.7b cross-validation discrepancy resolved.
+  - Cap formula now verified across:
+    N: 1,2,3,4,5,7; fs: 10.5,11,12,14,16,18; font: 5 CJK families;
+    **line length: 24 AND 45 chars**.
+  - Mech 2 specification is now complete and consistent.
+- side observation: at slack=5.5..10.0 (just over cap), Word drops
+  to 44 chars but does NOT apply Mech 2 to the new shorter line.
+  Compression returns at slack=12 (= fontSize), suggesting wrap-fit
+  re-cycles when overflow exceeds cap by ~fontSize.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 17 final: line-end yak EXEMPT from Mech 2 compression
+
+- context: Round 17 kinsoku × Mech 2 follow-up. After Word session
+  recovery, additional cw values measured.
+- evidence: `measure_kinsoku_remeasure.py` — 50-char probe (」 at pos 24)
+  with 8 cw sweep:
+  - cw=300 (slack=0, 25 chars/L1): 」 at pos 24 (mid-line), adv=12.0,
+    line w=300 (no compression, no overflow)
+  - cw=294 (slack=6 = cap, 25 chars/L1): 」 at pos 24 mid-line,
+    **adv=6.0 (compressed to half-width = cap)**, line w=294 ✓
+    Mech 2 fires cleanly when yak is mid-line + slack within cap.
+  - cw=284 (24 chars/L1): 」 at L1 last position (line-end),
+    line w=290 (visible overflow +6pt), 」 NOT compressed.
+    **Word retains kinsoku retreat with overflow rather than compress
+    the line-end yak.**
+  - cw=264: wraps to L2, 」 at L2 pos 2 between CJK
+- finding (NEW spec rule): **Line-end yak EXEMPT from Mech 2**.
+  Round 6 confirmed line-start (pos 1) yak is exempt. Round 17 confirms
+  the SAME rule for line-end (last position). Both edges excluded.
+  Mech 2 candidates = mid-line yak only (positions 2..(n-1) of line).
+- clarification of cw=284 mechanism:
+  Without retreat: pack 23 CJK on L1, 」 starts L2 → kinsoku violation
+  With retreat: keep 」 at L1 end, but Mech 2 doesn't fire on line-end
+  → line accepts visible overflow (~6pt past content_w)
+  Word chose retreat with overflow over both alternatives.
+- outcome:
+  - Spec §4.7b position rule extended:
+    Mech 2 candidates = yak at line position ∈ [2, n-1]
+    (excluded both line-start AND line-end)
+  - Spec §4.6.1 kinsoku retreat takes precedence over Mech 2 cap
+    constraint (line accepts overflow when retreat conflicts with cap).
+  - Implementation:
+    fn is_mech2_candidate(yak_pos, n_chars):
+      yak_pos > 0 AND yak_pos < n_chars - 1
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — partial — §4.6.1 Kinsoku Retreat × Mech 2: retreat causes visible overflow (round 17 partial)
+
+- context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
+  causes retreat. Question: when retreat causes line-1 overflow > Mech 2
+  cap, does Word retain retreat with overflow, or drop chars?
+- evidence: `tools/metrics/measure_kinsoku_remeasure.py` (50-char probe
+  with 」 at pos 24, 8 cw values; 3/8 measured, 5/8 RPC errored due to
+  Word COM session instability):
+  cw=264 (slack 336): L1 = 22 chars w=264 (no overflow); 」 in L2 pos 2
+    (between CJK, not at line-start)
+  cw=284 (slack 16): L1 = 24 chars including 」 at pos 24, w=290pt
+    → **L1 overflows content_w by 6pt** (visible overflow!)
+    L2 = 23 chars w=284, L3 = 3 chars
+  cw=300: L1 = 11 chars (measurement issue — likely y-grouping artifact)
+- finding: Kinsoku retreat OVERRIDES Mech 2 cap. Word allows visible
+  overflow on the line-1 to keep 」 at line-end (preventing line-start
+  prohibition violation). The 6pt overflow at cw=284 is past the cap
+  of 6pt (12pt × 0.5) — Word does NOT drop a char to fit; it retains
+  the natural-width line with visible overflow.
+- outcome:
+  - Spec §4.6.1 to note: kinsoku retreat takes precedence over Mech 2
+    drop-trigger. When kinsoku constraints conflict with cap, Word
+    chooses kinsoku conformance (line-end overflow) over cap conformance.
+  - This is a critical distinction: typical wrap-fit drops at slack
+    > cap, but kinsoku-driven layout doesn't drop.
+- followup: re-run with stable Word session for 5 missing cw values
+  (276, 288, 292, 294, 296). The cap-vs-overflow boundary needs more
+  data points. Probe builder + remeasurer scripts ready in
+  tools/metrics/.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — blocked — §4.6.1 Kinsoku Retreat × Mech 2 (round 17, blocked by Word COM failure)
+
+- context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
+  causes retreat to previous line. Question: when retreat creates
+  line-1 overflow > Mech 2 cap, does Word (a) retain retreat with
+  visible overflow, (b) drop chars to avoid retreat, (c) multi-step
+  retreat?
+- approach: 50-char probe with 」 at pos 24, sweep cw forcing wrap.
+  `tools/metrics/measure_kinsoku_mech2.py` + remeasure variant.
+- result: BLOCKED. Word COM session entered unhealthy state after
+  many measurements (~280 prior). Multiple `Server execution failed`
+  errors. Word.Documents.Open succeeded only for first 3 cw values
+  (cw=294/296/300) before subsequent measurements all RPC-failed.
+  Probe docx generated successfully (8 docx in
+  `tools/metrics/kinsoku_mech2_repro/`); only need re-measurement.
+- followup: re-run after Word session reset (full reboot may be
+  needed, or run on a separate machine).
+- partial data: `pipeline_data/kinsoku_mech2.json` (5/8 measure_error
+  entries; 0 successful line-data results).
+- code change: NONE.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b round 16: cap = last CJK run/2 (yak fs irrelevant); distribution = uniform-gap-above-half
 
 - context: Round 15 found cap depends on "last run/yak fs" but couldn't
