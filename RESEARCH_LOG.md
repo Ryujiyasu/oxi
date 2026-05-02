@@ -13,6 +13,50 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — refuted — 1ec1 □ glyph LSB Investigation B: charset hypothesis + font linking BOTH refuted; Word's 4.14pt LSB not explainable via GDI
+- context: 依頼書 Investigation B. After A refuted font fallback hypothesis,
+  test if CreateFontW charset (DEFAULT vs SHIFTJIS) or font linking changes □
+  glyph LSB.
+- evidence (Python ctypes direct GDI tests):
+  - **Test 1 — CreateFontW charset effect** (`tools/metrics/test_gdi_charset_lsb.py`):
+    Render MS Gothic 14pt □ at x=20. DEFAULT_CHARSET / SHIFTJIS_CHARSET /
+    ANSI_CHARSET all produce IDENTICAL result: face=ＭＳ ゴシック, abcA=2,
+    leftmost pixel at x=22 (LSB=2px ≈ 1.5pt). Only SYMBOL_CHARSET substitutes
+    to Wingdings (irrelevant for our case).
+  - **Test 2 — Glyph existence** (`tools/metrics/test_gdi_glyph_existence.py`):
+    GetGlyphIndicesW with GGI_MARK_NONEXISTING_GLYPHS shows MS Gothic has NATIVE
+    □ glyph (idx=1703, abcA=2, abcB=15). No font linking / GDI fallback for □.
+  - Oxi's measured 1.74pt LSB matches GDI's abcA=2 (≈ 1.5pt at PPEM=19).
+    **Oxi behaves correctly** per GDI TextOutW path.
+  - Word's measured 4.14pt LSB cannot be reproduced via any GDI path I tested.
+- outcome:
+  1. **Charset hypothesis FALSIFIED**. Oxi's CreateFontW DEFAULT_CHARSET (1)
+     produces same result as SHIFTJIS_CHARSET (128).
+  2. **Font linking hypothesis FALSIFIED**. MS Gothic has native □ glyph.
+  3. **The "+2.4pt LSB diff" framing is likely wrong**. Word's 4.14pt LSB
+     can't come from standard GDI rendering. New candidate hypotheses:
+     - **H_D**: Word uses DirectWrite/Direct2D (not GDI) for typography,
+       producing different glyph LSB than GDI TextOutW.
+     - **H_E**: Original measurement methodology error — "44.36pt advance"
+       was COMPUTED from layout formula, not directly measured. Word's actual
+       advance may differ (e.g., ind:left or lIns inheritance bug).
+     - **H_F**: ind:left or lIns calculation issue — relevant given existing
+       1ec1 textbox bullet investigation (session_51_textbox_ind_rule.md).
+  4. **Investigation should pivot** from "glyph LSB" to "advance position".
+     Re-measure Word's rendered □ position directly and back-calculate what
+     advance Word actually used. Compare to Oxi's layout-time advance.
+- next: re-verify the "44.36pt advance" assumption. Either:
+  (a) Word's render at advance=44.36pt + LSB=4.14pt (= visible 48.5pt) — implies
+      DirectWrite vs GDI rendering pipeline difference, or
+  (b) Word's actual advance != 44.36pt — implies advance calculation error in
+      Oxi (ind:left, lIns, or shape_left).
+  Hypothesis (b) is more likely given existing textbox-related findings.
+  Defer investigation C (cumulative drift) until advance is verified.
+- references:
+  memory/investigation_1ec1_box_phase_b_2026_05_02.md (full GDI test data +
+  H_D/H_E/H_F hypotheses + recommended pivot to advance verification).
+  Phase A: memory/investigation_1ec1_box_font_phase_a_2026_05_02.md.
+
 ## 2026-05-02 — oxi-4 — refuted — 1ec1 □ glyph LSB +2.4pt H_A (font fallback): both Word and Oxi resolve to MS Gothic
 - context: 依頼書 Investigation A. 1ec1091177b1_006.docx Shape 4 textbox □3
   paragraph: Oxi's □ visible glyph at +2.4pt LEFT of Word's. H_A hypothesis:
