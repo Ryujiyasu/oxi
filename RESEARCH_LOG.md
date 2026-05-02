@@ -13,6 +13,49 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — Cross-doc Mech 2 selective behavior is GENERAL (5 docs / 175 lines / 486 yakumono)
+- context: User question "paragraph 10 L4 ('Mech 1 hit + 3 yak full') pattern が他 doc
+  にも共通か。selective rule の一般性確認。"
+- hypothesis: selective behavior (Mech 1 hit + uncompressed yakumono coexist on
+  same line) generalizes across baseline docs.
+- evidence:
+  - Audited 5 jc=both + kern docs: 3a4f, 7f272a, ed025, d77a, b35123
+  - Method: walked first 30 multi-line body paragraphs per doc, COM-measured
+    per-char advance, classified each yakumono as Mech 1 (≤6.5pt) / Mech 2 partial
+    (6.5-10pt) / uncompressed (≥10pt) for 10.5pt MS Mincho
+  - Total: 175 non-final lines audited, 486 yakumono characters classified
+  - Script: tools/metrics/audit_mech2_selective_cross_doc.py
+  - Data: pipeline_data/mech2_cross_doc_audit.json + _part2.json
+  - Per-doc breakdown:
+    - 3a4f: 58 lines, **5 selective**, 37 proportional, 14 pure_full
+    - 7f272a: 4 lines, 0 selective (small sample, no overflow)
+    - ed025: 9 lines, **3 selective**, 0 proportional, 6 pure_full
+    - d77a: 98 lines, **18 selective**, 24 proportional, 52 pure_full
+    - b35123: 6 lines, 0 selective, 4 proportional, 2 pure_full
+  - **TOTAL: 26 selective lines (14.9%) across 3/5 docs**
+- outcome:
+  1. **Selective behavior is GENERAL, NOT a 3a4f-specific quirk**. Appears in
+     3a4f (5L), ed025 (3L), d77a (18L) = 26 lines across 3 distinct docs.
+  2. **Pattern is MIXED (text-dependent)**: same docs show both selective AND
+     proportional on different lines. 3a4f: 5 sel vs 37 prop. d77a: 18 sel vs 24 prop.
+  3. **Proposed mechanism**: cascade — Word first applies Mech 1 (Type A/B/C
+     neighbor pairs), then Mech 2 (slack distribution) on RESIDUAL overflow only:
+     - Line fits after Mech 1 alone → SELECTIVE (others stay full)
+     - Mech 1 insufficient → Mech 2 distributes residual = PROPORTIONAL
+     - No overflow → no compression = pure_full
+     - No Mech 1 candidates but overflow → pure proportional Mech 2
+  4. **Implication for Oxi**: must implement cascade, NOT pure proportional Mech 2.
+     If Oxi only does proportional, it will over-compress yakumono in 15% of
+     justified lines that Word leaves at full width (selective lines).
+- next: (a) verify Oxi break_into_lines current implementation against cascade
+  rule; (b) targeted overflow audit on ed025/7f272a to confirm Mech 2 absence
+  is sample bias not real; (c) cross-reference master's §4.7b spec
+  (a8d70c2 Mech 1↔Mech 2 precedence) — likely already specifies cascade.
+- references:
+  memory/investigation_mech2_selective_cross_doc_2026_05_02.md (full per-doc
+  data + cascade hypothesis). Builds on session_51_3a4f_p64_p42_validation
+  + session_51_oxi_compress_spec_table.
+
 ## 2026-05-02 — oxi-4 — correction — e3c545 pagination "divergence" was para_idx mapping artifact (cell paragraphs share table block_idx)
 - context: previous entry "Cluster B: e3c545 has CATASTROPHIC pagination divergence
   (130 paras / 12 Oxi pages vs 550 / 12 Word pages)" claimed Oxi paginates 4× slower
