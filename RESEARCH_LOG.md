@@ -13,6 +13,1171 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-4 — confirmed — Oxi yakumono cascade implementation has gap with Word's proportional Mech 2 (37% of justified body lines)
+- context: Cross-doc Mech 2 audit (RESEARCH_LOG entry below) confirmed 65 of 175
+  audited lines (37%) show Word's proportional Mech 2 (yakumono partial compression
+  to 7-9pt range). Code review of Oxi's break_into_lines to check if cascade matches.
+- hypothesis: Oxi implements Mech 1 + ASCII slack distribution but lacks proportional
+  Mech 2 (partial yakumono compression on residual overflow).
+- evidence (code review):
+  - `crates/oxidocs-core/src/layout/mod.rs:4321` — break_into_lines yakumono pre-pass:
+    builds yakumono_compressed[] boolean (Mech 1 Type A/B detection); applies
+    ×0.5 to compressed yakumono, ×0.583 to standalone 、。
+  - `crates/oxidocs-core/src/layout/mod.rs:3589` (Phase 1 overflow Mech 1):
+    on `slack < 0`, re-applies ×0.5 to remaining CJK punctuation. **Binary
+    compression — full or half**, no partial.
+  - `crates/oxidocs-core/src/layout/mod.rs:3645` (Stage 2b decompress):
+    on `slack > 0.5`, restores compressed 、。 toward natural. UNDOES Mech 1.
+  - `crates/oxidocs-core/src/layout/mod.rs:3677` (Phase 2 slack):
+    on `slack > 0`, distributes positive slack to ASCII spaces or as uniform
+    per-char gap. **Adds spacing, not compresses**.
+  - **Missing stage** between line 3618 and 3621: proportional Mech 2 that
+    distributes residual NEGATIVE slack across full-width yakumono with
+    per-char cap (font_size × 1/3 per spec).
+- outcome:
+  1. **Oxi can produce SELECTIVE behavior** (26 lines = 15% of audited) — matches Word.
+     Mech 1 fires on neighbor patterns; others stay full.
+  2. **Oxi can produce PURE FULL** (76 lines = 43%) — matches Word when no overflow.
+  3. **Oxi CANNOT produce PROPORTIONAL Mech 2** (65 lines = 37%) where Word
+     compresses yakumono partially to 7-9pt range. Oxi's options:
+     - Phase 1 forces ×0.5 (5.25pt for 10.5pt font) → over-compressed
+     - OR leaves full → still overflowing
+     - Net mismatch: ~2pt difference per yakumono in 37% of justified lines
+  4. **Recommended fix** (for oxi-2 implementation session):
+     ```
+     // Add Stage 2.5 between line 3618 and 3621:
+     if slack < 0 && !in_textbox {
+         compressible: yakumono still at full width (not Mech 1 hit yet)
+         per_char_reduction = (-slack / n_compressible).min(font_size × 0.5)
+         apply to each, recompute slack
+     }
+     ```
+- next: (a) targeted SSIM measurement: implement Stage 2.5, run pipeline.verify,
+  expect lift on 3a4f / d77a / b35123 (have most proportional Mech 2 lines);
+  (b) cross-reference master's §4.7b spec (a8d70c2) — likely already specifies
+  cascade with per-char cap formula; (c) consider Mech 3 (jc=left, master's
+  §4.7c) as separate axis from this Mech 2 gap.
+- references:
+  memory/investigation_oxi_yakumono_cascade_gap_2026_05_02.md (full code references
+  + recommended fix + caveats). Builds on
+  memory/investigation_mech2_selective_cross_doc_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed — Cross-doc Mech 2 selective behavior is GENERAL (5 docs / 175 lines / 486 yakumono)
+- context: User question "paragraph 10 L4 ('Mech 1 hit + 3 yak full') pattern が他 doc
+  にも共通か。selective rule の一般性確認。"
+- hypothesis: selective behavior (Mech 1 hit + uncompressed yakumono coexist on
+  same line) generalizes across baseline docs.
+- evidence:
+  - Audited 5 jc=both + kern docs: 3a4f, 7f272a, ed025, d77a, b35123
+  - Method: walked first 30 multi-line body paragraphs per doc, COM-measured
+    per-char advance, classified each yakumono as Mech 1 (≤6.5pt) / Mech 2 partial
+    (6.5-10pt) / uncompressed (≥10pt) for 10.5pt MS Mincho
+  - Total: 175 non-final lines audited, 486 yakumono characters classified
+  - Script: tools/metrics/audit_mech2_selective_cross_doc.py
+  - Data: pipeline_data/mech2_cross_doc_audit.json + _part2.json
+  - Per-doc breakdown:
+    - 3a4f: 58 lines, **5 selective**, 37 proportional, 14 pure_full
+    - 7f272a: 4 lines, 0 selective (small sample, no overflow)
+    - ed025: 9 lines, **3 selective**, 0 proportional, 6 pure_full
+    - d77a: 98 lines, **18 selective**, 24 proportional, 52 pure_full
+    - b35123: 6 lines, 0 selective, 4 proportional, 2 pure_full
+  - **TOTAL: 26 selective lines (14.9%) across 3/5 docs**
+- outcome:
+  1. **Selective behavior is GENERAL, NOT a 3a4f-specific quirk**. Appears in
+     3a4f (5L), ed025 (3L), d77a (18L) = 26 lines across 3 distinct docs.
+  2. **Pattern is MIXED (text-dependent)**: same docs show both selective AND
+     proportional on different lines. 3a4f: 5 sel vs 37 prop. d77a: 18 sel vs 24 prop.
+  3. **Proposed mechanism**: cascade — Word first applies Mech 1 (Type A/B/C
+     neighbor pairs), then Mech 2 (slack distribution) on RESIDUAL overflow only:
+     - Line fits after Mech 1 alone → SELECTIVE (others stay full)
+     - Mech 1 insufficient → Mech 2 distributes residual = PROPORTIONAL
+     - No overflow → no compression = pure_full
+     - No Mech 1 candidates but overflow → pure proportional Mech 2
+  4. **Implication for Oxi**: must implement cascade, NOT pure proportional Mech 2.
+     If Oxi only does proportional, it will over-compress yakumono in 15% of
+     justified lines that Word leaves at full width (selective lines).
+- next: (a) verify Oxi break_into_lines current implementation against cascade
+  rule; (b) targeted overflow audit on ed025/7f272a to confirm Mech 2 absence
+  is sample bias not real; (c) cross-reference master's §4.7b spec
+  (a8d70c2 Mech 1↔Mech 2 precedence) — likely already specifies cascade.
+- references:
+  memory/investigation_mech2_selective_cross_doc_2026_05_02.md (full per-doc
+  data + cascade hypothesis). Builds on session_51_3a4f_p64_p42_validation
+  + session_51_oxi_compress_spec_table.
+
+## 2026-05-02 — oxi-4 — correction — e3c545 pagination "divergence" was para_idx mapping artifact (cell paragraphs share table block_idx)
+- context: previous entry "Cluster B: e3c545 has CATASTROPHIC pagination divergence
+  (130 paras / 12 Oxi pages vs 550 / 12 Word pages)" claimed Oxi paginates 4× slower
+  than Word. Investigation continued to identify the over-reserved content type.
+- correction: discovered that Oxi's `paragraph_index` field for table cell elements
+  is set to the TABLE BLOCK's index (per layout/mod.rs:6038, with comment "Attribute
+  to the table's source block index so diff tools can localize cell text"). NOT the
+  cell paragraph's own index.
+- evidence:
+  - tools/metrics/inspect_e3c545_para83.py → para_idx=83 has 121 elements, 74 unique y
+  - But OOXML `<w:p>` 84 (= idx 83 1-based) is a single short PreformattedText
+    paragraph (just "@prefix cc:&lt;http://creativecommons.org/ns#&gt;.")
+  - Mismatch resolved by code review: para_idx aliasing for table cell content
+  - Oxi has 541 `<w:p>` total; 119 of those are inside tables (3 `<w:tbl>` opens
+    before the data-set-definition position, 2 `</w:tbl>` closes — i.e., inside
+    one of 9 tables)
+- corrected interpretation:
+  - Oxi IR has ~130 Body Blocks for e3c545 (each table is ONE Block containing
+    many cell paragraphs)
+  - Word's `Paragraphs(i)` includes all 541 (body + cell) paragraphs; Oxi's
+    para_idx in layout JSON is a body Block index for body content but aliases
+    to table block_idx for cell content
+  - Mapping `Word p_i = Oxi para_idx (p_i - 1)` breaks for cell paragraphs
+  - The "5-page divergence at p100" was Oxi's body para 99 vs Word's cell para 100
+    (different entities)
+- what's still real:
+  - Word p1-p4 dy = 0.0pt (body, perfect match)
+  - Word p5 dy = -3.5pt
+  - **Word p50 dy = +21pt** (body paragraph, cumulative drift)
+  - This implies ~0.4pt per body paragraph drift accumulating over the first 50
+    body paragraphs. Cluster B (per-para drift) hypothesis remains valid at this
+    smaller scale.
+- outcome:
+  1. **PREVIOUS ENTRY's "catastrophic divergence" claim is RETRACTED**. The data
+     was misinterpreted via an incorrect Word↔Oxi paragraph mapping.
+  2. **Body paragraph drift IS real** at ~0.4pt/para in early paragraphs of e3c545.
+  3. **Cluster B (per-para drift) hypothesis remains valid** — magnitude smaller
+     than claimed but real. Need text-match-based comparison (not index mapping)
+     to quantify cumulative drift accurately for full p1-p550 range.
+- next: (a) build text-content-based Word↔Oxi paragraph mapping; (b) compute
+  cumulative Y drift across all body paragraphs (excluding cell paragraphs);
+  (c) identify which body paragraphs show step-changes in dy (suggesting specific
+  feature triggers).
+- references: memory/investigation_e3c545_pagination_correction_2026_05_02.md
+  (correction memo). Supersedes investigation_e3c545_pagination_divergence_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed (revised mechanism) — Cluster B: e3c545 has CATASTROPHIC pagination divergence (130 paras / 12 Oxi pages vs 550 / 12 Word pages)
+- context: bottom-bucket survey Cluster B (long-doc cumulative Y drift) hypothesis.
+  Tested on e3c545 (550 paras, min SSIM 0.665 page 11).
+- hypothesis tested: small per-paragraph Y drift accumulates over hundreds of paras
+- evidence:
+  - Word COM Y measurement (tools/metrics/measure_long_doc_drift.py) on 20 sampled
+    paragraphs across e3c545
+  - Oxi cached layout comparison (tools/metrics/compare_long_doc_drift.py) using
+    pipeline_data/_e3c545_layout.json
+  - Result: Oxi 12 pages cover only paras 0-129. Word 12 pages cover all 550.
+  - dy progression: 0pt (paras 1-4) → -3.5pt (p5) → +21pt (p50) → 5-page
+    divergence (p100: Word page 4, Oxi page 9)
+  - Oxi page 5 contains ONLY 1 paragraph (para_idx=83) — single para fills full page
+- outcome:
+  1. **Cluster B mechanism REVISED**: NOT linear per-para drift. Oxi paginates
+     ~4× slower than Word due to catastrophic over-reservation of specific content
+     blocks (likely code blocks, nested tables, or specific OOXML features).
+  2. **Single-paragraph-fills-page anomaly** at para_idx=83 indicates a content
+     block that Oxi grossly over-reserves. e3c545 is a TTL/RDF technical
+     handbook with monospace code blocks — likely candidate.
+  3. **Why bottom-page SSIM is low**: Oxi page 11 contains paras 109-118 while
+     Word page 11 contains paras ~470-490 (completely DIFFERENT content). The
+     pixel-comparison sees totally different text → SSIM crashes.
+  4. **Cluster B should be re-classified** as "block over-reservation" not
+     "per-para drift". Aligns more with Cluster A (table cell layout) than the
+     original per-para hypothesis.
+- next: (a) identify para_idx=83 content type in e3c545 (code block? table?);
+  (b) trace per-paragraph cursor_y advance through paras 70-100 to find where
+  over-reservation kicks in; (c) verify pattern on 04b88e / 34140b (no Oxi cache
+  yet); (d) hypothesis: specific element (`<w:pre>`-style? grid charSpace?
+  monospace font lh formula?) over-reserves vertically.
+- references:
+  memory/investigation_e3c545_pagination_divergence_2026_05_02.md (full data + per-page
+  para_idx range + revised mechanism). Builds on
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — survey — Bottom-bucket post-R32: 15 docs, 5 hypothesis clusters
+- context: User question "R32 後 bottom-bucket survey, SSIM < 0.70 の docs 抽出 →
+  structural feature 分類 → cluster → 次 hypothesis 3-5 件 propose"
+- method:
+  - Source: ssim_baseline.json (PRE-R32 — R32 baseline-refresh not yet committed
+    but R31→R32 mean delta tiny, bottom-bucket composition stable)
+  - Bottom 30 worst-SSIM pages → deduplicated to 15 unique docs
+  - Per-doc XML feature scan: kern, jc, numPr, chars-indent, tbl, floating shape,
+    footnote, n_paras, doc_grid, compat_mode
+  - Sweep: tools/metrics/survey_bottom_bucket.py
+  - Data: pipeline_data/bottom_bucket_survey.json
+- structural pattern findings:
+  - **100% have effective kern** (15/15) — R32 kern gate fires here
+  - **100% have chars-indent** (15/15, avg 76 paras/doc with chars indent)
+  - **0% jc=both** — Mech 2 (justify-time slack) does NOT fire in bottom bucket;
+    only Mech 1 active
+  - **87% have tables** (13/15) — table-heavy template style
+  - **67% have floating shapes** (10/15)
+  - **33% have list paragraphs** (5/15)
+  - **20% have footnotes** (3/15) — but b837 has 26 fn (extreme density)
+- hypothesis clusters (predicted gain order):
+  1. **Cluster D — b837 footnote spill** (1 doc, KNOWN BLOCKER): Oxi reserves full
+     footnote area, Word splits across pages. Already in RESEARCH_LOG ## Active
+     hypotheses, assigned to oxi-2.
+  2. **Cluster A — heavy table internal layout** (5+ docs: 2ea81a, b35123, 1ec1091,
+     e3c545, 6514f214): table cell vertical Y, vAlign, cellMar, line stride within
+     cell. Multi-doc leverage.
+  3. **Cluster B — long-doc cumulative Y drift** (4-6 docs: e3c545 541p, 34140b
+     499p, 04b88e 386p, a1d6e4 317p, 6514f214 350p, d4d126 313p): each para small
+     Y drift accumulates over hundreds of paragraphs. Bottom pages downstream of
+     accumulated drift.
+  4. **Cluster E — chars-indent precise measurement** (universal, 100%): master's
+     active §15.1.1 work suggests not yet fully resolved. d77a 137 chars-indent
+     paragraphs (70% of 197 paras) is densest case.
+  5. **Cluster C — floating shape wrap-around** (3+ docs: 2ea81a 21fs, 459f, 1ec1091,
+     6514f214): body Y when text crosses floating shape zone. Master's §17 expansion
+     covered positionV/posOffset formula; wrap-effect on body Y still TBD.
+- specific bottom-bucket high-impact docs:
+  - d77a58485f16 p7 SSIM 0.627 (worst overall) — 137 chars-indent + 10 tables
+  - b837808d0555 p6 SSIM 0.645 — 26 footnotes (b837 spill case)
+  - 2ea81a8441cc p2 SSIM 0.664 — 21 floating shapes (master's §19.7 work doc)
+  - e3c545fac7a7 p11 SSIM 0.665 — 541 paras (longest doc, cumulative drift)
+  - b35123fe8efc p1 SSIM 0.666 — 22 tables in only 78 paras (28% in tables)
+- outcome:
+  1. **R32 kern gate already targets all 15** (100% kern coverage) — R32's
+     improvement here likely shows up post-baseline-refresh.
+  2. **5 distinct cluster axes** identified beyond kern. Each cluster has 1+ docs
+     where targeted fix could unlock major SSIM gains.
+  3. **Mech 2 (justify) not relevant in bottom bucket** — 0/15 use jc=both.
+     Future Mech 2 work won't help these docs.
+  4. **Long-doc drift hypothesis is novel** — was not in master's recent investigation
+     queue. If confirmed, single fix could lift 4-6 docs simultaneously.
+- next: rank cluster investigations. Cluster D (b837) already assigned. Cluster A
+  (table cell) and B (cumulative drift) are highest-leverage next steps.
+  Cluster E (chars-indent) should sync with master's §15.1.1 active work.
+- references:
+  memory/investigation_bottom_bucket_post_r32_2026_05_02.md (full table + per-doc
+  details + recommended priority order). Builds on
+  memory/investigation_r31_kern_cross_tab_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed — R31 narrow gate × kern cross-tab: 40/41 candidates have kern → R31 redundant under R32
+- context: User question — "R31 で SSIM 変化した 18 docs (3a4f_p64 +0.032 含む)
+  について kern presence 確認。あり → R32 kern gate で同 paragraph fire → R31
+  narrow path は冗長 → R32 ship 時削除可。なし → 残す価値あり。"
+- hypothesis: R31's narrow gate (chars-indent + cross-run pair + compressPunctuation)
+  is essentially a subset of R32's kern gate. Almost all R31-fire candidates have
+  effective kern.
+- evidence:
+  - Scan: tools/metrics/scan_r31_gate_candidates.py over 184-doc baseline
+  - Data: pipeline_data/r31_gate_candidates.json
+  - Cross-tab vs pipeline_data/kern_audit_2026-05-02.json
+  - **41 docs match R31's narrow gate conditions**
+    (chars-indent paragraph AND cross-<w:r> yakumono pair AND compressPunctuation)
+  - **40/41 (97.6%) have effective kern** (37 via docDefaults + 3 via Normal style)
+  - 1 outlier (9a8e8ddab85b_order_06-1.docx) has R31 conditions but NO effective kern
+  - Specifically: 3a4f9fbe1a83 (R31 winner p64 +0.032 + minor loser p42 -0.008)
+    has kern via Normal style val=2 → R32 will fire on both pages independently
+- outcome:
+  1. **R31 narrow path is essentially a subset of R32 kern gate**.
+  2. **3a4f_p64 (R31's only material winner +0.032) IS in the 40 with-kern set**.
+     R32 captures it independently. R31 not needed for this gain.
+  3. **17 minor-delta docs (|delta| ≤ 0.009) likely also in the 40-with-kern set**.
+     R32 will track or improve their micro-deltas.
+  4. **9a8e8ddab85b is R31's only no-kern fire** = potential false positive (Word
+     doesn't compress without kern, R31 does). R31 deletion CORRECTS this case.
+  5. **R32 ship-time R31 deletion is safe** — net impact predicted ≥ R31's
+     +0.000058, likely larger since R32 also catches R17 big_losers (7f272a, ed025).
+- next: pre-baseline measurement before R32 ship to verify mechanical prediction.
+  Specifically watch 9a8e8ddab85b for SSIM lift from removing R31's false fire.
+- references: memory/investigation_r31_kern_cross_tab_2026_05_02.md (full analysis +
+  41-doc list with kern source). Builds on session_51_kern_audit_177docs.md and
+  session_50_r31_chars_indent_cross_run_gate.md.
+
+## 2026-05-02 — oxi-4 — confirmed — §9 Footnote line-height closed-form: max(17.5, max(size + 5.5, natural_lh)) for CJK 83/64
+- context: prior §9.1 footnote investigation (memory `spec_footnote_lh_2026_05_02.md`)
+  observed size-dependent "extra" decreasing from 1.64pt (13pt) to 0.16pt (18pt) but
+  didn't pin closed form.
+- hypothesis: extras reflect a clean `lh = font_size + 5.5pt` for CJK 83/64 family
+  in the "above floor" regime (i.e., when natural_lh < size+5.5).
+- evidence:
+  - Phase 3 sweep: 30 records covering MS Mincho {11.5, 12.5, 15, 20, 24}pt +
+    Calibri {12, 14, 18}pt + Yu Mincho {11, 14}pt
+  - Data: tools/metrics/output/footnote_lh_sweep_phase3.json
+  - Sweep: tools/metrics/measure_footnote_lh_sweep.py (phase 3 variants)
+  - All MS Mincho 12.5/13/14/15/16/18pt match `lh = size + 5.5` exactly
+    (12.5→18.0, 13→18.5, 14→19.5, 15→20.5, 16→21.5, 18→23.5)
+  - MS Mincho 20pt: natural=25.94 > size+5.5=25.5 → measured 26.0 ≈ natural ✓
+  - MS Mincho 24pt: natural=31.13 > size+5.5=29.5 → measured 31.0 ≈ natural ✓
+  - Yu Mincho 11pt: natural=18.5 > floor → measured 18.5 ✓ (no boost; natural-only)
+  - Yu Mincho 14pt: natural=23.59 → measured 23.5 ✓
+  - Calibri 14pt: measured 18.5, BUT size+5.5=19.5. natural=17.25 + 1.25 extra.
+    Linear fit Calibri extra = 5.625 - 0.3125 × size. NOT same as MS Mincho's
+    size+5.5 boost.
+  - Calibri 18pt: natural=22.0 → measured 22.0 ✓ (Calibri extra ≈ 0 here)
+- outcome:
+  1. **CJK 83/64 family (MS Mincho/Gothic UPM=256) closed-form**:
+     `lh_footnote = max(17.5pt, max(font_size + 5.5pt, natural_lh))` snapped to 0.5pt.
+     - size 12-19pt: size+5.5 wins (lh = size + 5.5)
+     - size ≥ 20pt: natural wins (lh ≈ 1.297 × size, snapped)
+     - size ≤ 11.5pt: floor 17.5 wins
+  2. **Latin (Calibri)**: natural-based with small per-font extra (5.625 - 0.3125×size
+     for Calibri). Different coefficients per Latin font likely. Needs more data
+     (Calibri 13/15/16pt) for full closed-form.
+  3. **Large-glyph CJK (Yu Mincho/Meiryo)**: natural_lh dominates always
+     (natural >> floor and natural >> size+5.5).
+  4. **Why "size + 5.5" is special for CJK 83/64**: natural_lh = 1.297 × size;
+     measured extra = 5.5 - 0.297 × size. Sum: lh = 1.297×size + 5.5 - 0.297×size
+     = size + 5.5. The CJK 83/64 ratio + footnote extra coefficient happen to
+     produce a clean linear formula.
+- next: (a) Calibri 13/15/16pt to verify Latin extra linearity; (b) cross-language
+  verification (English Word); (c) footnote with grid mode (does docGrid affect
+  footnote area?).
+- references: memory/spec_footnote_size_extra_2026_05_02.md (full memo with
+  recommended spec text).
+
+## 2026-05-02 — oxi-4 — confirmed — §9 Footnote 17.5pt floor is HARDCODED in renderer (not from style)
+- context: prior §9.1 entry left open question "what's the origin of the 17.5pt floor?".
+  Hypothesis was hidden default FootnoteText style with `<w:spacing line="350" atLeast/>`
+  or similar.
+- hypothesis tested: explicit FootnoteText style with `<w:spacing line="240" auto/>`
+  ("Single") will override the floor and produce natural_lh = 13.617pt for MS Mincho 10.5pt.
+- evidence:
+  - 8-variant sweep: tools/metrics/measure_footnote_floor_origin.py
+  - Data: tools/metrics/output/footnote_floor_origin.json
+  - V1 no styles → 17.5pt (baseline)
+  - V2 explicit FootnoteText with `line=240 auto` → **17.5pt** (NOT 13.617pt!)
+  - V3 explicit `line=200 auto` → 15.0pt (sub-default, formula TBD)
+  - V4 explicit `line=200 exact` → 10.0pt (= line/20, exact wins)
+  - V5 explicit FootnoteText with empty pPr → 17.5pt
+  - V6 explicit `line=400 atLeast` (=20pt > floor) → 20.0pt (atLeast wins above floor)
+  - V7 explicit `line=350 atLeast` (=17.5pt = floor) → 17.5pt
+  - V8 styles.xml present, no pStyle ref on footnote → 17.5pt
+- outcome:
+  1. **17.5pt floor is HARDCODED in Word's footnote renderer**, NOT from a default style.
+     Even when docx provides FootnoteText style with explicit "Single" line spacing,
+     Word ignores it.
+  2. **lineRule precedence in footnote area**:
+     - `exact`: always wins precisely (lh = line/20)
+     - `atLeast`: wins only when line/20 > 17.5pt
+     - `auto`: silently overridden by floor when line ≥ 240 (= "Single" or higher)
+       For line < 240, produces a sub-default rule (15pt for line=200, formula TBD).
+  3. **17.5pt = 350tw** likely tied to Word's legacy footnote area allocation default.
+  4. **Spec §9.1 needs rewrite**: not just "12pt Single" correction (already known
+     wrong) but adding the explicit hardcoded floor + override precedence rules.
+- next: (a) pin "size-extra" formula for natural_lh > 17pt (decreasing 1.64→0.16pt
+  with size 13→18pt); (b) test cross-language (English Word) — is 17.5pt locale-
+  independent?; (c) test docGrid present in section — does footnote area inherit
+  body grid pitch?
+- references:
+  - memory/spec_footnote_floor_hardcoded_2026_05_02.md (full memo with recommended
+    spec rewrite text)
+  - earlier: memory/spec_footnote_lh_2026_05_02.md (initial finding showing 17.5pt floor)
+
+## 2026-05-02 — oxi-4 — investigation — Run fragment merging policy: NO merging, but per-fragment yakumono loop misses cross-<w:r> adjacency
+- context: User question — "break_into_lines に渡される fragments は <w:r> 単位ではなく
+  Oxi が同 style ones を merge した結果。これが cross-run yakumono detection を無効化
+  している可能性"
+- hypothesis tested: Oxi has a same-style run merging pass before break_into_lines
+- evidence (code review):
+  - `crates/oxidocs-core/src/parser/ooxml.rs:1046-1064`: parser pushes one Run per
+    `<w:r>`. Within a single `<w:r>`, multiple `<w:t>` text elements are
+    concatenated in `parse_run` (line 2407-2413), but cross-run text is NOT combined.
+  - `crates/oxidocs-core/src/layout/mod.rs:3218-3223`: fragments built as 1:1 from
+    `para.runs.iter().enumerate()`. No filtering, no merging.
+  - Only IR `Vec<Run>` mutations post-parse: `revisions.rs:57` (retain_mut filter
+    for tracked changes), `parser/ooxml.rs:5769` (mutate-in-place), `layout/mod.rs:685`
+    (filter for tracked changes), `layout/mod.rs:1345` (`resolve_fit_text_runs` reads
+    groups, doesn't merge).
+- outcome:
+  1. **User's "merging" premise is INCORRECT**: there is no same-style merging pass.
+     IR `Run` count = `<w:r>` count (modulo tracked-change filter).
+  2. **The functional issue user describes IS real**: yakumono detection at
+     `layout/mod.rs:4322` builds `chars_vec` per-fragment, so neighbor lookups
+     `chars_vec[i+1]` / `chars_vec[i-1]` are bounded to within a single `<w:r>`.
+     Cross-`<w:r>` adjacencies (e.g., `」` ending run A + `、` starting run B)
+     fail both `i+1 < n` and `i > 0` boundary checks → no compression.
+  3. **Real-world impact**: any docx with `<w:r>` boundaries from track-changes,
+     comment markers, formatting toggles, hyperlink boundaries, or field codes
+     can have undetected yakumono adjacencies. Word's renderer compresses based
+     on character identity (Type A/B/C per session 51 R0), independent of style
+     boundaries.
+- recommended fix (deferred to oxi-2 implementation session, ~50 LOC):
+  Pre-compute yakumono flags on paragraph-wide concatenated character sequence,
+  store paragraph-level + index map, look up by (frag_idx, char_idx_in_frag) in
+  the fragment loop. O(n) extra pass, negligible cost.
+- risks to verify before shipping:
+  (a) Style-boundary semantics — does Word fire yakumono compression when adjacent
+      chars have different fonts/sizes? Likely yes (character-driven), but COM
+      verification on `<w:r>「</w:r><w:r font=B>、</w:r>` minimal repro is needed.
+  (b) Revisions ordering — pre-pass must run AFTER tracked-change filtering, else
+      it'd see deleted/inserted text incorrectly.
+  (c) Field code boundary respect — pre-pass must honour `field_result_depth`
+      suppression at parser/ooxml.rs:1059-1063.
+- references: detail memo at memory/investigation_run_fragment_merging_2026_05_02.md
+  (text-only, no code change). Master's session 51 R0 yakumono Type A/B/C tables
+  in MEMORY.md provide the character-driven compression rule baseline.
+
+## 2026-05-02 — oxi-1 — confirmed — §15.1 leftChars char_width source: docDefault.rPr.sz, not pPr/run
+
+- context: §15.1 defined `effective_indent = leftChars / 100 * char_width`
+  for chars-based indents but did NOT specify which font's size determines
+  `char_width`. The 2026-03-29 confirmation used 10.5pt as char_width but
+  did not note its source.
+- hypothesis options:
+  (a) docDefault.rPrDefault.rPr.sz
+  (b) Paragraph pPr.rPr.sz
+  (c) Run rPr.sz
+  (d) Some inheritance chain (style > pPr > docDefault > fallback)
+- evidence — IC_* axis-isolation:
+  - `tools/metrics/ic_repro/` (no styles.xml): 9 variants × {pPr.sz, run.sz}
+    in {21, 28, mixed, empty}. ALL gave LeftIndent = 10.50pt regardless
+    of pPr.rPr.sz / run.rPr.sz. Conclusion: pPr/run rPr.sz are NOT used.
+    The 10.5pt default is Word's fallback when styles.xml is absent
+    (Japanese-localized Word implementation default).
+  - `tools/metrics/ic_docdef_repro/` (explicit styles.xml): 5 docDefault
+    sz values × variants. Linear scaling confirmed:
+    docDef sz=20 → LeftIndent=10.00pt
+    docDef sz=21 → 10.50pt
+    docDef sz=24 → 12.00pt
+    docDef sz=28 → 14.00pt
+    docDef sz=44 → 22.00pt
+  - Cross-check with run-override: IC_dd20_run44 (docDef=20, run sz=44)
+    gives LeftIndent=10.00pt. IC_dd44_run21 gives 22.00pt. **docDefault
+    always wins**.
+- outcome:
+  - char_width source CONFIRMED as `docDefault.rPrDefault.rPr.sz`.
+    NOT inherited via style/Normal chain (style hierarchy not tested
+    here; defer to follow-up).
+  - Refined §15.1.1 formula:
+    `char_width_pt = docDefault.rPr.sz_val / 2 (= sz_pt)`
+    `effective_indent_pt = leftChars / 100.0 * char_width_pt`
+  - Applies to all *Chars attributes (leftChars/rightChars/
+    firstLineChars/hangingChars).
+  - Implication for Oxi: parser must read docDefault.rPr.sz when
+    computing chars-based indents; current Oxi behavior likely uses
+    pPr/run.rPr.sz which is incorrect (need to verify).
+- code change: NONE. Audit needed of Oxi's `*Chars` indent computation
+  in `crates/oxidocs-core/src/layout/mod.rs`.
+
+## 2026-05-02 — oxi-1 — confirmed — §17 Shape Positioning expansion: positionV/posOffset formula + RelativeVerticalPosition enum mapping + baseline survey
+
+- context: §17 had only 2 minimal sub-sections (§17.1 reference table,
+  §17.2 wrap behavior) and no formula for positionV with posOffset, despite
+  shapes being heavily used in 18/184 baseline docs (177 anchors total).
+  Master had not investigated this area.
+- hypothesis: For `<wp:positionV relativeFrom="X"><wp:posOffset>N</wp:posOffset>`,
+  Shape.Top (pt, COM) = N / 12700 (linear), and absolute_Y =
+  ref_origin(X) + Shape.Top.
+- evidence:
+  - `tools/metrics/scan_baseline_shape_positioning.py` survey: 100% of
+    baseline anchors (177/177) use `positionV relativeFrom="paragraph"`.
+    Plus column-anchored horizontal (155/177), wrapNone (172/177),
+    layoutInCell (172/177), allowOverlap (177/177).
+  - `tools/metrics/build_sp_position_v.py` + `measure_sp_position_v.py`:
+    12 SP_* variants — 3 anchor positions × 4 posOffset values
+    {0, +9pt, +53.2pt, **−50pt**}. ALL show Shape.Top = posOffset_emu /
+    12700 EXACTLY (residual = 0.00pt). absolute_Y = anchor_paragraph_top
+    + Shape.Top, also exact across all 12.
+  - `tools/metrics/build_sp_relative_from.py` + `measure_sp_relative_from.py`:
+    12 SR_* variants — 6 relativeFrom values
+    {paragraph, page, margin, line, topMargin, bottomMargin} × 2 posOffset
+    {0, +100pt}. Linear conversion confirmed for all 6 references. COM's
+    `Shape.RelativeVerticalPosition` integer enum mapping pinned:
+    margin=0, page=1, paragraph=2, line=3, topMargin=4, bottomMargin=5.
+- outcome:
+  - §17 spec extended with §17.3 (positionV/posOffset formula) and §17.4
+    (baseline distribution survey).
+  - Confirmed formula for the 100%-of-baseline case
+    (`relativeFrom="paragraph"`):
+    `absolute_Y_pt = anchor_paragraph_top_y + (posOffset_emu / 12700)`.
+  - Other relativeFrom values follow the same `ref_origin + offset`
+    template; ref_origin Y values per relativeFrom are well-defined per
+    ECMA-376 §17.3.3.18 ST_RelFromV.
+  - Implication for Oxi: shape Y positioning must (a) parse posOffset as
+    EMU, divide by 12700 for pt, and (b) for paragraph-anchored shapes,
+    add the anchor paragraph's top y. The 5 non-paragraph relativeFrom
+    cases (out of 177) need ref_origin computed differently but are
+    edge cases.
+- code change: NONE (pure investigation + measurement). Oxi's existing
+  shape parsing/rendering should be reviewed against this rule;
+  particularly important for 459f, 2ea81a, 3a4f9f which contain shapes
+  on bottom-N-floor docs.
+
+## 2026-05-02 — oxi-4 — refuted — Spec §9.1 "Footnote LineSpacing 12pt Single"
+- context: spec §9.1 line 1141 claims footnote default "LineSpacing: 12pt (Single)".
+  Existing footnote_separator.json data showed inter-footnote lh = 17.5pt for
+  MS Mincho 10.5pt — contradicts spec.
+- hypothesis: footnote area applies a hidden floor (≥17.5pt) that overrides the
+  per-paragraph lineSpacing rule when the rule's value is below the floor.
+- evidence:
+  - 31 records: MS Mincho {9, 10.5, 12, 13, 14, 16, 18}pt + Calibri {10, 11}pt ×
+    n_footnotes ∈ {1, 3, 5} × 6 explicit lineRule cases
+  - Data: tools/metrics/output/footnote_lh_sweep.json (10 initial),
+          footnote_lh_sweep_phase2.json (24 follow-up)
+  - Sweep: tools/metrics/measure_footnote_lh_sweep.py
+  - Floor at 17.5pt for natural_lh < ~17pt (MS Mincho 9/10.5/12pt + Calibri 10/11pt)
+  - Above floor: lh = natural_lh + size-dependent extra (decreasing 1.64→0.16pt
+    as size grows 13→18pt)
+  - lineRule=auto with line=240 produces SAME lh as no spacing — Word silently
+    overrides
+  - lineRule=auto with line<240 (e.g., 200) produces below-natural lh (16-16.5pt
+    for 14pt MS Mincho — formula TBD)
+  - lineRule=exact precisely respected (lh = line/20 across all tested values)
+  - lineRule=atLeast respected only when line/20 > default (atLeast 360 = 18pt
+    < default 19.5pt → default wins; atLeast 240 = 12pt → default wins)
+- outcome:
+  1. **Spec §9.1 "12pt Single" REFUTED.** Default footnote lh has a floor at 17.5pt.
+  2. **Default formula**: `lh = max(17.5pt, natural_lh + extra(size))` where
+     extra is small and size-dependent. Possibly hidden default style with
+     `<w:spacing line="350" lineRule="atLeast"/>` accounts for floor.
+  3. **lineRule precedence**: Word respects `exact` always; respects `atLeast`
+     only when binding upward; silently ignores `auto` when line ≤ 240.
+  4. **Implication for Oxi**: `estimate_footnote_h` (`crates/oxidocs-core/src/layout/mod.rs`)
+     likely uses the spec's "12pt Single" assumption → reserves LESS area than Word.
+     Opposite to b837 issue (where Oxi reserves MORE) — suggests b837 has a
+     different code path bug.
+- next: (a) pin the exact "extra(size)" formula via more sizes (15, 17, 20, 24pt);
+  (b) verify floor is also 17.5pt with non-Japanese language; (c) measure
+  `<w:fnSep>` separator height directly; (d) measure `<w:continuationSeparator>`
+  for multi-page footnote behavior (related to b837 spill bug).
+- references: master's b837 footnote-area-spill blocker (RESEARCH_LOG line 1820),
+  see memory/spec_footnote_lh_2026_05_02.md for full data + recommended spec edit.
+
+## 2026-05-02 — oxi-4 — confirmed — §19.7 Y0 intercept residual explained via centering geometry
+- context: master's `## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly` left
+  "Residual 1–2.5pt unexplained — likely floating-table topFromText spacing constant
+  (default = 0 unless `topFromText`/`bottomFromText` set on tblpPr; needs separate
+  isolation)."
+- hypothesis: Y0 = (cell_h_anchor + centering_lh_anchor) / 2 + tblpY
+  (NOT line_height + topFromText; it's a geometric offset to anchor's cell BOTTOM)
+- evidence:
+  - Re-analyzed master's 7 K_* fe_match_repro variants in
+    `C:\Users\ryuji\oxi-1\pipeline_data\fe_match_measurements.json`
+  - Validation: tools/metrics/analyze_fe_y0_residual.py
+  - Results: 5/7 within 0.05pt (K_lp323, K_only_atLeast296, K_lp323_atLeast296_sz28
+    within 0.5pt residual); 3/7 at +0.55pt (K_baseline, K_only_sz28, K_tblWauto_only
+    — all `pitch=360tw=18.0pt + line=auto`); 1/7 at -0.53pt (K_lp323_atLeast296)
+  - All within 1pt; most within 0.5pt COM measurement quantization
+- outcome:
+  1. **Master's "residual 1-2.5pt" reduced to ~0.5-1pt**, attributable to pixel-snap
+     of integer-pt arithmetic, NOT to topFromText.
+  2. **Geometric basis**: floating table sits at anchor's grid cell BOTTOM (+ tblpY),
+     while anchor_y is the cell's first-character position (= cell_top + centering
+     offset above). Therefore Y0 = anchor_cell_h - centering_offset_above + tblpY
+     = (cell_h + centering_lh) / 2 + tblpY.
+  3. **Builds on §3.3 corrected formula** (centering_lh = round(max(natural_lh,
+     size × 83/64))). Master's "line_height" intuition was missing the centering
+     offset flip.
+  4. **topFromText hypothesis NOT needed** for the K_* observations (default=0).
+     A future sweep with non-zero topFromText would directly test linear addition
+     to Y0.
+- next: (a) test non-zero topFromText/bottomFromText and verify Y0 += topFromText;
+  (b) test inline-cell anchor case (master's slope=1 sweep showed +15.0pt Y0 for
+  inline anchor — should match (cell_h + centering_lh)/2 + cell_margin geometry);
+  (c) close the remaining +0.5pt jitter on integer-pt-pitch + auto cases.
+- references: master's §18.10 spec text in this branch, §19 follow-up planned for
+  main merge. Recommended spec edit text in
+  memory/spec_y0_intercept_explained_2026_05_02.md.
+
+## 2026-05-02 — oxi-4 — confirmed — §1.7 Mixed font run × grid centering extension
+- context: spec §1.7 says `lh = max(per-run lh)` after grid snap. Doesn't address how
+  the corrected §3.3 centering_lh formula interacts with mixed-font lines.
+- hypothesis: mixed-line centering_lh = max(per-run centering_lh)
+  where per-run centering_lh = round(max(natural_body_lh, size × 83/64))
+- evidence:
+  - 20 records: 10 combos × pitch ∈ {18, 24}pt
+  - Combos: Calibri-11/18, Yu Mincho-11, MS Mincho-10.5/18, Meiryo-11 × pure or mixed
+  - Data: tools/metrics/output/grid_mixed_font_centering.json
+  - Sweep: tools/metrics/measure_grid_mixed_font_centering.py
+  - Mixed Calibri-11 + Yu Mincho-11 → matches Yu Mincho-11 alone (centering=18 dominates)
+  - Mixed Calibri-18 + Yu Mincho-11 → matches Calibri-18 alone (centering=23 dominates
+    via universal 83/64 floor)
+  - Mixed MS Mincho-10.5 + Calibri-18 → matches Calibri-18 (centering=23)
+  - Mixed Meiryo-11 + Calibri-11 → matches Meiryo-11 (centering=21 dominates via
+    natural_lh > size × 83/64)
+- outcome:
+  1. **§1.7 extension**: mixed-line centering_lh = max(per-run centering_lh).
+  2. **Surprising consequence**: Latin fonts can dominate centering despite smaller
+     visual size (Calibri-18 size×83/64=23.34 > Yu Mincho-11 natural_lh=18.5).
+  3. **+0.5pt Latin residual** observed in mixed contexts — pure Calibri offset
+     produces 0.0pt error but mixed Calibri offset has +0.5pt extra. Likely Calibri
+     internal natural_lh = 22.5 (not 22) creating context-dependent half-pt rounding.
+- next: (a) test 3+ run mixes; (b) test mixed sizes within same font family;
+  (c) pin Calibri's exact internal natural_lh via dedicated single-font sub-pt sweep.
+
+## 2026-05-02 — oxi-4 — refuted — Spec §2.1 line 198 grid spacing snap claim
+- context: spec line 198 "sa=sb=10pt → 9.75pt due to grid snap" — long-standing
+  hand-wavy note. Wanted to pin exact behavior.
+- hypothesis tested: gap = line_h + sa (no grid snap on sa value)
+- evidence:
+  - 48 records: MS Mincho 10.5pt + Calibri 11pt × pitch ∈ {18, 24}pt × sa ∈
+    {0, 4, 5, 6, 7.5, 10, 10.5, 12, 15, 18, 20, 24}pt
+  - Data: tools/metrics/output/grid_paragraph_spacing.json
+  - Sweep: tools/metrics/measure_grid_paragraph_spacing.py
+  - All 48 records match `gap = pitch + sa` with 0.0pt error.
+  - sa=10pt at pitch=18 gives gap = 28pt EXACTLY. Spec predicted 27.75 → REFUTED.
+- outcome:
+  1. **Spec §2.1 line 198 REFUTED.** Modern Word does NOT grid-snap sa.
+  2. **sa is added directly** to the line gap as the exact pt value declared in
+     `<w:spacing w:after="...">`, regardless of whether grid mode is active.
+  3. **Latin/CJK identical** — Calibri and MS Mincho produce exact-same gaps for
+     same sa value.
+  4. **Paragraphs do NOT re-align to grid when sa>0** — only the first paragraph's
+     first line is grid-aligned (per §3.3). Subsequent paragraphs sit at line_h+sa
+     below previous, breaking grid alignment.
+  5. **Implication for Oxi**: if currently grid-snapping sa, that's a bug producing
+     cumulative Y drift in any document with non-zero paragraph spacing.
+- next: (a) verify sb-only and mixed sa/sb cases (§2.1 collapse rule unchanged?);
+  (b) verify with lineSpacingRule=exact/atLeast/multiple; (c) verify with
+  contextualSpacing=true (§2.3 should still zero out sa/sb).
+
+## 2026-05-02 — oxi-4 — confirmed — Grid centering lh formula (§3.3 / §13.4 correction)
+- context: Session 49 R109 hypothesized "text_y_offset uses font_size instead of natural
+  line height". Spec §3.3 says `inner_box = ceil(natural_lh)` for grid-centering inner box.
+- hypothesis: centering_lh = round(max(natural_body_lh, font_size × 83/64))
+  with universal 83/64 floor applied to ALL fonts (NOT just CJK whitelist)
+- evidence:
+  - 49 records: MS Mincho 10.5/14/18pt × Calibri 11/18pt × Yu Mincho/Meiryo 11pt ×
+    pitch ∈ {12,15,18,20,24,28,32}pt × 3 paras × 3 lines per para
+  - Data: tools/metrics/output/grid_per_line_y.json
+  - Sweep: tools/metrics/measure_grid_per_line_y.py
+  - Calibri 18pt at pitch=24 (single-cell): natural_lh=22, ceil=22 → predicted 1.0pt
+    offset; measured 0.5pt. Matches `round(max(22, 23.344))=23` formula.
+  - MS Mincho 18pt at pitch=24: natural_lh=23.344, ceil=24 → predicted 0.0pt; measured 0.5pt.
+    Matches `round(max(23.344, 23.344))=23`.
+  - Yu Mincho 11pt body lh=18.5 > 14.27 (size×83/64): centering uses 18 (font-specific).
+  - Meiryo 11pt body lh=21.5 > 14.27: centering uses 21 (font-specific).
+- outcome:
+  1. **Spec §3.3 inner_box formula correction**: `ceil(natural_lh)` → `round(max(natural_lh,
+     size × 83/64))`. Old formula coincidentally correct for MS Mincho/Gothic UPM=256
+     (where natural_lh = size × 83/64 exactly) but WRONG for Latin large-size and
+     CJK UPM=2048 with extra typo metrics.
+  2. **Universal 83/64 floor finding**: the 83/64 multiplier is applied to ALL fonts in
+     grid centering, not just CJK whitelist. This contradicts the §1.2 implication that
+     83/64 is a "CJK-specific multiplier" — it's actually a universal minimum.
+  3. **§13.4 TextBox same correction**: structural identical formula.
+  4. **Multi-paragraph grid behavior**: each line allocates exactly 1 grid_cell regardless
+     of paragraph boundaries (when sa=sb=0). Verified across all 49 records.
+  5. **Session 49 R109 indirectly resolved**: Oxi was using `font_size`; correct value
+     is `round(max(natural_lh, size × 83/64))`. The full fix touches both Latin and CJK
+     paths uniformly.
+- next: (a) verify TNR/HG-series follow same rule; (b) test exactly-.5 boundary cases
+  (round-half-up vs banker's vs half-down); (c) verify with mid-line font change (§1.7);
+  (d) compute Calibri 18pt + grid combo (master's Session 51 noted RPC errors there too).
+
+## 2026-05-02 — oxi-4 — confirmed — Tall-header pushdown (spec §8.2 TBD resolved)
+- context: word_layout_spec_ra.md line 936 long-standing TBD: "When header content
+  overflows headerDistance and crosses topMargin, body Y is pushed down. Earlier
+  note ('3-line 14pt header → body_y=90pt when topMargin=72') was measured for
+  noGrid; the formula has not been re-verified under the corrected spec."
+- hypothesis: body_y = max(top_margin, round_half(header_distance + n_lines × header_lh))
+- evidence:
+  - 90 records sweep: Calibri 11pt + MS Gothic 10.5pt × n_lines {1..5} ×
+    header_distance {18,36,54}pt × top_margin {36,72,108}pt
+  - Data: tools/metrics/output/tall_header_pushdown.json
+  - Validation: tools/metrics/analyze_tall_header_pushdown.py
+  - MS Gothic 10.5pt (CJK 83/64): 0.0pt error across all 45 records
+  - Calibri 11pt (lh=13.5pt): 0.0pt for n=1..3, systematic -0.5pt drift at n=4..5
+  - Boundary case (header_bottom_true == top_margin) treated as no-overflow
+- outcome:
+  1. **Formula confirmed for noGrid regime** with caveat for Latin UPM=2048 fonts at
+     n_header_lines ≥ 4 (cumulative sub-pt arithmetic produces -0.5pt drift).
+  2. **Spec §8.2 TBD resolved**. See memory/spec_tall_header_pushdown_2026_05_02.md
+     for the full formula text and recommended spec edit.
+  3. **Old "+~2.5pt offset" claim** (already retracted in spec) confirmed wrong
+     by full sweep data.
+- next: (a) measure with explicit grid (LM≥1) — likely body_y rounds up to next
+  grid cell; (b) measure with multi-paragraph header (separate <w:p> instead of
+  <w:br/>); (c) measure with custom header pPr (spaceBefore/After).
+  Cross-reference: master's Session 51 note (memory MEMORY.md) extended this to
+  docGrid (LM≥1) with 288 cases, also flagging Calibri 18pt RPC errors as open.
+
+## 2026-05-02 — oxi-4 — confirmed — LM0 cell row_h closed-form (cumulative two-endpoint snap)
+- context: Section 13.5 / oxi-4 active hypothesis "LM0 cell formula (investigating)"
+- hypothesis: row_h(n) = round_half(top_y + n * lh_natural) - round_half(top_y),
+  where lh_natural is the LM=0 body line height for (font, size).
+- evidence:
+  - 5 fonts × 7 sizes × 4 n_lines = 140 cell samples, +35 body samples
+  - Data: tools/metrics/output/lm0_multiline_cell_v3.json (MS Mincho/Gothic, 90 cells)
+          tools/metrics/output/lm0_multiline_cell_v5.json (Calibri/Yu Mincho/Meiryo/HGS Mincho E/TNR, 140 cells)
+  - Analysis: tools/metrics/analyze_lm0_cell_formula.py (H5: 0.0 total error on MS family)
+              tools/metrics/analyze_lm0_cell_formula_v5.py (H5a mean abs err ≤ 0.16pt across all 5 fonts)
+  - The previous research-log claim "10.5pt = 18n, 12pt = 28+36(n-1) — non-continuous formula"
+    referred to the docGrid (LM≥1) regime, NOT no-grid (LM=0). v3/v5 sweeps cover LM=0 only.
+- outcome:
+  1. **LM=0 cell row_h is fully closed-form** when lh_natural is correct.
+     `row_h = round_half(cell_top_y + n*lh) - round_half(cell_top_y)`
+  2. **Spec §1.2 simplification correction (separate finding)**: the rule
+     "lh = font_size × 83/64 for CJK whitelist" is wrong for Yu Mincho and Meiryo.
+     See memory `project_lm0_cell_formula_2026_05_02.md` for the per-font multipliers
+     and the corrected `lh = size × (typoAsc+typoDes+typoLineGap)/upm` general formula.
+  3. **HG-series partial revision**: HGS Mincho E (UPM=2048) measures ratio ≈ 1.30 ≈ 83/64,
+     contradicting spec §1.2 line 63 which generalizes "HG-series NOT in whitelist" from
+     a single HGGothicM measurement. Per-font measurement is required.
+  4. **LM≥1 (docGrid) cell row_h still TBD** — separate hypothesis chain.
+- next: (a) extend v5 to Yu Gothic / MS PMincho / MS PGothic / HGGothicM / HGGothicE for full
+    CJK whitelist coverage; (b) measure LM≥1 cell row_h with grid pitch sweep; (c) integrate
+    spec §13.5 with the closed-form once master approves.
+
+## 2026-05-02 — oxi-1 — confirmed (correction) — §13.5 trHeight: ECMA-376 hRule default is "atLeast", not "auto"
+
+- context: §13.5 Round 22 (2026-04-08) stated "ECMA-376 default for w:hRule
+  is 'auto', NOT 'atLeast'. When <w:trHeight w:val="..."/> appears WITHOUT
+  a w:hRule attribute, the value is a hint and Word ignores it at render
+  time, using content height only."
+- hypothesis: This claim is incorrect. ECMA-376 Part 1 CT_Height schema
+  defines `hRule` with `default="atLeast"`. Word should follow this, in
+  which case `<w:trHeight w:val="N"/>` without hRule renders as
+  `max(content, N)` — specified wins when N > content.
+- evidence: `tools/metrics/build_tr_hrule_default.py` + ad-hoc HR_* repro
+  (5 variants, all with 1-line MS Mincho 10.5pt content ~14pt + 60pt
+  specified to maximize discrimination):
+  - `HR_missing` (`<w:trHeight w:val="1200"/>`, no hRule):
+    Word reports HeightRule=1 (atLeast), renders 60.5pt
+  - `HR_explicit_auto` (`hRule="auto"`):
+    Word reports HeightRule=0 (auto), renders 14.0pt (content)
+  - `HR_explicit_atLeast`: HeightRule=1, renders 60.5pt
+  - `HR_explicit_exact`:   HeightRule=2, renders 60.0pt
+  - `HR_no_trHeight` (no trHeight element):
+    HeightRule=0, renders 14.0pt
+  Conclusion: `<w:trHeight w:val="N"/>` no hRule → atLeast (specified wins
+  when N > content). Round 22's contrary statement was a misreading of
+  the schema or a measurement-condition artifact (their tests with
+  content > specified produced identical auto/atLeast results, blind to
+  the discrimination case spec > content).
+- evidence #2: 90-variant `TR_*` matrix
+  (`tools/metrics/{build,measure}_tr_height.py`, rule × spec_pt × content
+  lines × docGrid linePitch). Across 47 successful measurements (Word
+  COM session instability caused 43 RPC failures on the larger batch),
+  the post-table paragraph Y minus table-top Y proxy for rendered row
+  height confirms `atLeast = max(content, specified) + ~1.5pt border`.
+  Cell content line height ≈ font natural height (MS Mincho 10.5pt =
+  13.65pt) with slight (≤1pt) sensitivity to docGrid linePitch.
+- outcome:
+  - §13.5 corrected (this commit / next branch sync to main): default
+    hRule is `"atLeast"`. Round 22's "auto default" claim was incorrect.
+  - §19.4 (was §18.4) "Word does NOT grid-snap when trHeight present"
+    holds: rendered row in atLeast mode is `max(content_natural, spec) +
+    border`, NOT a grid-snapped value. Oxi divergence at
+    `crates/oxidocs-core/src/layout/mod.rs:4308` (grid-snapping content
+    to ceil(content/pitch)*pitch then taking max with trHeight) is
+    incorrect for atLeast/exact rules with trHeight present.
+  - Implication: any baseline doc using `<w:trHeight w:val="N"/>` without
+    explicit `hRule="auto"` is being rendered too tall by Oxi. This is
+    the structural cause of 2ea81a tbl#1's +35pt over-pack.
+  - Raw data: `pipeline_data/tr_height_measurements.json` + ad-hoc HR_*
+    output. Tools: `build_tr_height_matrix.py` / `measure_tr_height.py`
+    + `build_tr_hrule_default.py`.
+- code change: NONE (pure investigation). Oxi's
+  `crates/oxidocs-core/src/parser/ooxml.rs` trHeight parser should default
+  hRule to "atLeast" when the attribute is absent (matches Word). Layout
+  at `mod.rs:4308` should NOT grid-snap content height when trHeight is
+  set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 trigger PINNED: characterSpacingControl="compressPunctuation"
+
+- context: Session 51 R0 found Mech 3 needs "real-doc supporting files"
+  but did not identify the discriminator. R34 implementation needs the
+  exact gate.
+- evidence — bisect_mech3_trigger.py (15 variants):
+  Removing 11 different elements/files from 7f272a clone, only one
+  disabled Mech 3:
+  - `<w:characterSpacingControl w:val="compressPunctuation"/>` removal
+    → Mech 3 NO LONGER FIRES
+  - `<w:useFELayout/>` removal → still fires
+  - `<w:balanceSingleByteDoubleByteWidth/>` removal → still fires
+  - `<w:adjustLineHeightInTable/>` removal → still fires
+  - compatMode 14→15 → still fires
+  - `<w:compat>` block fully removed → still fires
+  - `<w:kern>` removed from docDefaults → **STILL FIRES**
+  - `themeFontLang` removed → still fires
+  - `fontTable.xml` removed → still fires
+  - bare-minimum `settings.xml` (no cSC) → does NOT fire (consistent)
+- evidence — bisect_mech3_csc_values.py (10 variants):
+  cSC value matrix × kern × jc:
+  - `compressPunctuation` + any kern + jc=left/both → fires
+  - `compressPunctuationAndJapaneseKana` + kern=yes + jc=left → fires (equivalent)
+  - `doNotCompress` + any kern + jc=left/both → does NOT fire
+  - cSC element absent + kern=yes + jc=left → does NOT fire (default = doNotCompress)
+- outcome:
+  - **Mech 3 trigger = `<w:characterSpacingControl w:val="V"/>` with
+    V ∈ {"compressPunctuation", "compressPunctuationAndJapaneseKana"}**
+    in `word/settings.xml`. SOLE necessary and sufficient condition.
+  - **Mech 1 (kern gate) and Mech 2/3 (cSC gate) are INDEPENDENT.**
+    Both can fire concurrently or one without the other.
+  - Why Session 51 minimal repros never fired: synthesized minimal docx
+    lacked `word/settings.xml` entirely → cSC default = doNotCompress
+    → no Mech 3. The "real-doc supporting files" requirement was a
+    red herring — only one element matters.
+  - ECMA-376 §17.15.1.10 documents `characterSpacingControl` as
+    "applied only at justify" but Word also fires it at jc=left
+    (undocumented).
+  - Spec §4.7c updated with full trigger spec, bisect tables, ECMA
+    reference, and concrete Oxi implementation gate code.
+  - For R34 implementation: gate yakumono compression on the
+    document-level cSC setting, NOT on real-doc heuristics or kern
+    presence.
+- code change: NONE. Implementation guidance refined in spec §4.7c.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7c Mech 3 compression formula = same as Mech 2 (slack 0.5pt-step), only alignment gate differs
+
+- context: Per-request B. Mech 3 compression amount formula. 7f272a_p1
+  P13 shows 0.91x (L1) / 0.76x (L2) per-yak ratios. Need to fit
+  observed compression to: (a) slack distribution, (b) grid-snap,
+  (c) font_size × const.
+- evidence:
+  - `tools/metrics/measure_mech3_7f272a_per_line.py`: 7f272a paragraphs
+    11/13/16/18-22/25/27-30/34. Per-line per-char Information(5):
+    P13 L1: 3 yak compress (1.0, 1.0, 0.5pt) = 2.5pt total
+    P13 L2: 3 yak compress (2.5, 2.5, 2.5pt) = 7.5pt total
+    P34 L1: 1 yak compresses 5.0pt (`、→（` Mech 1 FINAL RULE B→A)
+  - `tools/metrics/measure_mech3_compression_formula.py`: 5 controlled
+    minimal-repro probes × 2 alignments (jc=left, jc=both), each
+    cloning 7f272a's supporting files:
+    P_yak3_overflow (45 chars, natural~468.5, overflow +3.6):
+      jc=left:  3 yak compress (1.0, 1.5, 1.0) = 3.5pt ≈ overflow
+      jc=both:  3 yak compress (1.0, 1.5, 1.0) = 3.5pt — IDENTICAL
+    No-overflow probes (29/40/37 chars): 0 compression in both
+    alignments. Mech 3 needs overflow to fire.
+- hypothesis verdicts:
+  (a) slack distribution → **CONFIRMED**: total_compression ≈ overflow,
+      distributed in 0.5pt steps, sum == slack. Same algorithm as Mech 2.
+  (b) grid-snap → REFUTED: compression amounts {1.0, 1.5, 2.5pt} are
+      NOT multiples of any character grid pitch.
+  (c) font_size × const → REFUTED: per-yak ratios vary line-by-line
+      (0.86, 0.90, 0.95, 0.76) — no single constant fits.
+- outcome:
+  - Spec §4.7c added: Mech 3 = Mech 2 algorithm with relaxed alignment
+    gate (fires under jc=left when kern is on + real-doc supporting
+    files present).
+  - **Conservative implementation**: extend Mech 2 to fire under jc=left
+    when `docDefaults.rPr.kern` present. The "real-doc supporting files"
+    requirement (Session 51 finding) may fall out automatically since
+    synthesized R32 sentinel tests lack the trigger components.
+  - The original 7f272a P13 L1 "no-overflow but 2.5pt compression"
+    appears to be measurement-artifact related to the ASCII digit "14"
+    being half-width (advance ~5pt vs natural CJK 10.5pt) — actual
+    natural width of P13 L1 is closer to 457pt + ~5pt half-width adj,
+    putting it at-or-just-over content_w=464.9. Slack distribution
+    holds.
+- code change: NONE. Implementation guidance in spec §4.7c.
+
+## 2026-05-02 — oxi-1 — confirmed — Cross-doc audit: Mech 1 fires on jc=left baseline docs (84/184 affected)
+
+- context: Per-request audit to estimate ship-priority of Mech 1
+  alignment-agnostic rule (Q6) by sampling real baseline docs.
+- evidence:
+  - `tools/metrics/audit_mech_compression_jc_left.py`: scanned all 184
+    baseline docs. Found **84 docs (46%)** have all 3 requirements:
+    `<w:kern>` in docDefaults + ≥3 paragraphs with jc=left/none jc + yakumono content.
+    Top 5 by yak-content count: 3a4f9fbe1a83 (1011 paras), ed025cbecffb
+    (180), d77a58485f16 (129), 6514f214e482 (94), b837808d0555 (65).
+  - `tools/metrics/audit_mech_smart.py`: targeted Mech 1 trigger pair
+    detection (Type-A→A, B→A, B→B) in jc=left/none paragraphs of top-5
+    real baseline docs. Per-char COM measurement (Information(5)) of 5
+    such paragraphs each:
+
+    | Doc | trigger paras | measured | compressed | yak compressed |
+    |---|---|---|---|---|
+    | 3a4f9fbe1a83 | 188 | 5 | 0 | 0/5 |
+    | ed025cbecffb |  20 | 5 | 2 | 4/19 |
+    | d77a58485f16 |  40 | 5 | 4 | 8/33 |
+    | b837808d0555 |   8 | 2 | 2 | 6/13 |
+    | e3c545fac7a7 |   6 | 1 | 0 | 0/3 |
+
+  - **Direct jc=left + Word.Alignment=0 (left) + Mech 1 firing CONFIRMED**:
+    ed025 p13: ）=5.5pt at 10.5pt font (half-width Mech 1)
+    ed025 p25: 。=5.0pt, ）=5.0pt at 10.5pt font (Mech 1)
+  - Many paragraphs with XML `(no jc)` resolved by Word to Alignment=3
+    (justify) via style inheritance. Cannot cleanly distinguish Mech 1
+    vs Mech 2 in those, but compression IS present.
+  - b837 p39 shows mixed compression values (、=7.0, （=7.5, 。=6.0pt at
+    12pt) — characteristic of Mech 2's 0.5pt-step distribution (NOT
+    Mech 1 strict half-width).
+- outcome:
+  - Mech 1 alignment-agnostic rule (Q6) CONFIRMED on real baseline data
+    (ed025 p13/p25). Not only synthetic repros.
+  - **Estimated impact**: 46% of baseline (84 docs) potentially affected
+    by Mech 1 firing under any alignment when kern is on. Of those, the
+    bottom-N target docs (ed025, d77a, b837) already show measurable
+    Mech 1 compression. Ship-priority for Mech 1 alignment fix: HIGH.
+  - 3a4f9fbe1a83 (1011 jc=left/none paras) shows 0/5 compression in
+    measured sample — but only because the sampled paragraphs lack
+    Mech 1 trigger pairs adjacent to body content (most are 「規則」と
+    style with full-width 「」 between CJK ideographs which doesn't
+    fire Mech 1).
+  - Smart-audit methodology demonstrated: text-level trigger detection
+    + targeted COM measurement gives reliable corpus-wide picture in
+    ~20 paragraphs measured (vs naive sampling's 0% hit rate).
+- code change: NONE (pure investigation). Implementation impact:
+  Oxi's Mech 1 implementation gate must NOT be alignment-conditional;
+  current code may be over-suppressing under non-justify alignments.
+
+## 2026-05-02 — oxi-1 — partial — §4.7b Mech 2 wrap-budget intertwined design + Oxi implementation sketch
+
+- context: §4.7b Mech 2 algorithm confirmed (0.5pt step, fontSize×2/3
+  floor) but "drop char + refit" is wrap-decision intertwined. R32's
+  alignment-gated 0.583x hack is a middle ground; proper
+  implementation needs the full wrap algorithm.
+- evidence: 3 probe sweeps at jc=both, MS Mincho 12pt:
+  - P_yak3 (21 chars, 3 yak): 2 transitions found
+  - P_yak6 (20 chars, 6 yak): partial (Word died, ~10 datapoints)
+  - P_yak12 (22 chars, 10 yak, 9 compressible): 130 datapoints — clean
+  Tools: `measure_m2_wrap_budget.py` + `_chunked.py` (Word-restart
+  on RPC failure).
+- findings:
+  - **Drop trigger**: each "drop 1 char" boundary at slack ≈ fontSize
+    (=12pt for 12pt MS Mincho). Word refuses total-line compression
+    > 1×fontSize → drops a char.
+  - **Per-yak distribution cap (multi-yak)**: 9 yak absorbed 22pt
+    total at cw=206; refused 23pt at cw=205. Cap ≈ 2.5pt =
+    fontSize × 5/24.
+  - **Per-yak cap (single-yak)**: from §4.7b round 1 — 1 yak can
+    absorb 4pt = fontSize/3. Asymmetric with multi-yak case.
+  - **N→N-2 jump at cw=205**: Word skipped 18-char fit, dropping
+    directly to 17 chars (natural=204 ≈ cw). Suggests Word uses
+    natural-fit-greedy as base, with optional +1 char Mech 2
+    extension.
+- inferred algorithm:
+  ```
+  natural_fit_n = max N s.t. sum(natural[0..N]) <= cw
+  while extend_n < len(chars):
+      candidate_n = extend_n + 1
+      new_slack = sum(natural[0..candidate_n]) - cw
+      if new_slack <= 0: extend; continue
+      if new_slack >= fontSize: break    # drop threshold
+      compressible = count_yak_skipping_pos1
+      cap_per_yak = fontSize/3 if 1 yak else fontSize*5/24
+      if new_slack > compressible * cap_per_yak: break
+      extend_n = candidate_n
+  ```
+- outcome:
+  - Spec §4.7b extended with "Mech 2 + wrap-budget intertwined design"
+    subsection, including observed regularities table, inferred
+    algorithm, and ~80-LOC Oxi implementation sketch
+    (`try_extend_with_mech2` + `distribute_mech2`).
+  - Open: per-yak cap formula `fontSize × 5/24` is empirical; may need
+    refinement at 10.5pt and other sizes. Need 2/3/4/5 yak data to
+    pin the linear-vs-stepped relationship.
+  - Open: 19→17 jump at cw=205 — exact "skip" rule between adjacent
+    drops not fully characterized.
+- code change: NONE (pure investigation + sketch). Implementation
+  sketch provided in spec §4.7b for review. R32's alignment-gated
+  0.583x hack can be replaced by the full Mech 2 wrap-budget
+  algorithm.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 1 alignment-agnostic + Mech 1↔Mech 2 precedence
+
+Two follow-up investigations to §4.7b Mech 2 characterization:
+
+### Q6: Mech 1 alignment dependency
+
+- context: §4.7b confirmed Mech 2 fires only at jc=both. §4.7 (Mech 1
+  Type A/B/C) did not specify alignment requirement. ed025_p1 (R17
+  big_loser) showed Mech 1 firing in jc=center/right paragraph,
+  suggesting Mech 1 is alignment-agnostic.
+- evidence: `tools/metrics/build_m1_alignment_test.py` +
+  `measure_m1_alignment.py`. 2 docs × 5 alignment paragraphs each:
+  - kern OFF, all 5 alignments: ）= 10.5pt (no Mech 1)
+  - kern ON, all 5 alignments: ）= 5.0–5.5pt (Mech 1 fires)
+  Specifically: jc=both/left/(no jc) → 5.5pt; jc=center/right → 5.0pt
+  (minor 0.25pt difference likely measurement artifact at non-left
+  aligned glyph origins).
+- outcome: Mech 1 is **alignment-agnostic**. `<w:kern>` in docDefaults
+  is the SOLE gate (per session 51 yakumono_kern_trigger finding).
+  Spec §4.7b updated.
+
+### Q7: Mech 1 → Mech 2 precedence interaction
+
+- context: §4.7b stated "Mech 1 fires first, Mech 2 fires second on
+  residuals" but did not define "residuals" — char-set or slack-level.
+- evidence: `tools/metrics/measure_m1_m2_precedence.py` 9-slack sweep on
+  probe `漢漢漢」）漢漢「漢漢漢` (11 chars, MS Mincho 12pt). 」 fires Mech 1
+  (B→B trigger with `）` neighbor); `）` and `「` do NOT fire Mech 1
+  (B→CJK / single A in CJK). Post-Mech1 natural = 126pt.
+
+  | cw | slack | 」 (M1-comp) | ） (uncomp) | 「 (uncomp) |
+  |---|---|---|---|---|
+  | 200/132/126 | ≤0 | 6.0pt | 12.0 | 12.0 |
+  | 125 | +1 | 6.0pt | 11.5 | 11.5 |
+  | 124 | +2 | 6.0pt | 11.0 | 11.0 |
+  | 122 | +4 | 6.0pt | 10.0 | 10.0 |
+  | 120 | +6 | 6.0pt | 9.0 | 9.0 |
+  | 118 | +8 | 6.0pt | 8.0 | 8.0 (floor) |
+
+- outcome:
+  - Mech 2 NEVER touches Mech-1-compressed yakumono. `」=6.0pt` constant
+    across all slacks. Mech 1's output is final for those chars.
+  - Mech 2 distributes slack ONLY across uncompressed yakumono. Each gets
+    `slack / n_uncomp_yak`, in 0.5pt steps, sum = slack EXACTLY.
+  - "Residuals" = char-level subset (uncompressed yakumono), NOT
+    line-level slack continuation.
+  - The Mech 2 floor (`fontSize × 2/3 = 8.0pt` for 12pt) still applies
+    to the residuals-only set.
+- code change: NONE. Spec §4.7b's "Mech 1 vs Mech 2 interaction"
+  subsection refined with measured data.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b Mech 2 (justify-time) trigger / position / algorithm characterization
+
+- context: Session 51 R0 entries identified Mech 2 (justify-time
+  yakumono compression) but left several questions open: which char
+  triggers fire (8.0/7.5/5.5pt usage), what does "mid-line" mean (% of
+  line length), are trigger pairs different from Mech 1 Type A/B/C, what
+  is "reactive" / overflow gating semantics? Required: 5-10 pair per-char
+  COM measurement.
+- evidence:
+  - `tools/metrics/measure_m2_trigger_pairs.py`: 10 yakumono-CJK pair
+    cases × 4 slack values (0/2/4/8pt) at jc=both, MS Mincho 12pt:
+    ALL 10 pairs (A→CJK, CJK→A, B→CJK, CJK→B for 「」（）、。) compress
+    identically: slack=0→12.0pt, slack=2→10.0pt, slack=4→8.0pt, slack=8→
+    line drops a char. Yakumono is the compressing char regardless of
+    neighbor type.
+  - `tools/metrics/measure_m2_position_and_charset.py`: position-axis
+    test (start/mid/end) × alignment (justify/left) + 16-char extended
+    set:
+    * jc=left at any position: NO compression (Mech 2 jc=both gated)
+    * jc=both at line-start position: Mech 2 NOT fire (drop instead)
+    * jc=both at mid/end positions: Mech 2 fires
+    * extended yakumono set { 「」（）［］【】〔〕、。 } all compress
+      to 8.0pt
+    * em-dash ―(U+2015) Type C: NO compression
+    * ASCII hyphen, Latin a, plain CJK: NO compression
+  - `tools/metrics/measure_m2_position_sweep.py`: yakumono position 1..20
+    sweep: position 1 (line-start) → no compression / line drops; positions
+    2..19 → all compress to 8.0pt. The "mid-line" position rule is
+    operationally **`position > 1`**, NOT a percentage threshold.
+- outcome:
+  - Spec §4.7b expanded with Mech 2 trigger conditions, compressible char
+    set (= Type A ∪ Type B from Mech 1, no Type C), position rule
+    (position > 1), compression algorithm with `min_yak_width =
+    fontSize × 2/3` cap, and 8.0/7.5/5.5pt value attribution table.
+  - Key formula:
+    `min_yak_width = fontSize × 2/3`
+    (8.0pt for 12pt font, 7.0pt for 10.5pt font)
+  - Per-yak compression cap = fontSize − min_yak_width = fontSize/3
+    (4.0pt for 12pt, 3.5pt for 10.5pt). Beyond cap → drop char and refit.
+  - 5.5pt = Mech 1 half-width (11pt font /2). 6.0pt = Mech 1 half (12pt).
+    7.0pt = Mech 2 floor (10.5pt × 2/3). 8.0pt = Mech 2 floor (12pt × 2/3).
+    7.5pt etc = Mech 2 distributed partial.
+  - Mech 1 fires first (line-break time, neighbor-pair-based);
+    Mech 2 fires second (layout time, slack-distribution-based).
+- code change: NONE (pure investigation). Oxi's Phase 2 reactive absorb
+  (per 1f8b5f2) should be reviewed against the spec §4.7b algorithm:
+  honour the position>1 gate, use fontSize×2/3 floor, distribute in 0.5pt
+  steps with sum-to-slack invariant.
+
+## 2026-05-02 — oxi-1 — partial — §19.7 Y0 intercept anomaly explained: anchor empty para's pPr-rPr font
+
+- context: Spec §19.7 / §18.10 (this branch). Prior round 1 (top entry below)
+  established "Y0 = anchor_top + 1 line_height" universal across PreKinds for
+  body paragraphs with content. The 2ea81a tbl#3 case still showed Y0 = +28.55pt
+  (~2× the expected 14.5pt), unexplained.
+- hypothesis (round 1 — REFUTED): Each intervening empty paragraph between
+  the "real" preceding paragraph and the floating table adds +1 line_height
+  to the Y0 intercept.
+  → 30-variant FE_* repro (tools/metrics/fe_repro/, 5 PreKinds × 5 empty
+  counts × 2 tblpY values) shows Y0 = constant ~14pt regardless of empty
+  count. Hypothesis REFUTED.
+- hypothesis (round 2 — CONFIRMED): The anomaly is driven by the LAST
+  (anchor) empty paragraph's `<w:pPr><w:rPr><w:sz/></w:rPr></w:pPr>` font
+  size — Word resolves the empty paragraph's height via that pPr-rPr font,
+  not from default style.
+  → 7-variant K_* axis-isolation matrix (tools/metrics/fe_match_repro/):
+  - K_baseline (sz=21, lp=360, line=auto):       Y0 = +16.55pt
+  - K_only_sz28 (sz=28, lp=360, line=auto):       **Y0 = +27.55pt** (≈ 2ea81a's +28.55)
+  - K_only_atLeast296 (sz=21, lp=360, line=296atLeast): Y0 = +16.55pt (no effect)
+  - K_lp323 (sz=21, lp=323, line=auto):           Y0 = +15.05pt
+  - K_lp323_atLeast296_sz28 (sz=28, lp=323, line=296 atLeast): Y0 = +26.05pt
+  - K_tblWauto_only:                              Y0 = +16.55pt (no effect)
+  Single-axis: only `sz` change moves Y0 substantially. Reference
+  2ea81a tbl#3: anchor empty para has pPr-rPr `sz=28` (14pt), line=296
+  atLeast, docGrid lp=323 → reproduced as +26.05–27.55pt (within 1–2.5pt
+  of the +28.55pt observed value).
+- evidence:
+  - `pipeline_data/fe_intervening_measurements.json` (30 variants, refutes
+    intervening-empty-count hypothesis)
+  - `pipeline_data/fe_match_measurements.json` (7 variants, confirms
+    pPr-rPr-sz hypothesis)
+  - `pipeline_data/tblppr_anchor_measurements.json` (2ea81a baseline ref)
+  - `tools/metrics/{build,measure}_fe_intervening.py`
+  - `tools/metrics/build_fe_2ea81a_match.py` + `measure_fe_match.py`
+- outcome:
+  - §19.7's "+1 × line_height_of_anchor" universal was an over-generalization.
+    True for paragraphs with content; for empty paragraphs Y0 follows the
+    pPr-rPr font.
+  - Refined formula written to spec §18.10 (this branch) / will become §19.10
+    when merged to main:
+    `table_top = anchor_top + line_height_resolved_from(anchor.pPr.rPr.sz)
+              + ~2pt floor + tblpY_pt`
+  - Residual 1–2.5pt unexplained — likely floating-table topFromText spacing
+    constant (default = 0 unless `topFromText`/`bottomFromText` set on
+    tblpPr; needs separate isolation).
+  - §19.7 / §18.7 IS still correct for the body-para-anchor case; the
+    update is for empty-anchor case.
+  - `intervening empty paragraph count` not a factor — refuted via 30
+    variants. Only the LAST anchor's pPr-rPr matters.
+- code change: NONE (pure investigation). Oxi's current line-height-for-anchor
+  resolution should be checked against this rule when implementing §19
+  shippable fix.
+
+## 2026-05-02 — oxi-1 — confirmed — vertAnchor=text floating-table tblpY behavior + parser-order quirk
+
+- context: §18 Floating Tables (`<w:tblpPr>`) was hypothesis-only, derived
+  from a single doc (2ea81a) with cross-table cross-verification but no
+  multi-doc convergence. §18.1 claimed slope=1.0 for `table_top` vs
+  `tblpY`; §18.2 claimed `+28.5pt = 2 line-heights` Y0 intercept based
+  on tbl#3.
+- hypothesis: (a) slope=1.0 is universal across pre-content kinds,
+  (b) Y0 intercept = `anchor_top + 1 line_height` (not 2), (c) prior
+  TP1-6 minimal repros (existing) showing slope=0 are caused by some
+  structural difference vs 2ea81a tbl#2.
+- evidence:
+  - `tools/metrics/build_ft_slope_repro.py` + `measure_ft_slope.py`:
+    25 minimal repros, 5 PreKinds (1para / 3para / 1empty / inline /
+    inline_p) × 5 tblpY values (0, 50, 600, 2000, 4000 twips). All 25
+    show clean slope=1.0. Y0 intercept = `anchor_top + ~14pt` for
+    body-para anchor (= line_height of MS Mincho 10.5pt single-line
+    auto-spacing). For empty-para anchor +18.5pt; for inline-cell
+    anchor +15.0pt.
+  - `tools/metrics/measure_tp_resweep.py`: re-measured TP1-6 (existing).
+    Reproduced prior slope=0 (TP1=71.0/TP2=71.0/TP3=71.0/TP4=98.0/
+    TP5=98.0/TP6=98.0). Confirms TP repros really do show slope=0.
+  - `tools/metrics/build_compat_test.py` + `measure_compat_test.py`:
+    10 minimal repros across compatMode ∈ {none, 11, 12, 14, 15} ×
+    tblpY ∈ {50, 600}. ALL show slope=1.0. **compatMode hypothesis
+    REJECTED** — that is not the cause.
+  - `tools/metrics/build_tp3_mutate.py` + `measure_tp3_mutate.py`:
+    18 variants from TP3 with single-axis mutations:
+    - `M_baseline / M_tblWdxa / M_noUseFE / M_noNumbering` → slope=0
+    - `M_noStyles / M_noTblStyle` → slope=1
+    Removing the `<w:tblStyle w:val="TableGrid"/>` reference is the
+    necessary and sufficient mutation to flip slope.
+  - `tools/metrics/build_order_test.py` + `measure_order_test.py`:
+    9 variants from TP3:
+    - `O_baseline` (tblpPr → tblStyle in source XML) → slope=0
+    - `O_swapped` (tblStyle → tblpPr, ECMA-376 §17.4.79 CT_TblPrBase
+      sequence) → slope=1
+    - `O_noStyle` (tblStyle removed) → slope=1
+    The single XML-order swap (no other change) flips slope from 0 to 1.
+  - Cross-check: 2ea81a tbl#3 has BOTH `<w:tblStyle w:val="aa"/>` AND
+    `<w:tblpPr>`, and is observed at slope=1.0. Its tblPr child order
+    is `tblStyle → tblpPr` (correct ECMA order). TP3's tblPr order is
+    `tblpPr → tblStyle` (incorrect). Same property, opposite order,
+    opposite slope.
+- outcome:
+  - §18.1 slope=1.0 finding is RECONFIRMED universally for ECMA-compliant
+    tblPr ordering, across 5 distinct PreKinds.
+  - §18.2 "+28.5pt = 2 line heights" hypothesis is LOCALLY REFUTED. The
+    universal Y0 intercept is `anchor_top + 1 line_height`. The 28.5pt
+    observation in 2ea81a tbl#3 is a separate phenomenon (likely
+    intervening-empty-para counted twice, or floating-table reserved
+    region — needs follow-up).
+  - **NEW §18.8 (CRITICAL undocumented quirk)**: Word's parser silently
+    drops `<w:tblpPr>` if its child-element ordering inside `<w:tblPr>`
+    violates ECMA-376 §17.4.79 CT_TblPrBase sequence. When dropped, the
+    table renders as inline at `anchor_bottom`. Single XML-order swap
+    is sufficient to flip behavior.
+  - Baseline survey: `tools/metrics/scan_baseline_tblpPr.py`-style scan
+    on 184 baseline docs finds 0 docs with order violations (375 total
+    `<w:tbl>`, 16 floating). So §18.8 quirk does NOT directly affect
+    baseline SSIM. Real-world Word-generated docs respect ECMA order;
+    only manually-authored repros (TP1-6) had the violation.
+  - **Implication for Oxi parser**: ooxml.rs currently honors `<w:tblpPr>`
+    regardless of its position within `<w:tblPr>`. To match Word strictly,
+    Oxi should drop tblpPr when it precedes tblStyle. Pre-existing impact
+    is zero on baseline (no order-violating docs), but defensively
+    important for hand-edited or non-Word-generated source files.
+  - All COM data: `pipeline_data/{ft_slope,tp_resweep,compat_test,
+    tp3_mutate,order_test}_measurements.json`. Spec updated with new
+    §18.6 / §18.7 / §18.8 / §18.9 sections.
+
 ## 2026-04-27 — oxi-main — partial — yakumono closing-punct compression fires regardless of useFELayout / kern (gate hypothesis narrowed)
 
 - context: post-loop-termination triage (3 deep dives across `adjacency_matrix_widths.json`,
@@ -357,6 +1522,252 @@ Format:
 
 ---
 
+## 2026-05-02 — oxi-3 — confirmed — R17 gate per-char validation: Type A/B/C in losers, Mech 2 in "winners"
+
+**Direct measurement of user's 4 target paragraphs** via per-char
+`Information(5)` advances:
+
+| Doc | User label | Word compression observed |
+|---|---|---|
+| ed025 p1 para 13 | big_LOSER | `）（` (B→A) and `））` (B→B) → 5.5pt half ✓ FINAL RULE Type A/B/C |
+| 7f272a p1 para 13 | big_LOSER | Mech 2 distributed: yakumono → 8.0pt mid-line |
+| 683f p2 para 30 | WINNER | All `、` followed by CJK → 10.5pt full (no compress) ✓ FINAL RULE |
+| 3a4f p23 para 475 | WINNER (?) | Word compresses `、` → 8.0/7.5pt (Mech 2) — refutes user's "Word は compress しない" expectation |
+
+### Key conclusions
+
+1. **Type A/B/C FINAL RULE is the proper Mech 1 spec.** ed025 follows
+   it exactly. R17's list_marker gate suppresses Mech 1 in plain
+   paragraphs → big_loser SSIM regressions.
+2. **Mech 2 fires without Mech 1 anchor.** Earlier finding REFUTED
+   — 7f272a + 3a4f have only B→CJK chars yet Mech 2 fires.
+3. **R17 list_marker gate is wrong in 3/4 cases.** Correctly matches
+   Word only when neither Mech 1 nor Mech 2 triggers (683f).
+4. **Replacement**: kern-gated FINAL RULE (Mech 1) + Mech 2 reactive
+   absorb (already in Phase 2). R17 `dc7104c` should be removed.
+
+### Source data
+
+- `tools/metrics/measure_r17_yakumono_per_char_advances.py`
+- `pipeline_data/r17_per_char_advances.log`
+- `pipeline_data/r17_per_char_advances_2026-05-02.json`
+
+Memory: `session_51_r17_gate_per_char_validation.md`
+
+---
+
+## 2026-05-02 — oxi-3 — confirmed (refinement) — kern audit + Normal-style override + 3a4f win/loser per-char + Oxi compression spec table
+
+Three follow-up tasks completed (依頼 1/3/4 from user):
+
+### 依頼 1: kern audit on 184 baseline docs (RESEARCH_LOG-readable)
+
+`tools/metrics/audit_kern_docDefaults.py` extracts effective kern via
+`run rPr > Normal style rPr > docDefaults rPr` resolution priority.
+
+| Metric | Value |
+|---|---|
+| Total docs | 184 |
+| Effective kern present | 62 (33.7%) |
+| Source: docDefaults | 38 |
+| **Source: Normal style** (NEW v2 finding) | 24 |
+
+**v1 claim REFUTED**: Initial audit only checked docDefaults and showed
+"kern perfectly discriminates R17 winners/losers". With Normal-style
+included, 4/6 R17 big_winners ALSO have effective kern=2 (d77a, 3a4f
+p23/p60 via Normal style). kern is necessary but NOT sufficient.
+
+R17 cross-tab refined:
+- big_winners: 3a4f p23/p60 (kern via Normal), d77a p3/p6 (kern via Normal),
+  683f p2 + 0e7af1 p6 (no kern)
+- big_losers: 7f272a/ed025 (kern via docDefaults), 3a4f p64 (kern via Normal)
+
+### 依頼 3: 3a4f p64 (R31 +0.032 winner) / p42 (R31 -0.008 loser) per-char
+
+`tools/metrics/measure_3a4f_p64_p42_v2.py` + `measure_3a4f_p42_only.py`
+using Selection.GoTo for direct page jump (full doc has 2386 paragraphs).
+
+Both pages show MIXED:
+- **Mech 1** at half-width (5.0–5.5pt) for `）（` `）。` `。）` `）`→`）` etc.
+  per FINAL RULE Type A/B/C
+- **Mech 2 partial** at 7.5/8.0/8.5pt for chars without Mech 1 trigger
+  on lines with overflow
+
+Difference between R31 win/loss is NOT mechanism choice; both pages
+have both mechanisms. R31's specific char-position decisions matter
+(needs R31 trace cross-reference to identify exact mismatches).
+
+3a4f activation source: **Normal style has `<w:kern w:val="2"/>`**
+(docDefaults has none). Resolution priority delivers kern=2 to all
+Normal-style paragraphs.
+
+### 依頼 4: Oxi compression spec table for ed025/7f272a
+
+`tools/metrics/extract_oxi_compress_spec_table.py` extracts char-level
+spec from existing JSON.
+
+ed025 paragraph 12 (R17 big_loser, kern=2):
+- 2 compressions: `）` at i=23 (B→A `）（`) and i=43 (B→B `）））`),
+  both at half-width 5.5pt
+- **Pure Mech 1 / FINAL RULE** ✓
+
+7f272a paragraph 12 (R17 big_loser, kern=2):
+- 6 compressions: all at Mech 2 partial 8.0–10.0pt
+- All chars have CJK neighbors (no Mech 1 trigger)
+- **Pure Mech 2**
+
+### Recommended Oxi rule (final form)
+
+```rust
+fn run_kern_active(run: &Run, doc: &Doc) -> bool {
+    let kern_hp = run.rpr.kern
+        .or(run.style.kern)        // Normal style or other paragraph style
+        .or(doc.doc_defaults.kern)
+        .unwrap_or(0);
+    kern_hp > 0 && (run.font_size * 2.0) as u32 >= kern_hp
+}
+
+// Mech 1: FINAL RULE Type A/B/C (validated by ed025)
+fn mech1_compress(prev_class, current, next_class) -> Option<f32> {
+    match classify_yakumono(current)? {
+        A if prev_class == Some(A) => Some(font_size / 2.0),
+        B if matches!(next_class, Some(A) | Some(B)) => Some(font_size / 2.0),
+        _ => None,
+    }
+}
+
+// Mech 2: justify-time slack distribution (validated by 7f272a + 3a4f)
+// 0.5pt-step distribution, total = slack exactly, per-char cap ~2pt
+// (already in Phase 2 reactive absorb mod.rs:2977; refine per
+// session_51_mechanism2_slack_algorithm)
+```
+
+### Source data
+
+- `tools/metrics/audit_kern_docDefaults.py` (Normal-style aware)
+- `tools/metrics/measure_3a4f_p64_p42_v2.py`,
+  `tools/metrics/measure_3a4f_p42_only.py`
+- `tools/metrics/extract_oxi_compress_spec_table.py`
+- `pipeline_data/kern_audit_2026-05-02.json`
+- `pipeline_data/3a4f_p42_per_char_2026-05-02.json`
+- `pipeline_data/oxi_compress_spec_table_2026-05-02.json`
+
+Memory:
+- `session_51_kern_audit_177docs.md`
+- `session_51_3a4f_p64_p42_validation.md`
+- `session_51_oxi_compress_spec_table.md`
+
+---
+
+## 2026-05-02 — oxi-3 — confirmed — Yakumono compression has TWO mechanisms; Mech 1 trigger PINPOINTED to `<w:kern>` in styles.xml docDefaults
+
+**TL;DR for master**: 2026-04-18 architectural-validation entry below is correct
+about Mech 2 (line-wrap heuristic / reactive). But it MISSED a separate
+always-on adjacency mechanism (Mech 1) that fires per Type A/B/C rule whenever
+`<w:kern w:val="N"/>` (N≥1) is in `word/styles.xml`'s docDefaults rPr.
+The 2026-04-18 Tier 2 cascade test ("rPrDefault rFonts/lang cascade
+FALSIFIED — no combination triggers") didn't include `w:kern` as a tested
+property. R17's list_marker gate (`dc7104c`) is a workaround; the proper
+gate is doc-level kern.
+
+### Mechanism 1 — adjacency rule (always-on, kern-gated)
+- context: 4 fonts × 2 settings × 14 probes = 112 sample pairs measured on
+  isolated 3-4 char paragraphs (no overflow, no justify)
+- hypothesis: Type A/B/C compression rules fire per FINAL RULE table
+  regardless of layout pressure
+- evidence: ALL 14 probes match the spec §4.7 FINAL RULE table for ＭＳ
+  明朝/ゴシック/Yu Mincho 10.5pt; doNotCompress and compressPunctuation
+  produce IDENTICAL advances (56 sample pairs, 100% match)
+- 5-step bisection (clone-and-replace → swap-files → inverse-swap →
+  styles-bisect → element-bisect) → `<w:kern w:val="2"/>` ALONE
+  is necessary and sufficient
+  - V_only_kern (kern as sole non-default prop): 」=5.5pt (compressed) ✓
+  - V_no_kern (every other prop except kern): 」=10.5pt (full) ✓
+  - All my prior OOXML-direct tests lacked kern → no compression observed
+- outcome: Mech 1 is gated by docDefaults `<w:kern>`, NOT by neighbor
+  type alone. Per-pair Type A/B/C rule applies on top of the kern gate.
+- artifacts: `tools/metrics/measure_yakumono_setting_contrast.py`,
+  `bisect_yakumono_clone_com.py`, `bisect_yakumono_swap_files.py`,
+  `bisect_yakumono_inverse_swap.py`, `bisect_styles_xml_trigger.py`
+
+### Mechanism 2 — justify-time slack distribution (line-wrap heuristic)
+- context: jc=both narrow content with 27-char probe `漢漢漢「漢漢漢」漢漢漢「...」漢漢漢、漢漢漢、漢漢漢`
+- hypothesis: separate from Mech 1, Word redistributes overflow slack
+  across yakumono on the line, also gated by kern
+- evidence:
+  - cw=320 (slack=4pt) jc=both: 6 yakumono compressed by 0.5-1.0pt
+    each, total reduction = exactly 4pt ✓
+  - cw=290 (slack=10pt) jc=both: 6 yakumono compressed by 1.5-2.0pt
+    each, total = exactly 10pt ✓
+  - cw=300: drops 2 chars instead of compressing (per-char cap ≈ 2pt)
+- algorithm: `distribute slack in 0.5pt steps to total = slack
+  exactly; cap per-char compression at ~2pt (≈17%); else drop a char`
+- outcome: this IS the master's 2026-04-18 line-wrap heuristic finding,
+  fully characterized. Confirms architectural-validation conclusion that
+  Phase 2 reactive absorb is correct. NEW: per-char ≤2pt cap and
+  drop-vs-compress threshold explain the non-monotonic width dependency.
+- artifacts: `tools/metrics/measure_yakumono_justify_interaction.py`,
+  `measure_mechanism2_slack_distribution.py`
+
+### NEW orthogonal findings
+- **em-dash (U+2014) classification is FONT-DEPENDENT** (8 fonts × 4 sizes):
+  ＭＳ 明朝 / ＭＳ ゴシック treat as Type B (compresses). Yu Mincho /
+  Yu Gothic / Meiryo / HGゴシックE / HGS明朝E / HG明朝B treat as Type C
+  (no compression). Hbar (U+2015) is universal Type C.
+  Spec §4.7 line 640's font-agnostic claim is WRONG.
+- **§4.6.2 (kana→Latin alphanumeric autoSpaceDE) is NOT gated by kern**:
+  fires identically with kern on/off (probe `はMでs`: は=13.0, M=8.0
+  with both kern states).
+- **§4.6.3 (CJK-adjacent space widening) does NOT EXIST in current Word**:
+  7 OOXML rPr variants + 6 multi-run + jfmb on-disk vs runtime-saved
+  comparison + kern on/off — ALL show space=3.0-3.5pt natural Latin
+  width. Spec §4.6.3 is REFUTED. The c45c1fc fix should be reverted.
+
+### kern semantics finalized 2026-05-02 evening
+
+`<w:kern w:val="N"/>` per ECMA-376 §17.3.2.18 is "Font Kerning Threshold"
+= minimum font size in **half-points** at which kerning applies.
+
+| val | Behavior at 10.5pt (21 hp) |
+|---|---|
+| 0 (or absent) | NO compression |
+| 1, 2 | COMPRESSION (21 ≥ val) |
+| 100 (=50pt threshold) | NO compression (21 < 100) |
+| ≥21 | COMPRESSION when font_size_hp ≥ val |
+
+Resolution priority: run rPr > paragraph style rPr > docDefaults rPr.
+pPr/rPr/kern affects only the paragraph mark glyph, NOT runs.
+
+Both Mech 1 (Type A/B/C) AND Mech 2 (justify slack distribution) gated
+by per-run kern resolution. Mech 2 additionally requires at least one
+Mech 1 trigger on the line (e.g., a `」（` pair) before it activates
+to compress non-trigger chars (e.g., the `（` at A→CJK).
+
+### Recommended next actions
+1. **Implement per-run kern resolution** in Oxi parser:
+   ```rust
+   let kern_hp = run_rpr.kern.or(style.kern).or(doc_defaults.kern).unwrap_or(0);
+   let yakumono_enabled = kern_hp > 0 && font_size_half_pt >= kern_hp;
+   ```
+   Subsumes R17 list_marker gate (dc7104c) entirely.
+2. **Update spec §4.7**: replace PROVISIONAL marker with the kern-based
+   gate. Note Mech 1 vs Mech 2 distinction with Mech 2's anchor requirement.
+3. **Update spec §4.7 line 640**: em-dash classification is font-dependent.
+4. **Update spec §4.6.3**: REFUTED — CJK-adjacent space widening
+   doesn't exist in current Word.
+5. **Mech 2 algorithm in Oxi Phase 2**: refine reactive absorb to use
+   the 0.5pt-step slack distribution + 2pt per-char cap.
+
+Memory entries added today: `session_51_yakumono_kern_trigger.md`,
+`session_51_yakumono_4font_validation.md`,
+`session_51_yakumono_justify_two_mechanisms.md`,
+`session_51_mechanism2_slack_algorithm.md`,
+`session_51_emdash_font_dependency.md`,
+`session_51_easia_hint_attribute.md`,
+`session_51_chargrid_halfwidth_data.md`,
+`session_51_tall_header_pushdown.md`.
+
+---
 ## 2026-04-25 — oxi-2 — confirmed — R-10 paragraph_mark_revision path also test-covered
 
 - mirror of the ppr_change test landed: `r10_fires_for_paragraph_mark_revision` mutates fixture_05's IR to install a synthetic `paragraph_mark_revision = TrackedChange { change_type: "insert", author: "Alice Reviewer", … }` while clearing every other revision pointer. Asserts ≥1 #424242 BoxRect emerges.
