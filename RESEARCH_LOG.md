@@ -208,6 +208,29 @@ Format:
 - impact: Documents with autoSpaceDE=0 or DN=0 at pPr/style level
   will have Oxi over-applying boundary spacing if not parsed.
 
+## 2026-05-02 — oxi-1 — MAJOR — §4.6.2 balanceSingleByteDoubleByteWidth disables RSB asymmetry (Round 42)
+
+- context: Round 25 derived Latin→kana boundary RSB-aware formula
+  `bnd = nat + extra - rsb`. Round 42 reveals this is conditional
+  on settings.xml `<w:balanceSingleByteDoubleByteWidth>` flag.
+- evidence — `pipeline_data/balance_byte.json` (3 m):
+  Probe 漢a漢b漢c at fs=12 TNR + MSM.
+  | variant | 'a' | 'b' |
+  | V1 default      | 7.5 | 8.5 (RSB-aware: 5.5+2.0, 6.0+2.5)
+  | V2 ON (val=1)   | 8.5 | 9.0 (symmetric: 5.5+3.0, 6.0+3.0)
+  | V3 OFF (val=0)  | 7.5 | 8.5 (= V1 default)
+- formula:
+  - default = OFF (V1 ≡ V3)
+  - OFF: Latin→kana = nat + extra - rsb (Round 25 RSB formula)
+  - ON: Latin→kana = nat + extra (symmetric, no RSB subtraction;
+    matches kana→Latin direction)
+- outcome: Round 25's RSB formula is conditional on this flag.
+  Modern Word docs with flag set will have ~0.5-1.0pt larger
+  Latin→kana boundaries than RSB formula predicts.
+- impact: Oxi must parse `<w:balanceSingleByteDoubleByteWidth>`
+  from settings.xml + dispatch boundary formula. Failure to do
+  so causes Latin width drift on documents using the flag.
+
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b mixed-fs pure-yak cap driven by LAST yak run (Round 22)
 
 - context: Round 21 confirmed pure-yak cap = 0.75 × fs at single-fs.
