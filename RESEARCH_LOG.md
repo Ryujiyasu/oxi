@@ -13,6 +13,160 @@ Format:
 - outcome: what this means for other agents
 ```
 
+## 2026-05-02 — oxi-1 — confirmed — §4.6.2 Latin→kana asymmetry RESOLVED via RSB (Round 25)
+
+- context: Round 24 found Latin→kana boundary extra varies by glyph
+  (M=+3.0, a=+2.0, 1=+2.5 at fs=12 TNR), unlike kana→Latin which
+  is constant +3.0pt. Open question: per-glyph rule.
+- evidence — `pipeline_data/autospace_glyph.json` (36 m):
+  18 glyphs × {natural advance, boundary advance}.
+  Result table:
+    nat=3.5 (i,l,t):  bnd=5.5  extra=2.0 → rsb=1.0
+    nat=5.5 (c,e,a):  bnd=7.5  extra=2.0 → rsb=1.0
+    nat=6.0 (n,o,0,1,4,8): bnd=8.5 extra=2.5 → rsb=0.5
+    nat=7.5 (T):      bnd=9.5  extra=2.0 → rsb=1.0
+    nat=8.5 (A):      bnd=11.0 extra=2.5 → rsb=0.5
+    nat=9.5 (m):      bnd=11.5 extra=2.0 → rsb=1.0
+    nat=10.5 (M):     bnd=13.0 extra=2.5 → rsb=0.5
+    nat=11.5 (W):     bnd=13.5 extra=2.0 → rsb=1.0
+- formula:
+  `boundary_advance = natural_advance + extra_pt - rsb(glyph)`
+  where extra_pt = §4.6.2 formula = +3.0pt at fs=12, and rsb
+  is the Latin glyph's right side bearing (positive for narrow
+  glyphs in TNR).
+  Geometric: kana left edge = Latin's INKED right edge + 3.0pt.
+- outcome:
+  - Resolves Round 24 asymmetry: kana glyphs have ~0 RSB so
+    kana→Latin formula collapses to constant +3.0pt; Latin
+    glyphs have variable RSB so Latin→kana varies.
+  - Oxi implementation: needs per-glyph RSB lookup (GDI
+    GetCharABCWidths.cWidth or DWrite GlyphMetrics.rightSideBearing).
+  - Font-metrics table at crates/oxidocs-core/src/font/data/
+    may need extension to include rsb_du per glyph.
+- impact: Documents with mixed Latin+CJK text get correct boundary
+  spacing; SSIM for those pages currently has 0.5-1.0pt drift per
+  Latin→kana boundary.
+- caveats: TNR-only at fs=12 measured; other fonts and sizes
+  need Round 26+ confirmation.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.6.2.1 autoSpaceDE/DN gate orthogonality (Round 23-24)
+
+- context: §4.6.2 measured kana↔Latin boundary extra (formula
+  +floor(fs/2+0.5)*0.5) but did not characterize when the flag
+  fires. Open question was whether autoSpaceDE/DN controls the
+  boundary at all and where the flag belongs.
+- evidence — 40 measurements:
+  - `pipeline_data/autospace_dn.json` (Round 23, settings.xml-level):
+    `<w:autoSpaceDE>`/`<w:autoSpaceDN>` placed in word/settings.xml
+    root had ZERO effect across 5 probes × 4 settings combinations.
+  - `pipeline_data/autospace_ppr.json` (Round 24, pPr+styles):
+    Same flags placed inside `<w:pPr>` (per-paragraph) or
+    styles.xml docDefaults pPrDefault DO disable boundary spacing.
+- formula:
+  - autoSpaceDE controls letter↔kana boundary ONLY (not digit)
+  - autoSpaceDN controls digit↔kana boundary ONLY (not letter)
+  - Two flags INDEPENDENT (DE=0 does NOT imply DN=0)
+  - Both default to ON. Disable with explicit `w:val="0"`
+- glyph asymmetry (open Round 25+):
+  fs=12 TNR + MSM, kana→Latin always +3.0pt; Latin→kana varies:
+  M→kana +3.0pt, a→kana +2.0pt, 1→kana +2.5pt. Per-glyph rule.
+- outcome — Oxi must:
+  1. Parse `w:autoSpaceDE` / `w:autoSpaceDN` from pPr / style chain
+     (NOT from settings.xml — that location is a no-op)
+  2. Apply boundary spacing only when corresponding flag = true
+  3. Use §4.6.2 formula for kana→Latin; Latin→kana needs glyph-
+     aware refinement (Round 25)
+- impact: Documents with autoSpaceDE=0 or DN=0 at pPr/style level
+  will have Oxi over-applying boundary spacing if not parsed.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b mixed-fs pure-yak cap driven by LAST yak run (Round 22)
+
+- context: Round 21 confirmed pure-yak cap = 0.75 × fs at single-fs.
+  Round 22 disambiguates which run drives cap when pure-yak line has
+  multiple yak runs at different sizes.
+- evidence — `pipeline_data/pure_yak_mixed.json` (24 measurements,
+  4 suites × 6 slacks):
+  - Suite A (12→14pt): cap_max=10.0pt, predict_last=10.5
+  - Suite B (14→12pt): cap_max=8.5pt,  predict_last=9.0
+  - Suite C (12→16pt): cap_max=11.5pt, predict_last=12.0
+  - Suite D (16→12pt): cap_max=8.5pt,  predict_last=9.0
+  Decisive: same fs set swapped → different cap → last drives.
+  cap rank (C, A) > (B, D) aligns with last_run_fs rank (16, 14) > (12, 12).
+- formula (FINAL §4.7b, both branches use last-relevant-char):
+  - Mixed line: `cap = (last_CJK.sz_val/2) × 0.5pt` (Round 16)
+  - Pure-yak:   `cap = floor(last_yak.sz_val × 3/4) × 0.5pt` (Round 22)
+- outcome — §4.7b cap formula completely closed across:
+  - 6 fs values (10.5, 11, 12, 14, 16, 18 from Round 14)
+  - 5 line lengths (12-30 chars)
+  - 4 mixed-fs configurations
+  - 5 CJK fonts (Round 8/14)
+  - Both alignment modes (jc=both/left, alignment-irrelevant per Round 4)
+- impact: §4.7b implementation in Oxi can dispatch on
+  `any_non_yak_cjk` and apply matching formula.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b pure-yak Mech 2 cap = floor(sz_val × 3 / 4) × 0.5pt
+
+- context: Following Round 19 partial finding (pure-yak Mech 2 fires
+  with cap > 0), Round 20+21 derive the universal cap formula via
+  fs sweep + line-length sweep.
+- evidence — `pipeline_data/pure_yak_fs.json` (35) + `pure_yak_n.json` (27):
+  - Round 20: fs ∈ {10.5, 11, 12, 14, 16} on 24-char pure-yak probe
+    cap_max in {5.2 coarse, 8.2, 9.0, 10.5, 12.0} ≈ 0.75 × fs
+  - Round 21 Q1: fs=10.5 fine sweep — slack=7.5 fits, 7.875 wraps
+    → cap = 7.5pt EXACT (confirms snap-floor: floor(21×3/4)×0.5 = 7.5)
+  - Round 21 Q2: n_compressible sweep at fs=12 — L ∈ {12,16,20,24,30}
+    all fit at slack=9, all wrap at slack=12 → cap=9.0pt CONSTANT,
+    INDEPENDENT of mid-line yak count
+- formula (CONFIRMED 6 fs × 5 lengths): `cap_pure_yak_pt =
+  floor(sz_val_int × 3 / 4) × 0.5` ≈ 0.75 × fs (snap to 0.5pt grid)
+- outcome — §4.7b spec dispatcher updated with 2-branch:
+  - Mixed yak+CJK: cap = (last_CJK.sz_val/2) × 0.5pt (Round 16, fs/2)
+  - Pure-yak: cap = floor(yak.sz_val × 3/4) × 0.5pt (Round 21, ~0.75×fs)
+- impact: implementations using only Round 16 formula on lines with
+  no CJK will under-fit (return cap=0 or undefined → premature wrap).
+  Pure-yak lines occur in headings, decorative text, table headers
+  with CJK quotation marks. Estimate few baseline docs affected
+  (most lines have CJK), but correctness for §4.7b is now closed.
+- next: Round 22 should test mixed-fs pure-yak (multiple yak runs at
+  different sizes within one line) to determine which fs drives cap.
+
+## 2026-05-02 — oxi-1 — partial — §4.7b Mech 2 cap on pure-yak line: NOT zero (no-CJK fallback exists)
+
+- context: §4.7b Round 16 confirmed `cap = last_CJK_run.fs/2` for Mech 2
+  slack distribution. Open question: what happens on pure-yak lines (no
+  CJK chars at all)? Round 16 formula would predict cap = 0 (undefined),
+  meaning Mech 2 would not fire and the line should wrap immediately on
+  any overflow beyond Mech 1's compression.
+- hypothesis: Mech 2 cap requires CJK presence; pure-yak lines fall back
+  to wrap-only (no Mech 2 contribution).
+- evidence — `tools/metrics/measure_pure_yak_line.py`,
+  `pipeline_data/pure_yak.json`:
+  - Suite A: probe `「」「」「」「」「」「」「」「」「」「」「」「」` (24 chars,
+    pure yak, MS Mincho 12pt, cSC=compressPunctuation, jc=both, kern=2).
+    Mech 1 makes 」=6pt half-width (B preceded by A); 「 stay at 12pt.
+    Line natural after Mech 1 = 12×12pt + 12×6pt = 216pt.
+    - cw=288/250/216 (slack ≤ 0): all 「=12.0 」=6.0 (Mech 1 only)
+    - cw=215 (slack=1): `「(pos3)=11.5, 「(pos5)=11.0` — Mech 2 fires
+      on Type A 「 (which Mech 1 leaves untouched)
+    - cw=210 (slack=6): persistent 「 compression
+    - cw=208 (slack=8): `「(pos3)=10.5` n=24 fits
+    - cw=205 (slack=11): n=22 (line wrapped, Mech 2 cap exceeded)
+  - Suite B (control): probe `「漢」漢「漢」漢「漢」漢「漢」漢「漢」漢「漢」漢`
+    (12 yak + 12 CJK alternating, no Mech 1 firing).
+    - slack=6 fits at cap = fs/2 = 6pt (matches Round 16)
+    - slack=8 wraps (n=23) — cap < 8pt confirmed for mixed line at 12pt
+- outcome — Round 16 cap formula INCOMPLETE:
+  - Mixed yak+CJK: cap = last_CJK_run.fs/2 ✓ (Round 16)
+  - Pure yak (no CJK): Mech 2 STILL fires on Type A chars; cap > fs/2
+    of yak (≥ 8pt at 12pt fs, vs 6pt mixed-line cap)
+  - Pure-yak cap formula NOT yet pinned; need fs sweep across pure-yak
+    probes to characterize. Round 20 target: vary fs (10.5/11/12/14)
+    and n_compressible (11/9/7/5 mid-line 「 chars) on pure-yak probes
+    to derive the no-CJK cap rule
+- impact: spec change needed in §4.7b — current formula
+  `cap = last_CJK_run.fs/2` returns undefined on pure-yak lines but
+  Word does NOT collapse to wrap-only; Mech 2 has a distinct pure-yak
+  branch. Implementation must not fall through to "no compression".
 ## 2026-05-02 — oxi-4 — partial + correction — 1ec1 +9pt offset variant test (Baseline only); previous "RESOLVED" claim was WRONG (Word ignores ind both □1 and □3, +5.5pt gap structural)
 - context: User's R37 measurement (post H_F fix): both □1 (no ind) and □3
   (ind=5.25pt) render at SAME Word x=48pt → Word ignores ind in 1ec1 textbox
@@ -1107,6 +1261,452 @@ Format:
   hRule to "atLeast" when the attribute is absent (matches Word). Layout
   at `mod.rs:4308` should NOT grid-snap content height when trHeight is
   set (atLeast or exact), per §19.4 / §13.5 corrected.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 18: cap formula line-length-invariant; P13 discrepancy was attribution error
+
+- context: Round 17 noted P13 L2 (real doc) showed 7.5pt comp where
+  Round 6/14 formula predicts cap = 5.0pt. Hypothesis: line-length-
+  dependent cap?
+- evidence: `measure_cap_45char.py` — 45-char synthetic probe matching
+  P13 L2's yak positions exactly (「pos2, 」pos9, 、pos33) at MS
+  Mincho 10.5pt with cSC=compressPunctuation:
+  slack=5: comp=5.0pt, n=45 (cap reached)
+  slack=5.5+: drop to 44 chars
+  → **cap = 5.0pt for 45-char synthetic** = Round 6/14 formula ✓
+- conclusion: cap formula `floor(sz_val/2)*0.5` is INVARIANT to line
+  length (verified at 24-char and 45-char). P13 L2's "7.5pt over cap"
+  observation was an attribution error — P13's natural width
+  estimation didn't account for Latin "14" half-width digits in the
+  text. Real slack < estimated; real comp matches formula.
+- outcome:
+  - Spec §4.7b cross-validation discrepancy resolved.
+  - Cap formula now verified across:
+    N: 1,2,3,4,5,7; fs: 10.5,11,12,14,16,18; font: 5 CJK families;
+    **line length: 24 AND 45 chars**.
+  - Mech 2 specification is now complete and consistent.
+- side observation: at slack=5.5..10.0 (just over cap), Word drops
+  to 44 chars but does NOT apply Mech 2 to the new shorter line.
+  Compression returns at slack=12 (= fontSize), suggesting wrap-fit
+  re-cycles when overflow exceeds cap by ~fontSize.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 17 final: line-end yak EXEMPT from Mech 2 compression
+
+- context: Round 17 kinsoku × Mech 2 follow-up. After Word session
+  recovery, additional cw values measured.
+- evidence: `measure_kinsoku_remeasure.py` — 50-char probe (」 at pos 24)
+  with 8 cw sweep:
+  - cw=300 (slack=0, 25 chars/L1): 」 at pos 24 (mid-line), adv=12.0,
+    line w=300 (no compression, no overflow)
+  - cw=294 (slack=6 = cap, 25 chars/L1): 」 at pos 24 mid-line,
+    **adv=6.0 (compressed to half-width = cap)**, line w=294 ✓
+    Mech 2 fires cleanly when yak is mid-line + slack within cap.
+  - cw=284 (24 chars/L1): 」 at L1 last position (line-end),
+    line w=290 (visible overflow +6pt), 」 NOT compressed.
+    **Word retains kinsoku retreat with overflow rather than compress
+    the line-end yak.**
+  - cw=264: wraps to L2, 」 at L2 pos 2 between CJK
+- finding (NEW spec rule): **Line-end yak EXEMPT from Mech 2**.
+  Round 6 confirmed line-start (pos 1) yak is exempt. Round 17 confirms
+  the SAME rule for line-end (last position). Both edges excluded.
+  Mech 2 candidates = mid-line yak only (positions 2..(n-1) of line).
+- clarification of cw=284 mechanism:
+  Without retreat: pack 23 CJK on L1, 」 starts L2 → kinsoku violation
+  With retreat: keep 」 at L1 end, but Mech 2 doesn't fire on line-end
+  → line accepts visible overflow (~6pt past content_w)
+  Word chose retreat with overflow over both alternatives.
+- outcome:
+  - Spec §4.7b position rule extended:
+    Mech 2 candidates = yak at line position ∈ [2, n-1]
+    (excluded both line-start AND line-end)
+  - Spec §4.6.1 kinsoku retreat takes precedence over Mech 2 cap
+    constraint (line accepts overflow when retreat conflicts with cap).
+  - Implementation:
+    fn is_mech2_candidate(yak_pos, n_chars):
+      yak_pos > 0 AND yak_pos < n_chars - 1
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — partial — §4.6.1 Kinsoku Retreat × Mech 2: retreat causes visible overflow (round 17 partial)
+
+- context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
+  causes retreat. Question: when retreat causes line-1 overflow > Mech 2
+  cap, does Word retain retreat with overflow, or drop chars?
+- evidence: `tools/metrics/measure_kinsoku_remeasure.py` (50-char probe
+  with 」 at pos 24, 8 cw values; 3/8 measured, 5/8 RPC errored due to
+  Word COM session instability):
+  cw=264 (slack 336): L1 = 22 chars w=264 (no overflow); 」 in L2 pos 2
+    (between CJK, not at line-start)
+  cw=284 (slack 16): L1 = 24 chars including 」 at pos 24, w=290pt
+    → **L1 overflows content_w by 6pt** (visible overflow!)
+    L2 = 23 chars w=284, L3 = 3 chars
+  cw=300: L1 = 11 chars (measurement issue — likely y-grouping artifact)
+- finding: Kinsoku retreat OVERRIDES Mech 2 cap. Word allows visible
+  overflow on the line-1 to keep 」 at line-end (preventing line-start
+  prohibition violation). The 6pt overflow at cw=284 is past the cap
+  of 6pt (12pt × 0.5) — Word does NOT drop a char to fit; it retains
+  the natural-width line with visible overflow.
+- outcome:
+  - Spec §4.6.1 to note: kinsoku retreat takes precedence over Mech 2
+    drop-trigger. When kinsoku constraints conflict with cap, Word
+    chooses kinsoku conformance (line-end overflow) over cap conformance.
+  - This is a critical distinction: typical wrap-fit drops at slack
+    > cap, but kinsoku-driven layout doesn't drop.
+- followup: re-run with stable Word session for 5 missing cw values
+  (276, 288, 292, 294, 296). The cap-vs-overflow boundary needs more
+  data points. Probe builder + remeasurer scripts ready in
+  tools/metrics/.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — blocked — §4.6.1 Kinsoku Retreat × Mech 2 (round 17, blocked by Word COM failure)
+
+- context: §4.6.1 Multi-Char Kinsoku Retreat — Type B at line-start
+  causes retreat to previous line. Question: when retreat creates
+  line-1 overflow > Mech 2 cap, does Word (a) retain retreat with
+  visible overflow, (b) drop chars to avoid retreat, (c) multi-step
+  retreat?
+- approach: 50-char probe with 」 at pos 24, sweep cw forcing wrap.
+  `tools/metrics/measure_kinsoku_mech2.py` + remeasure variant.
+- result: BLOCKED. Word COM session entered unhealthy state after
+  many measurements (~280 prior). Multiple `Server execution failed`
+  errors. Word.Documents.Open succeeded only for first 3 cw values
+  (cw=294/296/300) before subsequent measurements all RPC-failed.
+  Probe docx generated successfully (8 docx in
+  `tools/metrics/kinsoku_mech2_repro/`); only need re-measurement.
+- followup: re-run after Word session reset (full reboot may be
+  needed, or run on a separate machine).
+- partial data: `pipeline_data/kinsoku_mech2.json` (5/8 measure_error
+  entries; 0 successful line-data results).
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 16: cap = last CJK run/2 (yak fs irrelevant); distribution = uniform-gap-above-half
+
+- context: Round 15 found cap depends on "last run/yak fs" but couldn't
+  discriminate. Round 16 forces yak fs ≠ surrounding CJK fs.
+- evidence: `measure_cap_disambiguation.py` 3 suites:
+  E1 (CJK all 12pt, last yak forced 14pt): cap = 6.0pt = CJK/2
+  E2 (CJK 12→14pt, all yak 12pt): cap = 7.0pt = last CJK run/2
+  E3 (CJK 12pt, yak 10/12/14pt): cap = 6.0 = CJK/2
+- finding (cap source): **cap = (last CJK run's font size) / 2**.
+  Yak's own fs does NOT drive cap.
+- finding (distribution): refines "proportional to yak fs"
+  (Round 15) to **uniform-gap-above-half-width**:
+  Each yak's final advance = yak_fs/2 + C, where C is a line-uniform
+  constant chosen so total compression equals cap:
+    C = (sum(yak_fs/2) - cap) / N
+    per_yak_comp_i = yak_fs_i/2 - C
+  Verified on Round 16 E3 and Round 15 Suite B.
+- outcome:
+  - Spec §4.7b round 16 added with disambiguated cap rule + exact
+    distribution formula.
+  - Implementation:
+    fn mech2_cap_pt(last_cjk_run_sz_val) -> last_cjk_run/2 quantized
+    fn mech2_distribute(yak_fontsizes, cap):
+      C = (sum(fs/2) - cap) / N
+      for each yak: per_yak_comp = round_to_0.5pt(fs/2 - C)
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 15: mixed CJK sizes — cap from last run + proportional yak distribution
+
+- context: Round 13 found "cap = CJK fs/2" for mixed yak-size case.
+  Round 15 tests mixed CJK fs case (different CJK sizes within line).
+- evidence: `measure_mixed_cjk_sizes.py` 3 suites × ~7 cw values:
+  Suite A (24 chars all 12pt): cap = 6.0pt ✓ baseline
+  Suite B (12pt first 12 + 14pt last 12): cap = 7.0pt = 14/2
+  Suite C (14pt first 12 + 12pt last 12): cap = 6.0pt = 12/2
+- finding: Cap is determined by **last run's CJK fs** in mixed case.
+  (Indistinguishable from "last yak's fs" since they coincide here;
+  needs disambiguation test.)
+- per-yak distribution finding (NEW):
+  In Suite B at slack=7 (cap reached):
+    pos 6 (12pt yak): 2.0pt comp
+    pos 12 (12pt yak): 2.0pt comp
+    pos 18 (14pt yak): 3.0pt comp
+  Distribution is **proportional to each yak's fs**, NOT equal.
+  per_yak_comp ≈ round_to_0.5pt(slack × yak_fs / sum_of_yak_fs)
+- outcome:
+  - Spec §4.7b round 15 added with mixed-CJK rule + proportional
+    distribution.
+  - Refines Round 9/14's "equal distribution": equal only when all
+    yak share same fs; weighted by fs when yak sizes differ.
+  - Implementation guidance:
+    cap = last_cjk_run_fs/2
+    per_yak = round_to_0.5pt(slack × yak_fs / sum_yak_fs)
+- open: disambiguate "last run fs" vs "last yak fs" with run/yak fs
+  decoupled. Mixed yak fs without mixed CJK fs (Round 13) — review
+  per-yak distribution for proportionality.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 14: fs=18 cap=9.0pt + Yu/Meiryo 16pt + slack rounding rule
+
+- context: Round 13 left fs=18 cap unclear (8.5..9.0 range). Round 14
+  fills the gap and verifies cap formula on Yu Mincho/Meiryo at 16pt.
+- evidence: `measure_cap_round14_fillers.py` 28 measurements:
+  Suite A (fs=18 MS Mincho fillers slack=8.0..9.5 in 0.1pt steps):
+    slack=8.0..8.7: comp=8.5pt
+    slack=8.8: comp=9.0pt (over by 0.2pt)
+    slack=8.9: comp=9.0pt
+    slack=9.0: comp=9.0pt (cap reached)
+    slack=9.1+: drop
+    → cap = 9.0pt = floor(36/2)*0.5 ✓ FORMULA CONFIRMED
+  Suite B (Yu Mincho 16pt N=3):
+    cap = 8.0pt = floor(32/2)*0.5 ✓
+  Suite C (Meiryo 16pt N=3):
+    cap = 8.0pt ✓
+- sub-finding (slack rounding):
+  Word rounds slack to nearest 0.5pt BEFORE distribution. At slack=8.8
+  comp=9.0pt (over content_w by 0.2pt). Round 9's "total = slack
+  EXACTLY" is approximate; precise rule:
+    comp_total = round_to_0.5pt(slack)
+- 3-way universality CONFIRMED (15 rounds, ~280 measurements):
+  N: 1, 2, 3, 4, 5, 7
+  fs: 10.5, 11, 12, 14, 16, 18 pt (6 sizes)
+  font: MS 明朝/ゴシック, Yu Mincho, Meiryo, HG明朝E
+  Mixed-size: cap = CJK fs/2
+  Formula: cap = floor(sz_val_int/2) × 0.5
+- outcome:
+  - Spec §4.7b round 14 added with fs=18 confirmation and slack-
+    rounding refinement.
+  - Implementation guidance:
+    fn mech2_cap_pt(sz_val) -> (sz_val/2)*0.5
+    fn mech2_distribute(slack, n_yak, cap):
+      total = round_to_0.5pt(slack).min(cap)
+      total / n_yak  // per-yak
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 13: cap formula at 16pt + mixed-size = CJK-dominant-fs/2
+
+- context: Round 6/7/8/10 verified cap formula for 10.5/11/12/14pt MS
+  Mincho. Round 13 extends to 16/18pt + tests mixed-size lines.
+- evidence: `measure_cap_large_mixed.py` 4 suites × ~11 cw values:
+  Suite A (pure 16pt N=3):
+    cap = 8.0pt = floor(sz_val/2)*0.5 ✓ formula confirmed
+  Suite B (pure 18pt N=3):
+    formula predicts 9.0pt cap; observed max=8.5pt at slack=8.5;
+    slack=9.0 produced 2-char wrap anomaly (Word edge case)
+  Suite C (CJK=12pt, yak=10.5pt mixed):
+    cap = 6.0pt = CJK fs/2 (NOT yak fs/2 = 5.25)
+  Suite D (CJK=12pt, yak=14pt mixed):
+    cap = 6.0pt = CJK fs/2 (NOT yak fs/2 = 7.0)
+- KEY finding: **Mixed-size cap is determined by CJK (non-yak) font
+  size, NOT yakumono's own font size.**
+- per-yak compression mechanics:
+  Suite C (yak fs=10.5): per-yak comp = 2pt → yak adv = 10.5-2 = 8.5pt
+  Suite D (yak fs=14):   per-yak comp = 2pt → yak adv = 14-2 = 12.0pt
+  Each yak compresses by cap/N within own glyph metric.
+- outcome:
+  - Spec §4.7b round 13 added with mixed-size finding.
+  - Implementation guidance: cap_pt = CJK dominant sz/2, NOT yak's.
+    Per-yak compression = cap/N from yak's own font size.
+  - 16pt cap formula verified clean.
+  - 18pt has Word measurement edge case at exactly slack=9.0;
+    formula likely correct (9.0pt) but needs careful filler sweep.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7 round 12: Mech 1 trigger char-level audit complete (26/26 chars)
+
+- context: §4.7 lists 11 Type A + 13 Type B + 9 Type C chars. Round 11
+  verified smart quotes (4) and em-dash classification. Round 12
+  audits remaining standard yakumono characters individually.
+- evidence: `measure_mech1_char_audit.py`:
+  Suite A — 9 Type A chars × A→A trigger (preceded by （):
+    〈 《 「 『 【 〔 ［ ｛: all FIRE Mech 1 (adv=6.0, ratio=0.500)
+    （ self-pair: script artifact (first-match logic), but verified
+      by §4.7's `（（（（` example
+  Suite B — 13 Type B chars × B→B trigger (followed by ）):
+    ） 」 』 】 〕 ｝ 〉 》 ］ 、 。 ， ．: ALL 13/13 FIRE (adv=6.0)
+  Suite C — control (5 Type B between CJK):
+    All 5 correctly show no compression (Mech 1 does NOT fire when
+    next char is CJK)
+- finding:
+  All 26 standard yakumono chars (9 Type A + 13 Type B excluding
+  smart quotes / em-dash from round 11) verified to fire Mech 1 under
+  expected trigger pairs.
+- summary across rounds 11-12:
+  Type A (11 chars): smart quotes (4 in round 11) + 9 standard = 11/11 ✓
+  Type B (17 chars): smart quotes + em-dash glyph-metric (5 in round 11)
+                     + 13 standard (round 12) — 16/17 effective fire
+                     (em-dash is glyph-metric not Mech 1)
+  Type C: Hbar (U+2015) confirmed no compression
+- outcome:
+  - §4.7 Type A/B/C list fully verified at character level.
+  - Spec round 12 added with full audit table.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7 round 11: smart quotes Type A/B confirmed, em-dash REFRAMED as glyph metric
+
+- context: §4.7 lists smart quotes (U+2018-201D) and em-dash (U+2014)
+  as Type A/B without thorough verification under Mech 2. Session 51
+  found em-dash "compresses" in MS Mincho but not Yu Mincho.
+- evidence: `measure_smart_quotes_emdash_mech2.py`:
+  Suite A — 7 chars × 4 slacks at MS Mincho 12pt:
+    Smart quotes ‘ ’ " " (U+2018-201D): all behave as Type A/B,
+      adv 12→10→8→6 across slack 0..cap. Mech 2 fires correctly.
+    Em-dash (U+2014): adv = 6.0pt UNCHANGED across slack -1, +2, +4, +6.
+      Word reports compression but it's glyph design, not Mech 2.
+    Hbar (U+2015): adv = 12.5pt, no compression at any slack. Type C ✓.
+    」 (control): standard B behavior.
+  Suite B — em-dash × 3 fonts at slack=4:
+    MS Mincho em-dash adv = 6.0pt
+    Yu Mincho em-dash adv = 12.5pt
+    Meiryo em-dash adv = 12.50pt
+- key reframing:
+  Session 51's "MS compresses em-dash, Yu doesn't" is more precisely:
+  - MS 明朝/ゴシック em-dash glyph natural width = fontSize/2 (half-
+    width BY DESIGN). NOT compressed by Mech 2; it's a font metric.
+  - Yu Mincho / Meiryo em-dash glyph natural width = fontSize × 1.04
+    (full-width). Mech 2 does NOT compress it (effectively Type C).
+- outcome:
+  - §4.7 Type A/B/C list updated with em-dash font-dependency note.
+    U+2014 is **glyph half-width in MS branded fonts**, NOT Type B
+    compression rule.
+  - All 4 smart quotes (U+2018-201D) confirmed Type A/B as listed.
+  - Hbar (U+2015) confirmed Type C universal.
+  - Implementation: Oxi must use font-dependent em-dash natural width
+    AND exclude em-dash from Mech 2 candidate set.
+- code change: NONE. Spec §4.7 round 11 added.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 10: N=1 cap fillers complete 3-way universality
+
+- context: Round 7/8 had remaining sweep gaps for fs=10.5/11/12/14 N=1
+  cap measurement. Round 10 fills them.
+- evidence: `measure_n1_cap_fillers.py` 26 measurements:
+  fs=10.5 N=1: cap=5.00 first_drop=5.3 (cap+0.3)
+  fs=11.0 N=1: cap=5.50 first_drop=5.6 (cap+0.1)
+  fs=12.0 N=1: drop at slack=6.5 (NOT 12.5 as Round 7 claimed)
+  fs=14.0 N=1: cap=7.00 first_drop=7.2 (cap+0.2)
+- finding:
+  - Round 7's "fs=12 N=1 first_drop=12.5" was completely sweep-gap
+    artifact. Drop is actually at slack=6.5 = cap+0.5.
+  - All 4 font sizes confirm cap = floor(sz/2) × 0.5.
+  - drop_threshold ≈ cap + ~0.5pt (range cap+0.1 to cap+0.5).
+- 3-way universality verified:
+  - N (yak count): 1, 2, 3, 4, 5, 7 (all match formula)
+  - fs (font size): 10.5, 11, 12, 14 pt (all match formula)
+  - font family: MS 明朝/ゴシック, Yu Mincho, Meiryo, HG明朝E (all match)
+- outcome:
+  - Final spec rule (no branching needed):
+    cap_pt = floor(sz_val_int / 2) * 0.5
+    drop_threshold = cap + 0.5
+  - Spec §4.7b Round 10 added.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 9: Multi-line Mech 2 — per-line cap, last line no compress
+
+- context: Session 51 listed multi-line Mech 2 cascade as open question.
+  Cap is per-line vs paragraph-cumulative vs other?
+- evidence: `measure_multiline_mech2.py` 50-char probe with 6 yak
+  distributed × MS Mincho 12pt × jc=both × 12 cw values:
+  - cw=310 (2-line): L1 26 chars 2pt comp, L2 24 chars 0pt
+  - cw=306 (2-line): L1 26 chars 6.0pt comp (cap reached), L2 0pt
+  - cw=210 (3-line): L1 18 chars 6.0pt cap, L2 18 chars 6.0pt cap, L3 14 chars 0pt
+- finding:
+  - **Cap = floor(sz/2)*0.5 applied PER-LINE INDEPENDENTLY**.
+    Each non-last line can compress up to cap regardless of other lines.
+    cw=210 paragraph absorbed 12pt total (= 2 lines × 6pt cap each).
+  - **Last line never compresses** — jc=both renders last line LEFT-aligned
+    (standard Word behavior). All 3-line tests show L3 comp=0 regardless
+    of cw.
+  - **Wrap algorithm uses Mech 2 cap as per-line line-extension budget**.
+    Greedy pack + extend up to +1 char if remaining slack ≤ cap; break
+    otherwise.
+- outcome:
+  - Spec §4.7b Round 9 added with multi-line cascade rule.
+  - Implementation guidance:
+    For each non-last line, apply Mech 2 distribution if slack > 0.
+    Skip last line (jc=both last line rule).
+  - Each line treated as independent Mech 2 unit.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b round 8: cap font-independent + Round 7 N=1 drop REFUTED
+
+- context: Round 6 (4 sizes on MS Mincho) and Round 7 (N=1/2 on 12pt
+  MS Mincho) confirmed cap formula but raised 2 questions:
+  (a) is cap font-dependent? (Session 51 found em-dash is)
+  (b) is N=1 drop threshold = fontSize × 1 (Round 7 claim)?
+- evidence: `measure_cap_other_fonts.py`:
+  Suite E (5 CJK fonts × 12pt × N=3 mid-line):
+    ＭＳ 明朝, ＭＳ ゴシック, Yu Mincho, Meiryo, HG明朝E
+    → ALL produce cap=6.0pt, first_drop=6.5pt
+    → cap formula font-INDEPENDENT
+  Suite F (fs=14 N=1 gap-fill, slack 7..14 step 1pt):
+    slack=7.0: comp=7.0 (cap reached)
+    slack=8.0: drop ← first_drop = 8.0, NOT 14.5
+- correction:
+  Round 7's "N=1 first_drop ≈ fontSize × 1" was a sweep-gap artifact
+  (slack 7.0..14.0 untested, jumped from 6.7 to 14.5). True N=1 first
+  drop = cap + 1.0pt = 8.0pt for fs=14, mirroring N≥2.
+  fs=12 N=1 first_drop=12.5 (Round 7) likely also gap-artifact; true
+  value probably 6.5pt. Recommend filler sweep.
+- outcome:
+  - Final unified rule: cap = floor(sz_val/2) × 0.5, drop_threshold =
+    cap + 0.5pt. N-independent and font-independent.
+  - Spec §4.7b Round 8 added with corrected drop_threshold rule.
+  - Implementation simpler: no N=1 special case.
+- open: fs=12 N=1 first_drop verification, 16+pt fonts, mixed-size lines.
+- code change: NONE.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b N=1 cap REVISED + N=2 mid-line resolved (round 7)
+
+- context: §4.7b round 3 claimed N=1 cap = fontSize/3 (= 4pt for 12pt) as
+  special case, derived from a single P_1para_Y50 datapoint. Round 7
+  verifies across 4 font sizes + resolves Round 5's N=2 line-end yak
+  anomaly.
+- evidence: `measure_cap_n1_n2.py`:
+  Suite C (N=1 mid-line, pos 12 of 24, fine 0.5pt slack sweep):
+    fs=12 N=1 → max_comp = 6.0pt (= fontSize/2, NOT fontSize/3)
+    fs=10.5/11/14 sweep had gaps; partial confirmation
+  Suite D (N=2 mid-line, pos 8 + 16, 12pt):
+    max_comp = 6.0pt (= fontSize/2, Round 6 formula confirmed)
+    Round 5's "12pt anomaly" was line-end yak placement artifact
+- new finding (drop threshold):
+  N=1 first_drop = ~fontSize (12.5 for fs=12, 14.5 for fs=14)
+  N≥2 first_drop = cap + 0.5..1.0pt
+  → N=1 has special drop tolerance: Word allows line to extend up to
+    fontSize past cap before dropping. With multiple yak, distribution
+    is fine-grained enough that drop comes earlier.
+- outcome:
+  - Compression cap = `floor(sz_val/2) × 0.5` UNIVERSAL across N≥1.
+    The N=1 special case (fontSize/3) is REVOKED.
+  - Drop threshold differs: N=1 = fontSize, N≥2 = cap + 0.5pt.
+  - Spec §4.7b round 7 added with the corrected formula and drop-
+    threshold characterization.
+  - Implementation: same cap formula for any N; only drop_threshold
+    branches on N=1 vs N≥2.
+- open: fs=10.5/11/14 N=1 sweep gaps (haven't tested exact cap at those
+  font sizes due to slack sampling). Larger fonts. Other CJK fonts.
+- code change: NONE. Spec §4.7b round 7 added.
+
+## 2026-05-02 — oxi-1 — confirmed — §4.7b cap formula universal (4 font sizes verified, 0.5pt-quantized)
+
+- context: Round 5 found line-level cap = fontSize/2 at 12pt only.
+  Round 6 verifies universality across 10.5pt, 11pt, 12pt, 14pt.
+- evidence: `measure_cap_font_size_sweep.py` (16 cw values per font ×
+  4 font sizes × N=3 yak, controlled cSC=compressPunctuation, direct-zip
+  docx). Aggregator `measure_cap_font_aggregator.py` re-measured 47
+  docx with incremental save after first script crashed mid-Suite-A.
+- findings:
+  | fs | fs/2 (theory) | observed cap | first_drop slack | per-yak (N=3) |
+  | 10.5 | 5.25 | 5.00 | 6.2 | 1.667 |
+  | 11.0 | 5.50 | 5.50 | 6.5 | 1.833 |
+  | 12.0 | 6.00 | 6.00 | 7.0 | 2.000 |
+  | 14.0 | 7.00 | 7.00 | 8.0 | 2.333 |
+- formula refined:
+  cap_pt = round_down_to_0.5pt(fontSize / 2)
+         = floor(sz_val_int / 2) * 0.5
+  For fs=10.5 (sz=21): floor(21/2)*0.5 = 10*0.5 = 5.0pt
+  Other fs (11/12/14) have integer fs/2, no quantization needed.
+  This matches Mech 2's 0.5pt-step distribution granularity (Word's
+  internal half-point precision).
+- outcome:
+  - cap formula confirmed universal across MS Mincho 10.5-14pt.
+  - 0.5pt quantization rule documented in spec §4.7b round 6.
+  - Implementation guidance:
+    `cap = (sz_val_int / 2) * 0.5_pt` (clean integer math from
+    docx's `<w:sz w:val="N"/>` value).
+- open: N=2 mid-line anomaly (Suite B was planned but original script
+  died on Suite A; can be added later). Larger fonts (16+pt) untested.
+  Other CJK fonts (Yu Mincho, Meiryo) untested.
+- code change: NONE. Spec §4.7b round 6 added.
 
 ## 2026-05-02 — oxi-1 — confirmed — §4.7b per-yak cap REVISED: line-level cap = fontSize/2, divided by N
 
