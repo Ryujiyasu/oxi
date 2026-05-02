@@ -3585,8 +3585,12 @@ impl LayoutEngine {
         let inset_r = text_box.inset_right.unwrap_or(7.2);
         let inset_t = text_box.inset_top.unwrap_or(3.6);
         let inset_b = text_box.inset_bottom.unwrap_or(3.6);
-        let inner_x = abs_x + inset_l;
-        let inner_width = (text_box.width - inset_l - inset_r).max(0.0);
+        // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
+        let corner_inset = text_box.corner_radius
+            .map(|r| r * (1.0 - std::f32::consts::FRAC_1_SQRT_2))
+            .unwrap_or(0.0);
+        let inner_x = abs_x + inset_l + corner_inset;
+        let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
         let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
         // v-text-anchor: middle/bottom shifts content within textbox.
         // Initial cursor at top; for middle/bottom, compute content height first,
