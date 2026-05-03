@@ -247,6 +247,71 @@ checkbox+text rows to MORE lines than Word. Likely related to:
 - character width for □ + Japanese text
 - Latin-CJK word break rules
 
+## §6.7 Update 2026-05-03 — Word COM cell measurements (Day 1.5)
+
+Word COM (`Range.Cells` iteration vMerge-safe) gives actual Word cell Y:
+
+| label | Word y | Oxi y | drift |
+|---|---:|---:|---:|
+| R1 hdr | 126.00 | 124.50 | -1.5 |
+| R2 組織restart | 144.00 | 142.50 | -1.5 |
+| R3 cont | 189.00 | 185.62 | -3.4 |
+| R4 cont | 251.00 | 248.12 | -2.9 |
+| R5 cont | 313.50 | 308.75 | -4.75 |
+| **R6 人的restart** | **358.50** | **350.00** | **-9.0** ← swing |
+| R7 cont | 381.50 | 385.50 | **+4.0** |
+| R8 物理restart | 434.50 | 438.50 | +4.0 |
+| R9 cont | 508.50 | 509.00 | +0.5 |
+| R10 cont | 553.50 | 550.25 | -3.25 |
+| R11 技術restart | 604.00 | 599.25 | -4.75 |
+| R12 cont | 657.00 | 652.25 | -4.75 |
+| R13 cont | 710.00 | 705.25 | -4.75 |
+
+R5→R6 transition: Word advance 45pt, Oxi advance 41.25pt (drift -3.75pt).
+R6→R7 transition: Word advance 23pt, Oxi advance 35.5pt (drift +12.5pt).
+R6 (人的 restart) is the dominant drift source.
+
+## §6.8 Root cause — 2-pass row_height revision
+
+`crates/oxidocs-core/src/layout/mod.rs:6189-6209` has a 2-pass row height:
+1. Initial `row_height` from `estimate_para_height` per cell (line 5526)
+2. After rendering, `max_actual_cell_h > row_height` triggers `row_height
+   = max_actual_cell_h` (revised upward)
+
+For R6 (人的 restart, `<w:trHeight w:val="453"/>` = 22.65pt atLeast):
+- Declared row_height = 22.65pt (matches trHeight)
+- Actual rendered cell content height ≈ 35.5pt
+- → `row_height` revised to 35.5pt (+12.85pt vs declared)
+
+cursor_y advances by the REVISED row_height.
+
+Word renders the same row at exactly 23pt (matches trHeight + content).
+
+**Why is Oxi's actual rendered height larger than Word's?**
+
+Hypothesis: cell content `<w:p>` paragraphs render differently between
+estimate and actual. Estimate uses wrap heuristic that matches Word
+(content fits in 1 line). Actual rendering wraps to 2+ lines somewhere.
+
+Likely culprits:
+1. **Line height multiplier** — actual rendering uses 1.5× line spacing
+   while estimate uses 1.0×, growing each line by 50%.
+2. **Paragraph spacing** — actual adds `space_before/after` between
+   consecutive cell paragraphs while estimate doesn't.
+3. **Cell padding** — actual adds `pad_t + pad_b` separately while
+   estimate already accounts for it.
+
+To fix (multi-day):
+- Add debug output for `actual_cell_h` vs `cell_content_h` (estimate)
+  per cell, identify the discrepancy source.
+- Reconcile estimate and actual rendering paths so they match.
+- Ideal: rendering path CALLS estimate_para_height (single source).
+
+**Predicted impact**: If R6 row drops from 35.5pt to 23pt (-12.5pt), the
+post-R6 drift collapses by ~12pt. b35123 likely improves by ~+0.05 SSIM.
+Same fix may help other vMerge+trHeight docs (1ec1 has similar pattern,
+1636d28e too — could be a class fix benefiting multiple bottom docs).
+
 ## 7. Files / data
 
 - Measurement script: `c:/tmp/measure_b35123_v2.py`
