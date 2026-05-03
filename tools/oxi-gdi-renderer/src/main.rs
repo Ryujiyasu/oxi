@@ -139,7 +139,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, text_scale, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, double_strikethrough, highlight, character_spacing, text_scale, ..
                     } => {
                         let fs = (*font_size as f64 * scale).round() as i32;
                         // 2026-04-19: Apply horizontal text scale (OOXML w:w).
@@ -249,14 +249,27 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             let _ = DeleteObject(pen);
                         }
 
+                        // Strikethrough — single or double (R-11 moveFrom uses
+                        // `double_strikethrough` to match Word's per-run move
+                        // styling, COM-confirmed 2026-04-29 in fixture_08).
                         if *strikethrough {
                             let mut tm = TEXTMETRICW::default();
                             GetTextMetricsW(mem_dc, &mut tm);
                             let st_y = y + tm.tmAscent / 2;
                             let st_pen = CreatePen(PS_SOLID, 1, rgb);
                             let old_pen = SelectObject(mem_dc, st_pen);
-                            MoveToEx(mem_dc, x, st_y, None);
-                            LineTo(mem_dc, x + ew, st_y);
+                            if *double_strikethrough {
+                                // Two parallel lines, 2px apart — matches
+                                // fixture_08 measurement: y=164/165 + y=167/168
+                                // at 150 DPI ≈ 1pt separation.
+                                MoveToEx(mem_dc, x, st_y - 1, None);
+                                LineTo(mem_dc, x + ew, st_y - 1);
+                                MoveToEx(mem_dc, x, st_y + 2, None);
+                                LineTo(mem_dc, x + ew, st_y + 2);
+                            } else {
+                                MoveToEx(mem_dc, x, st_y, None);
+                                LineTo(mem_dc, x + ew, st_y);
+                            }
                             SelectObject(mem_dc, old_pen);
                             let _ = DeleteObject(st_pen);
                         }
