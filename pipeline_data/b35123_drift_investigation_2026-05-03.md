@@ -312,6 +312,74 @@ post-R6 drift collapses by ~12pt. b35123 likely improves by ~+0.05 SSIM.
 Same fix may help other vMerge+trHeight docs (1ec1 has similar pattern,
 1636d28e too — could be a class fix benefiting multiple bottom docs).
 
+## §6.9 Day 2 — char_width discrepancy between estimate and actual rendering
+
+Per-cell debug instrumentation (`OXI_DBG_CELL=1` env) gives both estimate
+and actual content_h:
+
+| row | cell | text | est | act | gap |
+|---|---|---|---:|---:|---:|
+| R0 hdr | C0 区分 (2字) | 1 para | 13.12 | 17.50 | +4.4 |
+| R0 hdr | C1 匿名... (29字) | 1 para | 13.12 | 17.50 | +4.4 |
+| R1 組織restart | C0 組織的管理措置 (6字) | 1 para | 25.75 | **35.00** | +9.3 |
+| R1 | C1 (2 paras) | | 25.75 | 42.62 | +16.9 |
+| **R5 人的restart** | **C0 人的管理措置 (6字)** | **1 para** | **13.12** | **35.00** | **+21.9** ← 主犯 |
+| R5 | C1 □ 法人... (1 para) | | 16.50 | 16.00 | -0.5 |
+| R6 | C1 (3 paras) | | 36.38 | 52.50 | +16.1 |
+| R7 物理restart | C0 物理的管理措置 | 1 para | 25.75 | 35.00 | +9.3 |
+
+**Pattern**: ALL label cells (C0 with names like 組織的管理措置, 人的管理
+措置, etc., 6 chars × 10.5pt) show est=13-25pt vs act=35pt — Oxi actual
+rendering wraps these to 2 lines, estimate computes 1 line.
+
+**count_cell_lines (estimate path) returns 1 line** — meaning chars FIT
+in 59.85pt cell width per estimate's char-width calc.
+
+**actual rendering wraps to 2 lines** — meaning chars OVERFLOW 59.85pt
+per the actual path's char-width calc.
+
+→ **Different `char_width_pt` values returned by estimate vs actual paths**.
+
+For 6 chars × 10.5pt = 63pt:
+- Cell width 59.85pt
+- estimate: ~9.85pt/char × 6 = 59.1pt (fits)
+- actual: ~10.5pt/char × 6 = 63pt (wraps)
+
+Word side: same character "人的管理措置" renders at h=23pt (1 line) in
+its 59.85pt cell — matches estimate's behavior. Actual rendering is
+wrong.
+
+## §6.10 Fix candidate
+
+Two paths:
+
+**A. Make actual rendering use estimate's char_width** — find the
+`char_width_pt_*` function used in actual cell rendering (around
+mod.rs:5993 or break_into_lines internals) and reconcile with
+`char_width_pt_with_fallback` used by `count_cell_lines`.
+
+**B. Allow overflow in actual rendering** — Word may not strictly wrap
+when content barely overflows cell width. Add a small tolerance (e.g.
+1pt) before wrap decision.
+
+Option A is more correct (matches Word). Option B is a heuristic.
+
+**Predicted impact**: ~7-12 label cells per b35123 page each save 12-22pt
+of unnecessary row height. b35123 row drift collapses, SSIM likely
++0.05 to +0.10. Same fix benefits any doc with narrow vMerge label
+columns (tokumei series, kyodokenkyuyoushiki series, b35 forms).
+
+## Multi-day Day 3+ work plan
+
+1. **Identify char_width fn used in actual cell rendering** — break_into_lines
+   or its sub-call. Compare with `char_width_pt_with_fallback`.
+2. **Diff the implementations** — find why one returns 9.85pt and the
+   other returns 10.5pt for the same CJK char in MS Mincho theme font.
+3. **Decide fix direction** — change actual to match estimate (likely),
+   or estimate to match actual.
+4. **Implement + canary** on b35123, 1ec1, 1636d28e, and bottom-15.
+5. **Ship** if net positive.
+
 ## 7. Files / data
 
 - Measurement script: `c:/tmp/measure_b35123_v2.py`
