@@ -4616,12 +4616,18 @@ impl LayoutEngine {
                     }
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
-                    // ed025 fix 2026-05-03: trailing U+3000 (fullwidth space) doesn't
-                    // trigger wrap in Word. Cell rendering already handles this at
-                    // mod.rs:5803 / 6685 ("is_space = ch==' ' || ch=='\\u{3000}'");
-                    // extend to break_into_lines CJK path. Para 10 = "32×　 + 法人番号: + 5×　"
-                    // wraps to 2 lines in Oxi but 1 in Word due to trailing 5×　.
-                    let is_immune_space = ch == '\u{3000}';
+                    // 2026-05-03: 82de3fa REVERTED. The "U+3000 always immune"
+                    // gate was over-broad: d77a has a paragraph with 142×U+3000
+                    // decorative run that became immune from wrap → over-packed
+                    // on p.8/9/10. Test: full revert lifts d77a p.10 +0.054,
+                    // p.9 +0.037, p.8 +0.008 (TOTAL +0.099); ed025 p.1 -0.042
+                    // (the original 82de3fa target paragraph reverts to 2-line
+                    // wrap). Net +0.057 / bottom-5 floor 3.2377 → 3.2646
+                    // (+0.0269 strict positive Path A). ed025 stays rank 18.
+                    // Future refinement: distinguish trailing-run length —
+                    // simple threshold gate fails because per-paragraph immune
+                    // affects ALL U+3000s in that paragraph not just trailing.
+                    let is_immune_space = false;
                     let line_compress_count = current_line.fragments.iter()
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
