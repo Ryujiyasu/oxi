@@ -695,6 +695,15 @@ pub struct PropertyChange {
     /// same reason as `prior_run_style`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prior_paragraph_style: Option<Box<ParagraphStyle>>,
+    /// Prior paragraph alignment (`<w:jc>` inside `<w:pPrChange>/<w:pPr>`).
+    /// `Paragraph.alignment` is a top-level IR field separate from
+    /// `ParagraphStyle`, so a pPrChange that toggles alignment can't ride
+    /// on `prior_paragraph_style` alone — the parser captures alignment
+    /// here when the prior pPr declares `<w:jc>`. R-12 v3.5 (R72,
+    /// 2026-04-29) consumes this to surface "Alignment: …" in the
+    /// "Formatted" margin balloon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_alignment: Option<Alignment>,
 }
 
 /// Resolved author palette entry — `display` is the join key, `color_index` is
@@ -1074,6 +1083,13 @@ impl Default for ParagraphStyle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TableStyle {
     pub border: bool,
+    /// True iff `<w:tblBorders>` was directly in this table's `<w:tblPr>`,
+    /// not inherited from a `<w:tblStyle>`. Used to gate the b35-style
+    /// "border-at-margin-minus-padding" offset (gen2_052 needs it,
+    /// 683ff with explicit borders does NOT — Word renders 683ff border
+    /// at margin without subtracting padding).
+    #[serde(default)]
+    pub explicit_borders: bool,
     /// Whether the table has inside horizontal borders (insideH)
     #[serde(default)]
     pub has_inside_h: bool,

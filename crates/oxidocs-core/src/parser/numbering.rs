@@ -159,6 +159,14 @@ impl NumberingDefinitions {
         let level = abstract_num.levels.get(&ilvl)?;
         level.indent_left
     }
+
+    /// Get the hanging indent for a given numId and ilvl
+    pub fn get_level_hanging(&self, num_id: &str, ilvl: u8) -> Option<f32> {
+        let abstract_num_id = self.num_map.get(num_id)?;
+        let abstract_num = self.abstract_nums.get(abstract_num_id)?;
+        let level = abstract_num.levels.get(&ilvl)?;
+        level.indent_hanging
+    }
 }
 
 /// Map Symbol/Wingdings private use area characters to standard Unicode equivalents

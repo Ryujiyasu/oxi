@@ -5441,8 +5441,14 @@ impl LayoutEngine {
             // EXPLICITLY set to 0 (Some(0.0)). When absent (None), use plain margin.
             // b35 measurement: Word table at margin+5.6 (= cell text start), border at
             // margin. Prior formula subtracted 5.2pt from margin → 5.2pt left-shift bug.
+            // 2026-05-03: Additionally gate on `!explicit_borders`. 683ff has
+            // explicit `<w:tblBorders>` in tblPr — Word renders its border AT
+            // the margin (no padding subtraction). Style-only-bordered tables
+            // (e.g. b35/gen2_052) need the offset; explicit-borders tables don't.
             let border_offset = match table.style.indent {
-                Some(v) if v.abs() < 0.01 => pad_l_default + border_w / 2.0,
+                Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
+                    pad_l_default + border_w / 2.0
+                }
                 _ => 0.0,
             };
             match table.style.alignment.as_deref() {

@@ -48,5 +48,90 @@
     "file": "fixture_10_multiple_reviewers.docx",
     "description": "Two authors: Alice's insertion + Bob's deletion in same paragraph; people.xml includes both.",
     "status": "OK"
+  },
+  {
+    "file": "fixture_11_cjk_revisions.docx",
+    "description": "CJK body (MS Mincho 24pt) with one ins + one del — exercises R-01/R-03 styling on CJK glyphs.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_12_three_reviewers.docx",
+    "description": "Three reviewers (Alice ins / Bob del / Carol ins) — surfaces palette slot 2 on the Oxi side for future Word pixel-pass confirmation.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_13_pPrChange_indent.docx",
+    "description": "pPrChange revision — paragraph left-indent toggled from 0 to 720dxa; prior pPr recorded empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_14_rPrChange_font.docx",
+    "description": "rPrChange revision — run toggled to Times New Roman 14pt; prior rPr recorded empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_15_pPrChange_alignment.docx",
+    "description": "pPrChange revision — paragraph alignment toggled from left to center.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_16_rPrChange_caps_spacing.docx",
+    "description": "rPrChange revision — run toggled to all_caps + character_spacing=1pt; prior rPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_17_rPrChange_vAlign_shading.docx",
+    "description": "rPrChange revision — run toggled to superscript + yellow shading; prior rPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_18_pPrChange_shading.docx",
+    "description": "pPrChange revision — paragraph shading toggled from default to yellow (#FFFF00); prior pPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_19_pPrChange_keep_next.docx",
+    "description": "pPrChange revision — paragraph toggled to keep_next=true; prior pPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_20_pPrChange_borders.docx",
+    "description": "pPrChange revision — paragraph gained a bottom border (single 0.5pt black); prior pPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_21_pPrChange_tabs.docx",
+    "description": "pPrChange revision — 3 tab stops added at 72/144/216pt; prior pPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_22_pPrChange_numPr.docx",
+    "description": "pPrChange revision — paragraph attached to inline numPr (numId=1 ilvl=0); prior pPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_23_rPrChange_outline_emboss.docx",
+    "description": "rPrChange revision — run toggled to outline + emboss; prior rPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_24_rPrChange_shadow_vanish_dstrike.docx",
+    "description": "rPrChange revision — run toggled to shadow + vanish + double-strikethrough; prior rPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_25_rPrChange_highlight_position.docx",
+    "description": "rPrChange revision — run toggled to highlight=yellow + position=3pt + emphasis_mark=dot; prior rPr empty.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_26_pPrChange_pageBreak_widow.docx",
+    "description": "pPrChange revision — page_break_before added + widow_control turned off; prior pPr defaults.",
+    "status": "OK"
+  },
+  {
+    "file": "fixture_27_pPrChange_bidi_textAlign.docx",
+    "description": "pPrChange revision — bidi (RTL) + text_alignment=top added; prior pPr empty.",
+    "status": "OK"
   }
 ]

@@ -1,4 +1,4 @@
-"""Oxi GDI Renderer → PNG レンダラー (Windows GDI TextOutW for pixel-accurate comparison)"""
+"""Oxi Renderer → PNG (DirectWrite/Direct2D default, GDI fallback)"""
 
 import subprocess
 import os
@@ -7,21 +7,35 @@ from .config import OXI_ROOT, OXI_PNG_DIR, RENDER_DPI
 
 RENDER_TIMEOUT = 300
 
-# GDI renderer binary path
-GDI_RENDERER = os.path.join(OXI_ROOT, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
+# DirectWrite is the default per session_50_dwrite_renderer_shipped.md
+# (commit 04cc22d): full baseline mean SSIM 0.851286→0.854443 (+0.003157,
+# 1.5x sentinel). Word uses DirectWrite internally so this matches Word's
+# text engine glyph metrics. Set OXI_USE_GDI=1 to force the legacy GDI
+# renderer (e.g., for diagnosing per-doc regressions vs DWrite).
+DWRITE_RENDERER = os.path.join(
+    OXI_ROOT, "tools", "oxi-dwrite-renderer", "target", "release", "oxi-dwrite-renderer.exe"
+)
+GDI_RENDERER = os.path.join(
+    OXI_ROOT, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe"
+)
+USE_GDI = os.environ.get("OXI_USE_GDI", "").lower() in ("1", "true", "yes")
+RENDERER_BIN = GDI_RENDERER if USE_GDI else DWRITE_RENDERER
+RENDERER_NAME = "GDI" if USE_GDI else "DWrite"
 
 
 def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
-    """
-    oxi-gdi-renderer で各.docxをGDI描画しPNG化する。
-    戻り値: {docx_path: [page1.png, page2.png, ...]}
+    """Render each .docx via the active Oxi renderer (DWrite default; GDI
+    fallback when OXI_USE_GDI=1).
+
+    Returns: {docx_path: [page1.png, page2.png, ...]}
     """
     results = {}
 
-    if not os.path.exists(GDI_RENDERER):
+    if not os.path.exists(RENDERER_BIN):
+        crate_dir = "oxi-gdi-renderer" if USE_GDI else "oxi-dwrite-renderer"
         raise FileNotFoundError(
-            f"GDI renderer not found: {GDI_RENDERER}\n"
-            "Build with: cd tools/oxi-gdi-renderer && cargo build --release"
+            f"Oxi {RENDERER_NAME} renderer not found: {RENDERER_BIN}\n"
+            f"Build with: cd tools/{crate_dir} && cargo build --release"
         )
 
     for docx_path in docx_paths:
@@ -41,7 +55,7 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
         timed_out = False
         try:
             proc = subprocess.Popen(
-                [GDI_RENDERER,
+                [RENDERER_BIN,
                  os.path.abspath(docx_path),
                  prefix,
                  str(RENDER_DPI)],
@@ -53,12 +67,12 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-                print(f"[WARN] Oxi GDI timeout ({doc_id}): >{RENDER_TIMEOUT}s — using partial output")
+                print(f"[WARN] Oxi {RENDERER_NAME} timeout ({doc_id}): >{RENDER_TIMEOUT}s — using partial output")
                 timed_out = True
 
             if not timed_out and proc.returncode != 0:
                 err_text = stderr.decode("utf-8", errors="replace")[:300]
-                print(f"[NG] Oxi GDI error ({doc_id}):\n{err_text}")
+                print(f"[NG] Oxi {RENDERER_NAME} error ({doc_id}):\n{err_text}")
                 results[docx_path] = []
                 continue
 
@@ -75,14 +89,21 @@ def render_with_oxi(docx_paths: list[str]) -> dict[str, list[str]]:
                 src.rename(dst)
                 page_idx += 1
 
+            # When OXI_MAX_PAGES is set, drop extra pages (Oxi renders all
+            # internally; we only want p.1..N for the canary).
+            max_pages = int(os.environ.get("OXI_MAX_PAGES", "0") or "0")
+            if max_pages > 0:
+                for extra in sorted(out_dir.glob("page_*.png"))[max_pages:]:
+                    extra.unlink()
+
             png_paths = sorted(out_dir.glob("page_*.png"))
             results[docx_path] = [str(p) for p in png_paths]
-            tag = "[WARN] partial" if timed_out else "  Oxi GDI"
+            tag = "[WARN] partial" if timed_out else f"  Oxi {RENDERER_NAME}"
             print(f"{tag}: {doc_id} ({len(png_paths)} pages)")
 
         except Exception as e:
-            print(f"[NG] Oxi GDI error ({doc_id}): {e}")
+            print(f"[NG] Oxi {RENDERER_NAME} error ({doc_id}): {e}")
             results[docx_path] = []
 
-    print(f"[OK] Oxi GDI rendering done: {len(results)} files")
+    print(f"[OK] Oxi {RENDERER_NAME} rendering done: {len(results)} files")
     return results

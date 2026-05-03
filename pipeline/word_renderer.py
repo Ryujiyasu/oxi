@@ -84,6 +84,9 @@ try:
     doc = word.Documents.Open(docx_path, ReadOnly=True, AddToRecentFiles=False, ConfirmConversions=False)
     try:
         page_count = doc.ComputeStatistics(2)
+        max_pages = int(os.environ.get("OXI_MAX_PAGES", "0") or "0")
+        if max_pages > 0:
+            page_count = min(page_count, max_pages)
         for page_num in range(1, page_count + 1):
             pdf_path = os.path.join(out_dir, f"page_{page_num:04d}.pdf")
             png_path = os.path.join(out_dir, f"page_{page_num:04d}.png")

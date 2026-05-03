@@ -92,6 +92,21 @@ fn main() {
                     println!("  [{}] Image {:.0}x{:.0}pt ({} bytes) alt={:?}",
                         bi, img.width, img.height, img.data.len(), img.alt_text);
                 }
+                ir::Block::Math(math_block) => {
+                    // R82 (2026-04-29): the dump_docx example's Block match
+                    // was non-exhaustive — Block::Math (added by OMML
+                    // Phase 2 / Session 43) was missing entirely, breaking
+                    // `cargo build --example dump_docx` once OMML landed.
+                    // Print a concise summary: kind (inline / display) +
+                    // top-level expression count. Recursion into nested
+                    // MathExpr is out of scope for a structural dump.
+                    let (kind, n_exprs) = match math_block {
+                        ir::MathBlock::Inline(xs) => ("inline", xs.len()),
+                        ir::MathBlock::Display { content, .. } => ("display", content.len()),
+                    };
+                    println!("  [{}] Math {} ({} top-level expressions)",
+                        bi, kind, n_exprs);
+                }
                 ir::Block::UnsupportedElement(u) => {
                     println!("  [{}] Unsupported: {}", bi, u.element_type);
                 }

@@ -1384,6 +1384,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
+    // 2026-05-01 R12: snapshot pPr-explicit indent BEFORE style inheritance.
+    // LibreOffice algorithm (ndtxt.cxx:AreListLevelIndentsApplicable, line 4820)
+    // applies numbering's indent ONLY when paragraph has NO hard-set indent (in
+    // pPr) AND no style in the basedOn chain has hard-set indent. This snapshot
+    // captures pPr-explicit; the style chain check is implicit in the order of
+    // operations below.
+    let ppr_explicit_indent_left =
+        style.indent_left.is_some() || style.indent_left_chars.is_some();
+    let ppr_explicit_first_line =
+        style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
+
     // Apply style inheritance from StyleSheet (basedOn already resolved)
     // ECMA-376: paragraph with no pStyle implicitly uses the default paragraph style (w:default="1")
     let effective_style_id = style_id.clone()
@@ -1578,6 +1589,31 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     }
                 }
             }
+            // 2026-05-01 R12: numbering's left/hanging indent OVERRIDES
+            // style-inherited indent (but NOT pPr-explicit indent). Implements
+            // LibreOffice's `AreListLevelIndentsApplicable` algorithm
+            // (sw/source/core/txtnode/ndtxt.cxx:4820): when paragraph has direct
+            // numPr in pPr and no hard-set indent in pPr, the list-level indents
+            // apply (i.e., numbering's `ind left/hanging` wins over the style
+            // chain's indent). Pixel-verified on d77a58485f16 p10 p5: numbering
+            // num=1 ilvl=0 has ind left=780tw=39pt hanging=360tw=18pt. Word
+            // visually renders L1 body at margin+21pt, L2+ at margin+39pt
+            // (standard hanging-indent), NOT at style a9's ind left=720tw=36pt.
+            // Note: COM Format.LeftIndent / Information(5) for Range.Characters
+            // are unreliable for hanging-indent paragraphs — pixel measurement
+            // of Word PNG required to verify visual position.
+            if !ppr_explicit_indent_left {
+                if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
+                    style.indent_left = Some(left);
+                    style.indent_left_chars = None;
+                }
+            }
+            if !ppr_explicit_first_line {
+                if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
+                    style.indent_first_line = Some(-hanging);
+                    style.indent_first_line_chars = None;
+                }
+            }
         }
     }
 
@@ -1735,7 +1771,21 @@ fn parse_paragraph_properties(
                         style.ppr_rpr = Some(ppr_rpr);
                     }
                     "numPr" if depth == 0 => {
-                        num_pr = Some(parse_num_pr(reader)?);
+                        let npr = parse_num_pr(reader)?;
+                        // R95 (2026-04-30): also mirror the parsed inline
+                        // numPr onto style.num_id/num_ilvl so describe_ppr_diff
+                        // (R-12 v3 ppr-axis) can compare prior vs current
+                        // numbering when a pPrChange records an inline numPr
+                        // toggle. Layout reads via num_pr_ref directly (line
+                        // ~1540-1552 reconstructs num_pr_ref from style.num_id
+                        // only when num_pr_ref is None — never the other way
+                        // around) so this is read-only from the perspective
+                        // of layout / list rendering.
+                        if !npr.num_id.is_empty() {
+                            style.num_id = Some(npr.num_id.clone());
+                            style.num_ilvl = npr.ilvl;
+                        }
+                        num_pr = Some(npr);
                     }
                     "spacing" if depth == 0 => {
                         style.has_direct_spacing = true;
@@ -1815,9 +1865,17 @@ fn parse_paragraph_properties(
                             match reader.read_event()? {
                                 Event::Start(inner) => {
                                     if local_name(inner.name().as_ref()) == "pPr" {
-                                        let (prior, _a, _sid, _npr, _spr, _nested, _pmr) =
+                                        let (prior, prior_explicit_align, _sid, _npr, _spr, _nested, _pmr) =
                                             parse_paragraph_properties(reader)?;
                                         pc.prior_paragraph_style = Some(Box::new(prior));
+                                        // R72: capture prior <w:jc> if the inner pPr
+                                        // declared one. Only set when explicit — a
+                                        // missing jc means "inherit from style", not
+                                        // "Left" (parse_paragraph_properties returns
+                                        // None when no <w:jc> child was seen).
+                                        if let Some(a) = prior_explicit_align {
+                                            pc.prior_alignment = Some(a);
+                                        }
                                     }
                                 }
                                 Event::Empty(inner) => {
@@ -2014,14 +2072,16 @@ fn parse_paragraph_properties(
                             }
                         }
                         // *Chars attributes: store raw values; resolved at layout time.
-                        // When hanging coexists with leftChars, the twip `left` value
-                        // already includes hanging and is the correct body-text indent.
-                        // leftChars*10.5 gives only the first-line position, NOT the body.
-                        // Skip leftChars override to use the authoritative twip value.
-                        let has_hanging = style.indent_first_line.map_or(false, |f| f < 0.0)
-                            || hanging_chars.is_some();
+                        // Pre-2026-05-01: when hanging coexisted with leftChars, the
+                        // skip rationale assumed an authoritative twip `left`. But for
+                        // docx that have ONLY chars-based indent (no twip), skipping
+                        // leftChars left subsequent-line wrap width ~1 char too wide,
+                        // causing Oxi to fit 2 extra chars on line 1 vs Word
+                        // (wrap_point_diff num_hang_chars test, 2026-05-01).
+                        // Now: only skip when twip `left` is also present (twip wins).
+                        let has_twip_left = style.indent_left.is_some();
                         if let Some(lc) = left_chars {
-                            if !has_hanging {
+                            if !has_twip_left {
                                 style.indent_left_chars = Some(lc);
                             }
                         }
@@ -4652,6 +4712,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                 if local == "tblBorders" {
                     // Don't set border=true here; individual border elements check val!=none
                     in_borders = true;
+                    style.explicit_borders = true;
                 } else if local == "tblCellMar" {
                     // Parse default cell margins
                     let mut margins = CellMargins { top: None, bottom: None, left: None, right: None };
@@ -5850,20 +5911,13 @@ fn parse_tracked_change_runs(
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
                     let (mut run, _dr) = parse_run(reader, ctx, styles, None)?;
-                    // Matches Word output:
-                    // - "delete" → strikethrough + red color
-                    // - "insert" → underline + red color
-                    if tc.change_type == "delete" {
-                        run.style.strikethrough = true;
-                        if run.style.color.is_none() {
-                            run.style.color = Some("FF0000".to_string());
-                        }
-                    } else if tc.change_type == "insert" {
-                        run.style.underline = true;
-                        if run.style.color.is_none() {
-                            run.style.color = Some("FF0000".to_string());
-                        }
-                    }
+                    // R62 (2026-04-29): parser stores tracked_change ONLY.
+                    // Visual styling (underline/strikethrough + author-palette
+                    // color) is applied at layout time by R-01
+                    // apply_revision_styling_to_run (mod.rs:732), using the
+                    // author palette and ShowRevisions mode. Pre-applying
+                    // hardcoded FF0000 here was legacy from before R-01
+                    // landed and required compensating strip helpers.
                     run.tracked_change = Some(tc.clone());
                     runs.push(run);
                 } else {

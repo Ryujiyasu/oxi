@@ -174,6 +174,8 @@ pub fn is_cjk(ch: char) -> bool {
         0x31F0..=0x31FF |
         // CJK Symbols and Punctuation
         0x3000..=0x303F |
+        // Enclosed Alphanumerics (①, ②, …, ⑳, ⒈, ⒉, …)
+        0x2460..=0x24FF |
         // Enclosed CJK Letters and Months (㊀, ㈱, etc.)
         0x3200..=0x32FF |
         // CJK Compatibility (㎡, ㎞, ㎏, etc.)
@@ -210,10 +212,28 @@ mod tests {
 
     #[test]
     fn test_line_start_prohibited() {
+        // Closing brackets and CJK punctuation that can't start a line
+        // (Word default + JIS X 4051 agree on these).
         assert!(is_line_start_prohibited('。'));
         assert!(is_line_start_prohibited('、'));
         assert!(is_line_start_prohibited('）'));
-        assert!(is_line_start_prohibited('っ'));
+        // R81 (2026-04-29): small kana are NOT prohibited under Word's
+        // default Microsoft kinsoku, even though JIS X 4051 strict
+        // prohibits them. The implementation matches Word's COM-confirmed
+        // behaviour (see LINE_START_PROHIBITED doc, 2026-04-08); the test
+        // formerly asserted strict JIS X 4051 (`is_line_start_prohibited('っ')`)
+        // and has failed since `っ` was removed from the implementation
+        // list in that 2026-04-08 ship. Pin the Word-default invariant
+        // here so a future revert to JIS-strict can't pass silently.
+        assert!(
+            !is_line_start_prohibited('っ'),
+            "small tsu must NOT be line-start-prohibited under Word default kinsoku"
+        );
+        assert!(
+            !is_line_start_prohibited('ゃ'),
+            "small ya must NOT be line-start-prohibited under Word default kinsoku"
+        );
+        // Non-prohibited "normal" characters.
         assert!(!is_line_start_prohibited('あ'));
         assert!(!is_line_start_prohibited('A'));
     }

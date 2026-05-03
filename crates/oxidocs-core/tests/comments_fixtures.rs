@@ -997,6 +997,7 @@ fn r10_fires_for_paragraph_level_ppr_change() {
                     date: None,
                     prior_run_style: None,
                     prior_paragraph_style: None,
+                    prior_alignment: None,
                 });
             }
         }
@@ -1212,6 +1213,11 @@ fn fixture_04_layout_multi_paragraph_range_highlight() {
 /// R-11: `<w:moveFrom>` and `<w:moveTo>` always render in green (#2B6033)
 /// regardless of the author's palette slot — Word's hard-coded behavior
 /// (COM-confirmed 2026-04-25 in fixture_08).
+///
+/// R-11 v2 (R66, 2026-04-29): moveFrom uses **double** strikethrough and
+/// moveTo uses **double** underline. Confirmed by pixel-sampling fixture_08
+/// rendered output: two full-width green lines at y=164/167 (strike) and
+/// y=220/222 (underline), 1pt apart, on the "moved clause" runs.
 #[test]
 fn fixture_08_layout_moves_render_in_green() {
     let Some(bytes) = read_fixture("fixture_08_move_from_to.docx") else {
@@ -1221,15 +1227,44 @@ fn fixture_08_layout_moves_render_in_green() {
     let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_08");
     let result = layout_doc(&doc);
 
-    // Each occurrence of "moved" appears twice — once in the moveFrom and once
-    // in the moveTo (same text).
-    let move_hits = collect_text_elements_with(&result, "moved");
+    // Walk LayoutContent::Text fragments matching "moved" and capture the
+    // full styling tuple — R-11 needs underline_style and double_strikethrough,
+    // not just the bool pair the shared helper exposes.
+    type MoveHit = (bool, Option<String>, bool, bool, Option<String>);
+    let move_hits: Vec<MoveHit> = {
+        let mut out = Vec::new();
+        for page in &result.pages {
+            for el in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text {
+                    text,
+                    underline,
+                    underline_style,
+                    strikethrough,
+                    double_strikethrough,
+                    color,
+                    ..
+                } = &el.content
+                {
+                    if text.contains("moved") {
+                        out.push((
+                            *underline,
+                            underline_style.clone(),
+                            *strikethrough,
+                            *double_strikethrough,
+                            color.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    };
     assert!(
         move_hits.len() >= 2,
         "expected ≥2 'moved' fragments (one moveFrom + one moveTo); got {}",
         move_hits.len()
     );
-    for (_, _, color) in &move_hits {
+    for (_, _, _, _, color) in &move_hits {
         assert_eq!(
             color.as_deref(),
             Some("#2B6033"),
@@ -1237,10 +1272,1100 @@ fn fixture_08_layout_moves_render_in_green() {
         );
     }
 
-    // moveFrom should render strikethrough (no underline); moveTo should render
-    // underline (no strikethrough). Find at least one of each.
-    let any_struck = move_hits.iter().any(|(u, s, _)| *s && !*u);
-    let any_underlined = move_hits.iter().any(|(u, s, _)| *u && !*s);
-    assert!(any_struck, "at least one moveFrom fragment must be strikethrough");
-    assert!(any_underlined, "at least one moveTo fragment must be underlined");
+    // moveFrom: strikethrough=true AND double_strikethrough=true (no underline).
+    let any_double_struck = move_hits
+        .iter()
+        .any(|(u, _, s, ds, _)| *s && *ds && !*u);
+    assert!(
+        any_double_struck,
+        "moveFrom must render with double strikethrough (R-11 v2, R66 COM-confirmed)"
+    );
+
+    // moveTo: underline=true AND underline_style=Some(\"double\") (no strikethrough).
+    let any_double_underlined = move_hits
+        .iter()
+        .any(|(u, us, s, _, _)| *u && us.as_deref() == Some("double") && !*s);
+    assert!(
+        any_double_underlined,
+        "moveTo must render with double underline (R-11 v2, R66 COM-confirmed)"
+    );
+}
+
+/// R-12 (R67, 2026-04-29): a `<w:rPrChange>` run anchors a "Formatted: …"
+/// balloon in the right margin. Pixel-confirmed against fixture_09's
+/// rendered PNG: balloon column starts at x≈401pt (resolved-balloon left
+/// edge), balloon top is at y≈158pt, body line "Formatted: Bold" sits at
+/// y≈166pt. The Oxi side emits the balloon with author = revision author,
+/// resolved=true (narrow grey geometry), and a body string built from the
+/// style diff between `rpr_change.prior_run_style` and the run's current
+/// style.
+#[test]
+fn fixture_09_layout_emits_rprchange_margin_balloon() {
+    let Some(bytes) = read_fixture("fixture_09_rPrChange_bold.docx") else {
+        eprintln!("skipping: fixture_09 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_09");
+    let result = layout_doc(&doc);
+
+    let mut balloon_count = 0_usize;
+    let mut found_body: Option<String> = None;
+    let mut found_author: Option<String> = None;
+    let mut found_resolved: Option<bool> = None;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id,
+                body,
+                author,
+                resolved,
+                ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                    found_author = Some(author.clone());
+                    found_resolved = Some(*resolved);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_09 has 1 rPrChange (bold toggle) → must emit exactly 1 R-12 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "R-12 balloon body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Bold"),
+        "fixture_09 toggles bold on; body should mention 'Bold'; got {body:?}"
+    );
+    assert_eq!(
+        found_author.as_deref(),
+        Some("Alice Reviewer"),
+        "R-12 balloon author must be the rPrChange author"
+    );
+    assert_eq!(
+        found_resolved,
+        Some(true),
+        "R-12 balloons use the narrow (resolved-width) geometry to mirror Word's 'Formatted' balloon"
+    );
+}
+
+/// R-12 v2 (R69, 2026-04-29): a `<w:pPrChange>` paragraph anchors a
+/// "Formatted: …" balloon in the right margin, mirroring v1's run-level
+/// rPrChange behaviour. fixture_13 toggles paragraph indent (0 → 720dxa
+/// = 36pt left); the balloon body must mention "Indent Left" and the
+/// synthetic comment_id must use the `pprchange:` prefix to keep
+/// run-level and paragraph-level entries distinguishable.
+#[test]
+fn fixture_13_layout_emits_pprchange_margin_balloon() {
+    let Some(bytes) = read_fixture("fixture_13_pPrChange_indent.docx") else {
+        eprintln!("skipping: fixture_13 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_13");
+    let result = layout_doc(&doc);
+
+    let mut pprchange_count = 0_usize;
+    let mut rprchange_count = 0_usize;
+    let mut found_body: Option<String> = None;
+    let mut found_author: Option<String> = None;
+    let mut found_resolved: Option<bool> = None;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id,
+                body,
+                author,
+                resolved,
+                ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    pprchange_count += 1;
+                    found_body = Some(body.clone());
+                    found_author = Some(author.clone());
+                    found_resolved = Some(*resolved);
+                } else if comment_id.starts_with("rprchange:") {
+                    rprchange_count += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        pprchange_count, 1,
+        "fixture_13 has 1 pPrChange (indent toggle) → must emit exactly 1 pprchange-prefixed balloon"
+    );
+    assert_eq!(
+        rprchange_count, 0,
+        "fixture_13 has no rPrChange — no rprchange-prefixed balloon expected"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "R-12 v2 balloon body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Indent Left"),
+        "fixture_13 toggles indent → body should mention 'Indent Left'; got {body:?}"
+    );
+    assert_eq!(
+        found_author.as_deref(),
+        Some("Alice Reviewer"),
+        "R-12 v2 balloon author must be the pPrChange author"
+    );
+    assert_eq!(
+        found_resolved,
+        Some(true),
+        "R-12 balloons use narrow (resolved-width) geometry"
+    );
+}
+
+/// R-12 v1 + R71 (2026-04-29): a multi-property `<w:rPrChange>` (font
+/// family + font size in a single change) lays out as ONE balloon whose
+/// body lists both diffs comma-separated. Confirms `describe_rpr_diff`'s
+/// font_family branch (added R71) and the helper's comma-join behaviour
+/// when more than one property toggles in a single revision.
+#[test]
+fn fixture_14_layout_rprchange_multi_property_describe_diff() {
+    let Some(bytes) = read_fixture("fixture_14_rPrChange_font.docx") else {
+        eprintln!("skipping: fixture_14 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_14");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_14 has 1 rPrChange (font + size) → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Font:"),
+        "fixture_14 changes font_family → body must mention 'Font:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Times New Roman"),
+        "the new font name must appear in the body; got {body:?}"
+    );
+    assert!(
+        body.contains("Font Size:"),
+        "fixture_14 changes font_size too → body must mention 'Font Size:'; got {body:?}"
+    );
+    assert!(
+        body.contains("14pt"),
+        "the new font size must appear in the body; got {body:?}"
+    );
+    // Comma-join behaviour: there must be a comma separating the two
+    // property diffs (the only literal comma in this body).
+    assert!(
+        body.contains(", "),
+        "multi-property diff must be comma-separated; got {body:?}"
+    );
+}
+
+/// R-12 v3.5 (R72, 2026-04-29): a `<w:pPrChange>` that toggles paragraph
+/// alignment surfaces "Alignment: …" in the balloon body. R69 v2 left
+/// this gap because Paragraph.alignment lives outside ParagraphStyle;
+/// R72 adds `prior_alignment` to PropertyChange so the parser can
+/// capture the prior `<w:jc>` and the helper can render the diff.
+#[test]
+fn fixture_15_layout_pprchange_alignment_toggle() {
+    let Some(bytes) = read_fixture("fixture_15_pPrChange_alignment.docx") else {
+        eprintln!("skipping: fixture_15 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_15");
+
+    // Parser side: prior_alignment must be captured from the inner
+    // pPr's <w:jc w:val="left"/> child.
+    let mut found_prior_alignment: Option<oxidocs_core::ir::Alignment> = None;
+    for page in &doc.pages {
+        for block in &page.blocks {
+            if let oxidocs_core::ir::Block::Paragraph(p) = block {
+                if let Some(pc) = p.ppr_change.as_ref() {
+                    found_prior_alignment = pc.prior_alignment;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        found_prior_alignment,
+        Some(oxidocs_core::ir::Alignment::Left),
+        "parser must capture prior_alignment = Left from inner pPr/jc"
+    );
+
+    // Layout side: balloon body must mention the alignment toggle.
+    let result = layout_doc(&doc);
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(balloon_count, 1, "fixture_15 has 1 pPrChange → 1 balloon");
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Alignment:"),
+        "alignment toggle must surface as 'Alignment:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Centered"),
+        "current alignment is Center → body should label it 'Centered'; got {body:?}"
+    );
+}
+
+/// R86 (2026-04-29): describe_rpr_diff covers 3 more axes — small_caps,
+/// all_caps, character_spacing. fixture_16 toggles all_caps + character
+/// _spacing in a single rPrChange to exercise (a) the new branches and
+/// (b) the comma-join across multiple new-axis diffs.
+#[test]
+fn fixture_16_layout_rprchange_caps_and_spacing() {
+    let Some(bytes) = read_fixture("fixture_16_rPrChange_caps_spacing.docx") else {
+        eprintln!("skipping: fixture_16 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_16");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_16 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("All Caps"),
+        "all_caps toggle must surface as 'All Caps'; got {body:?}"
+    );
+    assert!(
+        body.contains("Character Spacing"),
+        "character_spacing toggle must surface as 'Character Spacing:'; got {body:?}"
+    );
+    // Multi-axis diff: comma-separated.
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+/// R87 (2026-04-29): describe_rpr_diff covers vertical_align + shading
+/// (and font_family_east_asia, untested by this fixture). fixture_17
+/// toggles vertical_align=superscript + shading=#FFFF00 in a single
+/// rPrChange to exercise both new branches plus comma-join.
+#[test]
+fn fixture_17_layout_rprchange_valign_and_shading() {
+    let Some(bytes) = read_fixture("fixture_17_rPrChange_vAlign_shading.docx") else {
+        eprintln!("skipping: fixture_17 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_17");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_17 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Superscript"),
+        "vertical_align=Superscript must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Shading:"),
+        "shading toggle must surface as 'Shading:'; got {body:?}"
+    );
+    // Multi-axis diff: comma-separated.
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+/// R88 (2026-04-29): describe_ppr_diff covers paragraph shading.
+/// fixture_18 toggles `<w:pPr>/<w:shd w:fill="FFFF00"/>` (yellow
+/// paragraph bg); prior pPr empty. Body must surface
+/// "Paragraph Shading: FFFF00" (the "Paragraph " prefix
+/// disambiguates from the run-level "Shading:" added in R87).
+#[test]
+fn fixture_18_layout_pprchange_paragraph_shading() {
+    let Some(bytes) = read_fixture("fixture_18_pPrChange_shading.docx") else {
+        eprintln!("skipping: fixture_18 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_18");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_18 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Paragraph Shading:"),
+        "paragraph shading toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("FFFF00"),
+        "the new shading hex must appear in the body; got {body:?}"
+    );
+}
+
+/// R89 (2026-04-29): describe_ppr_diff covers keep_next + keep_lines.
+/// fixture_19 toggles keep_next via pPrChange. Body must mention
+/// "Keep With Next".
+///
+/// Originally R89 attempted num_id/num_ilvl axes but numPr is parsed
+/// separately into NumPrRef returned as a 4th tuple element of
+/// parse_paragraph_properties — it never populates ParagraphStyle's
+/// num_id, so prior_paragraph_style.num_id is always None. Wiring
+/// numPr through PropertyChange's prior_num_pr is a future R72-style
+/// 3-layer extension; R89 ships the simpler keep_* bool axes.
+#[test]
+fn fixture_19_layout_pprchange_keep_next() {
+    let Some(bytes) = read_fixture("fixture_19_pPrChange_keep_next.docx") else {
+        eprintln!("skipping: fixture_19 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_19");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_19 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Keep With Next"),
+        "keep_next toggle must surface as 'Keep With Next'; got {body:?}"
+    );
+}
+
+/// R93 (2026-04-30): describe_ppr_diff covers paragraph borders via
+/// side-presence summary (no PartialEq derive needed). fixture_20
+/// adds a bottom border via pPrChange whose prior pPr was empty
+/// (no border). Body must mention "Borders Added".
+#[test]
+fn fixture_20_layout_pprchange_borders_added() {
+    let Some(bytes) = read_fixture("fixture_20_pPrChange_borders.docx") else {
+        eprintln!("skipping: fixture_20 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_20");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_20 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Borders Added"),
+        "borders toggle must surface as 'Borders Added'; got {body:?}"
+    );
+}
+
+/// R94 (2026-04-30): describe_ppr_diff covers tab_stops via position-
+/// only summary (mirror of R93 borders side-summary). fixture_21 adds
+/// 3 tab stops via pPrChange whose prior pPr was empty.
+#[test]
+fn fixture_21_layout_pprchange_tabs_added() {
+    let Some(bytes) = read_fixture("fixture_21_pPrChange_tabs.docx") else {
+        eprintln!("skipping: fixture_21 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_21");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_21 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Tab Stops Added"),
+        "tabs toggle must surface as 'Tab Stops Added'; got {body:?}"
+    );
+}
+
+/// R95 (2026-04-30): describe_ppr_diff covers num_id (and num_ilvl,
+/// not exercised here since prior_ilvl == current_ilvl == 0). R89
+/// originally attempted these but parser asymmetry blocked them;
+/// R95 patches the parser to mirror inline numPr onto
+/// style.num_id/num_ilvl. fixture_22 attaches a paragraph to an
+/// inline list (numId=1 ilvl=0) via pPrChange whose prior pPr was
+/// empty. Body must contain "Numbering: list 1".
+#[test]
+fn fixture_22_layout_pprchange_inline_numPr_attach() {
+    let Some(bytes) = read_fixture("fixture_22_pPrChange_numPr.docx") else {
+        eprintln!("skipping: fixture_22 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_22");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_22 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Numbering: list 1"),
+        "num_id attach must surface as 'Numbering: list 1'; got {body:?}"
+    );
+}
+
+/// R98 (2026-04-30): describe_rpr_diff covers outline + emboss + imprint
+/// (3 NEW non-R72 rPr axes). fixture_23 toggles outline + emboss in a
+/// single rPrChange to exercise both new branches plus comma-join.
+#[test]
+fn fixture_23_layout_rprchange_outline_emboss() {
+    let Some(bytes) = read_fixture("fixture_23_rPrChange_outline_emboss.docx") else {
+        eprintln!("skipping: fixture_23 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_23");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_23 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Outline"),
+        "outline toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Emboss"),
+        "emboss toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+/// R108 (2026-04-30): describe_ppr_diff extension — bidi + page_break_after
+/// + text_alignment (3 more NEW non-R72 ppr axes). fixture_27 toggles bidi
+/// ON and text_alignment="top" in one pPrChange.
+#[test]
+fn fixture_27_layout_pprchange_bidi_textAlign() {
+    let Some(bytes) = read_fixture("fixture_27_pPrChange_bidi_textAlign.docx") else {
+        eprintln!("skipping: fixture_27 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_27");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_27 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Right-to-Left"),
+        "bidi toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Text Alignment: top"),
+        "text_alignment toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+/// R107 (2026-04-30): describe_ppr_diff NEW non-R72 axes — page_break_before
+/// + widow_control + contextual_spacing. fixture_26 toggles
+/// page_break_before ON and widow_control OFF in one pPrChange.
+#[test]
+fn fixture_26_layout_pprchange_pageBreak_widow() {
+    let Some(bytes) = read_fixture("fixture_26_pPrChange_pageBreak_widow.docx") else {
+        eprintln!("skipping: fixture_26 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_26");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("pprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_26 has 1 pPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Page Break Before"),
+        "page_break_before toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Not Widow/Orphan Control"),
+        "widow_control off must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+/// R100 (2026-04-30): describe_rpr_diff extension — highlight + position
+/// + emphasis_mark (3 user-visible Word props, Option-typed). fixture_25
+/// toggles all three in one rPrChange.
+#[test]
+fn fixture_25_layout_rprchange_highlight_position_em() {
+    let Some(bytes) = read_fixture("fixture_25_rPrChange_highlight_position.docx") else {
+        eprintln!("skipping: fixture_25 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_25");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_25 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Highlight: yellow"),
+        "highlight toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Position:"),
+        "position toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Emphasis Mark: dot"),
+        "emphasis_mark toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+/// R99 (2026-04-30): describe_rpr_diff extension — shadow + vanish +
+/// double_strikethrough (3 more NEW non-R72 rPr axes peer to R98).
+/// fixture_24 toggles all three in one rPrChange, exercises the new
+/// branches plus comma-join across them.
+#[test]
+fn fixture_24_layout_rprchange_shadow_vanish_dstrike() {
+    let Some(bytes) = read_fixture("fixture_24_rPrChange_shadow_vanish_dstrike.docx") else {
+        eprintln!("skipping: fixture_24 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_24");
+    let result = layout_doc(&doc);
+
+    let mut found_body: Option<String> = None;
+    let mut balloon_count = 0_usize;
+    for page in &result.pages {
+        for el in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Balloon {
+                comment_id, body, ..
+            } = &el.content
+            {
+                if comment_id.starts_with("rprchange:") {
+                    balloon_count += 1;
+                    found_body = Some(body.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        balloon_count, 1,
+        "fixture_24 has 1 rPrChange → 1 balloon"
+    );
+    let body = found_body.unwrap();
+    assert!(
+        body.starts_with("Formatted:"),
+        "body must start with 'Formatted:'; got {body:?}"
+    );
+    assert!(
+        body.contains("Shadow"),
+        "shadow toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains("Hidden"),
+        "vanish toggle must surface as 'Hidden'; got {body:?}"
+    );
+    assert!(
+        body.contains("Double Strikethrough"),
+        "dstrike toggle must surface; got {body:?}"
+    );
+    assert!(
+        body.contains(", "),
+        "multi-axis diff must be comma-joined; got {body:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// fixture_11 — CJK body with one ins + one del.
+//
+// PHASE_2_CLOSEOUT.md known-limitation #5 noted that the existing fixtures are
+// Latin-only and the strikethrough Y on CJK glyphs has not been verified.
+// fixture_11 is the smallest case that exercises R-01 / R-03 styling on
+// MS Mincho 24pt content; it covers the IR / layout side. The actual
+// pixel-level Y position is a renderer-side concern (TextOutW + GDI font
+// metrics) so verifying it via cargo tests is out of scope — the fixture
+// instead pins the prerequisite: the IR carries the right tracked_change
+// and the layout pre-pass applies underline/strikethrough + author color
+// regardless of script.
+// ---------------------------------------------------------------------------
+
+const F11_INS_TEXT: &str = "挿入された文字";
+const F11_DEL_TEXT: &str = "削除された文字";
+
+/// fixture_11 parser side: ins + del runs preserve CJK text and tracked-change
+/// metadata identically to the Latin fixtures.
+#[test]
+fn fixture_11_cjk_ins_del_parse_roundtrip() {
+    let Some(bytes) = read_fixture("fixture_11_cjk_revisions.docx") else {
+        eprintln!("skipping: fixture_11 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_11");
+
+    let revisions: Vec<(String, String)> = collect_runs(&doc)
+        .into_iter()
+        .filter_map(|r| {
+            r.tracked_change
+                .as_ref()
+                .map(|t| (t.change_type.clone(), r.text.clone()))
+        })
+        .collect();
+    assert_eq!(
+        revisions,
+        vec![
+            ("insert".to_string(), F11_INS_TEXT.to_string()),
+            ("delete".to_string(), F11_DEL_TEXT.to_string()),
+        ],
+        "fixture_11 must surface one CJK ins + one CJK del in document order"
+    );
+
+    // Author + date metadata still intact.
+    let with_tc: Vec<&oxidocs_core::ir::Run> = collect_runs(&doc)
+        .into_iter()
+        .filter(|r| r.tracked_change.is_some())
+        .collect();
+    for run in &with_tc {
+        let tc = run.tracked_change.as_ref().unwrap();
+        assert_eq!(tc.author.as_deref(), Some("Alice Reviewer"));
+        assert!(tc.date.is_some(), "w:date must survive on CJK runs too");
+    }
+}
+
+/// fixture_11 layout side: R-01 styles the CJK ins as underlined Alice-red,
+/// R-03 styles the CJK del as struck Alice-red. Adjacent normal CJK runs are
+/// left untouched.
+///
+/// Note: the body layout splits CJK content into per-glyph `LayoutContent::Text`
+/// fragments (one element per character; matches the per-glyph TextOutW
+/// emission the GDI renderer needs for CJK kerning / spacing). Tests below
+/// match on individual CJK characters rather than multi-char substrings.
+#[test]
+fn fixture_11_cjk_layout_ins_underline_and_del_strikethrough() {
+    let Some(bytes) = read_fixture("fixture_11_cjk_revisions.docx") else {
+        eprintln!("skipping: fixture_11 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_11");
+    let result = layout_doc(&doc);
+
+    // R-01: every CJK glyph that came from the <w:ins> run must be underlined
+    // + Alice-red. Pick the first two CJK characters of "挿入された文字".
+    for needle in &["挿", "入", "た", "文", "字"] {
+        let hits = collect_text_elements_with(&result, needle);
+        assert!(
+            !hits.is_empty(),
+            "ins CJK glyph '{needle}' must reach layout"
+        );
+        // Glyphs from the ins run must all be underlined Alice-red. The same
+        // glyph may appear elsewhere in the doc — filter to the underlined
+        // hits and require at least one.
+        let ins_styled: Vec<_> = hits
+            .iter()
+            .filter(|(u, _, c)| *u && c.as_deref() == Some("#D03337"))
+            .collect();
+        assert!(
+            !ins_styled.is_empty(),
+            "ins CJK glyph '{needle}' must surface underlined+red at least once; got {hits:?}"
+        );
+        for (_underline, strike, _color) in &ins_styled {
+            assert!(!*strike, "ins CJK glyph '{needle}' must NOT be strikethrough");
+        }
+    }
+
+    // R-03: every CJK glyph from the <w:del> run must be strikethrough +
+    // Alice-red. "削除された文字" — pick characters unique to del so we don't
+    // collide with the ins run.
+    for needle in &["削", "除"] {
+        let hits = collect_text_elements_with(&result, needle);
+        assert!(
+            !hits.is_empty(),
+            "del CJK glyph '{needle}' must reach layout"
+        );
+        let del_styled: Vec<_> = hits
+            .iter()
+            .filter(|(_, s, c)| *s && c.as_deref() == Some("#D03337"))
+            .collect();
+        assert!(
+            !del_styled.is_empty(),
+            "del CJK glyph '{needle}' must surface struck+red at least once; got {hits:?}"
+        );
+        for (underline, _strike, _color) in &del_styled {
+            assert!(
+                !*underline,
+                "del CJK glyph '{needle}' must NOT be underlined"
+            );
+        }
+    }
+
+    // Adjacent normal CJK runs must not be touched by the revision pre-pass.
+    // "前段落。" precedes the ins run; pick a glyph unique to that prefix.
+    for needle in &["前", "段", "落"] {
+        let hits = collect_text_elements_with(&result, needle);
+        assert!(
+            !hits.is_empty(),
+            "normal CJK glyph '{needle}' must reach layout"
+        );
+        for (underline, strike, color) in &hits {
+            assert!(!*underline, "normal CJK glyph '{needle}' must not be underlined");
+            assert!(!*strike, "normal CJK glyph '{needle}' must not be struck");
+            assert_ne!(
+                color.as_deref(),
+                Some("#D03337"),
+                "normal CJK glyph '{needle}' must not be author-tinted"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fixture_12 — three reviewers, exercising palette slot 2.
+//
+// Slots 0 (#D03337) and 1 (#5B2C90) are COM-confirmed via fixture_05/06/10.
+// Slot 2 in REVISION_AUTHOR_PALETTE is "#2B6033" (Word's documented green —
+// also used for moves regardless of author). PHASE_2_CLOSEOUT.md known-
+// limitation #9 noted that slots 2-7 lack ground-truth confirmation; the
+// fixture below is the smallest input that surfaces slot 2 on the Oxi side
+// so a future Word-side pixel pass can sample it.
+//
+// Body: "Start. ALICE INS middle1 BOB DEL middle2 CAROL INS. End."
+// people.xml seeds the palette in author-order so the assignment is stable.
+// ---------------------------------------------------------------------------
+
+/// fixture_12 parser side: people.xml seeds three authors and the palette
+/// hands them indices 0/1/2 in that order.
+#[test]
+fn fixture_12_three_reviewers_palette_assigns_slots_0_1_2() {
+    let Some(bytes) = read_fixture("fixture_12_three_reviewers.docx") else {
+        eprintln!("skipping: fixture_12 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_12");
+
+    assert_eq!(doc.people.len(), 3, "expected 3 reviewers in people.xml");
+    let people_authors: Vec<_> = doc.people.iter().map(|p| p.author.as_str()).collect();
+    assert_eq!(
+        people_authors,
+        vec!["Alice Reviewer", "Bob Reviewer", "Carol Reviewer"]
+    );
+
+    assert_eq!(doc.authors.len(), 3, "expected 3 palette entries");
+    assert_eq!(doc.authors[0].display, "Alice Reviewer");
+    assert_eq!(doc.authors[0].color_index, 0);
+    assert_eq!(doc.authors[1].display, "Bob Reviewer");
+    assert_eq!(doc.authors[1].color_index, 1);
+    assert_eq!(doc.authors[2].display, "Carol Reviewer");
+    assert_eq!(
+        doc.authors[2].color_index, 2,
+        "Carol must land on palette slot 2 (the new slot under test)"
+    );
+}
+
+/// fixture_12 layout side: each author's revision run renders in the
+/// palette color for its slot. The third author lands on slot 2 (`#2B6033`),
+/// which is currently sourced from Word's documented Office reviewing
+/// palette and not yet COM-confirmed against an actual Word render.
+/// Asserting against the constant pins the Oxi side; the comment above
+/// the test records the open ground-truth question.
+#[test]
+fn fixture_12_layout_third_author_uses_palette_slot_2() {
+    let Some(bytes) = read_fixture("fixture_12_three_reviewers.docx") else {
+        eprintln!("skipping: fixture_12 missing");
+        return;
+    };
+    let doc = oxidocs_core::parse_docx(&bytes).expect("parse fixture_12");
+    let result = layout_doc(&doc);
+
+    let alice_ins = collect_text_elements_with(&result, "ALICE");
+    assert!(!alice_ins.is_empty(), "Alice's ins missing from layout");
+    for (underline, _, color) in &alice_ins {
+        assert!(*underline);
+        assert_eq!(color.as_deref(), Some("#D03337"), "Alice = slot 0");
+    }
+
+    let bob_del = collect_text_elements_with(&result, "BOB");
+    assert!(!bob_del.is_empty(), "Bob's del missing from layout");
+    for (_, strike, color) in &bob_del {
+        assert!(*strike);
+        assert_eq!(color.as_deref(), Some("#5B2C90"), "Bob = slot 1");
+    }
+
+    let carol_ins = collect_text_elements_with(&result, "CAROL");
+    assert!(!carol_ins.is_empty(), "Carol's ins missing from layout");
+    for (underline, strike, color) in &carol_ins {
+        assert!(*underline, "Carol's ins must be underlined");
+        assert!(!*strike, "Carol's ins must not be strikethrough");
+        assert_eq!(
+            color.as_deref(),
+            Some("#478103"),
+            "Carol = slot 2 (#478103, COM-confirmed R65 2026-04-29 via fixture_12 pixel pass)"
+        );
+    }
 }

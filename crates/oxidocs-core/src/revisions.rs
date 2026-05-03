@@ -113,23 +113,18 @@ fn handle_run(run: &mut Run, mode: ReviewMode, target_id: Option<&str>) -> bool 
         return false;
     }
 
-    // Survivor — strip `tracked_change` and the parser's pre-applied
-    // tracked-change styling (underline + FF0000 on insertions, strikethrough
-    // + FF0000 on deletions). After acceptance/rejection the run reads as
-    // plain body text.
-    let kind = tc.change_type.clone();
+    // Survivor — clear `tracked_change` so subsequent passes treat the run
+    // as plain body text.
+    //
+    // R73 (2026-04-29): the older "strip parser's pre-applied tracked-change
+    // styling" block (underline + FF0000 on insertions, strikethrough +
+    // FF0000 on deletions) was removed here. R62 already removed the
+    // parser-side application of that styling (parser/ooxml.rs:5856-5866),
+    // so the strip was dead code. Worse, the strip was over-eager — it
+    // would also clear user-applied underline + FF0000 from the rPr, which
+    // is the wrong behaviour for a survivor run. Without the strip, accepted
+    // / rejected revisions preserve any intrinsic rPr the author set, which
+    // matches Word's "Accept" / "Reject" semantics.
     run.tracked_change = None;
-    if matches!(kind.as_str(), "insert" | "moveTo") {
-        run.style.underline = false;
-        run.style.underline_style = None;
-        if run.style.color.as_deref() == Some("FF0000") {
-            run.style.color = None;
-        }
-    } else if matches!(kind.as_str(), "delete" | "moveFrom") {
-        run.style.strikethrough = false;
-        if run.style.color.as_deref() == Some("FF0000") {
-            run.style.color = None;
-        }
-    }
     true
 }

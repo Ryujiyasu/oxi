@@ -104,6 +104,7 @@ mod tests {
                     font_name: "F1".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
+                    character_spacing: 0.0,
                 })
             })
             .collect();
@@ -190,6 +191,7 @@ mod tests {
                         font_name: "F1".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0,
                     })],
                     rotation: 0,
                 },
@@ -204,6 +206,7 @@ mod tests {
                         font_name: "F1".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0,
                     })],
                     rotation: 0,
                 },

@@ -249,7 +249,6 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             let _ = DeleteObject(pen);
                         }
 
-                        // Strikethrough
                         if *strikethrough {
                             let mut tm = TEXTMETRICW::default();
                             GetTextMetricsW(mem_dc, &mut tm);
