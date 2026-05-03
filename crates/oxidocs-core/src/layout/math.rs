@@ -594,7 +594,6 @@ fn emit_text_at(
             underline: false,
             underline_style: None,
             strikethrough: false,
-            double_strikethrough: false,
             color: None,
             highlight: None,
             field_type: None,

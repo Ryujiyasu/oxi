@@ -5477,9 +5477,12 @@ impl LayoutEngine {
                 } else {
                     0.0
                 };
-                // For line-wrapping estimation, use cell_w (not inner_w after padding)
-                // Word allows text to extend into cell margins for wrapping purposes
-                let inner_w = cell_w.max(0.0);
+                // Line-wrapping width = cell_w - L_pad - R_pad.
+                // COM-confirmed b35123 2026-05-03: 6-char "人的管理措置" in
+                // cell (w=59.85, L=R=5.40, content_w=49.05) wraps to 2 lines
+                // in Word. Prior code used cell_w → estimate said 1 line,
+                // actual rendering said 1 line (matched estimate, mismatched Word).
+                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
                 let mut cell_content_h = pad_t;
 
                 for block in &cell.blocks {
