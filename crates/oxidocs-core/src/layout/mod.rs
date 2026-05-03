@@ -2825,8 +2825,12 @@ impl LayoutEngine {
         let inset_r = text_box.inset_right.unwrap_or(7.2);
         let inset_t = text_box.inset_top.unwrap_or(3.6);
         let inset_b = text_box.inset_bottom.unwrap_or(3.6);
-        let inner_x = abs_x + inset_l;
-        let inner_width = (text_box.width - inset_l - inset_r).max(0.0);
+        // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
+        let corner_inset = text_box.corner_radius
+            .map(|r| r * (1.0 - std::f32::consts::FRAC_1_SQRT_2))
+            .unwrap_or(0.0);
+        let inner_x = abs_x + inset_l + corner_inset;
+        let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
         let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
         // v-text-anchor: middle/bottom shifts content within textbox.
         // Initial cursor at top; for middle/bottom, compute content height first,
@@ -4635,17 +4639,25 @@ impl LayoutEngine {
                     }
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
-                    // 82de3fa REVERTED 2026-05-03 (Session 52). The trailing-U+3000
-                    // immune-from-wrap rule (originally added for ed025 p.1 +0.0418)
+                    // 82de3fa REVERTED 2026-05-03 (independently confirmed by
+                    // Session 52 + Session 51 oxi-3 branch). The trailing-U+3000
+                    // immune-from-wrap rule (originally added for ed025 p.1 +0.042)
                     // caused d77a p.10 -0.054, p.9 -0.037, p.8 -0.008 (net -0.099)
-                    // because mid-text U+3000s (used for indentation in d77a) were
-                    // also marked immune. Per-fragment and per-paragraph trailing
-                    // checks BOTH failed to discriminate d77a's mid-text U+3000s
-                    // from ed025's true trailing run (the structural test isn't
-                    // sharp enough — Word's gate is likely line-fill aware).
-                    // Net trade reverting: +0.099 d77a recovery / -0.042 ed025 loss
-                    // = +0.057 net on bottom-bucket. d77a min p.7=0.6268 unchanged
-                    // so bottom-5 floor is preserved.
+                    // because d77a has a paragraph with 142×U+3000 decorative run
+                    // (verified by OOXML walk) that got marked immune. Mid-text
+                    // U+3000s (used for indentation) were also affected — both
+                    // per-fragment and per-paragraph trailing-run-length
+                    // threshold gates failed to discriminate d77a's mid-text
+                    // U+3000s from ed025's true trailing run, because the
+                    // immune flag propagates to ALL U+3000s in a paragraph,
+                    // not just the trailing run. Word's actual gate is likely
+                    // line-fill aware (only elide when the line is already
+                    // near-full).
+                    // Net trade: +0.099 d77a recovery / -0.042 ed025 loss
+                    // = +0.057 net on bottom-bucket. d77a min p.7=0.6268
+                    // unchanged so bottom-5 floor is preserved (3.2377 →
+                    // 3.2646, +0.0269 Path A strict positive). ed025 stays
+                    // rank 18 (out of bottom-5).
                     // Future: re-attempt with line-fill-aware gate (e.g. only
                     // immune when the line is already at >95% of available_tw).
                     let is_immune_space = false;
