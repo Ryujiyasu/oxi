@@ -4635,12 +4635,20 @@ impl LayoutEngine {
                     }
 
                     let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
-                    // ed025 fix 2026-05-03: trailing U+3000 (fullwidth space) doesn't
-                    // trigger wrap in Word. Cell rendering already handles this at
-                    // mod.rs:5803 / 6685 ("is_space = ch==' ' || ch=='\\u{3000}'");
-                    // extend to break_into_lines CJK path. Para 10 = "32×　 + 法人番号: + 5×　"
-                    // wraps to 2 lines in Oxi but 1 in Word due to trailing 5×　.
-                    let is_immune_space = ch == '\u{3000}';
+                    // 82de3fa REVERTED 2026-05-03 (Session 52). The trailing-U+3000
+                    // immune-from-wrap rule (originally added for ed025 p.1 +0.0418)
+                    // caused d77a p.10 -0.054, p.9 -0.037, p.8 -0.008 (net -0.099)
+                    // because mid-text U+3000s (used for indentation in d77a) were
+                    // also marked immune. Per-fragment and per-paragraph trailing
+                    // checks BOTH failed to discriminate d77a's mid-text U+3000s
+                    // from ed025's true trailing run (the structural test isn't
+                    // sharp enough — Word's gate is likely line-fill aware).
+                    // Net trade reverting: +0.099 d77a recovery / -0.042 ed025 loss
+                    // = +0.057 net on bottom-bucket. d77a min p.7=0.6268 unchanged
+                    // so bottom-5 floor is preserved.
+                    // Future: re-attempt with line-fill-aware gate (e.g. only
+                    // immune when the line is already at >95% of available_tw).
+                    let is_immune_space = false;
                     let line_compress_count = current_line.fragments.iter()
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
