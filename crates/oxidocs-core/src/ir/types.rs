@@ -1083,6 +1083,13 @@ impl Default for ParagraphStyle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TableStyle {
     pub border: bool,
+    /// True iff `<w:tblBorders>` was directly in this table's `<w:tblPr>`,
+    /// not inherited from a `<w:tblStyle>`. Used to gate the b35-style
+    /// "border-at-margin-minus-padding" offset (gen2_052 needs it,
+    /// 683ff with explicit borders does NOT — Word renders 683ff border
+    /// at margin without subtracting padding).
+    #[serde(default)]
+    pub explicit_borders: bool,
     /// Whether the table has inside horizontal borders (insideH)
     #[serde(default)]
     pub has_inside_h: bool,

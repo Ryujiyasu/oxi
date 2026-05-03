@@ -4712,6 +4712,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                 if local == "tblBorders" {
                     // Don't set border=true here; individual border elements check val!=none
                     in_borders = true;
+                    style.explicit_borders = true;
                 } else if local == "tblCellMar" {
                     // Parse default cell margins
                     let mut margins = CellMargins { top: None, bottom: None, left: None, right: None };
