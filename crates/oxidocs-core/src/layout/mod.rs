@@ -981,19 +981,16 @@ fn heading_default_font_size(level: u8) -> f32 {
 /// positions (Range.Information) against input spacing values.
 /// Example: cs=-0.45pt → -9tw → round(-9*96/1440) = -1px → -0.75pt
 fn snap_character_spacing(cs_pt: f32) -> f32 {
-    let cs_twips = (cs_pt * 20.0).round() as i64;
-    // round-to-nearest integer division (twips × 96 / 1440)
-    // For positive: (a*b + c/2) / c
-    // For negative: (a*b - c/2) / c, using floor division (not truncation)
-    let numer = cs_twips * 96;
-    let denom = 1440_i64;
-    let cs_px = if numer >= 0 {
-        (numer + denom / 2) / denom
-    } else {
-        // Floor division for negative: -((-numer + denom/2) / denom)
-        -((-numer + denom / 2) / denom)
-    };
-    cs_px as f32 * 72.0 / 96.0
+    // 2026-05-04 (Day 11-17): Word applies char_spacing at twip precision (1/20pt),
+    // NOT GDI pixel precision. Old code snapped to 96 DPI pixels which destroyed
+    // precision: cs in [-1, -19]tw all snapped to -0.75pt; cs=-20tw also to -0.75pt.
+    // 6-variant cs/grid isolation matrix verified the rule:
+    //   v0/v3 (no cs): Oxi matches Word exactly
+    //   v1 cs=-9: Word -0.444pt, Oxi (old) -0.75pt → over-compress by 0.31pt/char
+    //   v2 cs=-20: Word -1.000pt, Oxi (old) -0.75pt → under-compress by 0.25pt/char
+    // Replace with twip-precision rounding.
+    // Full-baseline verify: net +0.008 (4 improvements, 5 regressions <0.005pt).
+    (cs_pt * 20.0).round() / 20.0
 }
 
 impl LayoutEngine {
