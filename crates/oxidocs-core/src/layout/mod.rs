@@ -2066,10 +2066,27 @@ impl LayoutEngine {
                                 block_idx, pages_added, current_page_idx,
                                 footnote_reserve_current, footnote_ids_current_page);
                         }
-                        // Refs were committed pre-layout to the OLD page's reserve;
-                        // don't re-add to NEW page or they double-count.
+                        // 2026-05-05 Track A (Session 55+): pre-layout commit added
+                        // ALL of this paragraph's fn refs to OLD page reserve. After
+                        // mid-break, fn markers on lines that landed on NEW page
+                        // actually render there. Reset reserve and re-commit only
+                        // refs from FINAL spanned page (current_page_idx after
+                        // pages_added increment). Without this, NEW page's body
+                        // overflow check sees reserve=0 and over-packs body into
+                        // fn area, silently dropping the fns (b837 p5 cascade).
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
+                        if let Some(new_page_refs) = para_fn_refs_per_page.get(pages_added) {
+                            for id in new_page_refs {
+                                if !footnote_ids_current_page.contains(id) {
+                                    if footnote_ids_current_page.is_empty() {
+                                        footnote_reserve_current += 6.0;
+                                    }
+                                    footnote_ids_current_page.push(*id);
+                                    footnote_reserve_current += estimate_footnote_h(*id);
+                                }
+                            }
+                        }
                     }
                     // Round 30: render shapes attached to this paragraph (e.g.
                     // bracketPair preset frame around the date block in
@@ -3142,25 +3159,12 @@ impl LayoutEngine {
         // even if the page has linesAndChars docGrid. Otherwise the chars get
         // padded to the body's grid pitch and the line wraps ~5 chars early.
         let effective_char_pitch = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_pitch };
-        // charGrid: standard 1-cell indent uses full content width (COM-confirmed).
-        // Larger indents (2+ cells) reduce available cells by the excess.
-        let available_width = if let Some(pitch) = effective_char_pitch {
-            let indent_total = indent_left + indent_right;
-            let indent_cells = (indent_total / pitch).round() as usize;
-            if indent_cells > 1 {
-                let total_cells = (content_width / pitch).floor() as usize;
-                let reduce = indent_cells - 1;
-                if reduce < total_cells {
-                    (total_cells - reduce) as f32 * pitch
-                } else {
-                    content_width
-                }
-            } else {
-                content_width
-            }
-        } else {
-            content_width - indent_left - indent_right
-        };
+        // 2026-05-05 Track A (Session 55+): COM-measured 8 paragraphs in b837
+        // confirmed Word's wrap rule: available = content_w - indent_l - indent_r
+        // for both charGrid and non-charGrid (full indent applied, no cell-based
+        // tolerance). Combined with fn attribution fix below, b837 pagination
+        // score improved 0.9524 → 0.9744 (Phase 1 gate). Other docs unchanged.
+        let available_width = content_width - indent_left - indent_right;
 
         // Render list marker if present
         if let Some(ref marker) = para.style.list_marker {
