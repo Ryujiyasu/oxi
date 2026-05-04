@@ -1655,10 +1655,13 @@ impl LayoutEngine {
                                 }
                             }
                             let ph = self.estimate_para_height(&p2, cw, None, None, false, None, None);
-                            // The footnote marker (superscript number) renders
-                            // at a different Y position, effectively adding
-                            // ~half a line of extra height per footnote.
-                            h += ph + 2.0;
+                            // 2026-05-05 Track A continuation: removed +2.0pt
+                            // per-fn marker overhead. Empirically (b837 spill data
+                            // 25 fns) Oxi's est = Word actual + exactly 2.0pt for
+                            // every fn — the marker renders inline, no extra
+                            // line-height. Over-reservation by 10pt per page (5
+                            // fns × 2pt) prevented para 70 from fitting on p5.
+                            h += ph;
                             first_para = false;
                         } else {
                             h += self.estimate_para_height(p, cw, None, None, false, None, None);
