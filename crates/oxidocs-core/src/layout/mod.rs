@@ -5846,7 +5846,7 @@ impl LayoutEngine {
                                 // Previous formula (fs × pitch/default_fs) over-compressed
                                 // when fs<default_fs. Correct: cw = fs + charSpace_pt where
                                 // charSpace_pt = pitch − default_fs (negative for compressPunc).
-                                if run.style.fit_text.is_none() {
+                                if run.style.fit_text.is_none() && para.style.snap_to_grid {
                                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                                             && crate::font::is_fullwidth(ch)
@@ -6729,7 +6729,7 @@ impl LayoutEngine {
             for ch in run.text.chars() {
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
-                if run.style.fit_text.is_none() {
+                if run.style.fit_text.is_none() && para.style.snap_to_grid {
                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                             && crate::font::is_fullwidth(ch)
