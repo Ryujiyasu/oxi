@@ -21,6 +21,22 @@ variants = [
     ('repro_pcw_V9.docx', 'TABLE cs=-9 snapGrid=0 (1636-like)'),
     ('repro_pcw_V10.docx','TABLE cs=-9 snapGrid=0 + style.cs=-1'),
     ('repro_pcw_V11.docx','TABLE cs=-9 snapGrid=0 + style.cs=-1 + jc=both'),
+    ('repro_pcw_V12.docx','V11 + 1636-style docDefault rFonts'),
+    ('repro_pcw_V13.docx','V11 + indent (leftChars=150 left=315 right=199)'),
+    ('repro_pcw_V14.docx','V11 + para-level <w:wordWrap/> (overriding style off)'),
+    ('repro_pcw_V15.docx','V11 + style widowControl=0 wordWrap=0 adjustRightInd=0'),
+    ('repro_pcw_V16.docx','V11 + style explicit rFonts ascii/hAnsi/cs=Mincho'),
+    ('repro_pcw_V17.docx','V11 + multi-run split (some w/o hint=eastAsia)'),
+    ('repro_pcw_V18.docx','V11 + ALL real-1636 properties combined'),
+    ('repro_pcw_V19.docx','V11 + settings:balanceSingleByteDoubleByteWidth'),
+    ('repro_pcw_V20.docx','V11 + settings:useFELayout'),
+    ('repro_pcw_V21.docx','V11 + settings:characterSpacingControl=compressPunctuation'),
+    ('repro_pcw_V22.docx','V11 + ALL 3 settings flags'),
+    ('repro_pcw_V23.docx','V18 + ALL settings flags (full mimicry)'),
+    ('repro_pcw_V24.docx','BALANCE + cs=0 (isolate base)'),
+    ('repro_pcw_V25.docx','BALANCE + cs=-20 (-1pt)'),
+    ('repro_pcw_V26.docx','BALANCE + cs=+20 (+1pt)'),
+    ('repro_pcw_V27.docx','BALANCE + cs=-5 (-0.25pt)'),
 ]
 
 word = wc.Dispatch('Word.Application')
