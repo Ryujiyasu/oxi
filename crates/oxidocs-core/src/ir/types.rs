@@ -218,6 +218,15 @@ pub struct Run {
     /// Field type for dynamic content substitution (PAGE, NUMPAGES, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_type: Option<FieldType>,
+    /// `<w:lastRenderedPageBreak/>` hint (ECMA-376 §17.3.1.18). When set,
+    /// Word's last-saved render had a page break before this point. Used by
+    /// the SOFT LRPB layout rule: force a page break before this paragraph
+    /// ONLY if the paragraph would naturally fit on the current page (i.e.,
+    /// Oxi has not already overflowed past Word's saved break position).
+    /// Naive (always force) caused cascading regressions in over-packed
+    /// docs (Session 56 Day 3, 2026-05-07: 0e7af 1.0→0.26, d77a 0.96→0.27).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_last_rendered_page_break: bool,
 }
 
 /// Field types for dynamic content that gets resolved during layout

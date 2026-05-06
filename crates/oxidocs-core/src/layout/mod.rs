@@ -1841,8 +1841,32 @@ impl LayoutEngine {
                         }
                     };
 
+                    // SOFT lastRenderedPageBreak (ECMA-376 §17.3.1.18, Session 56 Day 4):
+                    // ANY run carrying <w:lastRenderedPageBreak/> indicates Word's
+                    // saved render had a page break before this point. The naive
+                    // "always force" implementation cascaded badly in over-packed
+                    // docs (Day 3: 0e7af 1.0→0.26, d77a 0.96→0.27 from extra breaks).
+                    // SOFT rule: force break only when BOTH conditions hold:
+                    //   1. The paragraph would naturally fit on the current page
+                    //      (i.e., we have not already overflowed past Word's break)
+                    //   2. The current page is already substantially filled
+                    //      (cursor more than halfway down the body area). Without
+                    //      this, LRPB fires near the top of an Oxi page that already
+                    //      aligns with Word's break — wrongly pushing content to
+                    //      next page (bd90b00 cascade: 0.96→0.74 with rule-1-only).
+                    let has_lrpb_run = para.runs.iter().any(|r| r.has_last_rendered_page_break);
+                    let lrpb_should_break = if has_lrpb_run && !elements.is_empty() {
+                        let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
+                        let remaining = (start_y + effective_content_h) - cursor_y;
+                        let consumed = cursor_y - start_y;
+                        let half_page = effective_content_h * 0.5;
+                        est_h <= remaining && consumed > half_page
+                    } else {
+                        false
+                    };
+
                     // pageBreakBefore: force a new page (not just next column)
-                    if para.style.page_break_before && !elements.is_empty() {
+                    if (para.style.page_break_before || lrpb_should_break) && !elements.is_empty() {
                         pages.push(LayoutPage {
                             width: page.size.width,
                             height: page.size.height,
@@ -2610,6 +2634,7 @@ impl LayoutEngine {
                                                 bookmark_name: None,
                                                 is_math: false,
                                                 field_type: None,
+                                                has_last_rendered_page_break: false,
                                             });
                                         }
                                         first_para = false;

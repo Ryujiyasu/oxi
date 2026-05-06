@@ -580,6 +580,7 @@ mod tests {
             bookmark_name: None,
             is_math: false,
             field_type: None,
+            has_last_rendered_page_break: false,
         };
         let runs = vec![mk_run(Some(r1)), mk_run(None), mk_run(Some(r2))];
         let max_exp = paragraph_ruby_expansion_pt(&runs, 10.5);

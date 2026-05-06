@@ -1253,6 +1253,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 bookmark_name: None,
                                 is_math: true,
                                 field_type: None,
+                                has_last_rendered_page_break: false,
                             });
                         }
                     }
@@ -1297,6 +1298,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                             bookmark_name: None,
                                             is_math: false,
                                             field_type: None,
+                                            has_last_rendered_page_break: false,
                                         });
                                     }
                                 }
@@ -1330,6 +1332,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                             bookmark_name: None,
                                             is_math: false,
                                             field_type: None,
+                                            has_last_rendered_page_break: false,
                                         });
                                     }
                                 }
@@ -1363,6 +1366,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     bookmark_name: Some(name),
                                     is_math: false,
                                     field_type: None,
+                                    has_last_rendered_page_break: false,
                                 });
                             }
                         }
@@ -2418,6 +2422,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
     let mut ruby: Option<Ruby> = None;
     let mut comment_references: Vec<String> = Vec::new();
     let mut rpr_change: Option<PropertyChange> = None;
+    let mut has_last_rendered_page_break = false;
 
     loop {
         match reader.read_event()? {
@@ -2504,6 +2509,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                         }
                     }
                     "tab" => text.push('\t'),
+                    "lastRenderedPageBreak" => {
+                        has_last_rendered_page_break = true;
+                    }
                     "fldChar" => {
                         // Track field state via marker characters
                         // (parsed by parent parse_paragraph to manage field_result_depth)
@@ -2615,6 +2623,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         bookmark_name: None,
         is_math: false,
         field_type,
+        has_last_rendered_page_break,
     }, drawing_result))
 }
 
