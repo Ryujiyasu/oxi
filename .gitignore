@@ -55,6 +55,7 @@ tools/**/*_deep*.py
 tools/acrobat_analysis.py
 tools/oxi-gdi-renderer/target/
 tools/oxi-dwrite-renderer/target/
+tools/metrics/_repros/
 
 # GDI renderer / layout-json output PNGs (generated artifacts)
 --layout-json_*.png
