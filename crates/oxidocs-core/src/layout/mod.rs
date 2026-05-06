@@ -936,6 +936,10 @@ pub struct LayoutEngine {
     compress_punctuation: bool,
     /// w:doNotExpandShiftReturn: don't justify lines ending with soft break (Shift+Enter)
     do_not_expand_shift_return: bool,
+    /// w:balanceSingleByteDoubleByteWidth: when set, character_spacing is doubled
+    /// for CJK fullwidth chars (Word "balance single/double byte widths" mode).
+    /// Derived from V19 minimal repro vs real 1636 (Session 56 Finding 3).
+    balance_single_byte_double_byte_width: bool,
     /// R-05b: when the document has any comments, the body's available width
     /// is reduced by this many points to make room for the right-margin
     /// balloon column. 0.0 when the document has no comments. Set in
@@ -1005,6 +1009,7 @@ impl LayoutEngine {
             compat_mode: 15,
             compress_punctuation: false,
             do_not_expand_shift_return: false,
+            balance_single_byte_double_byte_width: false,
             balloon_column_width: 0.0,
             show_comments: true,
             show_revisions: ShowRevisions::All,
@@ -1047,6 +1052,7 @@ impl LayoutEngine {
             compat_mode: doc.compat_mode,
             compress_punctuation: doc.compress_punctuation,
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
+            balance_single_byte_double_byte_width: doc.balance_single_byte_double_byte_width,
             // R-05b: 293.8pt balloon column + 24pt buffer between body and
             // balloon = 317.8pt total. Width is COM-confirmed (fixture_01
             // pixel pass, 2026-04-25); buffer is approximate and refined as
@@ -4389,6 +4395,17 @@ impl LayoutEngine {
                     }
                 }
                 char_width += cs;
+                // §17.15.1.7 balanceSingleByteDoubleByteWidth (Session 56 Finding 3,
+                // COM-confirmed via V19/V25/V26/V27 minimal repros 2026-05-06):
+                // when this compat flag is set, character_spacing is applied TWICE
+                // for CJK fullwidth chars (effective_cs = 2 * cs). Apply the extra
+                // cs here so per-char fragment advance reflects the doubled spacing.
+                if self.balance_single_byte_double_byte_width
+                    && crate::font::is_fullwidth(ch)
+                    && !yakumono_compressed[char_index]
+                {
+                    char_width += cs;
+                }
                 // 2-pass wrap: remember pre-yakumono width to compute yakumono savings.
                 let pre_yakumono_width = char_width;
                 // Physical yakumono compression (COM-confirmed b837 2026-04-16):
@@ -5862,7 +5879,16 @@ impl LayoutEngine {
                                         cw *= scale / 100.0;
                                     }
                                 }
-                                let cw = cw + cs;
+                                // Session 56 Finding 3: balanceSingleByteDoubleByteWidth
+                                // doubles cs for CJK fullwidth chars.
+                                let balance_extra_cs = if self.balance_single_byte_double_byte_width
+                                    && crate::font::is_fullwidth(ch)
+                                {
+                                    cs
+                                } else {
+                                    0.0
+                                };
+                                let cw = cw + cs + balance_extra_cs;
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
                                 let is_space = ch == ' ' || ch == '\u{3000}';
@@ -6745,7 +6771,16 @@ impl LayoutEngine {
                         cw *= scale / 100.0;
                     }
                 }
-                let cw = cw + cs;
+                // Session 56 Finding 3: balanceSingleByteDoubleByteWidth doubles
+                // cs for CJK fullwidth chars (count_cell_lines for height estimation).
+                let balance_extra_cs = if self.balance_single_byte_double_byte_width
+                    && crate::font::is_fullwidth(ch)
+                {
+                    cs
+                } else {
+                    0.0
+                };
+                let cw = cw + cs + balance_extra_cs;
                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                 let is_space = ch == ' ' || ch == '\u{3000}';
                 if !is_space && line_x + buf_w + cw > effective_wrap && !(!line_nonempty && !buf_nonempty) {

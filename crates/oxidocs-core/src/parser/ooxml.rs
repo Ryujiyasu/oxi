@@ -64,6 +64,8 @@ impl OoxmlParser {
         let compat_mode = self.parse_compat_mode();
         let compress_punctuation = self.parse_compress_punctuation();
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
+        let balance_single_byte_double_byte_width =
+            self.parse_compat_bool_flag("balanceSingleByteDoubleByteWidth");
         let people = self.parse_people();
 
         let mut pages = Vec::new();
@@ -271,6 +273,7 @@ impl OoxmlParser {
             compat_mode,
             compress_punctuation,
             do_not_expand_shift_return,
+            balance_single_byte_double_byte_width,
         })
     }
 

@@ -41,6 +41,12 @@ pub struct Document {
     /// When true, Shift+Enter (soft break) lines are NOT justified even in jc=both paragraphs.
     #[serde(default)]
     pub do_not_expand_shift_return: bool,
+    /// w:balanceSingleByteDoubleByteWidth compat setting.
+    /// When true, the effective character_spacing for CJK fullwidth chars is doubled
+    /// (Word's "balance single/double byte widths" mode).
+    /// Derived from V19 minimal repro vs real 1636 (Session 56 Finding 3).
+    #[serde(default)]
+    pub balance_single_byte_double_byte_width: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
