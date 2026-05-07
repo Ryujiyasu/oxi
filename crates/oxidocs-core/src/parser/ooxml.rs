@@ -1425,25 +1425,21 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 style.line_spacing = ds.line_spacing;
                 style.line_spacing_rule = ds.line_spacing_rule.clone();
             }
-            // Merge style's default_run_style field-by-field (style definition takes priority for unset fields)
+            // Bug B Day 18 (2026-05-08): replace hand-rolled field merge with
+            // shared merge_run_style helper from parser/styles.rs. The hand-
+            // rolled version inherited only 7 fields (font_size, font_family,
+            // font_family_east_asia, has_explicit_east_asia, color, bold,
+            // italic) plus character_spacing added at Day 16. The helper
+            // additionally covers highlight, shading, font_size_cs, kern,
+            // text_scale, underline, strikethrough, vertical_align.
+            //
+            // Day 4 attempted this same broad replacement and was reverted
+            // due to "cb8be 0.91→0.45 catastrophic" SSIM result. Day 13's
+            // drift discovery showed that result was likely drift artifact;
+            // re-evaluating on drift-free baseline.
             if let Some(ref style_rs) = ds.default_run_style {
                 if let Some(ref mut para_rs) = style.default_run_style {
-                    // Merge: style definition fills in missing fields
-                    if para_rs.font_size.is_none() { para_rs.font_size = style_rs.font_size; }
-                    if para_rs.font_family.is_none() { para_rs.font_family = style_rs.font_family.clone(); }
-                    if para_rs.font_family_east_asia.is_none() { para_rs.font_family_east_asia = style_rs.font_family_east_asia.clone(); }
-                    if !para_rs.has_explicit_east_asia && style_rs.has_explicit_east_asia { para_rs.has_explicit_east_asia = true; }
-                    if para_rs.color.is_none() { para_rs.color = style_rs.color.clone(); }
-                    if !para_rs.bold { para_rs.bold = style_rs.bold; }
-                    if !para_rs.italic { para_rs.italic = style_rs.italic; }
-                    // Bug B Day 16 (2026-05-08): inherit character_spacing from
-                    // pStyle's rPr. e.g. style "a5" (一太郎) has cs=-1tw which
-                    // was previously dropped at this merge. Bug B Day 4 surgical
-                    // attempt was Phase 1 neutral but SSIM-verify-skipped; Day
-                    // 16 re-evaluating on drift-free baseline.
-                    if para_rs.character_spacing.is_none() {
-                        para_rs.character_spacing = style_rs.character_spacing;
-                    }
+                    super::styles::merge_run_style(para_rs, style_rs);
                 } else {
                     style.default_run_style = ds.default_run_style.clone();
                 }
@@ -1665,17 +1661,20 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    // Bug B Day 16: inherit character_spacing from paragraph's
-    // default_run_style into runs whose own rPr doesn't set it.
-    // Layout reads run.style.character_spacing directly with no fallback,
-    // so without this step pStyle-level cs is never applied to runs.
+    // Bug B Day 18: propagate paragraph's default_run_style into individual
+    // runs via merge_run_style (parser/styles.rs). Layout reads run-level
+    // rPr fields directly with no fallback to para.default_run_style for
+    // many fields (e.g. character_spacing). Without this step pStyle-level
+    // properties are silently dropped.
+    //
+    // Day 16 introduced this for character_spacing only; Day 18 broadens
+    // to all merge_run_style-covered fields (cs + highlight + shading +
+    // font_size_cs + kern + text_scale + underline + strikethrough +
+    // vertical_align + font_size + font_family + font_family_east_asia +
+    // color + bold + italic).
     if let Some(ref para_drs) = style.default_run_style {
-        if let Some(cs) = para_drs.character_spacing {
-            for run in runs.iter_mut() {
-                if run.style.character_spacing.is_none() {
-                    run.style.character_spacing = Some(cs);
-                }
-            }
+        for run in runs.iter_mut() {
+            super::styles::merge_run_style(&mut run.style, para_drs);
         }
     }
 
