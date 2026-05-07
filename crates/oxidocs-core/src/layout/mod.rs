@@ -5141,11 +5141,14 @@ impl LayoutEngine {
                     Some(f) => (f - 1.0).abs() < 0.001,
                     None => true,
                 };
-                // Bug B Day 26 step 2 REVERTED: spec-correct (Word L7=L8) but
-                // compensation triangle catastrophic (b5f706 PASS→FAIL +
-                // SSIM -0.8013 net, multiple PASS docs damaged). Cell-internal
-                // y-anchor refactor (step 3) needed before this gate works.
-                if snap_to_grid && is_single {
+                // Bug B Day 28 (Phase β step 3): cell line snap is gated by the
+                // settings.xml `<w:adjustLineHeightInTable/>` flag. COM-confirmed
+                // via V70 minimal repro: cell paragraph dy = 18pt (snap) only when
+                // the flag is present; absent = 13pt natural (= L7/L8 spec).
+                // This unifies V1-V6 (no flag, no snap) and b5f706 real-doc
+                // (with flag, snap to pitch) under one rule.
+                let cell_snap_allowed = !in_table_cell || self.adjust_line_height_in_table;
+                if snap_to_grid && is_single && cell_snap_allowed {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
                             return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
