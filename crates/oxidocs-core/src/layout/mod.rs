@@ -5141,6 +5141,10 @@ impl LayoutEngine {
                     Some(f) => (f - 1.0).abs() < 0.001,
                     None => true,
                 };
+                // Bug B Day 26 step 2 REVERTED: spec-correct (Word L7=L8) but
+                // compensation triangle catastrophic (b5f706 PASS→FAIL +
+                // SSIM -0.8013 net, multiple PASS docs damaged). Cell-internal
+                // y-anchor refactor (step 3) needed before this gate works.
                 if snap_to_grid && is_single {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
@@ -5661,17 +5665,17 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
-            // Grid snap row content height, then round to 0.5pt (10tw)
-            // COM-confirmed: table row height = round_10tw(ceil(content / pitch) * pitch)
-            // linesAndChars mode: Word does NOT grid-snap table row heights
-            // (COM-measured: row heights are natural content height, not grid multiples)
-            if let Some(pitch) = table_grid_pitch {
-                if pitch > 0.0 && row_height > 0.0 && grid_char_pitch.is_none() {
-                    let snapped = (row_height / pitch).ceil() * pitch;
-                    // Round to 0.5pt (10 twips) — matches Word internal precision
-                    row_height = (snapped * 2.0).round() / 2.0;
-                }
-            }
+            // Bug B Day 26 (Phase β step 1): row height snap removal.
+            // COM-confirmed via R1-R6 ground truth (ffbd166): Word does NOT
+            // grid-snap table row heights. All R1-R6 = natural sum/max.
+            //
+            // Day 19 (REVERTED, 2026-05-08) attempted same removal alone:
+            // SSIM net -0.6412, 8 regressions. Diagnosis: cell line height
+            // was still snapped (left at mod.rs:5144) → cell content
+            // overflowed shrunk row.
+            //
+            // Day 26 plan: this step ALONE first, see specific regressions,
+            // then proceed to step 2 (cell line snap gate by !in_table_cell).
 
             // Apply trHeight constraint.
             // 2026-04-09 (COM re-verified, 0e7a contract sample table 1):
