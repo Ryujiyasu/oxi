@@ -1436,6 +1436,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     if para_rs.color.is_none() { para_rs.color = style_rs.color.clone(); }
                     if !para_rs.bold { para_rs.bold = style_rs.bold; }
                     if !para_rs.italic { para_rs.italic = style_rs.italic; }
+                    // Bug B Day 16 (2026-05-08): inherit character_spacing from
+                    // pStyle's rPr. e.g. style "a5" (一太郎) has cs=-1tw which
+                    // was previously dropped at this merge. Bug B Day 4 surgical
+                    // attempt was Phase 1 neutral but SSIM-verify-skipped; Day
+                    // 16 re-evaluating on drift-free baseline.
+                    if para_rs.character_spacing.is_none() {
+                        para_rs.character_spacing = style_rs.character_spacing;
+                    }
                 } else {
                     style.default_run_style = ds.default_run_style.clone();
                 }
@@ -1654,6 +1662,20 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             floating_imgs.push(img);
         } else {
             inline_images.push(Block::Image(img));
+        }
+    }
+
+    // Bug B Day 16: inherit character_spacing from paragraph's
+    // default_run_style into runs whose own rPr doesn't set it.
+    // Layout reads run.style.character_spacing directly with no fallback,
+    // so without this step pStyle-level cs is never applied to runs.
+    if let Some(ref para_drs) = style.default_run_style {
+        if let Some(cs) = para_drs.character_spacing {
+            for run in runs.iter_mut() {
+                if run.style.character_spacing.is_none() {
+                    run.style.character_spacing = Some(cs);
+                }
+            }
         }
     }
 
