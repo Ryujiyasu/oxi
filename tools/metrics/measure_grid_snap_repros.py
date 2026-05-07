@@ -28,11 +28,42 @@ def measure_doc(word, docx_path: str) -> dict:
     label = os.path.splitext(os.path.basename(docx_path))[0]
     print(f"=== {label} ===")
     doc = word.Documents.Open(docx_path, ReadOnly=True)
-    out = {"label": label, "paragraphs": []}
+    out = {"label": label, "paragraphs": [], "tables": []}
     try:
         sec = doc.Sections(1)
         out["page_margin_top_pt"] = round(sec.PageSetup.TopMargin, 3)
         out["doc_grid_line_pitch_tw"] = sec.PageSetup.LinePitch if hasattr(sec.PageSetup, "LinePitch") else None
+
+        # Measure tables (R category)
+        for ti in range(1, doc.Tables.Count + 1):
+            tbl = doc.Tables(ti)
+            tbl_data = {"table_index": ti, "rows": []}
+            for ri in range(1, tbl.Rows.Count + 1):
+                row = tbl.Rows(ri)
+                try:
+                    h_rule = row.HeightRule
+                    h_pt = row.Height
+                    # Y of first cell's first para
+                    cell1 = row.Cells(1)
+                    cell_rng = cell1.Range
+                    first = doc.Range(cell_rng.Start, cell_rng.Start)
+                    y_top = first.Information(WD_VPOS)
+                    pg = first.Information(WD_PAGE)
+                    tbl_data["rows"].append({
+                        "row_index": ri,
+                        "page": pg,
+                        "y_top": round(y_top, 3),
+                        "height_pt": round(h_pt, 3) if h_pt is not None else None,
+                        "height_rule": h_rule,
+                    })
+                except Exception as e:
+                    tbl_data["rows"].append({"row_index": ri, "error": str(e)})
+            # Compute row Y deltas (= row heights)
+            for i in range(1, len(tbl_data["rows"])):
+                if "y_top" in tbl_data["rows"][i] and "y_top" in tbl_data["rows"][i-1]:
+                    tbl_data["rows"][i]["delta_y_from_prev"] = round(
+                        tbl_data["rows"][i]["y_top"] - tbl_data["rows"][i-1]["y_top"], 3)
+            out["tables"].append(tbl_data)
 
         n = doc.Paragraphs.Count
         for i in range(1, n + 1):
@@ -84,6 +115,14 @@ def measure_doc(word, docx_path: str) -> dict:
             if "y" in p:
                 print(f"  i={p['i']} pg={p['page']} y={p['y']:.2f} txt={p['text']!r}")
         print(f"  Inter-para ΔY: mean={out.get('delta_mean')} min={out.get('delta_min')} max={out.get('delta_max')}")
+        # Display tables
+        for tbl in out["tables"]:
+            print(f"  Table[{tbl['table_index']}]:")
+            for row in tbl["rows"]:
+                if "y_top" in row:
+                    h_str = f"h={row.get('height_pt','?')}pt rule={row.get('height_rule','?')}"
+                    dy_str = f"ΔY_top={row.get('delta_y_from_prev','-')}"
+                    print(f"    row[{row['row_index']}] y_top={row['y_top']} pg={row['page']} {h_str} {dy_str}")
     finally:
         doc.Close(SaveChanges=False)
     return out

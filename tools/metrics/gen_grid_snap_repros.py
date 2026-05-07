@@ -156,6 +156,39 @@ def make_cell_doc(grid_pitch: int, snap: bool, label: str):
     make_docx(out_path, body, grid)
 
 
+def make_table_row(cells_content: list[str], tr_height: int | None = None,
+                   tr_rule: str | None = None) -> str:
+    """Build a single <w:tr> with cells. cells_content is list of inner XML for <w:tc>."""
+    height_xml = ""
+    if tr_height is not None:
+        rule_attr = f' w:hRule="{tr_rule}"' if tr_rule else ''
+        height_xml = f'<w:trHeight w:val="{tr_height}"{rule_attr}/>'
+    cells_xml = ""
+    for content in cells_content:
+        cells_xml += f"""<w:tc><w:tcPr><w:tcW w:w="9000" w:type="dxa"/></w:tcPr>{content}</w:tc>"""
+    return f"""<w:tr><w:trPr>{height_xml}</w:trPr>{cells_xml}</w:tr>"""
+
+
+def make_table_doc(label: str, rows_xml: str, num_cols: int = 1, grid_pitch: int = 330):
+    """Wrap rows in a <w:tbl> with appropriate gridCol setup."""
+    grid_cols = "".join(f'<w:gridCol w:w="9000"/>' for _ in range(num_cols))
+    body = f"""<w:tbl>
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblLayout w:type="fixed"/></w:tblPr>
+<w:tblGrid>{grid_cols}</w:tblGrid>
+{rows_xml}
+</w:tbl>
+<w:p/>"""
+    grid = f'<w:docGrid w:type="lines" w:linePitch="{grid_pitch}"/>'
+    out_path = os.path.join(OUT_DIR, f"{label}.docx")
+    make_docx(out_path, body, grid)
+
+
+def make_para_simple(text: str, snap: bool = True, sz_hp: int = 21) -> str:
+    """Simple paragraph for cell content."""
+    snap_xml = "" if snap else '<w:snapToGrid w:val="0"/>'
+    return f"""<w:p><w:pPr>{snap_xml}</w:pPr><w:r><w:rPr><w:sz w:val="{sz_hp}"/></w:rPr><w:t>{text}</w:t></w:r></w:p>"""
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -178,7 +211,51 @@ def main():
     make_cell_doc(330, False, "L8")
     print(f"  L8.docx written")
 
-    print(f"\nGenerated {len(L_DOCS) + 2} L-category docs in {OUT_DIR}")
+    # R-category design: each doc has 2+ rows so row-1 height = row-2.y_top - row-1.y_top
+    # Row-2 always contains a single short paragraph (reference) so its height is fixed.
+
+    # R1: row1 = 1 cell × 1 line of 10.5pt content, row2 = reference
+    row1 = make_table_row([make_para_simple("R1 content")])
+    row2 = make_table_row([make_para_simple("R-ref")])
+    make_table_doc("R1", row1 + row2)
+    print(f"  R1.docx written")
+
+    # R2: row1 = 1 cell × 3 lines, row2 = reference
+    paras_3 = "".join(make_para_simple(f"R2 line {i}") for i in range(1, 4))
+    row1 = make_table_row([paras_3])
+    make_table_doc("R2", row1 + row2)
+    print(f"  R2.docx written")
+
+    # R3: row1 = 2 cells (cell1=1 line, cell2=3 lines), row2 = reference (2 cells × ref)
+    cell1 = make_para_simple("R3 cell1")
+    cell2 = "".join(make_para_simple(f"R3 cell2 line {i}") for i in range(1, 4))
+    row1 = make_table_row([cell1, cell2])
+    row2_2col = make_table_row([make_para_simple("R-ref-1"), make_para_simple("R-ref-2")])
+    make_table_doc("R3", row1 + row2_2col, num_cols=2)
+    print(f"  R3.docx written")
+
+    # R4: row1 = trHeight=400tw=20pt exact, row2 = reference
+    row1 = make_table_row([make_para_simple("R4 content")], tr_height=400, tr_rule="exact")
+    make_table_doc("R4", row1 + row2)
+    print(f"  R4.docx written")
+
+    # R5: row1 = trHeight=400tw=20pt atLeast, row2 = reference
+    row1 = make_table_row([make_para_simple("R5 content")], tr_height=400, tr_rule="atLeast")
+    make_table_doc("R5", row1 + row2)
+    print(f"  R5.docx written")
+
+    # R6: row1 = nested table inside cell, row2 = reference
+    inner_tbl = """<w:tbl>
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblLayout w:type="fixed"/></w:tblPr>
+<w:tblGrid><w:gridCol w:w="4500"/></w:tblGrid>
+<w:tr><w:trPr/><w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>""" + make_para_simple("R6 nested cell") + """</w:tc></w:tr>
+</w:tbl>"""
+    cell_with_nested = inner_tbl + "<w:p/>"
+    row1 = make_table_row([cell_with_nested])
+    make_table_doc("R6", row1 + row2)
+    print(f"  R6.docx written")
+
+    print(f"\nGenerated {len(L_DOCS) + 2 + 6} (L+R) docs in {OUT_DIR}")
     print("Next: COM-measure each with measure_grid_snap_repros.py")
 
 
