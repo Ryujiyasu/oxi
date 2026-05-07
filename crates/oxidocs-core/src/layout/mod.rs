@@ -3184,7 +3184,52 @@ impl LayoutEngine {
         let list_consumes_hanging = para.style.list_marker.is_some()
             && first_line_indent_raw < 0.0
             && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
-        let first_line_indent = if list_consumes_hanging { 0.0 } else { first_line_indent_raw };
+        let mut first_line_indent = if list_consumes_hanging { 0.0 } else { first_line_indent_raw };
+
+        // 2026-05-08 Bug B (Session 55+ Day 14): leading whitespace absorbs indent.
+        // When a paragraph's leading whitespace (ASCII space + CJK fullwidth space)
+        // pt > L + FL pt, Word renders text at the page margin, treating the
+        // leading whitespace as visual indent.
+        //
+        // COM-confirmed on bd90b00 pi=24 ('統計センター...' with 60 leading
+        // ASCII spaces, L=102tw FL=178tw). Word x=56.5 (page margin) vs
+        // Oxi pre-fix x=70.7. After fix Oxi line 1 collapses to 1 line.
+        //
+        // NARROW trigger (full-context scan over 267 docx, body+table-cell+
+        // header+footer+footnote+endnote+textbox): only bd90b00 pi=24 +
+        // 3a4f9f pi=1410 match. ZERO PASS doc paragraph matches.
+        //
+        // Day 13 baseline drift discovery showed Day 12's verify (-0.1365)
+        // was drift-induced; after baseline refresh, real Δ is +0.0098 net
+        // (bd90b00 p.2 -0.0722→-0.0659 improvement, ed025 p.7 +0.0998 etc).
+        let mut indent_absorbed_by_leading_ws = false;
+        if indent_left > 0.0 && first_line_indent > 0.0 {
+            let para_font_size = self.resolve_font_size(
+                para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                &para.style,
+            );
+            let leading_ws_pt: f32 = {
+                let mut sum = 0.0_f32;
+                'outer: for run in &para.runs {
+                    let run_fs = run.style.font_size.unwrap_or(para_font_size);
+                    for c in run.text.chars() {
+                        match c {
+                            ' ' => sum += run_fs * 0.5,
+                            '\u{3000}' => sum += run_fs,
+                            _ => break 'outer,
+                        }
+                    }
+                }
+                sum
+            };
+            if leading_ws_pt > indent_left + first_line_indent {
+                indent_absorbed_by_leading_ws = true;
+            }
+        }
+        let indent_left = if indent_absorbed_by_leading_ws { 0.0 } else { indent_left };
+        if indent_absorbed_by_leading_ws {
+            first_line_indent = 0.0;
+        }
         // COM-confirmed (2026-04-03): charGrid (linesAndChars) ignores paragraph indents
         // for line-break purposes. Text starts at margin and charsLine determines wrapping.
         // data_guideline: indent=12pt but x0=71 (margin), 38ch/line (=charsLine+1 kinsoku).
