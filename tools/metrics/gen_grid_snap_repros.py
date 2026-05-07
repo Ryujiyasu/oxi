@@ -255,7 +255,59 @@ def main():
     make_table_doc("R6", row1 + row2)
     print(f"  R6.docx written")
 
-    print(f"\nGenerated {len(L_DOCS) + 2 + 6} (L+R) docs in {OUT_DIR}")
+    # ===== C category: cursor advance under various conditions =====
+    # 6 paragraphs with specific spacing; measure cumulative y to detect
+    # whether cursor sticky-anchors to grid lines or accumulates natural.
+
+    # C1: linesAndChars (LM2) mode, pitch=330, body paragraphs snap=1
+    body_inner = "".join(make_para(f"C1 line {i}", True, None, None, 21) for i in range(1, 7))
+    grid = '<w:docGrid w:type="linesAndChars" w:linePitch="330" w:charSpace="0"/>'
+    out_path = os.path.join(OUT_DIR, "C1.docx")
+    make_docx(out_path, body_inner, grid)
+    print(f"  C1.docx written")
+
+    # C2: mixed snap=1 + snap=0 paragraphs alternating
+    paras = []
+    for i in range(1, 7):
+        snap = (i % 2 == 1)
+        paras.append(make_para(f"C2 line {i} snap={int(snap)}", snap, None, None, 21))
+    body_inner = "".join(paras)
+    grid = '<w:docGrid w:type="lines" w:linePitch="330"/>'
+    out_path = os.path.join(OUT_DIR, "C2.docx")
+    make_docx(out_path, body_inner, grid)
+    print(f"  C2.docx written")
+
+    # C3: 6 paragraphs with line=exact 13pt (260tw)
+    body_inner = "".join(make_para(f"C3 line {i}", True, 260, "exact", 21) for i in range(1, 7))
+    grid = '<w:docGrid w:type="lines" w:linePitch="330"/>'
+    out_path = os.path.join(OUT_DIR, "C3.docx")
+    make_docx(out_path, body_inner, grid)
+    print(f"  C3.docx written")
+
+    # C4: 6 paragraphs with line=Multiple 1.5 (= 360tw=18pt for 12pt font, snapped × 1.5)
+    body_inner = "".join(make_para(f"C4 line {i}", True, 360, "auto", 21) for i in range(1, 7))
+    grid = '<w:docGrid w:type="lines" w:linePitch="330"/>'
+    out_path = os.path.join(OUT_DIR, "C4.docx")
+    make_docx(out_path, body_inner, grid)
+    print(f"  C4.docx written")
+
+    # ===== E category: estimate behavior =====
+    # E1: cell with multiple paragraphs (test cell line height accumulation)
+    paras_5 = "".join(make_para_simple(f"E1 line {i}") for i in range(1, 6))
+    row = make_table_row([paras_5])
+    make_table_doc("E1", row, grid_pitch=330)
+    print(f"  E1.docx written")
+
+    # E2: body with multiple paragraphs of different sizes (mixed line heights)
+    body_inner = ""
+    for i, sz in enumerate([16, 21, 28, 21, 16, 21], 1):  # 8/10.5/14/10.5/8/10.5pt
+        body_inner += make_para(f"E2 line {i} sz={sz//2}pt", True, None, None, sz)
+    grid = '<w:docGrid w:type="lines" w:linePitch="330"/>'
+    out_path = os.path.join(OUT_DIR, "E2.docx")
+    make_docx(out_path, body_inner, grid)
+    print(f"  E2.docx written")
+
+    print(f"\nGenerated {len(L_DOCS) + 2 + 6 + 4 + 2} (L+R+C+E) docs in {OUT_DIR}")
     print("Next: COM-measure each with measure_grid_snap_repros.py")
 
 
