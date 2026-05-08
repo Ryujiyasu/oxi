@@ -80,6 +80,10 @@ def main():
         ('DS_V122_paras_40_to_46', truncate_paragraphs(doc_xml, keep_range=(40, 46))),
         ('DS_V123_paras_1_to_45', truncate_paragraphs(doc_xml, keep_first_n=45)),
         ('DS_V124_paras_30_to_46', truncate_paragraphs(doc_xml, keep_range=(30, 46))),
+        # Day 31 part 15 — wrap-width bug isolation: extreme divergence paragraphs
+        ('DS_V125_para11_only', truncate_paragraphs(doc_xml, keep_range=(11, 11))),
+        ('DS_V126_para15_only', truncate_paragraphs(doc_xml, keep_range=(15, 15))),
+        ('DS_V127_para25_only', truncate_paragraphs(doc_xml, keep_range=(25, 25))),
     ]
 
     for label, xml in variants:

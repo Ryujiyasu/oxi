@@ -26,6 +26,9 @@ VARIANTS = [
     'DS_V122_paras_40_to_46',
     'DS_V123_paras_1_to_45',
     'DS_V124_paras_30_to_46',
+    'DS_V125_para11_only',
+    'DS_V126_para15_only',
+    'DS_V127_para25_only',
 ]
 
 # Full db9ca for comparison
