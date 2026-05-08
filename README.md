@@ -204,26 +204,28 @@ Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. 
 
 ## Layout Accuracy (SSIM Progress)
 
-Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM across 177 real-world .docx documents (352 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
+Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM across 235 real-world .docx documents (410 pages). All specifications are derived from COM API black-box measurements — no DLL disassembly.
 
 ```mermaid
 xychart-beta
-  title "Average SSIM vs Microsoft Word (177 docs, 352 pages)"
-  x-axis ["03-28", "04-01", "04-06", "04-10", "04-13", "04-14", "04-18", "04-21"]
+  title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
+  x-axis ["03-28", "04-06", "04-10", "04-14", "04-18", "04-21", "04-28", "05-08"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8191, 0.8430, 0.8520, 0.8567, 0.8584, 0.8597, 0.8625]
+  line [0.7884, 0.8430, 0.8520, 0.8584, 0.8597, 0.8625, 0.8699, 0.8855]
 ```
 
-| Date | avg SSIM | bottom-5 sum | Key Changes |
+| Date | avg SSIM | gate / Phase | Key Changes |
 |------|----------|--------------|-------------|
-| 2026-03-28 | 0.7884 | — | Baseline: grid snap, spacing collapse, justify, GDI metrics |
-| 2026-04-06 | **0.8430** | — | LM0 line height, docGrid no-type, font alias, eastAsia fallback |
-| 2026-04-10 | **0.8520** | — | leftChars indent, fullwidth symbols, font unification |
-| 2026-04-14 | **0.8584** | 2.8035 | 12 new OOXML elements, 10tw char width, cumulative raw model |
-| 2026-04-18 | **0.8597** | **3.0597** | 4-agent parallel session: CJK wrap strict overflow, empty-br stub, hanging-indent, row-height, yakumono compat15 gate, additive-primary methodology established (+0.2562 bottom-5) |
-| 2026-04-21 | **0.8625** | **3.2451** | LM0 first-line centering (Bug A, `(line_h - fontSize)/2` offset scales with font size — 46 gen2_* Title docs no longer -4.32pt shifted); footer first-type phantom fix; auto-multiplier formula derivation. 0e7a p.2 (0.5768 rank 1) and 683f p.2 (0.6329 rank 3) both drop out of bottom-8 (+0.1170 bottom-5) |
+| 2026-03-28 | 0.7884 | bottom-5 sum | Baseline: grid snap, spacing collapse, justify, GDI metrics |
+| 2026-04-06 | **0.8430** | bottom-5 sum | LM0 line height, docGrid no-type, font alias, eastAsia fallback |
+| 2026-04-10 | **0.8520** | bottom-5 sum | leftChars indent, fullwidth symbols, font unification |
+| 2026-04-14 | **0.8584** | bottom-5 sum 2.8035 | 12 new OOXML elements, 10tw char width, cumulative raw model |
+| 2026-04-18 | **0.8597** | bottom-5 sum 3.0597 | 4-agent parallel session: CJK wrap strict overflow, empty-br stub, hanging-indent, row-height, yakumono compat15 gate (+0.2562 bottom-5) |
+| 2026-04-21 | **0.8625** | bottom-5 sum 3.2451 | LM0 first-line centering (Bug A, `(line_h - fontSize)/2` offset scales with font size — 46 gen2_* Title docs no longer -4.32pt shifted); footer first-type phantom fix |
+| 2026-04-28 | **0.8699** | **Phase 1** (pagination) | Methodology redesign: gate moves from bottom-5 SSIM sum to per-doc page-match correctness. Bottom-5 cascade plateau (R21-R34) revealed SSIM single-gate cannot move past structural mismatches. Phase 1 measures whether each Word paragraph lands on the same page as Oxi |
+| 2026-05-08 | **0.8855** | Phase 1 37/55 | Day 14 leading-ws absorbs indent (+0.0098), Day 16 cs inheritance (+0.1066), Day 18 broad merge_run_style (+0.0252), Day 26 table row grid-snap removal (+0.2138), Day 28 adjustLineHeightInTable flag-conditional cell snap rule, Day 29f Times New Roman space data fix |
 
-**Bottom-5 floor sum** (Σ of 5 lowest per-doc min(page SSIM)) is the merge gate — it protects against whack-a-mole regressions that average SSIM misses. Each fix must strictly raise the bottom-5 floor.
+**Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 1 — pagination correctness** (per-paragraph page match between Word and Oxi). Bottom-5 SSIM sum is tracked but no longer the primary gate; SSIM regression > 0.005 still requires review. Phase 2 (element IoU ≥ 0.99) and Phase 3 (SSIM mean ≥ 0.99 + bottom-5 floor) activate as Phase 1 transitions to ≥ 95% pass rate. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
 
 For detailed daily progress, COM-confirmed specifications, and DML structural comparison results, see [docs/layout_accuracy.md](docs/layout_accuracy.md) and [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
