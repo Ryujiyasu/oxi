@@ -25,6 +25,12 @@ VARIANTS = [
     'TS_V104_no_flag',
     'TS_V105_line200',
     'TS_V106_line300',
+    'TS_V107_one_table_30rows',
+    'TS_V108_6tables_5rows',
+    'TS_V109_no_border',
+    'TS_V110_explicit_pad_t',
+    'TS_V111_lineRule_default',
+    'TS_V112_body_paragraphs',
 ]
 
 
