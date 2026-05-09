@@ -155,7 +155,7 @@ def analyze(doc_id):
 
 
 def main():
-    docs = ['bd90b00ab7a7', 'de6e32b5960b']
+    docs = ['bd90b00ab7a7', 'de6e32b5960b', 'db9ca18368cd', 'd77a58485f16']
     for doc_id in docs:
         analyze(doc_id)
 
