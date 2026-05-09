@@ -1,0 +1,232 @@
+[
+  {
+    "variant": "DR_LH_01",
+    "A": "auto",
+    "B": "auto",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      103.5
+    ],
+    "oxi_y": [
+      74.5,
+      90.0,
+      105.5
+    ],
+    "word_AB": 15.5,
+    "word_BC": 16.0,
+    "oxi_AB": 15.5,
+    "oxi_BC": 15.5,
+    "delta_AB": 0.0,
+    "delta_BC": -0.5,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_02",
+    "A": "auto",
+    "B": "exact14",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      101.5
+    ],
+    "oxi_y": [
+      74.5,
+      91.0,
+      104.0
+    ],
+    "word_AB": 15.5,
+    "word_BC": 14.0,
+    "oxi_AB": 16.5,
+    "oxi_BC": 13.0,
+    "delta_AB": 1.0,
+    "delta_BC": -1.0,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_03",
+    "A": "auto",
+    "B": "exact16",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      103.5
+    ],
+    "oxi_y": [
+      74.5,
+      93.0,
+      106.0
+    ],
+    "word_AB": 15.5,
+    "word_BC": 16.0,
+    "oxi_AB": 18.5,
+    "oxi_BC": 13.0,
+    "delta_AB": 3.0,
+    "delta_BC": -3.0,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_04",
+    "A": "auto",
+    "B": "exact18",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      105.5
+    ],
+    "oxi_y": [
+      74.5,
+      95.0,
+      108.0
+    ],
+    "word_AB": 15.5,
+    "word_BC": 18.0,
+    "oxi_AB": 20.5,
+    "oxi_BC": 13.0,
+    "delta_AB": 5.0,
+    "delta_BC": -5.0,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_05",
+    "A": "auto",
+    "B": "exact21",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      108.5
+    ],
+    "oxi_y": [
+      74.5,
+      98.0,
+      111.0
+    ],
+    "word_AB": 15.5,
+    "word_BC": 21.0,
+    "oxi_AB": 23.5,
+    "oxi_BC": 13.0,
+    "delta_AB": 8.0,
+    "delta_BC": -8.0,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_06",
+    "A": "auto",
+    "B": "mult1.15",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      103.5
+    ],
+    "oxi_y": [
+      74.5,
+      90.0,
+      105.5
+    ],
+    "word_AB": 15.5,
+    "word_BC": 16.0,
+    "oxi_AB": 15.5,
+    "oxi_BC": 15.5,
+    "delta_AB": 0.0,
+    "delta_BC": -0.5,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_07",
+    "A": "auto",
+    "B": "mult1.5",
+    "C": "auto",
+    "word_y": [
+      72.0,
+      87.5,
+      108.0
+    ],
+    "oxi_y": [
+      74.5,
+      92.5,
+      110.5
+    ],
+    "word_AB": 15.5,
+    "word_BC": 20.5,
+    "oxi_AB": 18.0,
+    "oxi_BC": 18.0,
+    "delta_AB": 2.5,
+    "delta_BC": -2.5,
+    "init_dy": 2.5
+  },
+  {
+    "variant": "DR_LH_08",
+    "A": "exact16",
+    "B": "exact16",
+    "C": "exact16",
+    "word_y": [
+      72.0,
+      88.0,
+      104.0
+    ],
+    "oxi_y": [
+      77.5,
+      93.5,
+      109.5
+    ],
+    "word_AB": 16.0,
+    "word_BC": 16.0,
+    "oxi_AB": 16.0,
+    "oxi_BC": 16.0,
+    "delta_AB": 0.0,
+    "delta_BC": 0.0,
+    "init_dy": 5.5
+  },
+  {
+    "variant": "DR_LH_09",
+    "A": "exact14",
+    "B": "exact16",
+    "C": "exact14",
+    "word_y": [
+      72.0,
+      86.0,
+      102.0
+    ],
+    "oxi_y": [
+      75.5,
+      91.5,
+      105.5
+    ],
+    "word_AB": 14.0,
+    "word_BC": 16.0,
+    "oxi_AB": 16.0,
+    "oxi_BC": 14.0,
+    "delta_AB": 2.0,
+    "delta_BC": -2.0,
+    "init_dy": 3.5
+  },
+  {
+    "variant": "DR_LH_10",
+    "A": "auto",
+    "B": "exact14",
+    "C": "exact14",
+    "word_y": [
+      72.0,
+      87.5,
+      101.5
+    ],
+    "oxi_y": [
+      74.5,
+      91.0,
+      105.0
+    ],
+    "word_AB": 15.5,
+    "word_BC": 14.0,
+    "oxi_AB": 16.5,
+    "oxi_BC": 14.0,
+    "delta_AB": 1.0,
+    "delta_BC": 0.0,
+    "init_dy": 2.5
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "pages": [
+    {"page": 1, "width": 595.300, "height": 841.900, "elements": [
+      {"type": "text", "x": 72.000, "y": 74.500, "w": 10.500, "h": 15.500, "text": "あ", "font_size": 10.50, "para_idx": 0, "run_idx": 0, "char_offset": 0},
+      {"type": "text", "x": 72.000, "y": 91.000, "w": 10.500, "h": 14.000, "text": "あ", "font_size": 10.50, "para_idx": 1, "run_idx": 0, "char_offset": 0},
+      {"type": "text", "x": 72.000, "y": 105.000, "w": 10.500, "h": 14.000, "text": "あ", "font_size": 10.50, "para_idx": 2, "run_idx": 0, "char_offset": 0}
+    ]}
+  ]
+}
