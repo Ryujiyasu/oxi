@@ -1,0 +1,134 @@
+[
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 1,
+    "test_y": 740.5,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 1,
+    "variant": "PB_OF_01",
+    "design_D": -15
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 1,
+    "test_y": 745.5,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 1,
+    "variant": "PB_OF_02",
+    "design_D": -10
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 1,
+    "test_y": 750.5,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 1,
+    "variant": "PB_OF_03",
+    "design_D": -5
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 1,
+    "test_y": 753.5,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 1,
+    "variant": "PB_OF_04",
+    "design_D": -2
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 1,
+    "test_y": 754.5,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 1,
+    "variant": "PB_OF_05",
+    "design_D": -1
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 1,
+    "test_y": 755.5,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 1,
+    "variant": "PB_OF_06",
+    "design_D": 0
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 2,
+    "test_y": 72.0,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 2,
+    "variant": "PB_OF_07",
+    "design_D": 1
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 2,
+    "test_y": 72.0,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 2,
+    "variant": "PB_OF_08",
+    "design_D": 2
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 2,
+    "test_y": 72.0,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 2,
+    "variant": "PB_OF_09",
+    "design_D": 3
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 2,
+    "test_y": 72.0,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 2,
+    "variant": "PB_OF_10",
+    "design_D": 5
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 2,
+    "test_y": 72.0,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 2,
+    "variant": "PB_OF_11",
+    "design_D": 7
+  },
+  {
+    "n_paragraphs": 48,
+    "test_idx": 48,
+    "test_page": 2,
+    "test_y": 72.0,
+    "prev_page": 1,
+    "prev_y": 716.0,
+    "n_pages": 2,
+    "variant": "PB_OF_12",
+    "design_D": 10
+  }
+]
