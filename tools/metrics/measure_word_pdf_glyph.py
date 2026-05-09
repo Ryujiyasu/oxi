@@ -128,35 +128,61 @@ def match_anchor_to_glyph(anchors, pages):
     return matches
 
 
-def main():
-    docx = r'C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\bd90b00ab7a7_order_05.docx'
-    pdf = r'C:\tmp\bd90b00ab7a7_order_05_word.pdf'
+def find_docx(doc_id, docx_dir):
+    for f in os.listdir(docx_dir):
+        if f.startswith(doc_id) and f.endswith('.docx'):
+            return os.path.join(docx_dir, f)
+    return None
 
-    print(f'Step 1: export PDF from Word')
+
+def process(doc_id, docx_dir):
+    docx = find_docx(doc_id, docx_dir)
+    if not docx:
+        print(f'  {doc_id}: NOT FOUND')
+        return None
+    label = os.path.splitext(os.path.basename(docx))[0]
+    pdf = os.path.join(r'C:\tmp', f'{label}_word.pdf')
     if not os.path.exists(pdf):
+        print(f'  exporting PDF...')
         export_pdf(docx, pdf)
-    else:
-        print(f'  PDF already exists: {pdf}')
-
-    print(f'\nStep 2: measure Word COM paragraph anchors')
     anchors = measure_paragraph_anchors(docx)
-    print(f'  Got {len(anchors)} anchors')
-
-    print(f'\nStep 3: extract PDF glyphs via PyMuPDF')
     pages = extract_pdf_glyphs(pdf)
-    print(f'  Got {len(pages)} pages, {sum(len(p["lines"]) for p in pages)} text lines')
-
-    print(f'\nStep 4: match anchors to glyphs')
     matches = match_anchor_to_glyph(anchors, pages)
-    print(f'  Matched {len(matches)} of {len(anchors)} paragraphs')
+    return {'doc_id': doc_id, 'matches': matches, 'n_anchors': len(anchors)}
 
-    print(f'\n=== bd90b00 — Word anchor vs PDF glyph y per paragraph ===')
-    print(f'  {"i":>3} {"pg":>2} {"anchor_y":>8} {"glyph_y":>8} {"offset":>7} {"glyph_orig":>10} {"lh_rule":>7} {"lh_val":>6} {"fs":>5} text')
-    for m in matches:
-        marker = ''
-        if abs(m['offset']) >= 1.0:
-            marker = ' <<NON-ZERO>>'
-        print(f'  {m["i"]:>3} {m["page"]:>2} {m["anchor_y"]:>8.2f} {m["glyph_top_y"]:>8.2f} {m["offset"]:>+7.2f} {m["glyph_origin_y"]:>10.2f} {m["lh_rule"]:>7} {m["lh_val"]:>6.1f} {m["fs"]:>5} {m["text"]!r}{marker}')
+
+def main():
+    docx_dir = r'C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx'
+    docs = ['bd90b00ab7a7', 'de6e32b5960b', 'db9ca18368cd', 'd77a58485f16']
+
+    print('Re-measuring 4 Class A docs with PDF-glyph methodology...')
+    all_results = {}
+    for doc_id in docs:
+        print(f'\n--- {doc_id} ---')
+        r = process(doc_id, docx_dir)
+        if not r:
+            continue
+        all_results[doc_id] = r
+        ms = r['matches']
+        print(f'  matched {len(ms)} of {r["n_anchors"]} sampled paragraphs')
+        offsets = [m["offset"] for m in ms]
+        if offsets:
+            print(f'  offset range: {min(offsets):+.2f} to {max(offsets):+.2f} (mean {sum(offsets)/len(offsets):+.2f})')
+
+    # Cross-doc comparison: how much offset is "natural Word behavior"?
+    print('\n=== Cross-doc Word natural offset summary ===')
+    print('  (offset = PDF glyph_top_y - Word anchor_y)')
+    print('  if all offsets are similar across docs, that reflects Word internal line-box behavior')
+    by_fs_lh = {}
+    for doc_id, r in all_results.items():
+        for m in r['matches']:
+            key = (m['lh_rule'], m['lh_val'], m['fs'])
+            by_fs_lh.setdefault(key, []).append(m['offset'])
+    print(f'  {"lh_rule":>7} {"lh_val":>6} {"fs":>5} {"n":>3} {"mean":>8} {"min":>7} {"max":>7}')
+    for key, offsets in sorted(by_fs_lh.items()):
+        n = len(offsets)
+        mn = sum(offsets)/n
+        print(f'  {key[0]:>7} {key[1]:>6.1f} {key[2]:>5} {n:>3} {mn:>+8.2f} {min(offsets):>+7.2f} {max(offsets):>+7.2f}')
 
 
 if __name__ == '__main__':
