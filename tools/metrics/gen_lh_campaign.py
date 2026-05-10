@@ -58,11 +58,14 @@ def make_para(font, fs_half, line_val, line_rule, snap_to_grid=True):
         spacing = f'<w:spacing w:line="{line_val}" w:lineRule="{line_rule}"/>'
     snap = '' if snap_to_grid else '<w:snapToGrid w:val="0"/>'
     rfonts = f'<w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
+    # Use Latin text for non-CJK fonts (Times New Roman, Century, etc.)
+    is_latin = font in ('Times New Roman', 'Century', 'Arial', 'Calibri')
+    test_text = 'Test line content' if is_latin else 'テスト行'
     return ('<w:p><w:pPr>'
             + spacing + snap +
             f'<w:rPr>{rfonts}<w:sz w:val="{fs_half}"/></w:rPr></w:pPr>'
             f'<w:r><w:rPr>{rfonts}<w:sz w:val="{fs_half}"/></w:rPr>'
-            f'<w:t>テスト行</w:t></w:r></w:p>')
+            f'<w:t>{test_text}</w:t></w:r></w:p>')
 
 
 def make_document(font, fs_half, line_val, line_rule, grid_type, line_pitch, snap):
@@ -132,6 +135,12 @@ TEST_MATRIX = [
     ('LH_msMincho_10p5_exact360', 'ＭＳ 明朝', 21, '360', 'exact',  'linesAndChars', '360', True),
     ('LH_msMincho_10p5_atleast', 'ＭＳ 明朝', 21, '280', 'atLeast', 'linesAndChars', '360', True),
     ('LH_msMincho_10p5_multiple_1p15', 'ＭＳ 明朝', 21, '276', 'auto', 'linesAndChars', '360', True),  # 276=23pt × 12/12.something; Multiple mapped
+
+    # === Day 33 part 28: Times New Roman (db9ca wi=37 actual font) ===
+    ('LH_TNR_10p5_g360', 'Times New Roman', 21, '', 'auto', 'linesAndChars', '360', True),
+    ('LH_TNR_10p5_gnone', 'Times New Roman', 21, '', 'auto', 'none', '0', True),
+    ('LH_TNR_10p5_g360_nosnap', 'Times New Roman', 21, '', 'auto', 'linesAndChars', '360', False),
+    ('LH_TNR_12_g360', 'Times New Roman', 24, '', 'auto', 'linesAndChars', '360', True),
 ]
 
 if __name__ == '__main__':
