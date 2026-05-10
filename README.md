@@ -33,12 +33,14 @@ View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — n
 Billions of people depend on proprietary document formats (.docx, .xlsx, .pptx, .pdf) for work, education, and government — yet no truly compatible open-source rendering engine exists. LibreOffice breaks layouts. Google Docs requires a server. The world deserves a document engine that is:
 
 - **Free forever** — MIT license, no vendor lock-in
+- **No proprietary format** — Oxi reads and writes only standard formats (.docx / .odt / .xlsx / .pptx / .pdf). Oxi never asks anyone to migrate into an Oxi-specific container
+- **Both ODF and OOXML are first-class** — neither is a second-class import
 - **Runs anywhere** — browser, desktop, mobile, server, embedded
-- **High-fidelity rendering** — based on published OOXML standards and COM API measurements
+- **High-fidelity rendering** — based on published ODF / OOXML standards and COM API measurements
 - **Private by design** — your data never leaves your device
 - **Accessible** — works on low-end hardware, no installation required
 
-Oxi doesn't reject Microsoft Word — it observes Word's behavior, reproduces it with pixel-level accuracy, and returns the power of interpretation to the communities who depend on these documents. Reclaim sovereignty. Enable diversity.
+Oxi doesn't reject Microsoft Word — it observes Word's behavior, reproduces it with pixel-level accuracy, and returns the power of interpretation to the communities who depend on these documents. The same loop applies to ODF: empirical fidelity to a reference renderer, pinned by measurement, not speculation. Reclaim sovereignty. Enable diversity.
 
 ---
 
@@ -68,7 +70,9 @@ Oxi's Ra loop is a mechanical convergence toward SSIM = 1.0 against Microsoft Wo
 | **Google Docs** | Server-rendered | Proprietary. Requires server. Intentionally diverges from Word layout |
 | **docx-rs / rdocx** | Rust DOCX libraries | Read/write and export only — no layout engine for browser rendering |
 
-**Oxi's unique combination:** OSS (MIT) + Rust/WASM client-side + COM-measured pixel-perfect Word compatibility + zero server cost. No other project occupies this intersection.
+**Oxi's unique combination:** OSS (MIT) + Rust/WASM client-side + dual-format first-class (.docx + .odt, no proprietary "Oxi format") + COM-measured pixel-perfect Word compatibility + zero server cost. No other project occupies this intersection.
+
+LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). Microsoft Word inverts that. Oxi's IR is format-agnostic from the start — neither format owns it, so neither degrades on round-trip.
 
 ---
 
@@ -174,14 +178,14 @@ Oxi uses two font engines for different purposes:
 | Format | Engine | Reason |
 |--------|--------|--------|
 | .docx (Word compatible) | **GDI** | Word uses GDI text metrics. Integer-pixel rounding, tmHeight line heights, hinting-dependent character widths. Pixel-identical layout requires matching GDI behavior exactly. |
-| .oxidocs (Oxi native) | **DirectWrite** | Platform-independent floating-point precision. No legacy rounding artifacts. Better support for variable fonts, OpenType features, and high-DPI rendering. |
+| .odt (ODF) | **DirectWrite** | ODF rendering is not anchored to a single canonical engine the way .docx is to Word. DirectWrite's floating-point metrics give cross-platform consistency without inheriting GDI's legacy rounding constraints. |
 | .pdf (export) | **DirectWrite** | PDF spec uses floating-point coordinates. GDI integer rounding is unnecessary and reduces quality. |
 
 ### Why two engines?
 
 Word's layout is built on GDI — a 30-year-old API that rounds character widths to integer pixels and computes line heights by rounding ascent and descent separately before adding them. These rounding decisions cascade: a 0.18pt/character difference at Calibri 11pt becomes 10.8pt of accumulated error over 60 characters, enough to change where lines break and pages split.
 
-Oxi's Phase 1 goal is Word-compatible rendering, so GDI metrics are mandatory. But GDI's integer rounding is a legacy constraint, not a design virtue. For Oxi's native format (.oxidocs), DirectWrite provides:
+Oxi's Phase 1 goal is Word-compatible rendering, so GDI metrics are mandatory. But GDI's integer rounding is a legacy constraint, not a design virtue. For ODF rendering and PDF export, DirectWrite provides:
 
 - **Cross-platform consistency** — floating-point metrics produce identical layout on Windows, macOS, Linux, and WASM
 - **Variable font support** — GDI cannot handle variable fonts; DirectWrite can
@@ -195,10 +199,10 @@ Both engines implement a shared `FontEngine` trait. The layout engine depends on
 ```
 FontEngine trait
 ├── GdiEngine       — Word-compatible metrics (integer px rounding)
-└── DWriteEngine    — Oxi-native metrics (floating-point precision)
+└── DWriteEngine    — Cross-platform metrics (floating-point precision)
 ```
 
-Opening a .docx → GDI engine. Creating a new .oxidocs → DirectWrite engine. Converting .docx to .oxidocs recalculates layout with DirectWrite metrics. No pixel accuracy is lost for Word documents; no legacy constraints limit Oxi-native documents.
+Opening a .docx → GDI engine. Opening an .odt or exporting to PDF → DirectWrite engine. No pixel accuracy is lost for Word documents; no legacy constraints limit cross-platform formats.
 
 ---
 
@@ -379,76 +383,78 @@ LibreOffice timed out (>45s) on 4 large government xlsx files. Oxi parsed all in
 - .pptx layout engine (slide rendering, masters)
 - Vertical writing & ruby (furigana)
 
-### v2 — oxidocs Native Format
+### v2 — Format Parity (.docx + .odt)
 
-**Architectural Guarantee: oxidocs core can always be losslessly converted to .docx.**
+**Both formats are first-class. There is no proprietary "Oxi format."**
 
-oxidocs is Oxi's native document format, designed with two explicit layers:
+Oxi positions itself as a rendering engine that treats both ISO/IEC 26300 (ODF) and ECMA-376 / ISO/IEC 29500 (OOXML) as first-class. Other engines treat one as native and the other as a second-class import: LibreOffice's OOXML rendering breaks layouts because OOXML is converted into ODF's internal model; Microsoft Word's ODF support has the same issue in reverse. Oxi's IR is designed to be language-agnostic from the start — neither format owns it.
 
-```
-oxidocs
-├── core layer   Word-compatible fields. Owned by Oxi core. Forks cannot modify.
-│                Always exportable to .docx.
-└── ext layer    Fork/Extension additions. On .docx export: customXml/ or discard.
-```
+This matters now because EU public-sector procurement is moving in this direction:
 
-**Output patterns:**
+- **Germany — Deutschland-Stack (2026-03)**: federal digital-sovereignty framework mandates ODF + PDF/UA only; OOXML excluded
+- **EU — Cyber Resilience Act (2024/2847) + Interoperable Europe Act**: legally mandate open standards and reduce vendor lockin across all member states
+- **France RGI (2009)**, **Netherlands / Sweden / Norway / Denmark**: ODF required or strongly preferred for public administration
 
-| Pattern | Format | Use case | Compatibility |
-|---------|--------|----------|---------------|
-| A | .docx + oxi extensions in customXml/ | External sharing, submission, archive | Opens in all Word clients |
-| B | .oxidocs (native, optimized) | Internal storage, Fork sharing, waterdocs base | Smaller than .docx. Always convertible to Pattern A |
-
-Like Git's loose objects vs packfiles — internal format is optimized, external output is the interchange format.
+A single-format engine forces every cross-format exchange to bleed pixel fidelity. A dual-format engine with pixel parity in both formats dissolves the migration step.
 
 **v2 deliverables:**
-- [ ] oxidocs specification (core layer / ext layer definition)
-- [ ] oxidocs ↔ .docx bidirectional conversion (Pattern A / B)
-- [ ] oxidocs-to-docx Generator (full generation, no original file required)
-- [ ] Dual font engine: GDI for .docx, DirectWrite for .oxidocs
-- [ ] docs/governance.md: Architectural Guarantee formalized
+- [ ] ODF parser (.odt → IR) — additive to the existing format-agnostic IR
+- [ ] ODF layout engine reaching SSIM ≥ 0.99 against a deterministic reference renderer
+- [ ] Bidirectional .docx ↔ .odt at the IR level (lossless for shared semantics; documented mapping for format-specific extensions)
+- [ ] Round-trip preservation tests: open → save → reopen with byte-level structural equality where the spec permits
+- [ ] docs/governance.md: dual-format core ownership, extension boundary
 
-### v2.x — waterdocs (oxidocs + hyde encryption)
+### v2.x — hyde-encrypted standard formats
+
+oxi-hyde wraps standard files. The encryption is an outer layer, not a new format — decryption restores a plain `.docx` or `.odt` openable by Word, LibreOffice, or any other compliant client.
 
 ```
-waterdocs
-├── core layer (after decryption → .docx exportable)
-└── hyde layer (encryption metadata, not included in .docx)
+.docx.hyde   = .docx + hyde encryption envelope
+.odt.hyde    = .odt  + hyde encryption envelope
 ```
 
-- [ ] waterdocs format definition (oxi-hyde Extension)
-- [ ] Encryption/decryption flow preserving core layer guarantee
-- [ ] oxi-hyde integration as standard Extension
+This is structurally equivalent to PGP-encrypted PDFs: the standard format remains the source of truth, encryption is an add-on. Compared to the alternative of inventing a proprietary encrypted container, this approach:
+
+- Avoids creating a new vendor lockin
+- Lets recipients decrypt with hyde, then open the file in any tool — not just Oxi
+- Keeps Oxi positioned as infrastructure, not a closed silo
+
+**v2.x deliverables:**
+- [ ] `.docx.hyde` / `.odt.hyde` envelope spec
+- [ ] Encryption / decryption flow (TPM 2.0 + ML-KEM, see oxi-hyde Extension)
+- [ ] Verifier compatibility tests (encrypted file → decrypt → open in Word / LibreOffice / Oxi)
 
 ### Future
 - oxi-argo (zero-knowledge proofs for document provenance)
 - oxi-mcp (AI agent workflow integration)
 - Desktop application (oxi-tauri)
 
-### Ra: No Excuses by Design
+### Ra: Empirical Convergence
 
-Oxi's Word compatibility is not aspirational — it is mechanically guaranteed to converge.
+Oxi's Word compatibility is built on empirical reverse engineering, not speculation. The premise was tightened after Sessions 38-45 falsified some of the founding axioms (R30 measurement bug, R33 41-page regression, R21 plateau). What remains:
 
-- Word's layout is **deterministic** — same input always produces the same output
-- Every value is **measurable** via the COM API — Y coordinates, line heights, character widths, paragraph spacing
-- Every visual difference between Oxi and Word maps to a **finite, identifiable specification gap**
-- Fixing one specification gap often improves **multiple documents simultaneously** (convergent structure)
-- Measurement results are **permanent assets** — once a behavior is COM-measured and committed, it never needs to be re-derived
+- Word's layout is **deterministic** — same input always produces the same output. This is the basis for measurement-driven specification derivation
+- Hypotheses are **falsifiable via COM measurement or pixel diff**. Speculation is not a basis for layout changes
+- Word output is the ground truth for the **fidelity goal** (matching Word's render). OOXML spec is the ground truth for the **correctness goal** (parser, IR semantics). When the two disagree (undocumented Word quirks), fidelity wins for rendering, correctness wins for parser/IR
+- The merge gate is **phase-based** — Phase 1 (pagination correctness), Phase 2 (element IoU ≥ 0.99), Phase 3 (SSIM ≥ 0.99 + bottom-N floor). SSIM remains the long-term goal but is gated only at Phase 3; tracked at every phase as a regression sentinel
 
-This is not "best effort." It is a closed loop where "not yet implemented" is the only valid state, and "cannot implement" does not exist. The question is never *if* Oxi will match Word, only *when* — determined by measurement count and implementation time.
+This is not "best effort." It is a measurement-driven convergence loop, where each merge moves the gate's primary metric or is rejected. The same loop transfers to ODF parity once the v2 baseline is in place — the reference renderer changes (LibreOffice headless), the methodology does not.
 
-### Implementation Gap: oxidocs-to-docx Generator
+### Implementation Gap: ODF Rendering Parity
 
-The most critical task for v2. Without a complete generator that can produce valid .docx from any oxidocs without the original file, the Architectural Guarantee is aspirational, not real.
+The most critical task for v2. Oxi's current Ra loop targets SSIM = 1.0 against Microsoft Word for .docx. The EU public-sector market needs the same fidelity for .odt. The methodology transfers — deterministic reference output, measurement-driven specification derivation, phase-based merge gate — but every layout-engine entry point currently presupposes OOXML structures.
 
-`create_blank_docx` is the foundation. The generator must map every oxidocs core field to OOXML. Ra's reverse-engineered specifications feed directly into this — every COM-measured behavior becomes a generation rule.
+The work splits into three:
+1. **ODF parser** — `.odt` → IR. The IR is already format-agnostic; the parser is additive
+2. **ODF-specific layout rules** — paragraph / list / table semantics that differ from OOXML need explicit branches, not silent OOXML defaults
+3. **ODF reference baseline** — pick a deterministic reference renderer (LibreOffice headless is the obvious candidate, given its 20-year status as the ODF reference implementation) for the SSIM gate
 
 ### Governance Impact
 
 The following will be added to docs/governance.md:
-- **oxidocs schema ownership** — core layer definition is owned by Oxi core; Forks cannot modify it
-- **ext layer export policy** — each Fork must declare how its Extensions behave on .docx export (customXml / discard / error)
-- **waterdocs core/Extension boundary** — encryption is an Extension, but post-decryption core layer guarantee is Oxi core's responsibility
+- **Dual-format core ownership** — both ODF and OOXML rendering specs are owned by Oxi core; Forks cannot diverge from the IR's format-agnostic structure
+- **Extension export policy** — each Fork must declare how its Extensions behave on .docx / .odt round-trip (custom extension fields / discard / error)
+- **Encryption-as-Extension boundary** — hyde wraps standard formats from the outside; post-decryption the file MUST be a valid .docx or .odt openable without Oxi
 
 ---
 
