@@ -1601,21 +1601,14 @@ impl LayoutEngine {
                             .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
                         let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                         let metrics = self.metrics_for_para_mark(&rpr_ref, &p.style);
-                        // If page has grid, Word grid-snaps footer lines to pitch.
-                        // 14pt + 10.5pt in 18pt grid → each paragraph uses 18pt cell.
-                        // COM-measured (2026-04-17, 04b88e): bridging to 5-page layout
-                        // requires grid-aware footer height.
-                        if let Some(pitch) = gp {
-                            if pitch > 0.0 {
-                                let nat = metrics.word_line_height_no_grid(empty_fs);
-                                let cells = (nat / pitch).ceil().max(1.0);
-                                cells * pitch
-                            } else {
-                                metrics.word_line_height_no_grid(empty_fs)
-                            }
-                        } else {
-                            metrics.word_line_height_no_grid(empty_fs)
-                        }
+                        // Day 33 part 11 (2026-05-10): always use natural line height
+                        // for empty footer paragraphs. Previous grid-snap (added
+                        // 2026-04-17 for 04b88e) over-reserves footer area when
+                        // grid pitch > natural line height (bd90b00: 16.5pt pitch,
+                        // ~13pt natural → 2.3pt over-reservation pushes 備考 to
+                        // page 2). The max-with-bottom-margin guard below ensures
+                        // we still reserve at least bottom_margin space.
+                        metrics.word_line_height_no_grid(empty_fs)
                     } else {
                         self.estimate_para_height(p, cw, gp, None, false, None, None)
                     };
@@ -3535,6 +3528,16 @@ impl LayoutEngine {
             let needs_page_break = if in_textbox { false } else {
                 *cursor_y + effective_lh > page_top + content_height
             };
+            if std::env::var("OXI_DUMP_BREAK").is_ok() && line_idx == 0 {
+                let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+                let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
+                eprintln!(
+                    "[BR_DUMP] pi={} line0 cursor_y={:.3} eff_lh={:.3} line_h={:.3} sum={:.3} pg_top={:.3} pg_bot={:.3} brk={} text={:?}",
+                    pi_str, *cursor_y, effective_lh, line_height,
+                    *cursor_y + effective_lh, page_top, page_top + content_height,
+                    needs_page_break, txt
+                );
+            }
 
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
             // check if only 1 line would fit on this page — if so, push the
