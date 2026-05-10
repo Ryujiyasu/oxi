@@ -1,0 +1,570 @@
+[
+  {
+    "variant": "DR_EMP_01",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 102.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 106.5,
+    "word_through": 30.5,
+    "oxi_through": 32.0,
+    "through_drift": 1.5,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 102.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 90.5,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 106.5,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_02",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 108.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 111.0,
+    "word_through": 36.5,
+    "oxi_through": 36.5,
+    "through_drift": 0.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 108.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 92.5,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 111.0,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_03",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 99.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 102.0,
+    "word_through": 27.5,
+    "oxi_through": 27.5,
+    "through_drift": 0.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 99.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 88.0,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 102.0,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_04",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 101.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 104.0,
+    "word_through": 29.5,
+    "oxi_through": 29.5,
+    "through_drift": 0.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 101.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 90.5,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 104.0,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_05",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 108.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 111.0,
+    "word_through": 36.5,
+    "oxi_through": 36.5,
+    "through_drift": 0.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 108.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 97.5,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 111.0,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_06",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 108.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 111.0,
+    "word_through": 36.5,
+    "oxi_through": 36.5,
+    "through_drift": 0.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 108.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 94.5,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 111.0,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_07",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 107.0,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 111.5,
+    "word_through": 35.0,
+    "oxi_through": 37.0,
+    "through_drift": 2.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 107.0
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 93.0,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 111.5,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_08",
+    "n_empty_word": 5,
+    "n_empty_oxi": 5,
+    "word_y_A": 72.0,
+    "word_y_C": 162.0,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 172.0,
+    "word_through": 90.0,
+    "oxi_through": 97.5,
+    "through_drift": 7.5,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "",
+        "page": 1,
+        "y": 102.5
+      },
+      {
+        "idx": 4,
+        "text": "",
+        "page": 1,
+        "y": 117.5
+      },
+      {
+        "idx": 5,
+        "text": "",
+        "page": 1,
+        "y": 132.0
+      },
+      {
+        "idx": 6,
+        "text": "",
+        "page": 1,
+        "y": 147.0
+      },
+      {
+        "idx": 7,
+        "text": "C",
+        "page": 1,
+        "y": 162.0
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 90.5,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 107.0,
+        "text": ""
+      },
+      {
+        "pi": 3,
+        "page": 1,
+        "y": 123.5,
+        "text": ""
+      },
+      {
+        "pi": 4,
+        "page": 1,
+        "y": 139.5,
+        "text": ""
+      },
+      {
+        "pi": 5,
+        "page": 1,
+        "y": 156.0,
+        "text": ""
+      },
+      {
+        "pi": 6,
+        "page": 1,
+        "y": 172.0,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_09",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 103.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 105.5,
+    "word_through": 31.5,
+    "oxi_through": 31.0,
+    "through_drift": -0.5,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 103.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 90.0,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 105.5,
+        "text": "C"
+      }
+    ]
+  },
+  {
+    "variant": "DR_EMP_10",
+    "n_empty_word": 1,
+    "n_empty_oxi": 1,
+    "word_y_A": 72.0,
+    "word_y_C": 103.5,
+    "oxi_y_A": 74.5,
+    "oxi_y_C": 106.0,
+    "word_through": 31.5,
+    "oxi_through": 31.5,
+    "through_drift": 0.0,
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0
+      },
+      {
+        "idx": 2,
+        "text": "",
+        "page": 1,
+        "y": 87.5
+      },
+      {
+        "idx": 3,
+        "text": "C",
+        "page": 1,
+        "y": 103.5
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 92.0,
+        "text": ""
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 106.0,
+        "text": "C"
+      }
+    ]
+  }
+]
