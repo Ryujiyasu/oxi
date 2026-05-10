@@ -3164,6 +3164,18 @@ impl LayoutEngine {
 
         *cursor_y += effective_spacing;
 
+        // Debug: dump per-paragraph cursor_y for Class A FAIL root cause investigation.
+        // Gated by env OXI_DUMP_CURSOR_Y. Day 33 part 7 (option B).
+        if std::env::var("OXI_DUMP_CURSOR_Y").is_ok() {
+            let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+            let n_runs = para.runs.len();
+            let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(20).collect();
+            eprintln!(
+                "[CY_DUMP] body_pi={} cursor_y={:.3} space_before={:.3} n_runs={} text={:?}",
+                pi_str, *cursor_y, effective_spacing, n_runs, txt
+            );
+        }
+
         // When both twip and *Chars values exist, twip is authoritative (pre-computed by Word).
         // Fall back to *Chars × 10.5pt only when twip value is absent.
         let indent_left = para.style.indent_left
