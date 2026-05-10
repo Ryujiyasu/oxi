@@ -5639,11 +5639,27 @@ impl LayoutEngine {
                 // Word allows text to extend into cell margins for wrapping purposes
                 let inner_w = cell_w.max(0.0);
                 let mut cell_content_h = pad_t;
+                let mut is_first_block_est = true;
 
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
-                            let para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                            let mut para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                            // Day 33 part 17 (2026-05-10): subtract space_before for first
+                            // paragraph in cell to match Word's behavior. Mirrors the
+                            // suppression in layout_table cell loop at line ~5877. Without
+                            // this, the row reserves extra height for borders even though
+                            // the text is positioned correctly.
+                            if is_first_block_est {
+                                let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
+                                    bl / 100.0 * pitch
+                                } else {
+                                    para.style.space_before
+                                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
+                                        .unwrap_or(0.0)
+                                };
+                                para_h -= sb_added;
+                            }
                             cell_content_h += para_h;
                         }
                         Block::Table(nested) => {
@@ -5673,6 +5689,7 @@ impl LayoutEngine {
                         }
                         _ => {}
                     }
+                    is_first_block_est = false;
                 }
                 cell_content_h += pad_b;
                 // COM-confirmed (2026-04-13, gen2_052): Word does NOT include
@@ -5815,6 +5832,7 @@ impl LayoutEngine {
 
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
                 let is_exact = row.height_rule.as_deref() == Some("exact");
+                let mut is_first_block_in_cell = true;
                 if !is_vmerge_continue {
                 for block in &cell.blocks {
                 // Clip content that overflows exact row height
@@ -5874,7 +5892,14 @@ impl LayoutEngine {
                     } else {
                         (effective_line_spacing, effective_line_rule)
                     };
-                    let effective_space_before = if should_reset {
+                    let effective_space_before = if should_reset || is_first_block_in_cell {
+                        // Day 33 part 17 (2026-05-10): Word suppresses spacing.before
+                        // for the first paragraph in a cell. COM-confirmed via 8 repros
+                        // (row1_attr_isolation): R1A_spacing_lineRule has spacing.before=4.35pt
+                        // + lineRule=exact 12pt → Word renders row at 12.5pt (no spacing
+                        // applied), Oxi was rendering at 16.85pt (+4.35pt over-pump).
+                        // Same for R1A_all4. Affects 备考 cluster docs (d4d126/de6e/etc)
+                        // where row 1 cell has style "ac"+spacing.before+lineRule=exact.
                         0.0
                     } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
                         bl / 100.0 * pitch
@@ -6265,6 +6290,7 @@ impl LayoutEngine {
                 }
                 _ => {}
                 } // match block
+                is_first_block_in_cell = false;
                 } // for block
                 } // if !is_vmerge_continue
 
