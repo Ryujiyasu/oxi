@@ -4347,6 +4347,22 @@ impl LayoutEngine {
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
 
+        // Day 33 part 19 (2026-05-10): paragraphs containing ONLY whitespace
+        // (ASCII space, tab, U+3000 fullwidth space, etc.) render as a single
+        // line in Word regardless of total natural width. COM-confirmed via
+        // WS_10 / WS_50 / WS_100 / WS_142 / WS_300 minimal repros (all 5
+        // produce identical 1-line break boundaries with BEFORE→AFTER advance
+        // = 31pt = 1 line each). MIX_50_TEXT (50 spaces + text) DOES wrap
+        // normally → rule is binary at paragraph level.
+        // This is the safe inverse of commit 82de3fa (reverted 2026-05-03)
+        // which used a per-character "trailing U+3000 immune" flag that
+        // propagated to ALL U+3000s in a paragraph, regressing d77a mid-text
+        // U+3000 indentation use. The all-whitespace gate is paragraph-binary
+        // and never affects mixed-content paragraphs.
+        let para_all_whitespace = fragments.iter().all(|(text, _, _, _, _)| {
+            text.chars().all(|c| c.is_whitespace() || c == '\u{3000}')
+        }) && fragments.iter().any(|(text, _, _, _, _)| !text.is_empty());
+
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
         let mut current_width = first_line_indent;
@@ -4379,7 +4395,9 @@ impl LayoutEngine {
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
                     let word_width_tw = pt_to_tw(word_width);
-                    if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
+                    // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
+                    if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty()
+                        && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         current_grid_extra = 0.0;
@@ -4823,7 +4841,8 @@ impl LayoutEngine {
                     if absorb {
                         compress_used = true;
                     }
-                    if overflow_tw > 0 && !absorb && !is_immune_space && !current_line.fragments.is_empty() {
+                    if overflow_tw > 0 && !absorb && !is_immune_space && !current_line.fragments.is_empty()
+                        && !para_all_whitespace {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
@@ -4939,7 +4958,9 @@ impl LayoutEngine {
                 fragments.last().map(|f| f.1.clone()).unwrap_or_default()
             });
             let wft = word_field_type.take();
-            if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
+            // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
+            if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty()
+                && !para_all_whitespace {
                 lines.push(std::mem::take(&mut current_line));
                 current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
             }
