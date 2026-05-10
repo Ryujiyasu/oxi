@@ -1,0 +1,630 @@
+[
+  {
+    "variant": "DR_TBL_01",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 103.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 105.525,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 103.5,
+    "body_C_oxi_y": 105.525,
+    "init_dy": 2.5,
+    "final_dy": 2.025,
+    "through_drift": -0.475
+  },
+  {
+    "variant": "DR_TBL_02",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 104.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 90.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 106.525,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 104.5,
+    "body_C_oxi_y": 106.525,
+    "init_dy": 2.5,
+    "final_dy": 2.025,
+    "through_drift": -0.475
+  },
+  {
+    "variant": "DR_TBL_03",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 93.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 93.5,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 115.0,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 94.9,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 116.825,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 115.0,
+    "body_C_oxi_y": 116.825,
+    "init_dy": 2.5,
+    "final_dy": 1.825,
+    "through_drift": -0.675
+  },
+  {
+    "variant": "DR_TBL_04",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "い",
+        "page": 1,
+        "y": 103.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "い\r\u0007",
+        "page": 1,
+        "y": 119.0,
+        "in_table": true
+      },
+      {
+        "idx": 5,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 6,
+        "text": "C",
+        "page": 1,
+        "y": 134.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 136.575,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 134.5,
+    "body_C_oxi_y": 136.575,
+    "init_dy": 2.5,
+    "final_dy": 2.075,
+    "through_drift": -0.425
+  },
+  {
+    "variant": "DR_TBL_05",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 103.0,
+        "in_table": true
+      },
+      {
+        "idx": 5,
+        "text": "\u0007",
+        "page": 1,
+        "y": 103.5,
+        "in_table": true
+      },
+      {
+        "idx": 6,
+        "text": "C",
+        "page": 1,
+        "y": 119.0,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 121.05,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 119.0,
+    "body_C_oxi_y": 121.05,
+    "init_dy": 2.5,
+    "final_dy": 2.05,
+    "through_drift": -0.45
+  },
+  {
+    "variant": "DR_TBL_06",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 117.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 120.0,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 117.5,
+    "body_C_oxi_y": 120.0,
+    "init_dy": 2.5,
+    "final_dy": 2.5,
+    "through_drift": 0.0
+  },
+  {
+    "variant": "DR_TBL_07",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 117.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 120.0,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 117.5,
+    "body_C_oxi_y": 120.0,
+    "init_dy": 2.5,
+    "final_dy": 2.5,
+    "through_drift": 0.0
+  },
+  {
+    "variant": "DR_TBL_08",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 108.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.5,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 111.131,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 108.5,
+    "body_C_oxi_y": 111.131,
+    "init_dy": 2.5,
+    "final_dy": 2.631,
+    "through_drift": 0.131
+  },
+  {
+    "variant": "DR_TBL_09",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 103.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 93.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 106.0,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 103.5,
+    "body_C_oxi_y": 106.0,
+    "init_dy": 2.5,
+    "final_dy": 2.5,
+    "through_drift": 0.0
+  },
+  {
+    "variant": "DR_TBL_10",
+    "word_paras": [
+      {
+        "idx": 1,
+        "text": "A",
+        "page": 1,
+        "y": 72.0,
+        "in_table": false
+      },
+      {
+        "idx": 2,
+        "text": "あ\r\u0007",
+        "page": 1,
+        "y": 87.5,
+        "in_table": true
+      },
+      {
+        "idx": 3,
+        "text": "\u0007",
+        "page": 1,
+        "y": 88.0,
+        "in_table": true
+      },
+      {
+        "idx": 4,
+        "text": "C",
+        "page": 1,
+        "y": 99.5,
+        "in_table": false
+      }
+    ],
+    "oxi_paras": [
+      {
+        "pi": 0,
+        "page": 1,
+        "y": 74.5,
+        "text": "A"
+      },
+      {
+        "pi": 1,
+        "page": 1,
+        "y": 89.0,
+        "text": "あ"
+      },
+      {
+        "pi": 2,
+        "page": 1,
+        "y": 102.219,
+        "text": "C"
+      }
+    ],
+    "body_A_word_y": 72.0,
+    "body_A_oxi_y": 74.5,
+    "body_C_word_y": 99.5,
+    "body_C_oxi_y": 102.219,
+    "init_dy": 2.5,
+    "final_dy": 2.719,
+    "through_drift": 0.219
+  }
+]
