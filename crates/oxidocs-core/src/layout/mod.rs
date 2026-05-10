@@ -5593,8 +5593,10 @@ impl LayoutEngine {
         }
 
         let num_rows = table.rows.len();
+        let dump_table = std::env::var("OXI_DUMP_TABLE").is_ok();
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
+            let row_entry_cursor_y = *cursor_y;
 
             // First pass: calculate row height
             let mut grid_idx = row.grid_before as usize;
@@ -5709,6 +5711,14 @@ impl LayoutEngine {
             if row_height == 0.0 {
                 let metrics = self.doc_default_metrics();
                 row_height = self.line_height_inner(self.default_font_size, None, None, metrics, true, table_grid_pitch, true);
+            }
+            if dump_table {
+                let trh = row.height.unwrap_or(0.0);
+                let trh_rule = row.height_rule.as_deref().unwrap_or("(none)");
+                eprintln!(
+                    "[TBL_DUMP] row={} entry_cursor_y={:.3} row_height_pre={:.3} trHeight={:.3} rule={} n_cells={}",
+                    row_idx, row_entry_cursor_y, row_height, trh, trh_rule, row.cells.len()
+                );
             }
             // Page break check: if this row won't fit, push current page and reset
             // Allow break if there are elements from previous rows OR from before the table
@@ -6020,8 +6030,23 @@ impl LayoutEngine {
                         }
 
                         if lines.is_empty() {
-                            let metrics = self.doc_default_metrics();
-                            content_h += self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, table_grid_pitch, true);
+                            // Day 33 part 9: when pPr/rPr explicitly sets font size on an empty
+                            // paragraph in a cell, use it. Pre-fix code always used
+                            // self.default_font_size (10.5pt), inflating cell content height
+                            // for fs=8pt cells (bd90b00 table 0 rows 1, 4: +2.1pt per empty
+                            // cell → row +2.25pt → table exit +4pt drift → 備考 overflow
+                            // = Class A FAIL root cause). Narrow fix: only override when
+                            // ppr_rpr.font_size is Some, leaving the default-fallback path
+                            // (664c38001b40 form-cells) unchanged.
+                            let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
+                            if let Some(empty_fs) = pprrpr_fs {
+                                let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                let empty_metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
+                                content_h += self.line_height_inner(empty_fs, effective_line_spacing, effective_line_rule, empty_metrics, para.style.snap_to_grid, table_grid_pitch, true);
+                            } else {
+                                let metrics = self.doc_default_metrics();
+                                content_h += self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, table_grid_pitch, true);
+                            }
                         }
 
                         let total_lines = lines.len();
@@ -6262,6 +6287,13 @@ impl LayoutEngine {
 
                 // Emit cell elements with absolute Y positions
                 let dy = *cursor_y + pad_t + v_offset;
+                if dump_table {
+                    let valign = cell.v_align.as_deref().unwrap_or("(top)");
+                    eprintln!(
+                        "[TBL_DUMP]   row={} cell={} cursor_y={:.3} pad_t={:.3} pad_b={:.3} content_h={:.3} v_align={} v_offset={:.3} dy={:.3} row_h={:.3}",
+                        row_idx, cell_idx, *cursor_y, pad_t, pad_b, content_h, valign, v_offset, dy, row_height
+                    );
+                }
                 for mut elem in cell_elements {
                     elem.y += dy;
                     // Also update y-coords inside TableBorder content (nested tables)
@@ -6347,6 +6379,12 @@ impl LayoutEngine {
                 cell_x += cell_w;
             }
 
+            if dump_table {
+                eprintln!(
+                    "[TBL_DUMP] row={} pre_correction row_height={:.3} max_actual_cell_h={:.3}",
+                    row_idx, row_height, max_actual_cell_h
+                );
+            }
             // If actual content exceeds estimated row_height, fix border elements
             if max_actual_cell_h > row_height + 0.01 {
                 let old_h = row_height;
@@ -6954,11 +6992,19 @@ impl LayoutEngine {
             let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
             let metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
-            if is_single_empty {
-                height += metrics.word_line_height_table_cell(empty_fs);
+            let h_added = if is_single_empty {
+                metrics.word_line_height_table_cell(empty_fs)
             } else {
-                height += self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true);
+                self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true)
+            };
+            if std::env::var("OXI_DUMP_TABLE").is_ok() {
+                let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
+                eprintln!(
+                    "[TBL_DUMP]   estimate_empty_para empty_fs={} ppr_rpr_fs={:?} is_single={} h_added={:.3} eff_ls={:?} eff_lr={:?}",
+                    empty_fs, pprrpr_fs, is_single_empty, h_added, eff_ls, eff_lr
+                );
             }
+            height += h_added;
         } else {
             let para_font_size = self.resolve_font_size(
                 para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
@@ -7018,6 +7064,17 @@ impl LayoutEngine {
                     self.line_height_inner(font_size, eff_ls, eff_lr, metrics, false, None, true)
                 };
                 if lh > max_line_height { max_line_height = lh; }
+            }
+            if std::env::var("OXI_DUMP_TABLE").is_ok() {
+                let first_run_fs = self.resolve_font_size(
+                    para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                    &para.style,
+                );
+                let preview: String = para.runs.iter().flat_map(|r| r.text.chars()).take(8).collect();
+                eprintln!(
+                    "[TBL_DUMP]   estimate_runs_para first_run_fs={} max_lh={:.3} lines={} h_added={:.3} text={:?}",
+                    first_run_fs, max_line_height, line_count, max_line_height * line_count as f32, preview
+                );
             }
             height += max_line_height * line_count as f32;
 
