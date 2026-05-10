@@ -1591,6 +1591,17 @@ impl LayoutEngine {
             let mut footer_h: f32 = 0.0;
             for block in &page.footer {
                 if let Block::Paragraph(p) = block {
+                    // Day 33 part 18 (2026-05-10): skip framePr-wrapped paragraphs.
+                    // framePr means floating-positioned frame (vAnchor/hAnchor set,
+                    // wrap=around) — Word excludes these from inline footer height
+                    // because they're positioned independently of inline flow.
+                    // COM-confirmed via 3-variant minimal repro (FP_A/B/C with
+                    // fs=80pt framePr para → all identical break boundaries).
+                    // Affects 备考 cluster: d4d126 (3.6pt over-reservation) plus
+                    // 6514, a1d6 candidates.
+                    if p.style.frame_pr.is_some() {
+                        continue;
+                    }
                     // estimate_para_height uses word_line_height_table_cell for
                     // empty paragraphs, which under-estimates footer empty lines.
                     // Override for empty footer paragraphs: use no-grid line height
@@ -2342,10 +2353,14 @@ impl LayoutEngine {
                 }
             }
             if !page.footer.is_empty() {
-                // Estimate footer content height first
+                // Estimate footer content height first.
+                // Day 33 part 18: skip framePr paragraphs (floating frames) —
+                // they're positioned independently of inline flow, so they
+                // should not shift footer_top.
                 let mut footer_h: f32 = 0.0;
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
+                        if para.style.frame_pr.is_some() { continue; }
                         footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
                     }
                 }
@@ -2427,9 +2442,11 @@ impl LayoutEngine {
                         // bottom margin if no footer is present.
                         let footnote_bottom = if !page.footer.is_empty() {
                             // Recompute footer top here (mirrors lines 832-839 above).
+                            // Day 33 part 18: skip framePr paragraphs (floating frames).
                             let mut footer_h: f32 = 0.0;
                             for block in &page.footer {
                                 if let Block::Paragraph(para) = block {
+                                    if para.style.frame_pr.is_some() { continue; }
                                     footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
                                 }
                             }
