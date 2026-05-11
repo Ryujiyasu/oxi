@@ -5974,13 +5974,17 @@ impl LayoutEngine {
                             && p_first_line_indent_raw < 0.0
                             && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
                         let p_first_line_indent = if p_list_consumes_hanging { 0.0 } else { p_first_line_indent_raw };
-                        let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
-                        // Hanging indent (firstLineIndent < 0): first line starts further LEFT,
-                        // so it has MORE available width, not less.
-                        // first_line_left = indent_left + firstLineIndent (may be < indent_left)
-                        // first_line_wrap = inner_w - first_line_left - indent_right
+                        // Day 33 part 57 (2026-05-12): use cell_w (not inner_w with padding
+                        // subtracted) for wrap width. Matches estimate path comment at
+                        // mod.rs:5677: "Word allows text to extend into cell margins for
+                        // wrapping purposes". 191cb row 3 cell 0 (16 CJK chars, cell_w=104pt,
+                        // inner_w=94.1pt): Oxi was wrapping at 8 chars (94.1pt limit) but
+                        // Word wraps at 9 chars (94.5pt fits in 104pt). The estimate-vs-
+                        // render inconsistency was the source of the over-pump.
+                        let wrap_base = cell_w;
+                        let wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
                         let first_line_wrap_w = if p_first_line_indent < 0.0 {
-                            (inner_w - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
+                            (wrap_base - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
