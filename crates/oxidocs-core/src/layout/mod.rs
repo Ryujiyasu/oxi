@@ -4243,14 +4243,19 @@ impl LayoutEngine {
 
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
-                // Push current page and start a new one
+                // Day 33 part 59 (2026-05-12): the line that CARRIES the break_type
+                // has its text already rendered into `elements` and should stay on
+                // the CURRENT page (text BEFORE the `<w:br w:type="page"/>` belongs
+                // to current page per OOXML semantics). Original code pushed
+                // current_elements first then merged elements → pi=11 text ended up
+                // on the NEW page. Fix: merge elements into the pushed page first.
+                let mut page_elements = std::mem::take(current_elements);
+                page_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
-                    elements: std::mem::take(current_elements),
+                    elements: page_elements,
                 });
-                current_elements.extend(std::mem::take(&mut elements));
-                elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
             }
         }
