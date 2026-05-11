@@ -1591,6 +1591,17 @@ impl LayoutEngine {
             let mut footer_h: f32 = 0.0;
             for block in &page.footer {
                 if let Block::Paragraph(p) = block {
+                    // Day 33 part 18 (2026-05-10): skip framePr-wrapped paragraphs.
+                    // framePr means floating-positioned frame (vAnchor/hAnchor set,
+                    // wrap=around) — Word excludes these from inline footer height
+                    // because they're positioned independently of inline flow.
+                    // COM-confirmed via 3-variant minimal repro (FP_A/B/C with
+                    // fs=80pt framePr para → all identical break boundaries).
+                    // Affects 备考 cluster: d4d126 (3.6pt over-reservation) plus
+                    // 6514, a1d6 candidates.
+                    if p.style.frame_pr.is_some() {
+                        continue;
+                    }
                     // estimate_para_height uses word_line_height_table_cell for
                     // empty paragraphs, which under-estimates footer empty lines.
                     // Override for empty footer paragraphs: use no-grid line height
@@ -2342,10 +2353,14 @@ impl LayoutEngine {
                 }
             }
             if !page.footer.is_empty() {
-                // Estimate footer content height first
+                // Estimate footer content height first.
+                // Day 33 part 18: skip framePr paragraphs (floating frames) —
+                // they're positioned independently of inline flow, so they
+                // should not shift footer_top.
                 let mut footer_h: f32 = 0.0;
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
+                        if para.style.frame_pr.is_some() { continue; }
                         footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
                     }
                 }
@@ -2427,9 +2442,11 @@ impl LayoutEngine {
                         // bottom margin if no footer is present.
                         let footnote_bottom = if !page.footer.is_empty() {
                             // Recompute footer top here (mirrors lines 832-839 above).
+                            // Day 33 part 18: skip framePr paragraphs (floating frames).
                             let mut footer_h: f32 = 0.0;
                             for block in &page.footer {
                                 if let Block::Paragraph(para) = block {
+                                    if para.style.frame_pr.is_some() { continue; }
                                     footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
                                 }
                             }
@@ -4226,14 +4243,19 @@ impl LayoutEngine {
 
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
-                // Push current page and start a new one
+                // Day 33 part 59 (2026-05-12): the line that CARRIES the break_type
+                // has its text already rendered into `elements` and should stay on
+                // the CURRENT page (text BEFORE the `<w:br w:type="page"/>` belongs
+                // to current page per OOXML semantics). Original code pushed
+                // current_elements first then merged elements → pi=11 text ended up
+                // on the NEW page. Fix: merge elements into the pushed page first.
+                let mut page_elements = std::mem::take(current_elements);
+                page_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
-                    elements: std::mem::take(current_elements),
+                    elements: page_elements,
                 });
-                current_elements.extend(std::mem::take(&mut elements));
-                elements = std::mem::take(current_elements);
                 *cursor_y = page_top;
             }
         }
@@ -4330,6 +4352,22 @@ impl LayoutEngine {
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
 
+        // Day 33 part 19 (2026-05-10): paragraphs containing ONLY whitespace
+        // (ASCII space, tab, U+3000 fullwidth space, etc.) render as a single
+        // line in Word regardless of total natural width. COM-confirmed via
+        // WS_10 / WS_50 / WS_100 / WS_142 / WS_300 minimal repros (all 5
+        // produce identical 1-line break boundaries with BEFORE→AFTER advance
+        // = 31pt = 1 line each). MIX_50_TEXT (50 spaces + text) DOES wrap
+        // normally → rule is binary at paragraph level.
+        // This is the safe inverse of commit 82de3fa (reverted 2026-05-03)
+        // which used a per-character "trailing U+3000 immune" flag that
+        // propagated to ALL U+3000s in a paragraph, regressing d77a mid-text
+        // U+3000 indentation use. The all-whitespace gate is paragraph-binary
+        // and never affects mixed-content paragraphs.
+        let para_all_whitespace = fragments.iter().all(|(text, _, _, _, _)| {
+            text.chars().all(|c| c.is_whitespace() || c == '\u{3000}')
+        }) && fragments.iter().any(|(text, _, _, _, _)| !text.is_empty());
+
         let mut lines = Vec::new();
         let mut current_line = Line { fragments: vec![], ..Default::default() };
         let mut current_width = first_line_indent;
@@ -4362,7 +4400,9 @@ impl LayoutEngine {
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
                     let word_width_tw = pt_to_tw(word_width);
-                    if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty() {
+                    // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
+                    if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty()
+                        && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
                         current_grid_extra = 0.0;
@@ -4806,7 +4846,8 @@ impl LayoutEngine {
                     if absorb {
                         compress_used = true;
                     }
-                    if overflow_tw > 0 && !absorb && !is_immune_space && !current_line.fragments.is_empty() {
+                    if overflow_tw > 0 && !absorb && !is_immune_space && !current_line.fragments.is_empty()
+                        && !para_all_whitespace {
                         // Word CJK hybrid hang/oikomi rule — COM-confirmed 2026-04-08.
                         // See memory/hangable_oikomi_rule.md.
                         //
@@ -4922,7 +4963,9 @@ impl LayoutEngine {
                 fragments.last().map(|f| f.1.clone()).unwrap_or_default()
             });
             let wft = word_field_type.take();
-            if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty() {
+            // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
+            if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty()
+                && !para_all_whitespace {
                 lines.push(std::mem::take(&mut current_line));
                 current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
             }
@@ -5936,13 +5979,17 @@ impl LayoutEngine {
                             && p_first_line_indent_raw < 0.0
                             && matches!(para.style.list_suff.as_deref(), None | Some("tab"));
                         let p_first_line_indent = if p_list_consumes_hanging { 0.0 } else { p_first_line_indent_raw };
-                        let wrap_w = (inner_w - p_indent_left - p_indent_right).max(0.0);
-                        // Hanging indent (firstLineIndent < 0): first line starts further LEFT,
-                        // so it has MORE available width, not less.
-                        // first_line_left = indent_left + firstLineIndent (may be < indent_left)
-                        // first_line_wrap = inner_w - first_line_left - indent_right
+                        // Day 33 part 57 (2026-05-12): use cell_w (not inner_w with padding
+                        // subtracted) for wrap width. Matches estimate path comment at
+                        // mod.rs:5677: "Word allows text to extend into cell margins for
+                        // wrapping purposes". 191cb row 3 cell 0 (16 CJK chars, cell_w=104pt,
+                        // inner_w=94.1pt): Oxi was wrapping at 8 chars (94.1pt limit) but
+                        // Word wraps at 9 chars (94.5pt fits in 104pt). The estimate-vs-
+                        // render inconsistency was the source of the over-pump.
+                        let wrap_base = cell_w;
+                        let wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
                         let first_line_wrap_w = if p_first_line_indent < 0.0 {
-                            (inner_w - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
+                            (wrap_base - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };

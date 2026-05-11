@@ -208,6 +208,10 @@ def main():
         print('=== Preserve docs (no drift) ===')
         for d in ['e3c545fac7a7', '0e7af1ae8f21', 'cb8be715d839']:
             process(d, out_dir)
+    elif len(sys.argv) > 1 and sys.argv[1] not in ('preserve',):
+        # Custom doc id(s)
+        for d in sys.argv[1:]:
+            process(d, out_dir)
     else:
         print('=== Class A docs (drift) ===')
         for d in ['bd90b00ab7a7', 'de6e32b5960b', 'db9ca18368cd', 'd77a58485f16']:
