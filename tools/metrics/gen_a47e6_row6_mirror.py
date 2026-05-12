@@ -216,9 +216,112 @@ def build(name: str, content_fn) -> str:
     return out_path
 
 
+def cell1_no_trailing() -> str:
+    """R02: label + nested table only (no trailing paragraphs)."""
+    p0 = para('（５）公表関係（統計法第34条第３項の規定によるもの）',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'},
+              sz=18, default_run_sz=None)
+    nested = nested_table_xml()
+    return f"{p0}{nested}"
+
+
+def cell1_no_label() -> str:
+    """R03: trailing paragraphs only (no label, no nested table)."""
+    p1 = para('    ※ 上記③は、（４）の公表のうち代表的なものかつ一般的に入手が困難でないもの',
+              line=200, ind={'left': '140', 'right': '199'}, sz=14, default_run_sz=14)
+    p2 = para('    ※ 上記以外の公表事項の公表内容（統計若しくは統計的研究の成果又はその概要の公表のために必要なもの）',
+              line=200, ind={'left': '140', 'right': '199'}, sz=14, default_run_sz=14)
+    p3 = para('◯　統計若しくは統計的研究又はその概要を公表するに当たって特別な事情等があれば下記に記入',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=18, default_run_sz=18)
+    p4 = para('　(　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　)',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=None)
+    p5 = para('', line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=None)
+    return f"{p1}{p2}{p3}{p4}{p5}"
+
+
+def cell1_nested_only() -> str:
+    """R04: nested table only (no other paragraphs)."""
+    return nested_table_xml()
+
+
+def cell1_label_plus_trailing() -> str:
+    """R05: label + trailing paragraphs (no nested table)."""
+    p0 = para('（５）公表関係（統計法第34条第３項の規定によるもの）',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'},
+              sz=18, default_run_sz=None)
+    p1 = para('    ※ 上記③は、（４）の公表のうち代表的なものかつ一般的に入手が困難でないもの',
+              line=200, ind={'left': '140', 'right': '199'}, sz=14, default_run_sz=14)
+    p2 = para('    ※ 上記以外の公表事項の公表内容（統計若しくは統計的研究の成果又はその概要の公表のために必要なもの）',
+              line=200, ind={'left': '140', 'right': '199'}, sz=14, default_run_sz=14)
+    p3 = para('◯　統計若しくは統計的研究又はその概要を公表するに当たって特別な事情等があれば下記に記入',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=18, default_run_sz=18)
+    p4 = para('　(　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　)',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=None)
+    p5 = para('', line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=None)
+    return f"{p0}{p1}{p2}{p3}{p4}{p5}"
+
+
+def cell1_nested_plus_trailing() -> str:
+    """R06: nested + trailing only (no label)."""
+    nested = nested_table_xml()
+    p1 = para('    ※ 上記③は、（４）の公表のうち代表的なものかつ一般的に入手が困難でないもの',
+              line=200, ind={'left': '140', 'right': '199'}, sz=14, default_run_sz=14)
+    p2 = para('    ※ 上記以外の公表事項の公表内容（統計若しくは統計的研究の成果又はその概要の公表のために必要なもの）',
+              line=200, ind={'left': '140', 'right': '199'}, sz=14, default_run_sz=14)
+    p3 = para('◯　統計若しくは統計的研究又はその概要を公表するに当たって特別な事情等があれば下記に記入',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=18, default_run_sz=18)
+    p4 = para('　(　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　)',
+              line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=None)
+    p5 = para('', line=240, ind={'left': '192', 'right': '199', 'hanging': '192'}, sz=None)
+    return f"{nested}{p1}{p2}{p3}{p4}{p5}"
+
+
+def make_doc_xml(cell1_fn) -> str:
+    cell1 = cell1_fn()
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>
+<w:p><w:r><w:t>HEADER MARKER</w:t></w:r></w:p>
+<w:tbl>
+<w:tblPr>
+<w:tblW w:w="0" w:type="auto"/>
+<w:tblBorders>
+<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+<w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+<w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+</w:tblBorders>
+</w:tblPr>
+<w:tblGrid><w:gridCol w:w="2122"/><w:gridCol w:w="7938"/></w:tblGrid>
+<w:tr><w:trPr><w:trHeight w:val="66"/></w:trPr>
+<w:tc><w:tcPr><w:tcW w:w="2122" w:type="dxa"/></w:tcPr><w:p/></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="7938" w:type="dxa"/></w:tcPr>
+{cell1}
+</w:tc>
+</w:tr>
+</w:tbl>
+<w:p><w:r><w:t>FOOTER MARKER</w:t></w:r></w:p>
+<w:sectPr>
+<w:pgSz w:w="11906" w:h="16838"/>
+<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="851" w:footer="992" w:gutter="0"/>
+<w:docGrid w:type="lines" w:linePitch="360"/>
+</w:sectPr>
+</w:body>
+</w:document>"""
+
+
 def main() -> int:
-    path = build('R01_full', doc_xml)
-    print(f'built: {path}')
+    variants = [
+        ('R01_full',                lambda: doc_xml()),
+        ('R02_label_plus_nested',   lambda: make_doc_xml(cell1_no_trailing)),
+        ('R03_trailing_only',       lambda: make_doc_xml(cell1_no_label)),
+        ('R04_nested_only',         lambda: make_doc_xml(cell1_nested_only)),
+        ('R05_label_plus_trailing', lambda: make_doc_xml(cell1_label_plus_trailing)),
+        ('R06_nested_plus_trailing',lambda: make_doc_xml(cell1_nested_plus_trailing)),
+    ]
+    for name, fn in variants:
+        path = build(name, fn)
+        print(f'built: {path}')
     return 0
 
 
