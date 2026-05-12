@@ -78,8 +78,15 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
                 continue
             oxi_by_page.setdefault(page, []).append((t, r))
 
-    # Track which (page, idx) Oxi records are already used (avoid double-match)
-    used: set[tuple[int, int]] = set()
+    # Per-record use counter. Oxi records may concatenate text from
+    # multiple cell-paragraphs that Word reports as separate paragraphs
+    # (e.g. a 4-cell table row "千円|千円|千円|千円" becomes one Oxi entry
+    # "千円千円千円千円"). For each match attempt, the record's capacity is
+    # max(1, count(prefix in record_text)). This allows the matcher to map
+    # multiple Word paragraphs to the same Oxi entry when the entry literally
+    # contains that many repetitions of the matched prefix — closing the
+    # R7.32 cell_paragraph_index gap for docs where Oxi joins per-cell text.
+    used: dict[tuple[int, int], int] = {}
 
     matches: list[dict] = []
     word_paras = word.get("paragraphs", [])
@@ -101,20 +108,24 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
                     continue
                 cand_recs = oxi_by_page.get(cand_page, [])
                 for idx, (ot, _orec) in enumerate(cand_recs):
-                    if (cand_page, idx) in used:
-                        continue
                     # Match: prefix-equality up to the shorter of the two,
                     # min length MIN_MATCH_LEN.
                     n = min(len(wt), len(ot))
                     if n < MIN_MATCH_LEN:
                         continue
-                    if wt[:n] == ot[:n]:
-                        # Distance metric for tie-breaking: pick exact-page
-                        # match over nearby-page match.
-                        dist = (radius, -n)
-                        if best is None or dist < best_dist:
-                            best = (cand_page, idx)
-                            best_dist = dist
+                    if wt[:n] != ot[:n]:
+                        continue
+                    # Capacity: how many times the matched prefix appears
+                    # in the Oxi record's text (≥1 by construction).
+                    capacity = max(1, ot.count(wt[:n]))
+                    if used.get((cand_page, idx), 0) >= capacity:
+                        continue
+                    # Distance metric for tie-breaking: pick exact-page
+                    # match over nearby-page match.
+                    dist = (radius, -n)
+                    if best is None or dist < best_dist:
+                        best = (cand_page, idx)
+                        best_dist = dist
             if best is not None and radius == 0:
                 # Same-page match found; don't search further pages.
                 break
@@ -129,7 +140,7 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
                 "matched": False,
             })
             continue
-        used.add(best)
+        used[best] = used.get(best, 0) + 1
         opage, oidx = best
         matches.append({
             "word_i": wp["i"],
