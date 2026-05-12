@@ -6945,7 +6945,16 @@ impl LayoutEngine {
             let available = content_width - indent;
             // Floating tables (tblpPr) are not constrained by content_width
             let is_floating = table.style.position.is_some();
-            if !is_floating && total > available && table.grid_columns.len() > 1 {
+            // Day 33 part 69 R7.24 (2026-05-12): fixed-layout tables keep
+            // their declared widths even if they exceed content area. Word
+            // does NOT shrink fixed-layout cells. Only autofit/auto layout
+            // shrinks. a47e6 table 1: tblLayout=fixed, grid 503pt > content
+            // 481.9pt — previously Oxi shrunk col 1 (396.9→375.8) costing
+            // 21.1pt of wrap width, causing fullwidth+年月日 paragraph to
+            // overflow by 0.55pt and Oxi wrap to 2 lines instead of 1
+            // (Word renders 1 line). +25pt cumulative row 0 over-pump.
+            let is_fixed = table.style.layout.as_deref() == Some("fixed");
+            if !is_floating && !is_fixed && total > available && table.grid_columns.len() > 1 {
                 let mut cols = table.grid_columns.clone();
                 let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
                 let last = (available - prefix_sum).max(0.0);
