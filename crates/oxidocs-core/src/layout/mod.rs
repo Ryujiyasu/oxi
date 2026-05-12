@@ -804,25 +804,35 @@ pub struct LayoutElement {
     pub width: f32,
     pub height: f32,
     pub content: LayoutContent,
-    /// Source paragraph index in the document body (for hit testing / editing)
+    /// Source paragraph index in the document body (for hit testing / editing).
+    /// For table cell elements this is the TABLE's page-level block_idx
+    /// (shared across all cells of the table).
     pub paragraph_index: Option<usize>,
     /// Source run index within the paragraph
     pub run_index: Option<usize>,
     /// Character offset within the run's text where this fragment starts
     pub char_offset: Option<usize>,
+    /// R7.32 (Day 33 part 72, 2026-05-13): paragraph index within a table cell
+    /// (0-based, counts only Block::Paragraph blocks in document order).
+    /// `paragraph_index` alone is shared across all cells of the table, so
+    /// without this field aggregate_dump (matcher) cannot distinguish which
+    /// cell paragraph an element comes from and misattributes diff matches.
+    /// None for non-cell elements. See e3c545 # プレフィックス case.
+    pub cell_paragraph_index: Option<usize>,
 }
 
 impl LayoutElement {
     /// Create a non-text element (border, shading, image, etc.) with no source indices.
     fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
-        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None }
+        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None }
     }
 
     /// Create a text element with source location for hit testing.
     fn text(x: f32, y: f32, width: f32, height: f32, content: LayoutContent,
             para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
         Self { x, y, width, height, content,
-               paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset) }
+               paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset),
+               cell_paragraph_index: None }
     }
 }
 
@@ -5936,6 +5946,9 @@ impl LayoutEngine {
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
                 let is_exact = row.height_rule.as_deref() == Some("exact");
                 let mut is_first_block_in_cell = true;
+                // R7.32: count Paragraph blocks within this cell so each cell
+                // paragraph can be distinguished in the dump output.
+                let mut cell_para_counter: usize = 0;
                 if !is_vmerge_continue {
                 for block in &cell.blocks {
                 // Clip content that overflows exact row height
@@ -6375,12 +6388,18 @@ impl LayoutEngine {
                                 // can localize cell text. Without this, para_idx is None and
                                 // docs with many tables produce unusable --dump-layout output.
                                 cell_el.paragraph_index = block_idx;
+                                // R7.32: also tag cell-internal paragraph index so the
+                                // matcher (aggregate_dump in measure_pagination_oxi.py)
+                                // can split cell paragraphs that share block_idx.
+                                cell_el.cell_paragraph_index = Some(cell_para_counter);
                                 cell_elements.push(cell_el);
                                 rx += adj_w + frag_spacing[frag_idx];
                             }
                             content_h += lh;
                         }
                         content_h += effective_space_after.unwrap_or(0.0);
+                        // R7.32: increment after each Paragraph block in the cell
+                        cell_para_counter += 1;
 
                         // Render shapes attached to this paragraph (e.g. bracketPair)
                         // pos.y = offset from paragraph start (Word COM confirmed)

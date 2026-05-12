@@ -55,17 +55,26 @@ def aggregate_dump(dump: dict) -> dict:
     out = {}
     for page in dump.get("pages", []):
         page_num = page["page"]
-        # Group text elements by para_idx (preserving insertion order via dict)
+        # Group text elements by (para_idx, cell_para_idx).
+        # R7.32 (Day 33 part 72, 2026-05-13): cell_para_idx distinguishes
+        # paragraphs within the same table cell. Without it, all cell
+        # paragraphs collapse under one para_idx (= table block_idx) and
+        # the matcher misattributes diff matches (e3c545 # プレフィックス was
+        # reported as +3 when actual layout delta was +1). Pre-R7.32 numbers
+        # were inflated by hidden cell-paragraph deltas.
         groups: dict = {}
         for el in page.get("elements", []):
             if el.get("type") != "text":
                 continue
-            key = el.get("para_idx")
-            if key is None:
+            pi = el.get("para_idx")
+            cpi = el.get("cell_para_idx")
+            if pi is None:
                 # Pseudo-key: cluster by y-line (0.5pt) — matches cascade tool
                 key = ("y", round(el["y"] * 2) / 2)
+            else:
+                key = (pi, cpi)
             slot = groups.setdefault(key, {
-                "para_idx": el.get("para_idx"),
+                "para_idx": pi,
                 "text_parts": [],
                 "y_min": el["y"],
                 "x_min": el["x"],
