@@ -153,8 +153,9 @@ def measure_oxi(docx: str) -> list[dict]:
     current_table_id = 0
 
     for entry in entries:
-        # Heuristic: cy > 50 and (current is empty OR row_idx == 0 starting fresh)
-        if entry["row_idx"] == 0 and entry["cy"] > 50:
+        # Heuristic: cy > 30 and (current is empty OR row_idx == 0 starting fresh)
+        # Top-level tables can start near page top (e.g., 31420af pg_top ~= 36)
+        if entry["row_idx"] == 0 and entry["cy"] > 30:
             # New top-level table starts
             if current_table:
                 top_level_tables.append(current_table)
@@ -162,7 +163,7 @@ def measure_oxi(docx: str) -> list[dict]:
             current_table_id += 1
             entry["table_idx"] = current_table_id
             current_table.append(entry)
-        elif entry["cy"] < 60 and entry["row_idx"] == 0:
+        elif entry["cy"] < 30 and entry["row_idx"] == 0:
             # Nested table starts; skip
             continue
         else:
