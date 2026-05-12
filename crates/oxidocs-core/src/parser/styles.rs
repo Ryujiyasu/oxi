@@ -217,8 +217,9 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if !child.keep_lines && parent.keep_lines {
         child.keep_lines = true;
     }
-    if !child.has_explicit_widow_control {
+    if !child.has_explicit_widow_control && parent.has_explicit_widow_control {
         child.widow_control = parent.widow_control;
+        child.has_explicit_widow_control = true;
     }
     if !child.page_break_before && parent.page_break_before {
         child.page_break_before = true;

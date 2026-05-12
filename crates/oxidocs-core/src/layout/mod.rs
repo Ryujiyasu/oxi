@@ -3406,6 +3406,16 @@ impl LayoutEngine {
         let line_heights: Vec<f32> = lines.iter().map(|line| {
             self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
         }).collect();
+        // Day 33 part 65 (2026-05-12): natural line heights (ascent+descent only)
+        // for page-break threshold. Word allows grid-snap LEADING to extend
+        // into bottom margin; only the text-occupying zone (ascent+descent)
+        // must fit within content area. db9ca18 i=37 confirmed via COM:
+        // line at y=758.25, grid line_h=18, line bottom=776.25 (5.25pt past
+        // pgBot=771) — Word fits, while Oxi (using full line_h for break
+        // check) rejected.
+        let natural_line_heights: Vec<f32> = lines.iter().map(|line| {
+            self.natural_line_height_for_line(line, &para.style, para_font_size)
+        }).collect();
 
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
@@ -3542,8 +3552,15 @@ impl LayoutEngine {
                 let cc = (old_pos / 10.0).round() as i32 * 10;
                 (cn - cc) as f32 / 20.0
             } else { line_height };
+            // Day 33 part 65 (2026-05-12): use natural_lh (ascent+descent) for
+            // break threshold; the grid-snap LEADING (line_h − natural_lh) is
+            // allowed to extend into bottom margin. Cursor still advances by
+            // full line_h. COM-confirmed via db9ca18 i=37 (+5.25pt overflow
+            // accepted by Word).
+            let natural_lh = natural_line_heights.get(line_idx).copied().unwrap_or(effective_lh);
+            let break_threshold = natural_lh.min(effective_lh);
             let needs_page_break = if in_textbox { false } else {
-                *cursor_y + effective_lh > page_top + content_height
+                *cursor_y + break_threshold > page_top + content_height
             };
             if std::env::var("OXI_DUMP_BREAK").is_ok() && line_idx == 0 {
                 let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
@@ -5238,6 +5255,43 @@ impl LayoutEngine {
         grid_pitch: Option<f32>,
     ) -> f32 {
         self.line_height_for_line_inner(line, para_style, para_font_size, snap_to_grid, grid_pitch, false)
+    }
+
+    /// Returns ascent+descent only (no grid snap, no leading) for a line.
+    /// Used for page-break threshold check (Day 33 part 65, 2026-05-12):
+    /// COM-confirmed via db9ca18 i=37 — Word allows the LEADING portion of
+    /// a grid-snapped line to extend into the bottom margin. Only the
+    /// ascent+descent zone must fit within content area. Without this rule,
+    /// Oxi rejects lines whose grid-pitch bottom exceeds pgBot by even a
+    /// few points (db9ca18 +2pt), while Word fits them (db9ca18 i=37
+    /// extends 5.25pt past pgBot in Word).
+    fn natural_line_height_for_line(
+        &self,
+        line: &Line,
+        para_style: &ParagraphStyle,
+        para_font_size: f32,
+    ) -> f32 {
+        let mut max_ascent: f32 = 0.0;
+        let mut max_descent: f32 = 0.0;
+        if line.fragments.is_empty() {
+            let font_size = para_style.ppr_rpr.as_ref()
+                .and_then(|r| r.font_size)
+                .unwrap_or(para_font_size);
+            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+            let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+            max_ascent = metrics.word_ascent_pt(font_size);
+            max_descent = metrics.word_descent_pt(font_size);
+        } else {
+            for frag in &line.fragments {
+                let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let asc = metrics.word_ascent_pt(font_size);
+                let des = metrics.word_descent_pt(font_size);
+                if asc > max_ascent { max_ascent = asc; }
+                if des > max_descent { max_descent = des; }
+            }
+        }
+        max_ascent + max_descent
     }
 
     fn line_height_for_line_inner(
