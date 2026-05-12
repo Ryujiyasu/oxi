@@ -5703,8 +5703,14 @@ impl LayoutEngine {
             for cell in row.cells.iter() {
                 let span = cell.grid_span.max(1) as usize;
                 // vMerge="continue" cells don't contribute to row height
-                // (their content is part of the vMerge="restart" cell above)
-                if cell.v_merge.as_deref() == Some("continue") || cell.v_merge.as_deref() == Some("") {
+                // (their content is part of the vMerge="restart" cell above).
+                // vMerge="restart" cells also don't contribute: Word distributes
+                // the restart cell's content across the entire vMerge span, so
+                // the row's own height comes from non-merged cells in the same row.
+                if cell.v_merge.as_deref() == Some("continue")
+                    || cell.v_merge.as_deref() == Some("")
+                    || cell.v_merge.as_deref() == Some("restart")
+                {
                     grid_idx += span;
                     continue;
                 }
@@ -6401,7 +6407,8 @@ impl LayoutEngine {
                 // line box), which makes their bottom extend past content_h. Using
                 // max(content_h, elem_bottom) double-counts this offset and inflates
                 // row height. Trust content_h as the authoritative sum.
-                if !is_vmerge_continue && !is_exact_row {
+                let is_vmerge_restart = cell.v_merge.as_deref() == Some("restart");
+                if !is_vmerge_continue && !is_exact_row && !is_vmerge_restart {
                     let actual = pad_t + content_h + pad_b;
                     if actual > max_actual_cell_h {
                         max_actual_cell_h = actual;
