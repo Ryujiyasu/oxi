@@ -70,14 +70,16 @@ def aggregate_dump(dump: dict) -> dict:
                 "y_min": el["y"],
                 "x_min": el["x"],
             })
-            slot["text_parts"].append((el["x"], el.get("text", "")))
+            slot["text_parts"].append((el["y"], el["x"], el.get("text", "")))
             slot["y_min"] = min(slot["y_min"], el["y"])
             slot["x_min"] = min(slot["x_min"], el["x"])
         # Build records
         records = []
         for key, slot in groups.items():
-            slot["text_parts"].sort(key=lambda xt: xt[0])
-            text = "".join(t for _, t in slot["text_parts"])
+            # Sort by (y, x) so multi-line wrapped paragraphs concatenate
+            # line-by-line top-to-bottom, not interleaved by X across lines.
+            slot["text_parts"].sort(key=lambda yxt: (yxt[0], yxt[1]))
+            text = "".join(t for _, _, t in slot["text_parts"])
             text = text.replace("\n", "").replace("\r", "")[:30]
             records.append({
                 "para_idx": slot["para_idx"],
