@@ -213,9 +213,9 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
-  x-axis ["03-28", "04-06", "04-10", "04-14", "04-18", "04-21", "04-28", "05-08", "05-12", "05-12b"]
+  x-axis ["03-28", "04-06", "04-10", "04-14", "04-18", "04-21", "04-28", "05-08", "05-12", "05-12b", "05-12c"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8430, 0.8520, 0.8584, 0.8597, 0.8625, 0.8699, 0.8855, 0.8893, 0.8892]
+  line [0.7884, 0.8430, 0.8520, 0.8584, 0.8597, 0.8625, 0.8699, 0.8855, 0.8893, 0.8892, 0.8895]
 ```
 
 | Date | avg SSIM | gate / Phase | Key Changes |
@@ -231,6 +231,7 @@ xychart-beta
 | 2026-05-12 | **0.8893** | **Phase 1 43/55** | Day 33 part 57 wrap_w uses cell_w (191cb + 1636 PASS), Day 33 part 59 page-break order fix preserves current-line text on hard break (cb8be7 PASS). Phase A+B (cursor advance + page-break decision precision) refactor commitment producing first concrete wins after 7+ sessions of investigation |
 | 2026-05-12 | 0.8893 | Phase 1 42/55 (corrected) | Day 33 part 62 measurer fix: `measure_pagination_oxi.py` text concat now sorts by (y, x) instead of x-only — previously, multi-line wrapped paragraphs had their characters interleaved across lines, making the matcher unable to align them with Word. Fix tipped 04b88e to PASS, but revealed 3 docs (31420af, b837808, db9ca18) that previously appeared PASS due to insufficient matches. Methodology correction, not a layout regression |
 | 2026-05-12 | **0.8892** | **Phase 1 43/55** | Day 33 part 65 (R7.18): body page-break check now uses natural line height (ascent+descent, no grid leading) instead of full grid line height — Word allows the leading portion of a grid-snapped line to extend into the bottom margin. COM-verified via db9ca18 paragraph 37: Word fits a line at y=758 whose grid bottom is 776 (5.25pt past pgBot 771). Companion fix: widow_control inheritance now propagates the explicit flag through the style chain, so widowControl=0 set on Normal correctly disables the orphan check for descendants. db9ca18 FAIL→PASS (3 pages matching Word). 0 PASS→FAIL transitions |
+| 2026-05-12 | **0.8895** | **Phase 1 44/55** | Day 33 part 69 (R7.24): preserve fixed-layout (`<w:tblLayout w:type="fixed"/>`) table column widths — previously Oxi shrank the last column when grid_columns sum exceeded content_width (correct for autofit, wrong for fixed). 7-session a47e6 investigation: 21.1pt wrap-width loss caused "fullwidth+年月日" paragraph to overflow by 0.55pt → wrap to 2 lines, +25pt row 0 over-pump, +1.4pt at pi=2 → +1 page. 1-line fix tipped a47e6 to PASS (0.5 → 1.0) and improved d4d126 (0.8 → 0.857). Methodology lesson: estimate-vs-render diagnostic ≠ real cause; render-vs-render is the correct layer |
 
 **Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 1 — pagination correctness** (per-paragraph page match between Word and Oxi). Bottom-5 SSIM sum is tracked but no longer the primary gate; SSIM regression > 0.005 still requires review. Phase 2 (element IoU ≥ 0.99) and Phase 3 (SSIM mean ≥ 0.99 + bottom-5 floor) activate as Phase 1 transitions to ≥ 95% pass rate. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
 
