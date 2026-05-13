@@ -5049,7 +5049,28 @@ impl LayoutEngine {
                     // rank 18 (out of bottom-5).
                     // Future: re-attempt with line-fill-aware gate (e.g. only
                     // immune when the line is already at >95% of available_tw).
-                    let is_immune_space = false;
+                    //
+                    // R7.62 (Day 36 part 9, 2026-05-14): re-attempt the trailing-U+3000
+                    // immunity rule with TWO conditions tightened to avoid the d77a
+                    // regression of the previous 82de3fa attempt:
+                    //   1. ch == U+3000 AND
+                    //   2. ALL remaining chars (char_index+1..end) are also U+3000
+                    //      (true trailing-U+3000 run — distinguishes ed025c wi=10's
+                    //      5 trailing U+3000 from d77a's 142-char mid-text U+3000
+                    //      decorative run where non-U+3000 chars follow) AND
+                    //   3. current line is already at ≥95% of available_tw (near-full
+                    //      — Word collapses trailing U+3000 only when the line has
+                    //      legitimately filled with content first; this excludes
+                    //      degenerate "empty + trailing" lines).
+                    // ed025c wi=10: "32×U+3000 + 法人番号： + 5×U+3000". Char 38 (1st
+                    // trailing U+3000 that overflows) has remaining 4 chars all
+                    // U+3000 + line at 99.1% full → immune. Resolves the +16pt
+                    // drift jump that cascades 149 paras +1, 69 paras +2/+3.
+                    let trailing_u3000 = ch == '\u{3000}'
+                        && chars_vec.iter().skip(char_index + 1).all(|&c| c == '\u{3000}');
+                    let line_near_full = available_tw > 0
+                        && (current_width_tw * 100) >= (available_tw * 95);
+                    let is_immune_space = trailing_u3000 && line_near_full;
                     let line_compress_count = current_line.fragments.iter()
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
