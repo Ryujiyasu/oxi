@@ -5992,11 +5992,47 @@ impl LayoutEngine {
             // Row splitting: when cantSplit=false (default) and the row overflows,
             // split it across pages rather than moving the entire row to the next page.
             // Word splits rows at the page boundary, keeping partial content on each page.
-            // Only split single-cell rows in single-row tables (1x1 "box" tables).
-            // Multi-row or multi-cell table splitting is too complex and can cause
-            // regressions in page count for other documents.
+            //
+            // R7.58 (Day 35 session 58, 2026-05-13): mid-row LRPB positive-evidence
+            // gate. Word's `<w:lastRenderedPageBreak/>` placement tells us how Word
+            // broke this row in its last saved render:
+            //   - LRPB at cell=0, first paragraph, run=0: row was PUSHED whole
+            //   - LRPB at any other position in row: row was SPLIT (break mid-row)
+            //   - No LRPB in row: row was NOT broken by Word
+            // Only enable multi-cell split when we have POSITIVE evidence Word split
+            // (mid-row LRPB). Otherwise retain push-whole behavior (gate (1) un-gated
+            // attempt caused 4 PASS→FAIL regressions: 29dc6e/31420af/6514/de6e, all
+            // had LRPB-at-start or no LRPB; gate (2) inverted check failed because
+            // it allowed split for no-LRPB rows that Word didn't break).
+            // Single-cell 1x1 box tables retain prior unconditional split.
             let is_single_cell_row = row.cells.len() == 1 && num_rows == 1;
-            let needs_row_split = row_overflows && !row.cant_split && has_content && is_single_cell_row;
+            // Scan row content for an LRPB that is NOT at the row-start position
+            // (cell=0, first paragraph block in cell, run=0).
+            let has_lrpb_mid_row = {
+                let mut found = false;
+                for (ci, cell) in row.cells.iter().enumerate() {
+                    let mut first_para_in_cell_seen = false;
+                    for block in cell.blocks.iter() {
+                        if let Block::Paragraph(p) = block {
+                            let is_first_para_in_cell = !first_para_in_cell_seen;
+                            first_para_in_cell_seen = true;
+                            for (ri, run) in p.runs.iter().enumerate() {
+                                if run.has_last_rendered_page_break
+                                    && !(ci == 0 && is_first_para_in_cell && ri == 0)
+                                {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if found { break; }
+                        }
+                    }
+                    if found { break; }
+                }
+                found
+            };
+            let needs_row_split = row_overflows && !row.cant_split && has_content
+                && (is_single_cell_row || has_lrpb_mid_row);
             if (row_overflows || lrpb_row_should_break) && has_content && !needs_row_split {
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
