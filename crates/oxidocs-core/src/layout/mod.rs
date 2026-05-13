@@ -828,12 +828,20 @@ pub struct LayoutElement {
     /// None for non-cell elements.
     pub cell_row_index: Option<usize>,
     pub cell_col_index: Option<usize>,
+    /// R7.56 (Day 34 part 25, 2026-05-13): true on the FIRST text element of
+    /// a cell paragraph whose run[0] carries `<w:lastRenderedPageBreak/>`.
+    /// The row-split logic uses this to force a page break before this
+    /// element (mid-cell LRPB respect, analogous to R7.45/R7.47 for body
+    /// and row-first cases). e3c545 cpi=81/cpi=N LRPB markers caused
+    /// remaining -1 outliers w_i=202, 314, 483 because the existing
+    /// R7.47 row-LRPB check only inspects `cell.blocks.first()`.
+    pub is_paragraph_start_with_lrpb: bool,
 }
 
 impl LayoutElement {
     /// Create a non-text element (border, shading, image, etc.) with no source indices.
     fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
-        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None }
+        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false }
     }
 
     /// Create a text element with source location for hit testing.
@@ -841,7 +849,7 @@ impl LayoutElement {
             para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
         Self { x, y, width, height, content,
                paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset),
-               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None }
+               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false }
     }
 }
 
@@ -6544,6 +6552,19 @@ impl LayoutEngine {
                                 // sharing (block_idx, cpi=0) don't collapse.
                                 cell_el.cell_row_index = Some(row_idx);
                                 cell_el.cell_col_index = Some(cell_idx);
+                                // R7.56 (Day 34 part 25, 2026-05-13): mark the FIRST
+                                // text element of a paragraph whose run[0] carries
+                                // `<w:lastRenderedPageBreak/>`. The row-split logic
+                                // uses this to force a page break before this element
+                                // (mid-cell LRPB respect for e3c545 cpi=81/N/M).
+                                if line_idx == 0 && frag_idx == 0 {
+                                    let para_has_lrpb_on_run0 = para.runs.first()
+                                        .map(|r| r.has_last_rendered_page_break)
+                                        .unwrap_or(false);
+                                    if para_has_lrpb_on_run0 {
+                                        cell_el.is_paragraph_start_with_lrpb = true;
+                                    }
+                                }
                                 cell_elements.push(cell_el);
                                 rx += adj_w + frag_spacing[frag_idx];
                             }
@@ -6721,9 +6742,24 @@ impl LayoutEngine {
             // This handles single-cell rows with many paragraphs (e.g. list boxes).
             let row_bottom = *cursor_y + row_height;
             if row_bottom > page_bottom + 0.5 && !row.cant_split {
-                let split_y = page_bottom;
-                // Partition elements: those fitting on current page vs overflow
+                // R7.56 (Day 34 part 25, 2026-05-13): respect mid-cell LRPB markers.
+                // If any element in this row carries `is_paragraph_start_with_lrpb`,
+                // force the split before the FIRST such element above page_bottom
+                // (i.e., pull split_y back to that element's y so it goes to next page).
+                // e3c545 cpi=81 LRPB at y=765.62: without this pull-back, the element
+                // bottom (777.24) fits split_y=785.2 (page_bottom) and stays on current
+                // page; with pull-back, split_y becomes 765.62 → element goes overflow.
                 let row_elements = elements.split_off(elements_before_row);
+                let lrpb_split_y = row_elements.iter()
+                    .filter(|e| e.is_paragraph_start_with_lrpb && e.y > *cursor_y + 0.5)
+                    .map(|e| e.y)
+                    .fold(f32::INFINITY, f32::min);
+                let split_y = if lrpb_split_y.is_finite() && lrpb_split_y < page_bottom {
+                    lrpb_split_y
+                } else {
+                    page_bottom
+                };
+                // Partition elements: those fitting on current page vs overflow
                 let mut current_page_elems: Vec<LayoutElement> = Vec::new();
                 let mut next_page_elems: Vec<LayoutElement> = Vec::new();
 
@@ -7011,8 +7047,19 @@ impl LayoutEngine {
                         break;
                     }
 
-                    // Need another split at page_bottom
-                    let next_split = page_bottom;
+                    // Need another split at page_bottom (or earlier if a mid-cell
+                    // LRPB marker exists at y < page_bottom).
+                    // R7.56 (Day 34 part 25): pull split back to first LRPB-marked
+                    // element above page_top. Same logic as the first-split path.
+                    let lrpb_next_split = remaining.iter()
+                        .filter(|e| e.is_paragraph_start_with_lrpb && e.y > page_top + 0.5)
+                        .map(|e| e.y)
+                        .fold(f32::INFINITY, f32::min);
+                    let next_split = if lrpb_next_split.is_finite() && lrpb_next_split < page_bottom {
+                        lrpb_next_split
+                    } else {
+                        page_bottom
+                    };
                     let mut this_page: Vec<LayoutElement> = Vec::new();
                     let mut overflow: Vec<LayoutElement> = Vec::new();
 
