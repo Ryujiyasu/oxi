@@ -3624,6 +3624,14 @@ impl LayoutEngine {
             } else {
                 false
             };
+            if std::env::var("OXI_DUMP_WIDOW").is_ok() && line_idx == 0 {
+                let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
+                eprintln!("[WIDOW] line0 lines={} wc={} cursor_y={:.2} lh={:.2} next_h={:.2} limit={:.2} curr_empty={} break={} text={:?}",
+                    lines.len(), para.style.widow_control, *cursor_y, line_height,
+                    line_heights.get(1).copied().unwrap_or(0.0),
+                    page_top + content_height, current_elements.is_empty(),
+                    widow_orphan_break, txt);
+            }
 
             if widow_orphan_break {
                 // Push current page and move entire paragraph so far to next page
