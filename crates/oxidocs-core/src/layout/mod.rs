@@ -6148,6 +6148,13 @@ impl LayoutEngine {
                         let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)> = Vec::new();
                         let mut line_x: f32 = 0.0;
                         let mut is_first_line = true;
+                        // R7.51 (2026-05-13): autoSpaceDE state for CJK↔Latin transitions.
+                        // Tracks the last emitted character across runs/buffers so we can
+                        // detect transitions and add Word's 2.5pt (10.5pt font) gap. The
+                        // body renderer (break_into_lines) applies this; this cell-renderer
+                        // path historically did not, causing d77a58 w_i=47 wrap mismatch
+                        // (5 lines Oxi vs 6 lines Word).
+                        let mut prev_char_emitted: Option<char> = None;
 
                         for run in &para.runs {
                             let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -6198,6 +6205,23 @@ impl LayoutEngine {
                                     0.0
                                 };
                                 let cw = cw + cs + balance_extra_cs;
+                                // R7.51 (2026-05-13): autoSpaceDE for CJK↔Latin transitions
+                                // in cell renderer. The body renderer (break_into_lines) already
+                                // applies this 2.5pt gap (at 10.5pt) but the cell-renderer loop
+                                // here historically did not. d77a58 w_i=47 wrap mismatch
+                                // (5 lines Oxi vs 6 lines Word) traced to missing auto-space
+                                // around "URL" / "1.0" / "CC BY" Latin runs within CJK text.
+                                // Formula matches break_into_lines: ((fs/2)+0.5).floor()*0.5.
+                                let auto_space_extra = if para.style.auto_space_de {
+                                    let prev_cjk_ideo = prev_char_emitted.map_or(false, kinsoku::is_cjk_ideograph_or_kana);
+                                    let prev_latin = prev_char_emitted.map_or(false, |c| c.is_ascii_alphanumeric());
+                                    let cur_cjk_ideo = kinsoku::is_cjk_ideograph_or_kana(ch);
+                                    let cur_latin = ch.is_ascii_alphanumeric();
+                                    if (prev_cjk_ideo && cur_latin) || (prev_latin && cur_cjk_ideo) {
+                                        ((font_size / 2.0) + 0.5).floor() * 0.5
+                                    } else { 0.0 }
+                                } else { 0.0 };
+                                let cw = cw + auto_space_extra;
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
                                 let is_space = ch == ' ' || ch == '\u{3000}';
@@ -6229,6 +6253,7 @@ impl LayoutEngine {
                                 }
                                 buf.push(ch);
                                 buf_w += cw;
+                                prev_char_emitted = Some(ch);
                             }
                             if !buf.is_empty() {
                                 current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
@@ -7102,6 +7127,10 @@ impl LayoutEngine {
         let mut buf_nonempty = false;
         let mut line_nonempty = false;
         let mut is_first_line = true;
+        // R7.51: mirror autoSpaceDE applied in cell renderer (mod.rs:6181 path).
+        // Without this the line-count estimate under-counts vs render, re-introducing
+        // the Fix C estimate<render mismatch this function exists to prevent.
+        let mut prev_char_emitted: Option<char> = None;
 
         for run in &para.runs {
             let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -7139,6 +7168,17 @@ impl LayoutEngine {
                     0.0
                 };
                 let cw = cw + cs + balance_extra_cs;
+                // R7.51: autoSpaceDE mirror — see cell renderer note.
+                let auto_space_extra = if para.style.auto_space_de {
+                    let prev_cjk_ideo = prev_char_emitted.map_or(false, kinsoku::is_cjk_ideograph_or_kana);
+                    let prev_latin = prev_char_emitted.map_or(false, |c| c.is_ascii_alphanumeric());
+                    let cur_cjk_ideo = kinsoku::is_cjk_ideograph_or_kana(ch);
+                    let cur_latin = ch.is_ascii_alphanumeric();
+                    if (prev_cjk_ideo && cur_latin) || (prev_latin && cur_cjk_ideo) {
+                        ((font_size / 2.0) + 0.5).floor() * 0.5
+                    } else { 0.0 }
+                } else { 0.0 };
+                let cw = cw + auto_space_extra;
                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                 let is_space = ch == ' ' || ch == '\u{3000}';
                 if !is_space && line_x + buf_w + cw > effective_wrap && !(!line_nonempty && !buf_nonempty) {
@@ -7168,6 +7208,7 @@ impl LayoutEngine {
                 }
                 buf_w += cw;
                 buf_nonempty = true;
+                prev_char_emitted = Some(ch);
             }
             if buf_nonempty {
                 line_x += buf_w;
