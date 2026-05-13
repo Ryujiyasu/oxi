@@ -5884,6 +5884,25 @@ impl LayoutEngine {
             let has_content = !elements.is_empty() || !current_elements.is_empty();
             let page_bottom = page_top + content_height;
             let row_overflows = *cursor_y + row_height > page_bottom;
+            // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
+            // ANY cell's FIRST paragraph carries `<w:lastRenderedPageBreak/>`
+            // on its run[0], Word's saved render broke before this row.
+            // Mirrors the body-paragraph LRPB SOFT rule at mod.rs:1888.
+            // de6e / 29dc6e outliers (4 each) had LRPB-at-cell-start markers
+            // that the table layout previously ignored.
+            let row_has_lrpb_at_cell_start = row.cells.iter().any(|cell| {
+                cell.blocks.first().map_or(false, |b| match b {
+                    Block::Paragraph(p) => p.runs.first()
+                        .map(|r| r.has_last_rendered_page_break).unwrap_or(false),
+                    _ => false,
+                })
+            });
+            let consumed_row = *cursor_y - page_top;
+            let half_content = content_height * 0.5;
+            let lrpb_row_should_break = row_has_lrpb_at_cell_start
+                && has_content
+                && !row_overflows  // row would fit; LRPB hint says break anyway
+                && consumed_row > half_content;
             // Row splitting: when cantSplit=false (default) and the row overflows,
             // split it across pages rather than moving the entire row to the next page.
             // Word splits rows at the page boundary, keeping partial content on each page.
@@ -5892,7 +5911,7 @@ impl LayoutEngine {
             // regressions in page count for other documents.
             let is_single_cell_row = row.cells.len() == 1 && num_rows == 1;
             let needs_row_split = row_overflows && !row.cant_split && has_content && is_single_cell_row;
-            if row_overflows && has_content && !needs_row_split {
+            if (row_overflows || lrpb_row_should_break) && has_content && !needs_row_split {
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
