@@ -1877,8 +1877,17 @@ impl LayoutEngine {
                     //      this, LRPB fires near the top of an Oxi page that already
                     //      aligns with Word's break — wrongly pushing content to
                     //      next page (bd90b00 cascade: 0.96→0.74 with rule-1-only).
-                    let has_lrpb_run = para.runs.iter().any(|r| r.has_last_rendered_page_break);
-                    let lrpb_should_break = if has_lrpb_run && !elements.is_empty() {
+                    // R7.45 (Day 34 part 14, 2026-05-13): only fire SOFT LRPB
+                    // when the marker is on the FIRST run (paragraph-start
+                    // break). When LRPB is on a later run, Word broke
+                    // mid-paragraph — force-breaking the whole paragraph
+                    // here moves both lines to the next page, but Word
+                    // actually leaves line 0 on the current page. Let the
+                    // natural per-line break handle the mid-paragraph case
+                    // (34140 w_i=535 example).
+                    let has_lrpb_at_start = para.runs.first()
+                        .map(|r| r.has_last_rendered_page_break).unwrap_or(false);
+                    let lrpb_should_break = if has_lrpb_at_start && !elements.is_empty() {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                         let remaining = (start_y + effective_content_h) - cursor_y;
                         let consumed = cursor_y - start_y;
