@@ -5898,11 +5898,28 @@ impl LayoutEngine {
                 })
             });
             let consumed_row = *cursor_y - page_top;
-            let half_content = content_height * 0.5;
+            // R7.48 (2026-05-13): tighten R7.47 threshold from > 0.5 to > 0.85.
+            // OXI_DUMP_ROW_LRPB traces showed Oxi cursor_y/content_height at the
+            // firing point: de6e fires at 0.904, 29dc6e at 0.868 (correct PASSes),
+            // a1d6 at 0.812 (stale LRPB — Word's current render doesn't break here).
+            // 0.85 cleanly separates correct firings (page near full) from stale
+            // hints fired around mid-page.
+            let lrpb_threshold = content_height * 0.85;
             let lrpb_row_should_break = row_has_lrpb_at_cell_start
                 && has_content
                 && !row_overflows  // row would fit; LRPB hint says break anyway
-                && consumed_row > half_content;
+                && consumed_row > lrpb_threshold;
+            if std::env::var("OXI_DUMP_ROW_LRPB").is_ok() && row_has_lrpb_at_cell_start {
+                let preview: String = row.cells.iter().filter_map(|c| {
+                    c.blocks.first().and_then(|b| match b {
+                        Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(20).collect::<String>()),
+                        _ => None,
+                    })
+                }).next().unwrap_or_default();
+                eprintln!("[ROW_LRPB] row_idx={} cursor_y={:.2} row_h={:.2} page_bot={:.2} consumed_frac={:.3} row_overflows={} fire={} text={:?}",
+                    row_idx, *cursor_y, row_height, page_bottom,
+                    consumed_row/content_height, row_overflows, lrpb_row_should_break, preview);
+            }
             // Row splitting: when cantSplit=false (default) and the row overflows,
             // split it across pages rather than moving the entire row to the next page.
             // Word splits rows at the page boundary, keeping partial content on each page.
