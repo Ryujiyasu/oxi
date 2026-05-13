@@ -1779,6 +1779,16 @@ impl LayoutEngine {
         // project_fn_reserve_option_b_step1_FALSIFIED.md.
         let mut page_fn_refs: Vec<Vec<u32>> = Vec::new();
 
+        // R7.60 (Day 36 part 6, 2026-05-14): track floating-table Y ranges per page
+        // for body-position (vertAnchor="page", tblpY > top_margin) full-width tables.
+        // When a new floating table would Y-overlap with an already-placed one on the
+        // current page, push it to the next page. Word's behavior for 459f05: both
+        // floating tables span content width, so they cannot share a page; second
+        // table's anchor effectively rolls to next page.
+        // Header-position floats (tblpY <= top_margin, e.g. 1ec1/2ea81a) and
+        // vertAnchor="text" floats (e.g. 3a4f9f/ed025c) are NOT tracked — they
+        // co-locate with body content normally.
+        let mut floating_tables_per_page: Vec<Vec<(f32, f32)>> = vec![Vec::new()];
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // wrapTopAndBottom: for inline TABLE blocks, push below overlapping TextBoxes
@@ -2245,12 +2255,19 @@ impl LayoutEngine {
                     let saved_cursor_y = cursor_y;
 
                     // Floating table (tblpPr): position relative to anchor
+                    let mut candidate_y_top: f32 = 0.0;
+                    let mut is_body_floating: bool = false;
                     if let Some(ref pos) = table.style.position {
-                        cursor_y = match pos.v_anchor.as_deref() {
+                        candidate_y_top = match pos.v_anchor.as_deref() {
                             Some("page") => pos.y,
                             Some("margin") => start_y + pos.y,
                             _ => cursor_y + pos.y, // "text": offset from anchor para bottom
                         };
+                        cursor_y = candidate_y_top;
+                        // R7.60 body-floating eligibility: vertAnchor="page" AND
+                        // table positioned below top margin (in body region).
+                        is_body_floating = pos.v_anchor.as_deref() == Some("page")
+                            && candidate_y_top > start_y + 0.1;
                     }
                     let pages_before = pages.len();
                     let table_elements = self.layout_table(
@@ -2269,7 +2286,48 @@ impl LayoutEngine {
                         &mut elements,
                         Some(block_idx),
                     );
+                    let candidate_y_bottom = cursor_y;
+
+                    // R7.60: for body-position vertAnchor=page floating tables,
+                    // check overlap with previously-placed floating tables on the
+                    // current page. If overlap, push table elements to next page.
+                    let mut target_page = current_page_idx;
+                    if is_body_floating && is_floating {
+                        while floating_tables_per_page
+                            .get(target_page)
+                            .map_or(false, |ranges| ranges.iter().any(|(t, b)|
+                                !(candidate_y_bottom <= *t || candidate_y_top >= *b)
+                            ))
+                        {
+                            target_page += 1;
+                        }
+                    }
+
+                    if target_page > current_page_idx {
+                        // Finalize current page; advance to target page.
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        current_page_idx += 1;
+                        while current_page_idx < target_page {
+                            pages.push(LayoutPage {
+                                width: page.size.width,
+                                height: page.size.height,
+                                elements: Vec::new(),
+                            });
+                            current_page_idx += 1;
+                        }
+                    }
+                    while floating_tables_per_page.len() <= current_page_idx {
+                        floating_tables_per_page.push(Vec::new());
+                    }
                     elements.extend(table_elements);
+                    if is_body_floating {
+                        floating_tables_per_page[current_page_idx]
+                            .push((candidate_y_top, candidate_y_bottom));
+                    }
 
                     if is_floating {
                         // Floating tables don't advance the text flow
