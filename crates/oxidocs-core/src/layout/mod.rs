@@ -4775,7 +4775,24 @@ impl LayoutEngine {
                     {
                         let default_fs = pitch / ratio;
                         let char_space_pt = pitch - default_fs;
-                        (font_size + char_space_pt) - char_width
+                        // R7.59 (Day 36 part 3, 2026-05-13): hybrid grid-extra formula.
+                        // charSpace>=0 (expansion): proportional. COM-verified d4d126
+                        //   w_i=245 fs=10 default=10.5 cs=+0.575: Word renders ~10.547pt
+                        //   advance (proportional, NOT the 10.5pt COM Information(WD_HPOS)
+                        //   reports — that's the snapped logical width). Old linear
+                        //   cw = 10+0.575 = 10.575pt over-expanded → 1-line→2-line wrap
+                        //   regression on 35-char paragraphs.
+                        // charSpace<0 (compression): linear. COM-verified b35 fs=9
+                        //   cs=-0.66: Word=8.3pt (= 9-0.7).
+                        // 10tw-snap variant tested 2026-05-13: slightly worse SSIM
+                        //   (+2.1481 net vs +2.1859 net) because Word's INTERNAL
+                        //   rendering uses raw proportional advance, not snapped.
+                        let expected_w = if char_space_pt >= 0.0 {
+                            font_size * pitch / default_fs
+                        } else {
+                            font_size + char_space_pt
+                        };
+                        expected_w - char_width
                     } else { 0.0 }
                 } else if let Some(pitch) = grid_char_pitch {
                     if pitch > 0.0 && char_width > 0.0
@@ -6291,7 +6308,12 @@ impl LayoutEngine {
                                         {
                                             let default_fs = pitch / ratio;
                                             let char_space_pt = pitch - default_fs;
-                                            cw = font_size + char_space_pt;
+                                            // R7.59 hybrid (see break_into_lines comment).
+                                            cw = if char_space_pt >= 0.0 {
+                                                font_size * pitch / default_fs
+                                            } else {
+                                                font_size + char_space_pt
+                                            };
                                         }
                                     }
                                 }
@@ -7305,7 +7327,12 @@ impl LayoutEngine {
                         {
                             let default_fs = pitch / ratio;
                             let char_space_pt = pitch - default_fs;
-                            cw = font_size + char_space_pt;
+                            // R7.59 hybrid (see break_into_lines comment).
+                            cw = if char_space_pt >= 0.0 {
+                                font_size * pitch / default_fs
+                            } else {
+                                font_size + char_space_pt
+                            };
                         }
                     }
                 }
