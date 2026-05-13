@@ -857,6 +857,27 @@ fn normalize_family_name(name: &str) -> String {
     }
 }
 
+/// Day 34 part 23 (2026-05-13): does the CJK font have an OpenType `hwid`
+/// feature (halfwidth-glyph substitution for fullwidth yakumono)?
+///
+/// COM-verified rule: Word applies yakumono pair compression (close-side
+/// followed by open-side, ×0.5) when EITHER:
+///   - settings.xml `<w:characterSpacingControl val="compressPunctuation">`
+///   - OR the CJK font supports halfwidth-glyph hwid substitution
+///
+/// e3c545 idx=29 (Meiryo 10.5pt, doNotCompress) measured via Word COM:
+/// the 、 of 、「 pair rendered at 5.25pt (half) — exactly the pair-compression
+/// behavior even though csControl=doNotCompress.
+///
+/// Conservative whitelist: only "Meiryo" (post-normalization). Other
+/// hwid-capable fonts (Yu Gothic / Yu Mincho / BIZ UD) are NOT enabled by
+/// this function yet because the post-normalization name "Yu Gothic Regular"
+/// also covers "MS PGothic" via normalize_family_name's substitution path,
+/// and MS PGothic does NOT have hwid in Word's rendering.
+pub fn font_supports_hwid(family: &str) -> bool {
+    matches!(family, "Meiryo")
+}
+
 /// Half-width katakana: U+FF65..U+FF9F (ｦ, ｧ, ｨ, ... ﾝ, ﾞ, ﾟ)
 fn is_halfwidth_katakana(ch: char) -> bool {
     matches!(ch as u32, 0xFF65..=0xFF9F)

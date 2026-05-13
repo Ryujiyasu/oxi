@@ -4577,10 +4577,27 @@ impl LayoutEngine {
             // additional context (line position, surrounding chars, paragraph
             // structure?) NOT captured in the 8x8 grid. Reverted on 2026-04-27.
             // See RESEARCH_LOG 2026-04-27 falsified entry for full data.
+            //
+            // Day 34 part 23 (2026-05-13): COM measurement of e3c545 idx=29
+            // (Meiryo 10.5pt, csControl=doNotCompress) showed Word DOES
+            // compress the 、 of 、「 pair to 5.25pt (half). This contradicts
+            // the OOXML doNotCompress flag — Word applies pair compression
+            // when the CJK font has hwid (halfwidth-glyph) support.
+            // Two-tier gate:
+            //   - PAIR rule (close+open, ×0.5): compress_punctuation OR hwid
+            //   - FULL rules (expand pair, standalone, line-start): compress_punctuation only
+            //     (preserves existing behavior; 2026-04-27 unconditional broke MS Mincho docs)
+            let cjk_font_has_hwid = cjk_metrics
+                .map(|m| crate::font::font_supports_hwid(&m.family))
+                .unwrap_or(false);
+            let yakumono_pair_enabled = self.compress_punctuation || cjk_font_has_hwid;
             let yakumono_enabled = self.compress_punctuation;
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
-            let yakumono_compressed: Vec<bool> = if yakumono_enabled {
+            // Rule 1 (close+open ×0.5) is gated by yakumono_pair_enabled
+            // (compress_punctuation OR hwid font); Rules 2-4 below use
+            // yakumono_enabled (compress_punctuation only).
+            let yakumono_compressed: Vec<bool> = if yakumono_pair_enabled {
                 let n = chars_vec.len();
                 let mut v = vec![false; n];
                 for i in 0..n {
