@@ -1916,12 +1916,17 @@ impl LayoutEngine {
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor_y;
                     } else {
-                        // Normal case: this paragraph lands on the current page
-                        // unless an overflow check below pushes it. Pre-commit
-                        // its footnote contributions; later, if a page break
-                        // happens (keepLines/keepNext/etc.), we'll reset and
-                        // re-commit on the new page.
-                        commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
+                        // R7.53 (2026-05-13): pre-commit DEFERRED to after
+                        // layout_paragraph. Previously pre-committed here,
+                        // which inflated pg_bot and rejected b837808 i=49/
+                        // 60/72/90 paragraphs at their first line. Now the
+                        // first-line break check uses lenient effective_h
+                        // via `first_line_extra_content_h = delta_if_current`
+                        // passed to layout_paragraph. Subsequent lines use
+                        // strict (this para's fns are NOT yet committed but
+                        // delta_if_current is accounted via the param).
+                        // Post-layout commit below handles both non-spanning
+                        // and spanning cases uniformly.
                     }
 
                     // keepLines: if doesn't fit, advance column or page
@@ -2075,6 +2080,10 @@ impl LayoutEngine {
                         Some(&mut mult_cumul_raw),
                         adjacent_to_empty_run,
                         Some(&mut para_fn_refs_per_page),
+                        // R7.53: first-line lenient — add back this para's
+                        // own fn reserve delta so line 0 fits if it would
+                        // without the para's footnotes.
+                        delta_if_current,
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -2143,6 +2152,23 @@ impl LayoutEngine {
                         footnote_ids_current_page.clear();
                         if let Some(new_page_refs) = para_fn_refs_per_page.get(pages_added) {
                             for id in new_page_refs {
+                                if !footnote_ids_current_page.contains(id) {
+                                    if footnote_ids_current_page.is_empty() {
+                                        footnote_reserve_current += 6.0;
+                                    }
+                                    footnote_ids_current_page.push(*id);
+                                    footnote_reserve_current += estimate_footnote_h(*id);
+                                }
+                            }
+                        }
+                    } else {
+                        // R7.53 (2026-05-13): non-spanning case — paragraph
+                        // stayed on the current page. Pre-commit was deferred
+                        // (see comment near mod.rs:1924). Now commit this
+                        // para's footnotes that actually rendered on the
+                        // start page (para_fn_refs_per_page[0]).
+                        if let Some(start_refs) = para_fn_refs_per_page.first() {
+                            for id in start_refs {
                                 if !footnote_ids_current_page.contains(id) {
                                     if footnote_ids_current_page.is_empty() {
                                         footnote_reserve_current += 6.0;
@@ -2375,6 +2401,7 @@ impl LayoutEngine {
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
                             false, None,
+                            0.0,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -2402,6 +2429,7 @@ impl LayoutEngine {
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
                             false, None,
+                            0.0,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -2693,6 +2721,7 @@ impl LayoutEngine {
                                         grid_pitch, None, false,
                                         false, 0.0, None, None, None,
                                         false, None,
+                                        0.0,
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -2957,6 +2986,7 @@ impl LayoutEngine {
                         true, // in_textbox: suppress CJK compression
                         0.0, None, None, None,
                         false, None,
+                        0.0,
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -3160,6 +3190,13 @@ impl LayoutEngine {
         // i-th new page pushed during this paragraph. Does NOT alter
         // behavior; exists so caller can redistribute fn reserves correctly.
         mut line_fn_refs_out: Option<&mut Vec<Vec<u32>>>,
+        // R7.53 (2026-05-13): extra content_h available ONLY for the first
+        // line's page-break check. Caller passes the paragraph's own footnote
+        // reserve delta so the first-line check ignores fns that will move
+        // with the paragraph to the next page if line 0 doesn't fit. After
+        // line 0 is placed, subsequent lines use the strict content_height
+        // (including this para's fns).
+        first_line_extra_content_h: f32,
     ) -> (Vec<LayoutElement>, f32) {
         if let Some(v) = line_fn_refs_out.as_deref_mut() {
             if v.is_empty() { v.push(Vec::new()); }
@@ -3587,8 +3624,15 @@ impl LayoutEngine {
             // accepted by Word).
             let natural_lh = natural_line_heights.get(line_idx).copied().unwrap_or(effective_lh);
             let break_threshold = natural_lh.min(effective_lh);
+            // R7.53: first-line lenient check using `first_line_extra_content_h`.
+            // For line_idx > 0, the strict content_height applies.
+            let effective_break_bottom = if line_idx == 0 {
+                page_top + content_height + first_line_extra_content_h
+            } else {
+                page_top + content_height
+            };
             let needs_page_break = if in_textbox { false } else {
-                *cursor_y + break_threshold > page_top + content_height
+                *cursor_y + break_threshold > effective_break_bottom
             };
             if std::env::var("OXI_DUMP_BREAK").is_ok() && line_idx == 0 {
                 let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
