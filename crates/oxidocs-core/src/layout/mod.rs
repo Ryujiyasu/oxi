@@ -7079,7 +7079,19 @@ impl LayoutEngine {
                                 }
                             }
                             _ => {
-                                if elem_top < next_split {
+                                // Day 34 part 24 (2026-05-13): use element BOTTOM
+                                // vs next_split, NOT top. Mirrors the same fix
+                                // applied to the first split at line 6807 on
+                                // 2026-04-22 (Step 1). For rows that span 3+ pages,
+                                // the multi-page loop here was still using top-only
+                                // check, so a line whose top fits but bottom
+                                // overflows incorrectly stayed on the current page.
+                                // e3c545 cpi=82 at y=777.25 h=11.62 (bottom=788.87)
+                                // on page 5 with split_y=785.2: top-check kept it
+                                // on p5 (777.25<785.2), bottom-check moves to p6
+                                // (788.87>785.3). Fixes 4 -1 outliers in e3c545.
+                                let elem_bottom = elem.y + elem.height;
+                                if elem_bottom <= next_split + 0.1 {
                                     this_page.push(elem);
                                 } else {
                                     let shift = next_split - page_top;
