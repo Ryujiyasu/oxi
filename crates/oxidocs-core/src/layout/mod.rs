@@ -836,12 +836,22 @@ pub struct LayoutElement {
     /// remaining -1 outliers w_i=202, 314, 483 because the existing
     /// R7.47 row-LRPB check only inspects `cell.blocks.first()`.
     pub is_paragraph_start_with_lrpb: bool,
+    /// R7.61 (Day 36 part 8, 2026-05-14): true on text elements emitted from
+    /// vMerge="restart" cell content whose final Y exceeds the page bottom.
+    /// Post-paginate sweep moves these to the next page so pagination reports
+    /// them as page N+1 rather than page N (matches Word's split-mid-cell for
+    /// vMerge restart overflow). Narrow scope: only set in cell render path
+    /// for vMerge=restart cells past page_bottom — body text and other cells
+    /// are never marked. a1d6 row 13 ※２/※３: w_i=179/180 are on Word p4 but
+    /// Oxi renders them visually past page 3's bottom; this flag lifts them
+    /// to page 4 in the pagination output.
+    pub vmerge_restart_overflow_to_next_page: bool,
 }
 
 impl LayoutElement {
     /// Create a non-text element (border, shading, image, etc.) with no source indices.
     fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
-        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false }
+        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false, vmerge_restart_overflow_to_next_page: false }
     }
 
     /// Create a text element with source location for hit testing.
@@ -849,7 +859,7 @@ impl LayoutElement {
             para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
         Self { x, y, width, height, content,
                paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset),
-               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false }
+               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false, vmerge_restart_overflow_to_next_page: false }
     }
 }
 
@@ -2406,6 +2416,42 @@ impl LayoutEngine {
             height: page.size.height,
             elements,
         });
+
+        // R7.61 (Day 36 part 8, 2026-05-14): post-paginate sweep — move
+        // vMerge="restart" cell content that overflowed past page_bottom to
+        // the next page. Each marked element is shifted so its Y in the next
+        // page mirrors the same offset past page_top. This rectifies Oxi's
+        // page assignment for a1d6 row 13 ※２/※３ (Word p4, Oxi visually on
+        // p3 past page bottom) without disturbing other docs because the
+        // marker is only set for vMerge=restart cell text past page_bottom
+        // — body text and other cells are not marked. Scope-verified across
+        // 55-doc Phase 1 baseline: only a1d6 has 2+ vMerge restart overflow
+        // entries on the same page.
+        {
+            let page_top = page.margin.top;
+            let page_bottom_sweep = page_top + content_height;
+            for i in 0..pages.len() {
+                let take = std::mem::take(&mut pages[i].elements);
+                let (keep, overflow): (Vec<_>, Vec<_>) = take.into_iter()
+                    .partition(|e| !e.vmerge_restart_overflow_to_next_page);
+                pages[i].elements = keep;
+                if overflow.is_empty() { continue; }
+                let next_idx = i + 1;
+                if next_idx >= pages.len() {
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: Vec::new(),
+                    });
+                }
+                let shift = page_bottom_sweep - page_top;
+                for mut elem in overflow {
+                    elem.y -= shift;
+                    elem.vmerge_restart_overflow_to_next_page = false;
+                    pages[next_idx].elements.push(elem);
+                }
+            }
+        }
 
         // Layout text boxes and add to the correct layout page
         // The current_page_idx tracking tells us which layout page each anchor block ended up on
@@ -6739,12 +6785,26 @@ impl LayoutEngine {
                         row_idx, cell_idx, *cursor_y, pad_t, pad_b, content_h, valign, v_offset, dy, row_height
                     );
                 }
+                let is_vmerge_restart = cell.v_merge.as_deref() == Some("restart");
                 for mut elem in cell_elements {
                     elem.y += dy;
                     // Also update y-coords inside TableBorder content (nested tables)
                     if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = elem.content {
                         *y1 += dy;
                         *y2 += dy;
+                    }
+                    // R7.61 (Day 36 part 8): mark vMerge=restart cell text content
+                    // that overflows the page bottom. Post-paginate sweep moves
+                    // these to next page (a1d6 ※２/※３ on row 13 cell[0]).
+                    // Only text elements (skip borders/shading). cell_paragraph_index
+                    // > 0 condition prevents the cell's first paragraph from being
+                    // moved (it anchors the cell to its row's page).
+                    if is_vmerge_restart
+                        && matches!(&elem.content, LayoutContent::Text { .. })
+                        && elem.y > page_bottom + 0.5
+                        && elem.cell_paragraph_index.map_or(false, |cpi| cpi > 0)
+                    {
+                        elem.vmerge_restart_overflow_to_next_page = true;
                     }
                     elements.push(elem);
                 }
