@@ -68,11 +68,17 @@ def aggregate_dump(dump: dict) -> dict:
                 continue
             pi = el.get("para_idx")
             cpi = el.get("cell_para_idx")
+            # R7.44 (Day 34 part 13, 2026-05-13): cell row/col indices added to
+            # disambiguate cells that share (block_idx, cpi=0). Pre-R7.44 four
+            # "千円" cells in one row collapsed into one "千円千円千円千円" record,
+            # which forced the matcher into substring/multi-instance workarounds.
+            cri = el.get("cell_row_idx")
+            cci = el.get("cell_col_idx")
             if pi is None:
                 # Pseudo-key: cluster by y-line (0.5pt) — matches cascade tool
                 key = ("y", round(el["y"] * 2) / 2)
             else:
-                key = (pi, cpi)
+                key = (pi, cpi, cri, cci)
             slot = groups.setdefault(key, {
                 "para_idx": pi,
                 "text_parts": [],

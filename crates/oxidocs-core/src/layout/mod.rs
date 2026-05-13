@@ -819,12 +819,21 @@ pub struct LayoutElement {
     /// cell paragraph an element comes from and misattributes diff matches.
     /// None for non-cell elements. See e3c545 # プレフィックス case.
     pub cell_paragraph_index: Option<usize>,
+    /// R7.44 (Day 34 part 13, 2026-05-13): row and column index within the
+    /// table block, so aggregate_dump can distinguish cells that share
+    /// (paragraph_index, cell_paragraph_index). Without these, all cells'
+    /// first paragraphs share key (block_idx, cpi=0) and collapse into one
+    /// aggregate record — the matcher sees one "千円千円千円千円" instead of
+    /// four separate "千円" cells. See 04b88e w_i=99 / b5f706 6(9) cases.
+    /// None for non-cell elements.
+    pub cell_row_index: Option<usize>,
+    pub cell_col_index: Option<usize>,
 }
 
 impl LayoutElement {
     /// Create a non-text element (border, shading, image, etc.) with no source indices.
     fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
-        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None }
+        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None }
     }
 
     /// Create a text element with source location for hit testing.
@@ -832,7 +841,7 @@ impl LayoutElement {
             para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
         Self { x, y, width, height, content,
                paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset),
-               cell_paragraph_index: None }
+               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None }
     }
 }
 
@@ -6392,6 +6401,10 @@ impl LayoutEngine {
                                 // matcher (aggregate_dump in measure_pagination_oxi.py)
                                 // can split cell paragraphs that share block_idx.
                                 cell_el.cell_paragraph_index = Some(cell_para_counter);
+                                // R7.44: tag (row, col) within the table so cells
+                                // sharing (block_idx, cpi=0) don't collapse.
+                                cell_el.cell_row_index = Some(row_idx);
+                                cell_el.cell_col_index = Some(cell_idx);
                                 cell_elements.push(cell_el);
                                 rx += adj_w + frag_spacing[frag_idx];
                             }

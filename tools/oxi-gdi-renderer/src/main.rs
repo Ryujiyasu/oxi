@@ -731,9 +731,14 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             let co_json = el.char_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             // R7.32: emit cell_para_idx so aggregate_dump can split cell paragraphs
             let cpi_json = el.cell_paragraph_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            // R7.44: emit cell_row_idx / cell_col_idx so aggregate_dump can
+            // distinguish cells sharing (block_idx, cpi=0) — fixes the
+            // "千円千円千円千円" collapse.
+            let cri_json = el.cell_row_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            let cci_json = el.cell_col_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json).unwrap();
         }
         out.push_str("\n    ]}");
     }
