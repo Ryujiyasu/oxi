@@ -6753,7 +6753,20 @@ impl LayoutEngine {
                                 // `<w:lastRenderedPageBreak/>`. The row-split logic
                                 // uses this to force a page break before this element
                                 // (mid-cell LRPB respect for e3c545 cpi=81/N/M).
-                                if line_idx == 0 && frag_idx == 0 {
+                                //
+                                // R7.64 (Day 37, 2026-05-14): exclude cell-first paragraphs
+                                // (cell_para_counter == 0). In a multi-cell row that
+                                // Word split mid-cell, each cell's first paragraph can
+                                // carry an LRPB indicating "this cell continues here
+                                // after page break", not "split before this element".
+                                // ed025c balance sheet row 1: cells 1, 3 first paragraphs
+                                // had LRPB at p0r0 alongside cell 0 p32 LRPB (genuine
+                                // mid-cell split). Without this gate, cells 1, 3 p0
+                                // elements at y=row_top pulled split_y to row_top → all
+                                // row 1 content pushed to next page. Mirrors R7.58 gate
+                                // (mod.rs:6166) which excludes (ci==0, first_para, ri==0)
+                                // — extends exclusion to ALL cells' first paragraphs.
+                                if line_idx == 0 && frag_idx == 0 && cell_para_counter > 0 {
                                     let para_has_lrpb_on_run0 = para.runs.first()
                                         .map(|r| r.has_last_rendered_page_break)
                                         .unwrap_or(false);
