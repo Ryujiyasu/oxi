@@ -7078,7 +7078,29 @@ impl LayoutEngine {
                             // next page. Previously used elem_top < split_y,
                             // which kept the overflow-bottom line on current
                             // page. This matches d77a p6/p7 cell-paragraph split.
-                            let elem_bottom = elem.y + elem.height;
+                            //
+                            // R7.69 (Day 37 session 58, 2026-05-14): for text
+                            // elements, elem.y is glyph-top (= line-box top +
+                            // text_y_off) per mod.rs:4164, but elem.height is
+                            // line_height (line-box height). So elem.y +
+                            // elem.height = glyph_top + line_height overshoots
+                            // the actual line-box bottom by text_y_off. Word
+                            // checks line-box bottom against page_bottom; using
+                            // glyph_top + line_height pushes lines off-page that
+                            // would fit in Word. ed025c (7) at cursor_y=739.5,
+                            // font 10.5pt, lh=18, text_y_off=4.0 → glyph_y=743.5,
+                            // elem_bottom=761.5 > page_bottom 760.5 → moved to
+                            // p14. Correct line-box bottom = 739.5 + 18 = 757.5
+                            // ≤ 760.5 → fits on p13 (matches Word).
+                            // Recover text_y_off from elem.height (line_height)
+                            // and the font size carried in LayoutContent::Text.
+                            let text_y_off_recovered = if let LayoutContent::Text { font_size, .. } = &elem.content {
+                                let raw = (elem.height - *font_size).max(0.0) / 2.0;
+                                (raw * 2.0 + 0.5).floor() / 2.0
+                            } else {
+                                0.0
+                            };
+                            let elem_bottom = elem.y + elem.height - text_y_off_recovered;
                             if elem_bottom <= split_y + 0.1 {
                                 current_page_elems.push(elem);
                             } else {
