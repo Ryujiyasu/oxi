@@ -6988,10 +6988,21 @@ impl LayoutEngine {
                 // bottom (777.24) fits split_y=785.2 (page_bottom) and stays on current
                 // page; with pull-back, split_y becomes 765.62 → element goes overflow.
                 let row_elements = elements.split_off(elements_before_row);
+                // R7.70 (Day 37 session 58, 2026-05-15): pick the FIRST LRPB-marked
+                // element in document order (= cell-render order), not the min elem.y.
+                // ed025c row has 3 LRPB elements: (8) at y=761.5 (cell 0, correct
+                // break point), "× × ×" at y=743.5 (number-cell at (7)-position, in
+                // a different cell of same row), "１" at y=1463.5 (much later). The
+                // previous min-y rule picked × × × at 743.5 → split_y pulled below
+                // page_bottom → (7) overflowed mistakenly. Document-order picks
+                // cell 0's (8) at 761.5 first → split_y = page_bottom fallback (since
+                // 761.5 > page_bottom 760.5) → (7) stays. e3c545 cpi=81 path is
+                // unaffected because there it was the only LRPB in the row (single
+                // element → first == min).
                 let lrpb_split_y = row_elements.iter()
-                    .filter(|e| e.is_paragraph_start_with_lrpb && e.y > *cursor_y + 0.5)
+                    .find(|e| e.is_paragraph_start_with_lrpb && e.y > *cursor_y + 0.5)
                     .map(|e| e.y)
-                    .fold(f32::INFINITY, f32::min);
+                    .unwrap_or(f32::INFINITY);
                 let split_y = if lrpb_split_y.is_finite() && lrpb_split_y < page_bottom {
                     lrpb_split_y
                 } else {
