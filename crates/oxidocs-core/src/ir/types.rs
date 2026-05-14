@@ -1000,6 +1000,14 @@ pub struct ParagraphStyle {
     /// Text alignment within line (w:textAlignment): "top", "center", "baseline", "bottom", "auto"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<String>,
+    /// R7.63 (Day 36 part 10, 2026-05-14): true when text_alignment was inherited
+    /// from pPrDefault, false when set per-paragraph or via paragraph style chain.
+    /// text_y_offset_for_line uses this to gate the "baseline → offset=0" rule:
+    /// pPrDefault baseline applies document-wide and suppresses centering for all
+    /// paragraphs (e3c545 case); per-paragraph baseline does NOT suppress centering
+    /// (ed025c wi=827 case — only that one paragraph has it, breaking gap to wi=826).
+    #[serde(default)]
+    pub text_alignment_from_pprdefault: bool,
     /// Frame paragraph properties (w:framePr) — for drop caps and positioned paragraphs
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_pr: Option<FrameProperties>,
@@ -1085,6 +1093,7 @@ impl Default for ParagraphStyle {
             word_wrap: true,
             adjust_right_ind: true,
             text_alignment: None,
+            text_alignment_from_pprdefault: false,
             auto_space_de: true,
             auto_space_dn: true,
             frame_pr: None,

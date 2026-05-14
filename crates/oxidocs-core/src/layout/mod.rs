@@ -5758,7 +5758,20 @@ impl LayoutEngine {
                 // textAlignment="baseline" → Word P1 at top_margin + 0pt, not
                 // + (lh-fs)/2. Without this, all body paragraphs drift +5-6pt
                 // below Word.
-                if matches!(para_style.text_alignment.as_deref(), Some("baseline") | Some("top")) {
+                //
+                // R7.63 (Day 36 part 10, 2026-05-14): only suppress centering
+                // when the baseline/top setting was INHERITED FROM pPrDefault
+                // (document-wide). Per-paragraph override on a single paragraph
+                // (ed025c wi=827: explicit `<w:textAlignment w:val="baseline"/>`
+                // in pPr) should NOT disable centering — it's a glyph-alignment
+                // hint within the line, not a line-positioning override. Without
+                // this gate, ed025c wi=827 shifts up 4pt relative to wi=826,
+                // collapsing the line gap from 18pt to 14pt and cascading 148
+                // paras +1 / 69 paras +2 / 69 paras +3 in the downstream
+                // pagination.
+                if matches!(para_style.text_alignment.as_deref(), Some("baseline") | Some("top"))
+                    && para_style.text_alignment_from_pprdefault
+                {
                     return 0.0;
                 }
                 // Grid-snapped lines: text is vertically centered within the grid cell.

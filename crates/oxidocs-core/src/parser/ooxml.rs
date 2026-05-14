@@ -1549,6 +1549,13 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         // textAlignment (§17.3.1.35) inheritance from pPrDefault.
         if style.text_alignment.is_none() {
             style.text_alignment = doc_para.text_alignment.clone();
+            // R7.63: mark as inherited from pPrDefault so layout can distinguish
+            // document-wide baseline (e3c545: all paras get offset=0) from
+            // per-paragraph baseline (ed025c wi=827: only one para, must NOT
+            // suppress centering or its gap to wi=826 collapses by 4pt).
+            if style.text_alignment.is_some() {
+                style.text_alignment_from_pprdefault = true;
+            }
         }
     }
     // Inherit alignment from docDefaults pPrDefault (jc)
