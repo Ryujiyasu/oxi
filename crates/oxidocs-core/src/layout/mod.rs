@@ -4751,9 +4751,13 @@ impl LayoutEngine {
                 // when this compat flag is set, character_spacing is applied TWICE
                 // for CJK fullwidth chars (effective_cs = 2 * cs). Apply the extra
                 // cs here so per-char fragment advance reflects the doubled spacing.
+                // Day 37 (2026-05-14): EXCLUDE fitText runs — resolve_fit_text_runs
+                // already produces the FINAL effective cs (post-balance-doubling) so
+                // adding here would over-pump by another factor.
                 if self.balance_single_byte_double_byte_width
                     && crate::font::is_fullwidth(ch)
                     && !yakumono_compressed[char_index]
+                    && style.fit_text.is_none()
                 {
                     char_width += cs;
                 }
@@ -6462,8 +6466,19 @@ impl LayoutEngine {
                                 }
                                 // Session 56 Finding 3: balanceSingleByteDoubleByteWidth
                                 // doubles cs for CJK fullwidth chars.
+                                // Day 37 (2026-05-14): EXCLUDE fitText runs from balance
+                                // doubling. resolve_fit_text_runs (mod.rs:1408) computes the
+                                // per_em_cs as (target − natural) / denom_em — this value is
+                                // the FINAL effective cs that should be applied at render to
+                                // hit the target width. Applying balance doubling on top of
+                                // this doubled value over-expands by 2×, causing fitText
+                                // paragraphs to wrap at the cell boundary (ed025c "(2) ○○
+                                // 奨励金" wraps at "○○" because cw=10.5+21+21=52.5pt × 3 chars
+                                // = 157.5pt > first_line_wrap_w=170pt approximately. The
+                                // correct cs=21pt gives cw=31.5pt × 3 = 94.5pt which fits).
                                 let balance_extra_cs = if self.balance_single_byte_double_byte_width
                                     && crate::font::is_fullwidth(ch)
+                                    && run.style.fit_text.is_none()
                                 {
                                     cs
                                 } else {
@@ -7508,8 +7523,11 @@ impl LayoutEngine {
                 }
                 // Session 56 Finding 3: balanceSingleByteDoubleByteWidth doubles
                 // cs for CJK fullwidth chars (count_cell_lines for height estimation).
+                // Day 37 (2026-05-14): EXCLUDE fitText runs (cs already accounts for
+                // balance doubling via resolve_fit_text_runs). Mirrors cell renderer fix.
                 let balance_extra_cs = if self.balance_single_byte_double_byte_width
                     && crate::font::is_fullwidth(ch)
+                    && run.style.fit_text.is_none()
                 {
                     cs
                 } else {
