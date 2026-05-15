@@ -6190,9 +6190,30 @@ impl LayoutEngine {
                 }
                 found
             };
+            // R7.74 (Day 37, 2026-05-15): Word's implicit "table-start widow protection"
+            // for HEADING-style tables (single-row + single-cell, content longer
+            // than the row's available space). When such a table starts near the
+            // page bottom, Word pushes it entirely to the next page even without
+            // explicit keepNext/cantSplit. COM-confirmed on d4d126 T5 (25 paragraphs
+            // in 1 cell of 1 row); 04b88e's multi-row form tables do NOT have this
+            // implicit widow → restrict to single-row single-cell.
+            let is_single_row_single_cell = table.rows.len() == 1
+                && table.rows.get(0).map_or(false, |r| r.cells.len() == 1);
+            let widow_break_needed = row_idx == 0 && has_content && is_single_row_single_cell && {
+                let free_space = page_bottom - *cursor_y;
+                let widow_threshold = if let Some(pitch) = table_grid_pitch {
+                    pitch * 4.0
+                } else { 58.0 };
+                free_space > 0.0 && free_space < widow_threshold
+            };
+
+            // needs_row_split: only when overflow + table allows split.
+            // widow_break_needed overrides split — we want the whole table on next page.
             let needs_row_split = row_overflows && !row.cant_split && has_content
-                && (is_single_cell_row || has_lrpb_mid_row);
-            if (row_overflows || lrpb_row_should_break) && has_content && !needs_row_split {
+                && (is_single_cell_row || has_lrpb_mid_row)
+                && !widow_break_needed;
+
+            if (row_overflows || lrpb_row_should_break || widow_break_needed) && has_content && !needs_row_split {
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
