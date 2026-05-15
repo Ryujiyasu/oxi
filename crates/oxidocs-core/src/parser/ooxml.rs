@@ -1863,6 +1863,13 @@ fn parse_paragraph_properties(
                                     style.line_spacing = Some(lv / 20.0);
                                     style.line_spacing_rule = Some("atLeast".to_string());
                                 }
+                                _ if lv < 0.0 => {
+                                    // Word quirk (COM-confirmed 2026-05-15 on d4d126):
+                                    // negative w:line with lineRule="auto" (or missing) is
+                                    // treated as wdLineSpaceExactly with |val|/20 pt.
+                                    style.line_spacing = Some(lv.abs() / 20.0);
+                                    style.line_spacing_rule = Some("exact".to_string());
+                                }
                                 _ => {
                                     style.line_spacing = Some(lv / 240.0);
                                 }
@@ -2052,6 +2059,13 @@ fn parse_paragraph_properties(
                                     // At least: value in twips, convert to points
                                     style.line_spacing = Some(lv / 20.0);
                                     style.line_spacing_rule = Some("atLeast".to_string());
+                                }
+                                _ if lv < 0.0 => {
+                                    // Word quirk (COM-confirmed 2026-05-15 on d4d126):
+                                    // negative w:line with lineRule="auto" (or missing) is
+                                    // treated as wdLineSpaceExactly with |val|/20 pt.
+                                    style.line_spacing = Some(lv.abs() / 20.0);
+                                    style.line_spacing_rule = Some("exact".to_string());
                                 }
                                 _ => {
                                     // Auto: proportional, divide by 240

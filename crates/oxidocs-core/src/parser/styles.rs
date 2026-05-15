@@ -708,6 +708,12 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                         style.line_spacing = Some(lv / 20.0);
                         style.line_spacing_rule = Some("atLeast".to_string());
                     }
+                    _ if lv < 0.0 => {
+                        // R7.72: negative w:line with lineRule="auto" → exact mode |val|/20
+                        // COM-confirmed 2026-05-15 on d4d126.
+                        style.line_spacing = Some(lv.abs() / 20.0);
+                        style.line_spacing_rule = Some("exact".to_string());
+                    }
                     _ => {
                         style.line_spacing = Some(lv / 240.0);
                     }
@@ -1179,6 +1185,11 @@ fn parse_style_definition(
                                         style.line_spacing = Some(lv / 20.0);
                                         style.line_spacing_rule = Some("atLeast".to_string());
                                     }
+                                    _ if lv < 0.0 => {
+                                        // R7.72: negative w:line + auto → exact |val|/20
+                                        style.line_spacing = Some(lv.abs() / 20.0);
+                                        style.line_spacing_rule = Some("exact".to_string());
+                                    }
                                     _ => {
                                         style.line_spacing = Some(lv / 240.0);
                                     }
@@ -1390,6 +1401,11 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                                                     Some("atLeast") => {
                                                         ps.line_spacing = Some(lv / 20.0);
                                                         ps.line_spacing_rule = Some("atLeast".to_string());
+                                                    }
+                                                    _ if lv < 0.0 => {
+                                                        // R7.72: negative w:line + auto → exact |val|/20
+                                                        ps.line_spacing = Some(lv.abs() / 20.0);
+                                                        ps.line_spacing_rule = Some("exact".to_string());
                                                     }
                                                     _ => {
                                                         ps.line_spacing = Some(lv / 240.0);
