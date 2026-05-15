@@ -6275,6 +6275,10 @@ impl LayoutEngine {
                 // R7.32: count Paragraph blocks within this cell so each cell
                 // paragraph can be distinguished in the dump output.
                 let mut cell_para_counter: usize = 0;
+                // R7.73: track whether the immediately-previous cell paragraph
+                // carried a `<w:lastRenderedPageBreak/>` on a non-run-0 run.
+                // Reset to false at each cell start.
+                let mut prev_cell_para_had_mid_lrpb: bool = false;
                 if !is_vmerge_continue {
                 for block in &cell.blocks {
                 // Clip content that overflows exact row height
@@ -6785,7 +6789,18 @@ impl LayoutEngine {
                                     let para_has_lrpb_on_run0 = para.runs.first()
                                         .map(|r| r.has_last_rendered_page_break)
                                         .unwrap_or(false);
-                                    if para_has_lrpb_on_run0 {
+                                    // R7.73 (Day 37 session 58, 2026-05-15):
+                                    // also mark when the IMMEDIATE PREVIOUS
+                                    // paragraph in this cell had LRPB on a
+                                    // non-run-0 (mid-paragraph LRPB indicates
+                                    // Word split mid-paragraph; closest
+                                    // paragraph-boundary approximation is to
+                                    // pull-back at the start of this NEXT
+                                    // paragraph). d4d126 wi=291 has LRPB on
+                                    // run 1, wi=292 should be pulled to next
+                                    // page. COM-confirmed wi=291 split is
+                                    // current (not stale).
+                                    if para_has_lrpb_on_run0 || prev_cell_para_had_mid_lrpb {
                                         cell_el.is_paragraph_start_with_lrpb = true;
                                     }
                                 }
@@ -6797,6 +6812,11 @@ impl LayoutEngine {
                         content_h += effective_space_after.unwrap_or(0.0);
                         // R7.32: increment after each Paragraph block in the cell
                         cell_para_counter += 1;
+                        // R7.73: track if THIS paragraph had LRPB on a non-run-0
+                        // run, so the NEXT paragraph in this cell can be marked
+                        // as a mid-cell row-split anchor.
+                        prev_cell_para_had_mid_lrpb = para.runs.iter().enumerate().any(|(i, r)|
+                            i > 0 && r.has_last_rendered_page_break);
 
                         // Render shapes attached to this paragraph (e.g. bracketPair)
                         // pos.y = offset from paragraph start (Word COM confirmed)
