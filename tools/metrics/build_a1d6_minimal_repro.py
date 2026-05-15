@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 
 SRC = 'tools/golden-test/documents/docx/a1d6e4efa2e7_tokumei_08_01-4.docx'
 OUT_V1 = 'c:/tmp/minimal_a1d6_v1.docx'
+OUT_V2 = 'c:/tmp/minimal_a1d6_v2.docx'  # T5 = R1-R3 only (test row pitch hypothesis)
 
 NS = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
@@ -46,7 +47,7 @@ def main():
         names = zin.namelist()
         contents = {n: zin.read(n) for n in names}
 
-    # Modify document.xml
+    # === v1: T5 R27-R30 を削除 ===
     raw_doc = contents['word/document.xml'].decode('utf-8')
     tree = ET.fromstring(raw_doc)
     tables = tree.findall('.//w:tbl', NS)
@@ -54,22 +55,42 @@ def main():
     rows = T5.findall('w:tr', NS)
     print(f'Original T5 has {len(rows)} rows')
 
-    # v1: R27-R30 削除 (1-based, indices 26..29)
-    for ri in range(29, 25, -1):  # 反転して remove
+    for ri in range(29, 25, -1):
         if ri < len(rows):
             T5.remove(rows[ri])
     new_rows = T5.findall('w:tr', NS)
     print(f'v1 T5 has {len(new_rows)} rows after deletion')
 
     new_xml = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
-    contents['word/document.xml'] = new_xml
+    contents_v1 = dict(contents)
+    contents_v1['word/document.xml'] = new_xml
 
-    # Write v1 docx
     os.makedirs(os.path.dirname(OUT_V1), exist_ok=True)
     with zipfile.ZipFile(OUT_V1, 'w', zipfile.ZIP_DEFLATED) as zout:
         for n in names:
-            zout.writestr(n, contents[n])
+            zout.writestr(n, contents_v1[n])
     print(f'Wrote {OUT_V1}')
+
+    # === v2: T5 R1-R3 だけ残す (仮説 5 検証用) ===
+    raw_doc2 = contents['word/document.xml'].decode('utf-8')
+    tree2 = ET.fromstring(raw_doc2)
+    tables2 = tree2.findall('.//w:tbl', NS)
+    T5_v2 = tables2[4]
+    rows2 = T5_v2.findall('w:tr', NS)
+    # R4-R30 削除 (3 行だけ残す)
+    for ri in range(len(rows2)-1, 2, -1):
+        T5_v2.remove(rows2[ri])
+    new_rows2 = T5_v2.findall('w:tr', NS)
+    print(f'v2 T5 has {len(new_rows2)} rows (expect 3)')
+
+    new_xml2 = ET.tostring(tree2, encoding='utf-8', xml_declaration=True)
+    contents_v2 = dict(contents)
+    contents_v2['word/document.xml'] = new_xml2
+
+    with zipfile.ZipFile(OUT_V2, 'w', zipfile.ZIP_DEFLATED) as zout:
+        for n in names:
+            zout.writestr(n, contents_v2[n])
+    print(f'Wrote {OUT_V2}')
 
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
