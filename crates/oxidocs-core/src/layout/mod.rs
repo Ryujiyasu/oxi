@@ -2340,8 +2340,41 @@ impl LayoutEngine {
                     }
 
                     if is_floating {
-                        // Floating tables don't advance the text flow
-                        cursor_y = saved_cursor_y;
+                        // R7.76 (Session 61): wrap-below mechanism for vertAnchor=text
+                        // floating tables.
+                        // Two sub-cases per Session 60 [[session60-word-floating-table-wrap-mechanism]]:
+                        //   (a) pages_added > 0 (table spilled to new page) — cursor_y =
+                        //       saved_cursor_y is wrong because saved was on the OLD page.
+                        //       Body must follow to the page where the table ended and
+                        //       wrap below it. This was the missing case in R7.75 v3.
+                        //   (b) pages_added == 0 + wide table — Session 60's same-page
+                        //       wrap-below case (R7.75 v3 implementation).
+                        // Spatial gate `(pos_x_zero || h_anchor_page)` retained from v3
+                        // — excludes ed025c's tblpX!=0 horz=margin floating tables.
+                        let pages_added = pages.len() - pages_before;
+                        let table_w_pt: f32 = table.grid_columns.iter().sum();
+                        let v_anchor_text = table.style.position.as_ref()
+                            .map_or(false, |p| p.v_anchor.as_deref() == Some("text"));
+                        let pos_x_zero = table.style.position.as_ref()
+                            .map_or(false, |p| p.x.abs() < 0.5);
+                        let h_anchor_page = table.style.position.as_ref()
+                            .map_or(false, |p| p.h_anchor.as_deref() == Some("page"));
+                        let wide_table = table_w_pt > content_width - 30.0;
+                        let needs_wrap_below = v_anchor_text
+                            && wide_table
+                            && (pos_x_zero || h_anchor_page);
+
+                        if needs_wrap_below && pages_added > 0 {
+                            current_page_idx += pages_added;
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            cursor_y = candidate_y_bottom + 1.5;
+                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                        } else if needs_wrap_below {
+                            cursor_y = candidate_y_bottom + 1.5;
+                        } else {
+                            // Original behavior: floating tables don't advance text flow
+                            cursor_y = saved_cursor_y;
+                        }
                     } else {
                         let pages_added = pages.len() - pages_before;
                         if pages_added > 0 {
