@@ -4408,6 +4408,14 @@ impl LayoutEngine {
                 // are anchored to topMargin. grid_line(n) = ((margin_tw + n*pitch_tw) / 10 + 1) * 10
                 // (always ceil to next 10tw boundary). cursor advances to grid_line(K + cells)
                 // where K = (cursor_tw - margin_tw) / pitch_tw (integer division).
+                //
+                // R56 attempt (2026-05-17, reverted): cursor-relative advance
+                // (cur + cells*pitch) fixed M6 d1e8 minimal repro pi=1 +5.5pt
+                // mid-cell advance bug but REGRESSED Phase 1 b837 PASS->FAIL and
+                // Phase 2 d1e8 -0.1083, b837 -0.1006. The absolute-grid formula
+                // is load-bearing for compensating bugs in other LM2 docs. Same
+                // trap as Session 64/68 falsifications. See
+                // [[session69-r56-lm2-cursor-relative-falsified]].
                 let pitch_tw_i = (grid_pitch.unwrap() * 20.0).round() as i32;
                 let margin_tw = (page.margin.top * 20.0).round() as i32;
                 let cells = (line_height * 20.0 / pitch_tw_i as f32).round().max(1.0) as i32;
