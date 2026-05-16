@@ -7379,10 +7379,21 @@ impl LayoutEngine {
                 let mut remaining = next_page_elems;
                 let mut current_split_base = page_top;
                 loop {
-                    // Find the maximum Y in remaining elements
+                    // Find the maximum Y in remaining elements.
+                    // R7.77 (Session 62, 2026-05-16): exclude PresetShape elements
+                    // from the max_y check. PresetShapes (e.g. 3a4f9f Shape A
+                    // cy=686.6pt with wrap=wrapNone, H position off-page) are
+                    // overlays — they don't reserve text flow space in Word. When
+                    // their height exceeds page content_height (657pt), they cause
+                    // the row-split loop to iterate indefinitely (or push extra
+                    // pages until the shape "fits"), driving Sub-jump 3b in 3a4f9f
+                    // (wi=1042→1045 +1 page cascade). The shape itself is still
+                    // partitioned and rendered; only its height is excluded from
+                    // the page-fit determination.
                     let max_y = remaining.iter().map(|e| {
                         match &e.content {
                             LayoutContent::TableBorder { y2, .. } => *y2,
+                            LayoutContent::PresetShape { .. } => e.y, // ignore height
                             _ => e.y + e.height,
                         }
                     }).fold(0.0_f32, f32::max);
