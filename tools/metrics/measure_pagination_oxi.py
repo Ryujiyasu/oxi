@@ -78,7 +78,26 @@ def aggregate_dump(dump: dict) -> dict:
                 # Pseudo-key: cluster by y-line (0.5pt) — matches cascade tool
                 key = ("y", round(el["y"] * 2) / 2)
             else:
-                key = (pi, cpi, cri, cci)
+                # 2026-05-16 (Session 62, R7.77 post): nested-table disambiguation.
+                # 3a4f9f p24 has 4 shift-variant nested tables under one outer
+                # Block::Table (pi=186); cells from different variants share
+                # (cri=0 cci=0) but appear at y=122, 232, 324, 416. Without
+                # disambiguation, the matcher collapses them into one record with
+                # capacity=1, producing false +3 deltas + 30 unmatched on 3a4f9f.
+                # Conditional disambiguation: if an existing slot with the same
+                # base key has y > 60pt away from current element, create a new
+                # slot with an instance suffix. 60pt threshold is wider than
+                # typical short-cell wrap (< 5 lines = 87pt) is OK for most cases
+                # but disambiguates separated table instances (>60pt gap).
+                base_key = (pi, cpi, cri, cci)
+                key = base_key
+                instance = 0
+                while key in groups:
+                    existing_y = groups[key]["y_min"]
+                    if abs(el["y"] - existing_y) <= 60:
+                        break  # close enough — same cell
+                    instance += 1
+                    key = base_key + (instance,)
             slot = groups.setdefault(key, {
                 "para_idx": pi,
                 "text_parts": [],
