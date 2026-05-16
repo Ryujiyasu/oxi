@@ -5,6 +5,14 @@ Phase 2 gate of the redesigned merge methodology (CLAUDE.md §Merge gate):
   - Aggregate: mean IoU per doc + cross-doc mean
   - Phase 2 → Phase 3 transition: mean IoU ≥ 0.99 sustained 5+ commits
 
+R54 (2026-05-17): per-(in_table) median_dy bimodal repair. Word reports
+table cell paragraph y at a different convention than body paragraphs
+(typically +0.5pt offset, observable across 7+ baseline docs). Computing
+a single doc-wide median leaves the minority cohort with systematic
+±0.5pt residual that is convention noise, not real y misalignment.
+Splitting median by in_table flag removes this artifact; cross-baseline
+gain mean_iou 0.8535 → 0.8643 (+0.0108), PASS 12/55 → 15/55.
+
 Initial implementation: 1D IoU on paragraph y-range (start_y, end_y).
 Y-range is more informative than full bbox for body paragraphs (x is
 usually fixed by margins). Future extensions: full-bbox for table cells,
@@ -223,20 +231,36 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
             "word_page": wpage,
             "word_y": wp["y"],
             "word_h": wp["h"],
+            "in_table": bool(wp.get("in_table", False)),
             "oxi_page": opage,
             "oxi_y": orec["y"],
             "oxi_h": orec["h"],
             "matched": True,
         })
 
-    # Compute per-doc systematic dy (median across same-page matches)
+    # R54 (2026-05-17): per-(in_table) median_dy bimodal repair.
+    # See module docstring for motivation.
     same_page = [m for m in raw_matches
                  if m["matched"] and m.get("oxi_page") == m["word_page"]]
-    if same_page:
-        dys = sorted(m["oxi_y"] - m["word_y"] for m in same_page)
-        median_dy = dys[len(dys) // 2]
-    else:
-        median_dy = 0.0
+    same_page_body = [m for m in same_page if not m.get("in_table")]
+    same_page_tab = [m for m in same_page if m.get("in_table")]
+
+    def _median(xs: list[float]) -> float:
+        if not xs:
+            return 0.0
+        xs_sorted = sorted(xs)
+        return xs_sorted[len(xs_sorted) // 2]
+
+    median_dy_body = _median([m["oxi_y"] - m["word_y"] for m in same_page_body])
+    median_dy_tab = _median([m["oxi_y"] - m["word_y"] for m in same_page_tab])
+    # Backward-compat doc-wide median (reported but not used for IoU)
+    median_dy = _median([m["oxi_y"] - m["word_y"] for m in same_page])
+    # Fallback: if one cohort is missing, use the other so we don't fall
+    # back to 0.0 (which would inflate measured residual)
+    if not same_page_body and same_page_tab:
+        median_dy_body = median_dy_tab
+    if not same_page_tab and same_page_body:
+        median_dy_tab = median_dy_body
 
     # Build final matches with both raw and adjusted IoU
     matches = []
@@ -253,12 +277,13 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
             continue
         wy, wh = m["word_y"], m["word_h"]
         oy, oh = m["oxi_y"], m["oxi_h"]
+        offset = median_dy_tab if m.get("in_table") else median_dy_body
         # R53: position-focused IoU is the Phase 2 gate metric. Raw and
         # adjusted yrange-IoU kept for diagnosis.
         if m["oxi_page"] == m["word_page"]:
             iou_raw = yrange_iou(wy, wy + wh, oy, oy + oh)
-            iou_yrange_adj = yrange_iou(wy, wy + wh, oy - median_dy, oy - median_dy + oh)
-            iou_pos = position_iou(wy, wh, oy - median_dy, oh)
+            iou_yrange_adj = yrange_iou(wy, wy + wh, oy - offset, oy - offset + oh)
+            iou_pos = position_iou(wy, wh, oy - offset, oh)
         else:
             iou_raw = 0.0
             iou_yrange_adj = 0.0
@@ -268,6 +293,7 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
             "word_page": m["word_page"],
             "word_y": round(wy, 2),
             "word_h": round(wh, 2),
+            "in_table": m.get("in_table", False),
             "oxi_page": m["oxi_page"],
             "oxi_y": round(oy, 2),
             "oxi_h": round(oh, 2),
@@ -298,6 +324,10 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
         "n_matched": n_matched,
         "n_unmatched": len(matches) - n_matched,
         "median_dy": round(median_dy, 2),
+        "median_dy_body": round(median_dy_body, 2),
+        "median_dy_table": round(median_dy_tab, 2),
+        "n_same_page_body": len(same_page_body),
+        "n_same_page_table": len(same_page_tab),
         # Primary gate metric: position-focused IoU (R53, 2026-04-29).
         # Decoupled from height rendering convention (Oxi grid-pitch vs
         # Word natural). Measures real y-position alignment.
