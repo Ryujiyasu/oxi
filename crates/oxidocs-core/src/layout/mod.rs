@@ -4404,25 +4404,41 @@ impl LayoutEngine {
                     _ => true,
                 };
             if is_lm2_single {
-                // COM-confirmed (2026-04-14, 1ec1 24/24 match): linesAndChars grid lines
-                // are anchored to topMargin. grid_line(n) = ((margin_tw + n*pitch_tw) / 10 + 1) * 10
-                // (always ceil to next 10tw boundary). cursor advances to grid_line(K + cells)
-                // where K = (cursor_tw - margin_tw) / pitch_tw (integer division).
+                // R56b (2026-05-17): hybrid cursor advance. Cell-aligned cursor
+                // entries use the absolute formula (drift-free for uniform-paragraph
+                // docs like b837 / 1ec1). Mid-cell entries (after irregular line-
+                // height paragraph that took non-LM2 path) use cursor-relative
+                // with PROPER ceiling — fixes d1e8 wi=31->wi=32 3pt advance bug.
                 //
-                // R56 attempt (2026-05-17, reverted): cursor-relative advance
-                // (cur + cells*pitch) fixed M6 d1e8 minimal repro pi=1 +5.5pt
-                // mid-cell advance bug but REGRESSED Phase 1 b837 PASS->FAIL and
-                // Phase 2 d1e8 -0.1083, b837 -0.1006. The absolute-grid formula
-                // is load-bearing for compensating bugs in other LM2 docs. Same
-                // trap as Session 64/68 falsifications. See
-                // [[session69-r56-lm2-cursor-relative-falsified]].
+                // R56 original attempt failed because `(X/10+1)*10` formula adds
+                // 10tw extra when X is on 10tw boundary; cursor-relative with
+                // cur on 10tw boundary frequently triggered this. Proper ceiling
+                // `((X+9)/10)*10` correctly returns X when X is on boundary.
+                //
+                // See [[session69-lm2-unified-refactor-groundwork]].
                 let pitch_tw_i = (grid_pitch.unwrap() * 20.0).round() as i32;
                 let margin_tw = (page.margin.top * 20.0).round() as i32;
                 let cells = (line_height * 20.0 / pitch_tw_i as f32).round().max(1.0) as i32;
                 let cur_tw = (*cursor_y * 20.0).round() as i32;
-                let k = ((cur_tw - margin_tw).max(0)) / pitch_tw_i;
-                let target_n = k + cells;
-                let target_tw = ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10;
+                let offset = (cur_tw - margin_tw).max(0);
+                let cell_remainder = offset % pitch_tw_i;
+                // R56c: distinguish "slightly past cell start" (uniform LM2
+                // after 10tw ceiling, e.g. pitch=292 cur=margin+1*pitch+5tw)
+                // from "truly mid-cell" (after irregular non-LM2 paragraph).
+                // Threshold: <10tw or >pitch-10tw means within ceiling-noise
+                // of cell boundary → use absolute (drift-free).
+                let cell_aligned = cell_remainder < 10 || cell_remainder > pitch_tw_i - 10;
+                let target_tw = if cell_aligned {
+                    // Cell-aligned (or near-aligned): pre-R56 absolute formula
+                    let k = offset / pitch_tw_i;
+                    let target_n = k + cells;
+                    ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10
+                } else {
+                    // Mid-cell from irregular predecessor: cursor-relative +
+                    // proper ceiling (no 10tw over-shoot)
+                    let raw = cur_tw + cells * pitch_tw_i;
+                    if raw % 10 == 0 { raw } else { (raw / 10 + 1) * 10 }
+                };
                 *cursor_y = target_tw as f32 / 20.0;
                 cumul_line_idx += cells as usize;
             } else {
