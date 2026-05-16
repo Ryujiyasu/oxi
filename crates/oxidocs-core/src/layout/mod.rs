@@ -5477,7 +5477,20 @@ impl LayoutEngine {
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
             (Some("atLeast"), Some(val)) => {
-                // COM-confirmed: atLeast = max(grid_snap(natural), specified)
+                // R55 (2026-05-17): `line=0 atLeast` uses NATURAL line height
+                // without grid-snap. COM-confirmed via L1-L8 minimal repros:
+                //   L1 (10.5pt line=0 atLeast): gap=13.5pt  (natural, no snap)
+                //   L2 (14pt   line=0 atLeast): gap=18pt    (natural ≈18.75)
+                //   L3 (10pt   line=0 atLeast): gap=12.75pt (natural)
+                //   L4 (12pt   line=0 atLeast): gap=15.75pt (natural)
+                //   L5 (10.5pt line=240 atLeast): gap=18pt  (snap to grid, then max)
+                //   L8 (mixed  line=0 atLeast): each para uses its OWN natural
+                // Only 2 baseline docs use line=0 atLeast: e201 + d1e8 (both
+                // Phase 2 bottom-band with accumulating Y drift, Phase 1 PASS).
+                if val == 0.0 {
+                    return base;
+                }
+                // Non-zero val: original behavior (snap natural, then max with val)
                 let snapped = if snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
@@ -5713,7 +5726,13 @@ impl LayoutEngine {
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
             (Some("atLeast"), Some(val)) => {
-                // COM-confirmed: atLeast = max(grid_snap(natural), specified)
+                // R55 (2026-05-17): `line=0 atLeast` uses NATURAL line height
+                // without grid-snap. COM-confirmed via L1-L8 minimal repros.
+                // See line_height_inner counterpart for full reasoning.
+                if val == 0.0 {
+                    return base;
+                }
+                // Non-zero val: original behavior (snap natural, then max with val)
                 let snapped = if para_style.snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
