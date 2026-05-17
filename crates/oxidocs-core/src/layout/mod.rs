@@ -846,12 +846,19 @@ pub struct LayoutElement {
     /// Oxi renders them visually past page 3's bottom; this flag lifts them
     /// to page 4 in the pagination output.
     pub vmerge_restart_overflow_to_next_page: bool,
+    /// Session 72 Phase A (2026-05-17): vertical offset from LINE BOX TOP
+    /// to glyph top. Currently `y` already includes this offset (y = line_box_top
+    /// + text_y_off). After Session 75, `y` will be LINE BOX TOP and renderers
+    /// will add this at draw time. Populated by body line emit (mod.rs ~4197)
+    /// and table cell emit (mod.rs ~6840) for text elements; 0.0 for non-text
+    /// elements. See [[session71-y-convention-refactor-design]].
+    pub text_y_off: f32,
 }
 
 impl LayoutElement {
     /// Create a non-text element (border, shading, image, etc.) with no source indices.
     fn new(x: f32, y: f32, width: f32, height: f32, content: LayoutContent) -> Self {
-        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false, vmerge_restart_overflow_to_next_page: false }
+        Self { x, y, width, height, content, paragraph_index: None, run_index: None, char_offset: None, cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false, vmerge_restart_overflow_to_next_page: false, text_y_off: 0.0 }
     }
 
     /// Create a text element with source location for hit testing.
@@ -859,7 +866,7 @@ impl LayoutElement {
             para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
         Self { x, y, width, height, content,
                paragraph_index: Some(para_idx), run_index: Some(run_idx), char_offset: Some(char_offset),
-               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false, vmerge_restart_overflow_to_next_page: false }
+               cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, is_paragraph_start_with_lrpb: false, vmerge_restart_overflow_to_next_page: false, text_y_off: 0.0 }
     }
 }
 
@@ -4214,6 +4221,8 @@ impl LayoutEngine {
                         },
                         text_scale: frag.style.text_scale.unwrap_or(100.0),
                 });
+                // Session 72 Phase A: populate text_y_off (y still includes it).
+                el.text_y_off = text_y_off + baseline_adjust + vert_offset;
                 if let Some(pi) = body_para_index {
                     el.paragraph_index = Some(pi);
                     el.run_index = Some(frag.run_index);
@@ -4382,6 +4391,8 @@ impl LayoutEngine {
                             text_scale: 100.0,
                         },
                     );
+                    // Session 72 Phase A: populate text_y_off (y still includes it).
+                    el.text_y_off = text_y_off;
                     el.paragraph_index = Some(pi);
                     elements.push(el);
                 }
@@ -6798,7 +6809,7 @@ impl LayoutEngine {
                                 if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
                                     let list_indent = para.style.list_indent.unwrap_or(18.0);
                                     let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
-                                    let marker_el = LayoutElement::new(
+                                    let mut marker_el = LayoutElement::new(
                                         cell_x + pad_l + line_indent - list_indent,
                                         content_h + cell_text_y_off,
                                         mk_w,
@@ -6819,6 +6830,8 @@ impl LayoutEngine {
                                             text_scale: 100.0,
                                         },
                                     );
+                                    // Session 72 Phase A: populate text_y_off.
+                                    marker_el.text_y_off = cell_text_y_off;
                                     cell_elements.push(marker_el);
                                 }
                             }
@@ -6852,6 +6865,8 @@ impl LayoutEngine {
                                         field_type: None,
                                         text_scale: *ts,
                                 });
+                                // Session 72 Phase A: populate text_y_off (y still includes it).
+                                cell_el.text_y_off = cell_text_y_off;
                                 // Attribute to the table's source block index so diff tools
                                 // can localize cell text. Without this, para_idx is None and
                                 // docs with many tables produce unusable --dump-layout output.
