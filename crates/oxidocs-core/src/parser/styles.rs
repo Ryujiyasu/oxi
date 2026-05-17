@@ -767,6 +767,42 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
             }
             style.snap_to_grid = enabled;
         }
+        "autoSpaceDE" => {
+            // Session 85 fix: parse autoSpaceDE in STYLE definitions (was missing).
+            // tokumei_08_01 series uses style "ac" with <w:autoSpaceDE w:val="0"/>;
+            // without this parse, the style stored auto_space_de=true (default) and
+            // paragraph-level pStyle inheritance silently used true. Result: 4 ASCII/CJK
+            // boundary chars × 2.5pt = 10pt extra per line → 36-char paragraphs wrap to
+            // 35+1 in Oxi vs 1-line in Word (a1d6 p4 direction-flip cause).
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                }
+            }
+            style.auto_space_de = enabled;
+        }
+        "autoSpaceDN" => {
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                }
+            }
+            style.auto_space_dn = enabled;
+        }
+        "wordWrap" => {
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                }
+            }
+            style.word_wrap = enabled;
+        }
         "pageBreakBefore" => {
             style.page_break_before = true;
         }
@@ -1241,6 +1277,47 @@ fn parse_style_definition(
                                 }
                             }
                             style.snap_to_grid = enabled;
+                        }
+                        // Session 85 fix: parse autoSpaceDE/autoSpaceDN/wordWrap in
+                        // STYLE definitions. Previously parse_style_definition only
+                        // handled snapToGrid + widowControl among the CJK formatting
+                        // group, silently losing autoSpaceDE=0 settings on styles like
+                        // "ac" used by tokumei_08_01 series (a1d6/d4d126/de6e/22 docs).
+                        // Result: paragraphs using <w:pStyle w:val="ac"/> retained
+                        // default auto_space_de=true → 4 ASCII/CJK boundary chars ×
+                        // 2.5pt = 10pt extra per line → line wrap overflow.
+                        // CR9 verification: paragraph with BOTH pStyle ac AND direct
+                        // pPr autoSpaceDE=0 fits 36 chars matching Word; CR6 with only
+                        // pStyle ac fits 35 chars → style parser bug confirmed.
+                        "autoSpaceDE" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                            }
+                            style.auto_space_de = enabled;
+                        }
+                        "autoSpaceDN" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                            }
+                            style.auto_space_dn = enabled;
+                        }
+                        "wordWrap" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                            }
+                            style.word_wrap = enabled;
                         }
                         "pageBreakBefore" => {
                             style.page_break_before = true;

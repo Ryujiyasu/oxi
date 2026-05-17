@@ -1495,6 +1495,16 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if !ds.snap_to_grid {
                 style.snap_to_grid = false;
             }
+            // Session 85 fix: inherit auto_space_de from style (false overrides
+            // default true). Mirrors snap_to_grid pattern. Confirmed via CR9
+            // minimal repro: when paragraph has BOTH direct pPr autoSpaceDE=0
+            // AND pStyle ac (also autoSpaceDE=0), Oxi fits 36 chars matching
+            // Word. CR6 (pStyle ac only) fits 35 chars → pStyle inheritance
+            // for auto_space_de was broken. tokumei_08_01 series (a1d6/d4d126/
+            // de6e/etc, 22 baseline docs) uses style "ac" with autoSpaceDE=0.
+            if !ds.auto_space_de {
+                style.auto_space_de = false;
+            }
         }
     }
 
