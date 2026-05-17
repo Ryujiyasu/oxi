@@ -4201,7 +4201,10 @@ impl LayoutEngine {
                 let _ = line_max_ascent;
                 let _ = frag_ascent;
 
-                let mut el = LayoutElement::new(x, *cursor_y + text_y_off + baseline_adjust + vert_offset, adjusted_width, line_height, LayoutContent::Text {
+                // Session 75 Phase D (2026-05-17): y is LINE BOX TOP, renderer adds
+                // text_y_off + baseline_adjust + vert_offset at draw time. See
+                // memory/session71_y_convention_refactor_design.md.
+                let mut el = LayoutElement::new(x, *cursor_y, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -4370,9 +4373,10 @@ impl LayoutEngine {
             // empty body paragraphs (header_page_number_01, footer_complex_01).
             if line.fragments.is_empty() {
                 if let Some(pi) = body_para_index {
+                    // Session 75 Phase D: y is LINE BOX TOP; renderer adds text_y_off.
                     let mut el = LayoutElement::new(
                         line_x,
-                        *cursor_y + text_y_off,
+                        *cursor_y,
                         0.0,
                         line_height,
                         LayoutContent::Text {
@@ -6809,9 +6813,10 @@ impl LayoutEngine {
                                 if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
                                     let list_indent = para.style.list_indent.unwrap_or(18.0);
                                     let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                                    // Session 75 Phase D: y is LINE BOX TOP; renderer adds cell_text_y_off.
                                     let mut marker_el = LayoutElement::new(
                                         cell_x + pad_l + line_indent - list_indent,
-                                        content_h + cell_text_y_off,
+                                        content_h,
                                         mk_w,
                                         lh,
                                         LayoutContent::Text {
@@ -6850,7 +6855,8 @@ impl LayoutEngine {
                                         } else { 0.0 }
                                     } else { 0.0 }
                                 } else { 0.0 };
-                                let mut cell_el = LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h + cell_text_y_off, adj_w, lh, LayoutContent::Text {
+                                // Session 75 Phase D: y is LINE BOX TOP; renderer adds cell_text_y_off.
+                                let mut cell_el = LayoutElement::new(cell_x + pad_l + line_indent + align_offset + rx, content_h, adj_w, lh, LayoutContent::Text {
                                         text: text.clone(),
                                         font_size: *fs,
                                         font_family: font_family.clone(),
@@ -7222,28 +7228,12 @@ impl LayoutEngine {
                             // which kept the overflow-bottom line on current
                             // page. This matches d77a p6/p7 cell-paragraph split.
                             //
-                            // R7.69 (Day 37 session 58, 2026-05-14): for text
-                            // elements, elem.y is glyph-top (= line-box top +
-                            // text_y_off) per mod.rs:4164, but elem.height is
-                            // line_height (line-box height). So elem.y +
-                            // elem.height = glyph_top + line_height overshoots
-                            // the actual line-box bottom by text_y_off. Word
-                            // checks line-box bottom against page_bottom; using
-                            // glyph_top + line_height pushes lines off-page that
-                            // would fit in Word. ed025c (7) at cursor_y=739.5,
-                            // font 10.5pt, lh=18, text_y_off=4.0 → glyph_y=743.5,
-                            // elem_bottom=761.5 > page_bottom 760.5 → moved to
-                            // p14. Correct line-box bottom = 739.5 + 18 = 757.5
-                            // ≤ 760.5 → fits on p13 (matches Word).
-                            // Recover text_y_off from elem.height (line_height)
-                            // and the font size carried in LayoutContent::Text.
-                            let text_y_off_recovered = if let LayoutContent::Text { font_size, .. } = &elem.content {
-                                let raw = (elem.height - *font_size).max(0.0) / 2.0;
-                                (raw * 2.0 + 0.5).floor() / 2.0
-                            } else {
-                                0.0
-                            };
-                            let elem_bottom = elem.y + elem.height - text_y_off_recovered;
+                            // Session 75 Phase D (2026-05-17): elem.y is now
+                            // LINE BOX TOP (was glyph_top = LBT + text_y_off
+                            // pre-Phase-D). So elem.y + elem.height = line_box
+                            // bottom directly, no recovery needed. Replaces the
+                            // R7.69 text_y_off_recovered workaround.
+                            let elem_bottom = elem.y + elem.height;
                             if elem_bottom <= split_y + 0.1 {
                                 current_page_elems.push(elem);
                             } else {

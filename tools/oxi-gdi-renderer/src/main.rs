@@ -141,6 +141,12 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     oxidocs_core::layout::LayoutContent::Text {
                         text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, text_scale, ..
                     } => {
+                        // Session 75 Phase D (2026-05-17): elem.y is LINE BOX TOP;
+                        // glyph_y = LBT + text_y_off is where TextOutW/underline/
+                        // strikethrough/highlight should draw to preserve pre-Phase-D
+                        // pixel positions. See memory/session71_y_convention_refactor_design.md.
+                        let text_y_off_px = (elem.text_y_off as f64 * scale).round() as i32;
+                        let glyph_y = y + text_y_off_px;
                         let fs = (*font_size as f64 * scale).round() as i32;
                         // 2026-04-19: Apply horizontal text scale (OOXML w:w).
                         // CreateFontW lfWidth=0 → default aspect; positive value → specified glyph width.
@@ -176,7 +182,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                 }
                             };
                             let hl_brush = CreateSolidBrush(hl_rgb);
-                            let r = RECT { left: x, top: y, right: x + ew, bottom: y + eh };
+                            // Phase D: highlight tracks glyph (not line box) to preserve pre-Phase-D pixels.
+                            let r = RECT { left: x, top: glyph_y, right: x + ew, bottom: glyph_y + eh };
                             FillRect(mem_dc, &r, hl_brush);
                             let _ = DeleteObject(hl_brush);
                         }
@@ -206,7 +213,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                         // Draw text
                         let text_wide: Vec<u16> = text.encode_utf16().collect();
-                        TextOutW(mem_dc, x, y, &text_wide);
+                        TextOutW(mem_dc, x, glyph_y, &text_wide);
 
                         // Reset character extra
                         if cs_px != 0 {
@@ -234,14 +241,14 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             let old_pen = SelectObject(mem_dc, pen);
                             let is_double = underline_style.as_deref() == Some("double");
                             if is_double {
-                                let ul_y1 = y + ascent + ul_offset;
+                                let ul_y1 = glyph_y + ascent + ul_offset;
                                 let ul_y2 = ul_y1 + ul_size + 2;
                                 MoveToEx(mem_dc, x, ul_y1, None);
                                 LineTo(mem_dc, x + ew, ul_y1);
                                 MoveToEx(mem_dc, x, ul_y2, None);
                                 LineTo(mem_dc, x + ew, ul_y2);
                             } else {
-                                let ul_y = y + ascent + ul_offset;
+                                let ul_y = glyph_y + ascent + ul_offset;
                                 MoveToEx(mem_dc, x, ul_y, None);
                                 LineTo(mem_dc, x + ew, ul_y);
                             }
@@ -252,7 +259,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         if *strikethrough {
                             let mut tm = TEXTMETRICW::default();
                             GetTextMetricsW(mem_dc, &mut tm);
-                            let st_y = y + tm.tmAscent / 2;
+                            let st_y = glyph_y + tm.tmAscent / 2;
                             let st_pen = CreatePen(PS_SOLID, 1, rgb);
                             let old_pen = SelectObject(mem_dc, st_pen);
                             MoveToEx(mem_dc, x, st_y, None);

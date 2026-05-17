@@ -207,9 +207,12 @@ unsafe fn render_page_elements(
                 text_scale: _, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
+                // Session 75 Phase D (2026-05-17): el.y is LINE BOX TOP; pass
+                // el.y + el.text_y_off as the glyph-top y to preserve pre-Phase-D
+                // pixel positions. See memory/session71_y_convention_refactor_design.md.
                 render_text(
                     rt, dwrite_factory,
-                    el.x, el.y, el.width, el.height,
+                    el.x, el.y + el.text_y_off, el.width, el.height,
                     text, font_family.as_deref().unwrap_or("Calibri"),
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, highlight.as_deref(), *character_spacing,

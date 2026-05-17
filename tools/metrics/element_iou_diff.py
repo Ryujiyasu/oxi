@@ -133,29 +133,19 @@ def derive_oxi_heights(pages: dict[str, list[dict]]) -> list[dict]:
     """For each Oxi paragraph, derive height from next-paragraph y diff
     (within same page). Returns a flat list with page info.
 
-    Session 74 Phase C (2026-05-17): subtracts text_y_off from y to recover
-    LINE BOX TOP, matching Word's Information(6) convention. Before this
-    change, Oxi reported glyph top (= LINE BOX TOP + text_y_off), which
-    produced systematic +1.5 to +6.5pt offsets that R54 bimodal median
-    repair partially compensated. See
+    Session 75 Phase D (2026-05-17): Oxi y is now LINE BOX TOP directly
+    (Rust layout producer flipped). Phase C's text_y_off subtraction is
+    removed — y is already in the correct convention. text_y_off remains
+    in records as diagnostic only. See
     memory/session71_y_convention_refactor_design.md.
     """
     out = []
     for page_str in sorted(pages.keys(), key=int):
         page = int(page_str)
         recs = pages[page_str]
-        # Project to LINE BOX TOP by subtracting text_y_off (Session 74 Phase C).
-        # Old caches without text_y_off default to 0.0 (no-op).
-        adjusted = []
-        for r in recs:
-            if r.get("y") is None:
-                continue
-            r2 = dict(r)
-            r2["y_glyph"] = r["y"]  # preserve original for diagnostics
-            r2["y"] = round(r["y"] - r.get("text_y_off", 0.0), 2)
-            adjusted.append(r2)
-        # Sort by y (now LINE BOX TOP)
-        sorted_recs = sorted(adjusted, key=lambda r: r.get("y", 0))
+        # Sort by y (already LINE BOX TOP after Phase D)
+        sorted_recs = sorted([r for r in recs if r.get("y") is not None],
+                             key=lambda r: r["y"])
         for i, r in enumerate(sorted_recs):
             h = None
             for j in range(i + 1, len(sorted_recs)):
