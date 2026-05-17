@@ -5841,8 +5841,14 @@ impl LayoutEngine {
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                 // Session 76 Mech A fix: body/cell top-align, shape bottom-align.
+                // Session 78 Mech A v2 refinement (2026-05-17): Word's actual
+                // glyph offset for body exact = 0.5pt (NOT 0.0pt), per Session 70
+                // COM measurements A1/A2/A3/A7 all showing Word offset = 0.50pt
+                // = 10 twips. Returning 0.0 caused fded6 p.1 -0.10, 7f272a p.1
+                // -0.06, 04b88e p.1 -0.06 SSIM regressions. See
+                // memory/session78_mech_a_v2_05pt_offset.md.
                 if !in_shape_context {
-                    return 0.0;
+                    return 0.5;
                 }
                 // Shape context: text at bottom of line box (extra space above).
                 // Per spec §13.4 note: "GDI TextOutW character cell = fontSize".
@@ -6818,8 +6824,9 @@ impl LayoutEngine {
                                     // body context — top-align text within line box
                                     // for exact/atLeast (matches Word). Shape/textbox
                                     // context bottom-aligns but cells are never shape.
-                                    // COM-confirmed via Session 70 B5/B6 repros.
-                                    0.0
+                                    // Session 78 Mech A v2 refinement: cell offset =
+                                    // 0.25pt (5 twips) per Session 70 B5/B6 repros.
+                                    0.25
                                 }
                                 _ => {
                                     // Single/auto grid-snapped: center fontSize within lh.
