@@ -6072,6 +6072,12 @@ impl LayoutEngine {
         let dump_table = std::env::var("OXI_DUMP_TABLE").is_ok();
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
+            // Session 79c: visual_row_h = max cell content_h with emit-equivalent
+            // line-height formula (grid-snapped when adjustLineHeightInTable). Used
+            // ONLY for vAlign=center offset, NOT for row_height (page break logic
+            // preserves the natural pre-pass to avoid 3a4f9f cascade — see
+            // session79_adjust_lh_in_table_mixed_cell_valign_falsified.md).
+            let mut visual_row_h: f32 = 0.0;
             let row_entry_cursor_y = *cursor_y;
 
             // First pass: calculate row height
@@ -6118,12 +6124,15 @@ impl LayoutEngine {
                 // Word allows text to extend into cell margins for wrapping purposes
                 let inner_w = cell_w.max(0.0);
                 let mut cell_content_h = pad_t;
+                // Session 79c: parallel emit-equivalent content_h for visual_row_h
+                let mut cell_content_h_visual = pad_t;
                 let mut is_first_block_est = true;
 
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
                             let mut para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                            let mut para_h_visual = self.estimate_para_height_emit(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
                             // Day 33 part 17 (2026-05-10): subtract space_before for first
                             // paragraph in cell to match Word's behavior. Mirrors the
                             // suppression in layout_table cell loop at line ~5877. Without
@@ -6138,8 +6147,10 @@ impl LayoutEngine {
                                         .unwrap_or(0.0)
                                 };
                                 para_h -= sb_added;
+                                para_h_visual -= sb_added;
                             }
                             cell_content_h += para_h;
+                            cell_content_h_visual += para_h_visual;
                         }
                         Block::Table(nested) => {
                             // Estimate nested table height from rows
@@ -6164,6 +6175,7 @@ impl LayoutEngine {
                                     }
                                 }
                                 cell_content_h += nr_h;
+                                cell_content_h_visual += nr_h;
                             }
                         }
                         _ => {}
@@ -6171,6 +6183,7 @@ impl LayoutEngine {
                     is_first_block_est = false;
                 }
                 cell_content_h += pad_b;
+                cell_content_h_visual += pad_b;
                 // COM-confirmed (2026-04-13, gen2_052): Word does NOT include
                 // inside-H border width in the row height calculation. The border
                 // is drawn at the boundary between rows (overlapping). Including
@@ -6178,6 +6191,7 @@ impl LayoutEngine {
                 // cell_content_h += border_overhead;  // removed
 
                 row_height = row_height.max(cell_content_h);
+                visual_row_h = visual_row_h.max(cell_content_h_visual);
                 grid_idx += span;
             }
 
@@ -6997,9 +7011,18 @@ impl LayoutEngine {
                 }
 
                 // Apply vAlign offset
+                // Session 79c (2026-05-17): use visual_row_h (pre-computed from
+                // emit-equivalent estimate_para_height_emit) when greater than
+                // row_height. visual_row_h reflects the actual emitted cell
+                // content height (grid-snapped under adjustLineHeightInTable),
+                // matching what Word centers within. row_height (page-break
+                // logic) preserved to avoid 3a4f9f cascade. Also fall back to
+                // max_actual_cell_h in case visual_row_h underestimated for
+                // unusual cells (defensive).
+                let effective_row_h = row_height.max(visual_row_h).max(max_actual_cell_h);
                 let v_offset = match cell.v_align.as_deref() {
-                    Some("center") => ((row_height - pad_t - pad_b - content_h) / 2.0).max(0.0),
-                    Some("bottom") => (row_height - pad_t - pad_b - content_h).max(0.0),
+                    Some("center") => ((effective_row_h - pad_t - pad_b - content_h) / 2.0).max(0.0),
+                    Some("bottom") => (effective_row_h - pad_t - pad_b - content_h).max(0.0),
                     _ => 0.0, // top (default)
                 };
 
@@ -7792,6 +7815,45 @@ impl LayoutEngine {
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
     ) -> f32 {
+        self.estimate_para_height_inner(para, available_width, grid_pitch, table_para_style,
+            in_cell, grid_char_pitch, grid_char_cw_ratio, false)
+    }
+
+    /// Session 79c (2026-05-17): variant that matches the actual cell emit
+    /// line-height formula (mod.rs:6711-6717) when adjustLineHeightInTable
+    /// triggers cell grid snap. Used to compute `visual_row_h` (max content
+    /// height as actually emitted) for vAlign=center offset only — does NOT
+    /// affect `row_height` (page break logic) so 3a4f9f cascade is avoided.
+    /// b5f706 row 1: 23 cells, mixed 1-/2-paragraph counts with vAlign=center.
+    /// Word centers 1-para cells at row middle. Oxi pre-pass uses no-grid lh
+    /// (10.625pt for 9pt MS Gothic) so row_height=21.75pt undercounts emit
+    /// (36pt grid-snapped). Without this fix, 1-para cells render +1.6pt
+    /// instead of Word's +9pt.
+    fn estimate_para_height_emit(
+        &self,
+        para: &Paragraph,
+        available_width: f32,
+        grid_pitch: Option<f32>,
+        table_para_style: Option<&ParagraphStyle>,
+        in_cell: bool,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> f32 {
+        self.estimate_para_height_inner(para, available_width, grid_pitch, table_para_style,
+            in_cell, grid_char_pitch, grid_char_cw_ratio, true)
+    }
+
+    fn estimate_para_height_inner(
+        &self,
+        para: &Paragraph,
+        available_width: f32,
+        grid_pitch: Option<f32>,
+        table_para_style: Option<&ParagraphStyle>,
+        in_cell: bool,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+        force_grid_snap: bool,
+    ) -> f32 {
         let mut height = 0.0;
         // Table cells snap to grid in default Word mode
         let snap = para.style.snap_to_grid;
@@ -7823,8 +7885,20 @@ impl LayoutEngine {
             let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
             let metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
+            // Session 79c: force_grid_snap=true switches the formula to match
+            // the actual cell emit when adjustLineHeightInTable triggers grid
+            // snap (line_height_inner cell_snap_allowed path). Used only for
+            // visual_row_h (vAlign=center offset), NOT for row_height.
+            let snap_in_cell = force_grid_snap
+                && self.adjust_line_height_in_table
+                && para.style.snap_to_grid
+                && grid_pitch.is_some();
             let h_added = if is_single_empty {
-                metrics.word_line_height_table_cell(empty_fs)
+                if snap_in_cell {
+                    self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, true, grid_pitch, true)
+                } else {
+                    metrics.word_line_height_table_cell(empty_fs)
+                }
             } else {
                 self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, false, None, true)
             };
@@ -7880,6 +7954,11 @@ impl LayoutEngine {
                 lines.len().max(1)
             };
 
+            // Session 79c: same snap_in_cell condition as empty-para branch.
+            let snap_in_cell = force_grid_snap
+                && self.adjust_line_height_in_table
+                && para.style.snap_to_grid
+                && grid_pitch.is_some();
             let mut max_line_height: f32 = 0.0;
             for run in &para.runs {
                 let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -7890,7 +7969,11 @@ impl LayoutEngine {
                     _ => true,
                 };
                 let lh = if is_single_run {
-                    metrics.word_line_height_table_cell(font_size)
+                    if snap_in_cell {
+                        self.line_height_inner(font_size, eff_ls, eff_lr, metrics, true, grid_pitch, true)
+                    } else {
+                        metrics.word_line_height_table_cell(font_size)
+                    }
                 } else {
                     self.line_height_inner(font_size, eff_ls, eff_lr, metrics, false, None, true)
                 };
