@@ -131,21 +131,35 @@ def derive_word_heights(paragraphs: list[dict]) -> list[dict]:
 
 def derive_oxi_heights(pages: dict[str, list[dict]]) -> list[dict]:
     """For each Oxi paragraph, derive height from next-paragraph y diff
-    (within same page). Returns a flat list with page info."""
+    (within same page). Returns a flat list with page info.
+
+    Session 74 Phase C (2026-05-17): subtracts text_y_off from y to recover
+    LINE BOX TOP, matching Word's Information(6) convention. Before this
+    change, Oxi reported glyph top (= LINE BOX TOP + text_y_off), which
+    produced systematic +1.5 to +6.5pt offsets that R54 bimodal median
+    repair partially compensated. See
+    memory/session71_y_convention_refactor_design.md.
+    """
     out = []
     for page_str in sorted(pages.keys(), key=int):
         page = int(page_str)
         recs = pages[page_str]
-        # Sort by y
-        sorted_recs = sorted(recs, key=lambda r: r.get("y", 0))
-        for i, r in enumerate(sorted_recs):
+        # Project to LINE BOX TOP by subtracting text_y_off (Session 74 Phase C).
+        # Old caches without text_y_off default to 0.0 (no-op).
+        adjusted = []
+        for r in recs:
             if r.get("y") is None:
                 continue
+            r2 = dict(r)
+            r2["y_glyph"] = r["y"]  # preserve original for diagnostics
+            r2["y"] = round(r["y"] - r.get("text_y_off", 0.0), 2)
+            adjusted.append(r2)
+        # Sort by y (now LINE BOX TOP)
+        sorted_recs = sorted(adjusted, key=lambda r: r.get("y", 0))
+        for i, r in enumerate(sorted_recs):
             h = None
             for j in range(i + 1, len(sorted_recs)):
                 nr = sorted_recs[j]
-                if nr.get("y") is None:
-                    continue
                 if nr["y"] > r["y"]:
                     h = nr["y"] - r["y"]
                     break

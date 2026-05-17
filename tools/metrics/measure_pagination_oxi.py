@@ -103,9 +103,16 @@ def aggregate_dump(dump: dict) -> dict:
                 "text_parts": [],
                 "y_min": el["y"],
                 "x_min": el["x"],
+                # Session 74 Phase C (2026-05-17): track text_y_off of the
+                # min-y line. After Phase D, y will be LINE BOX TOP directly;
+                # for now Python tools subtract text_y_off to recover it. See
+                # memory/session71_y_convention_refactor_design.md.
+                "text_y_off_at_ymin": el.get("text_y_off", 0.0),
             })
             slot["text_parts"].append((el["y"], el["x"], el.get("text", "")))
-            slot["y_min"] = min(slot["y_min"], el["y"])
+            if el["y"] < slot["y_min"]:
+                slot["y_min"] = el["y"]
+                slot["text_y_off_at_ymin"] = el.get("text_y_off", 0.0)
             slot["x_min"] = min(slot["x_min"], el["x"])
         # Build records
         records = []
@@ -120,6 +127,7 @@ def aggregate_dump(dump: dict) -> dict:
                 "text": text,
                 "y": round(slot["y_min"], 2),
                 "x": round(slot["x_min"], 2),
+                "text_y_off": round(slot["text_y_off_at_ymin"], 2),
             })
         # Sort within page by Y, then X (reading order)
         records.sort(key=lambda r: (r["y"], r["x"]))
