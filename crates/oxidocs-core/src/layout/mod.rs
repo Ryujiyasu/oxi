@@ -4144,7 +4144,9 @@ impl LayoutEngine {
 
             // Matches Word output: exact/atLeast line spacing places text at BOTTOM of line box.
             // Extra space goes above text (ascent increased, descent unchanged).
-            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch);
+            // Session 76 Mech A fix: pass in_textbox so the function can distinguish
+            // body/cell (top-align for exact) from shape (bottom-align).
+            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox);
 
             // Compute max ascent across all fragments for baseline alignment.
             // All fragments in a line share the same baseline (matches Word output).
@@ -5817,7 +5819,15 @@ impl LayoutEngine {
     }
 
     /// Compute the vertical offset to apply to text within a line for exact/atLeast spacing.
-    /// Matches Word output: exact/atLeast place text at BOTTOM of line box (extra space above).
+    ///
+    /// Word behavior depends on paragraph context (Session 76 Mech A fix, 2026-05-17):
+    /// - **body / cell paragraphs**: top-align — text glyph at LINE BOX TOP, return 0.
+    ///   COM-confirmed via 7 minimal repros in Session 70 (A1-A3, A7, B5-B6):
+    ///   Word's exact rule on body paragraphs places glyph at top_margin = LINE BOX TOP.
+    /// - **shape / textbox paragraphs**: bottom-align — text glyph at line box bottom,
+    ///   return `(line_height - max_font_size).max(0.0)`. COM-confirmed on 1ec1 p1
+    ///   Shape 4 (exact=22pt fontSize=14pt → 8pt offset).
+    ///
     /// Returns the offset from line-box top to where text should start.
     fn text_y_offset_for_line(
         &self,
@@ -5826,10 +5836,15 @@ impl LayoutEngine {
         para_font_size: f32,
         line_height: f32,
         grid_pitch: Option<f32>,
+        in_shape_context: bool,
     ) -> f32 {
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
-                // exact/atLeast: text at bottom of line box (extra space above).
+                // Session 76 Mech A fix: body/cell top-align, shape bottom-align.
+                if !in_shape_context {
+                    return 0.0;
+                }
+                // Shape context: text at bottom of line box (extra space above).
                 // Per spec §13.4 note: "GDI TextOutW character cell = fontSize".
                 // offset = line_height - max_font_size. COM-confirmed on 1ec1 p1
                 // Shape 4 exact=22pt fontSize=14pt → 8pt offset (not 3.85pt).
@@ -6799,7 +6814,12 @@ impl LayoutEngine {
                                 .fold(0.0_f32, f32::max);
                             let cell_text_y_off = match (effective_line_rule, effective_line_spacing) {
                                 (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
-                                    (lh - cell_max_fs).max(0.0)
+                                    // Session 76 Mech A fix (2026-05-17): cells are
+                                    // body context — top-align text within line box
+                                    // for exact/atLeast (matches Word). Shape/textbox
+                                    // context bottom-aligns but cells are never shape.
+                                    // COM-confirmed via Session 70 B5/B6 repros.
+                                    0.0
                                 }
                                 _ => {
                                     // Single/auto grid-snapped: center fontSize within lh.
