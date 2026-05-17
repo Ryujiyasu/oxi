@@ -5916,6 +5916,25 @@ impl LayoutEngine {
                 //   single test doc (test_line_heights with 11pt) where the effect is ~0.3pt
                 //   and visually masked; larger fonts (26pt) show a -3.84pt glyph-top shift
                 //   that cascades through gen2_* series (46 docs).
+                // Session 77 Mech B fix (2026-05-17): compute max natural height
+                // across fragments using word_line_height_no_grid() which encodes the
+                // win_sum * fs * 83/64 ratio for CJK fonts (vs raw fs for Latin).
+                // Replaces previous "use raw font_size" simplification that
+                // produced systematic +1-3pt over-centering for CJK 83/64 fonts.
+                // See memory/session71_y_convention_refactor_design.md.
+                let natural_height = if line.fragments.is_empty() {
+                    let fs = para_style.ppr_rpr.as_ref()
+                        .and_then(|r| r.font_size)
+                        .unwrap_or(para_font_size);
+                    let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                    self.metrics_for_para_mark(&rpr_ref, para_style).word_line_height_no_grid(fs)
+                } else {
+                    line.fragments.iter().map(|frag| {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        self.metrics_for_text(&frag.text, &frag.style, para_style).word_line_height_no_grid(fs)
+                    }).fold(0.0_f32, f32::max)
+                };
+
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
                     // COM-confirmed (2026-04-04/16): text is vertically centered within
@@ -5940,14 +5959,11 @@ impl LayoutEngine {
                     //   offset = (line_height - fontSize)/2
                     // Both reduce to (line_height - fontSize)/2 because line_height = pitch
                     // in the single-cell case.
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments.iter()
-                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
-                            .fold(0.0_f32, f32::max)
-                    } else { para_font_size };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let raw = (line_height - font_size).max(0.0) / 2.0;
+                        // Mech B: center natural_height (win_sum * fs * 83/64 for CJK)
+                        // within the allocated line_height.
+                        let raw = (line_height - natural_height).max(0.0) / 2.0;
                         // Round to 0.5pt (10 twips) — COM-confirmed best fit
                         (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
@@ -5955,12 +5971,7 @@ impl LayoutEngine {
                     }
                 } else {
                     // LM0: same centering formula as LM1/LM2 single cell.
-                    let font_size = if !line.fragments.is_empty() {
-                        line.fragments.iter()
-                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
-                            .fold(0.0_f32, f32::max)
-                    } else { para_font_size };
-                    let raw = (line_height - font_size).max(0.0) / 2.0;
+                    let raw = (line_height - natural_height).max(0.0) / 2.0;
                     (raw * 2.0 + 0.5).floor() / 2.0
                 }
             }
@@ -6809,9 +6820,13 @@ impl LayoutEngine {
                             // per spec §13.4 note "GDI TextOutW character cell = fontSize".
                             // For grid-snapped cell lines (line_height = n*pitch), this centers
                             // the character cell; for exact spacing, bottom-aligns.
-                            let cell_max_fs: f32 = line.iter()
-                                .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _)| *fs)
-                                .fold(0.0_f32, f32::max);
+                            // Session 77 Mech B fix (2026-05-17): use natural_height per
+                            // fragment (win_sum * fs * 83/64 for CJK). Replaces previous
+                            // "use raw fs" simplification.
+                            let cell_max_natural: f32 = line.iter().map(|(_, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                let family: &str = font_family.as_deref().unwrap_or("");
+                                self.registry.get(family).word_line_height_no_grid(*fs)
+                            }).fold(0.0_f32, f32::max);
                             let cell_text_y_off = match (effective_line_rule, effective_line_spacing) {
                                 (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                                     // Session 76 Mech A fix (2026-05-17): cells are
@@ -6822,8 +6837,8 @@ impl LayoutEngine {
                                     0.0
                                 }
                                 _ => {
-                                    // Single/auto grid-snapped: center fontSize within lh.
-                                    let raw = (lh - cell_max_fs).max(0.0) / 2.0;
+                                    // Single/auto grid-snapped: center natural height within lh.
+                                    let raw = (lh - cell_max_natural).max(0.0) / 2.0;
                                     (raw * 2.0 + 0.5).floor() / 2.0
                                 }
                             };
