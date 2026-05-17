@@ -736,9 +736,13 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             // "千円千円千円千円" collapse.
             let cri_json = el.cell_row_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let cci_json = el.cell_col_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            // Session 73 Phase B (2026-05-17): emit text_y_off so element_iou_diff.py
+            // and measure_pagination_oxi.py can subtract it to compare against Word's
+            // Information(6) (LINE BOX TOP convention). See
+            // memory/session71_y_convention_refactor_design.md.
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off).unwrap();
         }
         out.push_str("\n    ]}");
     }

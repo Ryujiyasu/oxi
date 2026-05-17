@@ -713,9 +713,11 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             let pi_json = el.paragraph_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let ri_json = el.run_index.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
             let co_json = el.char_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+            // Session 73 Phase B: emit text_y_off for Y-convention refactor.
+            // See memory/session71_y_convention_refactor_design.md.
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"text_y_off\": {:.3}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, el.text_y_off).unwrap();
         }
         out.push_str("\n    ]}");
     }
