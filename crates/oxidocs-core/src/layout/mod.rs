@@ -963,6 +963,51 @@ pub struct BalloonReply {
     pub body: String,
 }
 
+/// Two-track cursor for the layout pipeline.
+///
+/// Session 99 (2026-05-18) decoupling refactor (see
+/// `docs/spec/decoupling_refactor_design.md`). Splits the running y
+/// position into:
+///   - `cursor_y` — used by page-break gates (row-fit check at
+///     mod.rs:6255, LRPB threshold at mod.rs:6276, space_before
+///     suppression at mod.rs:3388). MUST remain stable across the
+///     refactor to preserve Phase 1 pagination correctness.
+///   - `visual_y` — used by visual emit sites (text lines, table
+///     borders, cell shading, images). Initially mirrors `cursor_y`
+///     exactly (Phase A1 = no behavior change). Phase B can let it
+///     diverge per-quirk (e.g. Word's atLeast row snap visual = trH
+///     rounded to 0.75pt, while page-break uses unsnapped trH).
+///
+/// Phase A1 invariant: every advance mirrors to both fields. No
+/// reads of `visual_y` yet — all visual emit sites still read
+/// `cursor_y`. Verified by Phase 1 pagination_diff (53/55 unchanged)
+/// and SSIM verify (0 regressed).
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutCursor {
+    pub cursor_y: f32,
+    pub visual_y: f32,
+}
+
+impl LayoutCursor {
+    pub fn new(y: f32) -> Self {
+        Self { cursor_y: y, visual_y: y }
+    }
+
+    /// Advance both tracks by the same amount (Phase A default).
+    /// Phase B will introduce `advance_split(page, visual)` for
+    /// per-quirk divergence.
+    pub fn advance(&mut self, dy: f32) {
+        self.cursor_y += dy;
+        self.visual_y += dy;
+    }
+
+    /// Set both tracks to the same value (used at page boundary reset).
+    pub fn set(&mut self, y: f32) {
+        self.cursor_y = y;
+        self.visual_y = y;
+    }
+}
+
 pub struct LayoutEngine {
     default_font_size: f32,
     default_font_family: Option<String>,
@@ -8109,6 +8154,36 @@ enum LineBreakType {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    /// S99/S100 LayoutCursor invariants (Phase A1).
+    /// Future Phase B will allow cursor_y and visual_y to diverge.
+    #[test]
+    fn layout_cursor_new_initializes_both_tracks() {
+        let c = LayoutCursor::new(72.0);
+        assert_eq!(c.cursor_y, 72.0);
+        assert_eq!(c.visual_y, 72.0);
+    }
+
+    #[test]
+    fn layout_cursor_advance_mirrors_both_tracks() {
+        let mut c = LayoutCursor::new(10.0);
+        c.advance(5.5);
+        assert_eq!(c.cursor_y, 15.5);
+        assert_eq!(c.visual_y, 15.5);
+        c.advance(-2.0);
+        assert_eq!(c.cursor_y, 13.5);
+        assert_eq!(c.visual_y, 13.5);
+    }
+
+    #[test]
+    fn layout_cursor_set_resets_both_tracks() {
+        let mut c = LayoutCursor::new(50.0);
+        c.advance(25.0);
+        // Page boundary reset
+        c.set(80.0);
+        assert_eq!(c.cursor_y, 80.0);
+        assert_eq!(c.visual_y, 80.0);
+    }
 
     /// R-05d: balloons that don't overlap stay at their natural anchor.
     #[test]
