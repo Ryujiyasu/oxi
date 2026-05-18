@@ -994,11 +994,22 @@ impl LayoutCursor {
     }
 
     /// Advance both tracks by the same amount (Phase A default).
-    /// Phase B will introduce `advance_split(page, visual)` for
-    /// per-quirk divergence.
     pub fn advance(&mut self, dy: f32) {
         self.cursor_y += dy;
         self.visual_y += dy;
+    }
+
+    /// Advance the two tracks by DIFFERENT amounts (Phase B divergence).
+    ///
+    /// Session 103 (2026-05-18) Phase B1. First use case: Word's atLeast
+    /// row snap (S98 finding) advances visual position by
+    /// `ceil((trH + bw) / 0.75) × 0.75` while page-break cursor advances
+    /// by the unsnapped `max(content, trH)`. Keeping `cursor_y` stable
+    /// preserves Phase 1 pagination while `visual_y` corrects pixel
+    /// positions. See `docs/spec/decoupling_refactor_design.md` Phase B1.
+    pub fn advance_split(&mut self, page_dy: f32, visual_dy: f32) {
+        self.cursor_y += page_dy;
+        self.visual_y += visual_dy;
     }
 
     /// Set both tracks to the same value (used at page boundary reset).
@@ -8173,6 +8184,19 @@ mod tests {
         c.advance(-2.0);
         assert_eq!(c.cursor_y, 13.5);
         assert_eq!(c.visual_y, 13.5);
+    }
+
+    #[test]
+    fn layout_cursor_advance_split_diverges_tracks() {
+        // Phase B divergence: cursor_y and visual_y advance by different amounts.
+        let mut c = LayoutCursor::new(10.0);
+        c.advance_split(15.0, 18.0);
+        assert_eq!(c.cursor_y, 25.0);
+        assert_eq!(c.visual_y, 28.0);
+        // Visual delta accumulates
+        c.advance_split(5.0, 7.0);
+        assert_eq!(c.cursor_y, 30.0);
+        assert_eq!(c.visual_y, 35.0);
     }
 
     #[test]
