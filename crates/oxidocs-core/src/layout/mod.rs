@@ -6503,6 +6503,14 @@ impl LayoutEngine {
                     };
                     let effective_space_after = if should_reset {
                         None
+                    } else if let (Some(al), Some(pitch)) = (para.style.after_lines, table_grid_pitch) {
+                        // Session 94 (2026-05-18) fix: afterLines was parsed into
+                        // IR but not applied in cell rendering path. Body path at
+                        // mod.rs:4554 already had this. Symmetric with before_lines
+                        // handling at mod.rs:6497. TR33 (afterLines only, no after
+                        // twip) measured Word pitch 13.50pt vs Oxi 12.00pt = +1.5pt
+                        // gap closed by reading afterLines.
+                        Some(al / 100.0 * pitch)
                     } else {
                         para.style.space_after
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after))
