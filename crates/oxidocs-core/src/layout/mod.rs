@@ -1670,6 +1670,11 @@ impl LayoutEngine {
                             // Adding p0_offset to start_y caused 2+pt cursor drift
                             // that accumulated over the entire page (38 lines × 2pt
                             // drift in db9c = different page count).
+                            // NOTE (Session 107, 2026-05-18): the half-leading IS
+                            // applied at cursor.set(page_top) sites inside
+                            // layout_paragraph for subsequent pages. See d77a p.2
+                            // fix below — page 1's first paragraph is intentionally
+                            // left at topMargin to avoid the cascade documented above.
                             let _p0_offset = (p0_h - lm0_lh) / 2.0;
                             // Previously: start_y += p0_offset;
                         }
@@ -3895,6 +3900,22 @@ impl LayoutEngine {
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
                 cursor.set(page_top);
+                // Session 107: half-leading at page top (see mid-para break
+                // note for full rationale).
+                let rule_w = para.style.line_spacing_rule.as_deref();
+                let skip_hl_w = matches!(rule_w, Some("exact") | Some("atLeast"));
+                if line_idx > 0
+                    && !skip_hl_w
+                    && grid_pitch.map_or(false, |p| p > 0.0)
+                    && para.style.snap_to_grid
+                    && !in_textbox
+                {
+                    let hl = ((effective_lh - natural_lh) / 2.0).max(0.0);
+                    let leading = effective_lh - natural_lh;
+                    if hl > 0.0 && leading < 3.0 {
+                        cursor.advance(hl);
+                    }
+                }
                 // Step 0: widow/orphan moves all earlier lines (if any) of
                 // this paragraph to the new page. Re-slot any refs already
                 // attributed to page 0 into page 1, then open a new bucket
@@ -3932,6 +3953,43 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
                 cursor.set(page_top);
+                // Session 107 (2026-05-18): apply half-leading at page top for
+                // grid-snapped lines that are CONTINUATIONS of a paragraph
+                // spilling across page breaks. Word's continuation first line
+                // sits at topMargin + (line_h - natural_lh)/2, not topMargin.
+                // Without this offset, the continuation's content on the next
+                // page is 1-3pt higher than Word, causing later lines in the
+                // SAME paragraph to fit on the wrong page (d77a p.2: line 5
+                // of pi=25 fits in Oxi within natural_lh tolerance but Word
+                // breaks → Oxi has 5 lines vs Word's 4).
+                //
+                // Restrictions:
+                // - line_idx > 0 (continuation only — new paragraphs starting
+                //   on a fresh page have compensating glyph misalignment via
+                //   text_y_off that visually matches Word without the LBT
+                //   shift; applying it there causes regressions)
+                // - skip exact/atLeast rules (V1/V2/V4 minimal repros confirm
+                //   Word does NOT apply half-leading to those)
+                // - leading < 3pt threshold (CJK 12pt+ at grid 18pt has small
+                //   leading where natural_lh leniency alone cannot match
+                //   Word's break decisions; larger leadings like TNR 10.5pt
+                //   (6.5pt) or Mincho 10.5pt (4.5pt) already have enough
+                //   tolerance, and applying the shift there regresses
+                //   db9ca18 / Mincho-heavy docs without page-break benefit)
+                let rule = para.style.line_spacing_rule.as_deref();
+                let skip_half_leading = matches!(rule, Some("exact") | Some("atLeast"));
+                if line_idx > 0
+                    && !skip_half_leading
+                    && grid_pitch.map_or(false, |p| p > 0.0)
+                    && para.style.snap_to_grid
+                    && !in_textbox
+                {
+                    let hl = ((effective_lh - natural_lh) / 2.0).max(0.0);
+                    let leading = effective_lh - natural_lh;
+                    if hl > 0.0 && leading < 3.0 {
+                        cursor.advance(hl);
+                    }
+                }
                 // Step 0: lines [0, line_idx) stay on OLD page (their refs
                 // already accumulated in current bucket); open a fresh
                 // bucket so line_idx and beyond register on the NEW page.
