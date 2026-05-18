@@ -2465,7 +2465,7 @@ impl LayoutEngine {
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                     }
-                    elements.push(LayoutElement::new(start_x, cursor.cursor_y, img.width, img.height, LayoutContent::Image {
+                    elements.push(LayoutElement::new(start_x, cursor.visual_y, img.width, img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
                     }));
@@ -3296,7 +3296,7 @@ impl LayoutEngine {
                     elements.extend(table_elements);
                 }
                 Block::Image(img) => {
-                    elements.push(LayoutElement::new(inner_x, cursor.cursor_y, img.width.min(inner_width), img.height, LayoutContent::Image {
+                    elements.push(LayoutElement::new(inner_x, cursor.visual_y, img.width.min(inner_width), img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
                     }));
@@ -3588,7 +3588,7 @@ impl LayoutEngine {
                 .map(|s| s.to_string());
             let marker_bold = self.resolve_bold(marker_style, &para.style);
             let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
-            elements.push(LayoutElement::new(marker_x, cursor.cursor_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
+            elements.push(LayoutElement::new(marker_x, cursor.visual_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
                     text: marker_text,
                     font_size: marker_font_size,
                     font_family: marker_font_family,
@@ -4251,7 +4251,7 @@ impl LayoutEngine {
                 // Session 75 Phase D (2026-05-17): y is LINE BOX TOP, renderer adds
                 // text_y_off + baseline_adjust + vert_offset at draw time. See
                 // memory/session71_y_convention_refactor_design.md.
-                let mut el = LayoutElement::new(x, cursor.cursor_y, adjusted_width, line_height, LayoutContent::Text {
+                let mut el = LayoutElement::new(x, cursor.visual_y, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -4396,7 +4396,7 @@ impl LayoutEngine {
             // multi-author paragraphs still get a single unambiguous bar.
             if line_has_revision {
                 let bar_x = (start_x - 12.0).max(0.0);
-                let bar_y = cursor.cursor_y;
+                let bar_y = cursor.visual_y;
                 let bar_h = line_height;
                 let bar_w: f32 = 1.5;
                 elements.push(LayoutElement::new(
@@ -6462,7 +6462,7 @@ impl LayoutEngine {
                         } else {
                             format!("#{}", shading_color)
                         };
-                        elements.push(LayoutElement::new(cell_x, cursor.cursor_y, cell_w, row_height, LayoutContent::CellShading {
+                        elements.push(LayoutElement::new(cell_x, cursor.visual_y, cell_w, row_height, LayoutContent::CellShading {
                                 color: color_hex,
                         }));
                     }
@@ -7101,7 +7101,7 @@ impl LayoutEngine {
                 };
 
                 // Emit cell elements with absolute Y positions
-                let dy = cursor.cursor_y + pad_t + v_offset;
+                let dy = cursor.visual_y + pad_t + v_offset;
                 if dump_table {
                     let valign = cell.v_align.as_deref().unwrap_or("(top)");
                     eprintln!(
@@ -7139,7 +7139,7 @@ impl LayoutEngine {
                 });
                 if table.style.border || has_cell_borders {
                     let bx = cell_x;
-                    let by = cursor.cursor_y;
+                    let by = cursor.visual_y;
 
                     // Resolve border color and width from cell borders, falling back to table style
                     let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32) {
@@ -7218,7 +7218,7 @@ impl LayoutEngine {
             if max_actual_cell_h > row_height + 0.01 {
                 let old_h = row_height;
                 row_height = max_actual_cell_h;
-                let by = cursor.cursor_y;
+                let by = cursor.visual_y;
                 let old_bottom = by + old_h;
                 let new_bottom = by + row_height;
                 for elem in elements[elements_before_row..].iter_mut() {
