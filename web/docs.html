@@ -623,8 +623,16 @@ function renderText(ctx, elem) {
     ctx.strokeStyle = elem.color || '#000000';
     ctx.lineWidth = fontSize * 0.05;
     const underY = baseline + fontSize * 0.15;
-    ctx.moveTo(elem.x, underY);
-    ctx.lineTo(elem.x + elem.width, underY);
+    if (elem.underline_style === 'double') {
+      const gap = Math.max(1, fontSize * 0.08);
+      ctx.moveTo(elem.x, underY);
+      ctx.lineTo(elem.x + elem.width, underY);
+      ctx.moveTo(elem.x, underY + gap);
+      ctx.lineTo(elem.x + elem.width, underY + gap);
+    } else {
+      ctx.moveTo(elem.x, underY);
+      ctx.lineTo(elem.x + elem.width, underY);
+    }
     ctx.stroke();
   }
 
