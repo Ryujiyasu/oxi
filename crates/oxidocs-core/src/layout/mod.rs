@@ -5082,16 +5082,26 @@ impl LayoutEngine {
                     // autoSpaceDE: add 2.5pt gap between Latin and CJK ideograph/kana.
                     // COM-confirmed (2026-04-07): only ideographs/kana trigger auto-space,
                     // not CJK punctuation (which gets no extra spacing from Latin).
-                    let prev_is_latin = !word.is_empty() && word.chars().last().map_or(false, |c| c.is_ascii_alphanumeric());
-                    let prev_frag_is_latin = if word.is_empty() {
-                        current_line.fragments.last().map_or(false, |f| {
-                            f.text.chars().last().map_or(false, |c| c.is_ascii_alphanumeric())
-                        })
-                    } else { false };
+                    // Session 95 (2026-05-18) split: autoSpaceDE gates ALPHABETIC
+                    // boundaries, autoSpaceDN gates DIGIT boundaries. e3c545 has
+                    // DE=on, DN=off → digits should NOT get the gap. Was previously
+                    // gated on auto_space_de alone via is_ascii_alphanumeric().
+                    let prev_alpha_local = !word.is_empty() && word.chars().last().map_or(false, |c| c.is_ascii_alphabetic());
+                    let prev_digit_local = !word.is_empty() && word.chars().last().map_or(false, |c| c.is_ascii_digit());
+                    let (prev_frag_alpha, prev_frag_digit) = if word.is_empty() {
+                        let last_char = current_line.fragments.last().and_then(|f| f.text.chars().last());
+                        (
+                            last_char.map_or(false, |c| c.is_ascii_alphabetic()),
+                            last_char.map_or(false, |c| c.is_ascii_digit()),
+                        )
+                    } else { (false, false) };
+                    let prev_is_alpha = prev_alpha_local || prev_frag_alpha;
+                    let prev_is_digit = prev_digit_local || prev_frag_digit;
                     flush_word!(style);
-                    if (prev_is_latin || prev_frag_is_latin)
-                        && para_style.auto_space_de
-                        && kinsoku::is_cjk_ideograph_or_kana(ch)
+                    let cur_is_cjk = kinsoku::is_cjk_ideograph_or_kana(ch);
+                    if cur_is_cjk
+                        && ((prev_is_alpha && para_style.auto_space_de)
+                            || (prev_is_digit && para_style.auto_space_dn))
                     {
                         // §4.6.2 autoSpaceDE per-fontSize formula — COM-confirmed 2026-04-08.
                         //   9-10.5pt → 2.5pt, 11-12pt → 3.0pt, 14pt → 3.5pt,
@@ -5267,7 +5277,12 @@ impl LayoutEngine {
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
                     // COM-confirmed (2026-04-07): Word only adds auto-space between Latin and
                     // CJK ideographs/kana, NOT between Latin and CJK punctuation.
-                    if word_style.is_none() && para_style.auto_space_de && ch.is_ascii_alphanumeric() {
+                    // Session 95 (2026-05-18) split DE (alpha) vs DN (digit).
+                    let ch_is_alpha = ch.is_ascii_alphabetic();
+                    let ch_is_digit = ch.is_ascii_digit();
+                    let s95_de_fires = ch_is_alpha && para_style.auto_space_de;
+                    let s95_dn_fires = ch_is_digit && para_style.auto_space_dn;
+                    if word_style.is_none() && (s95_de_fires || s95_dn_fires) {
                         let prev_is_cjk_ideo = current_line.fragments.last().map_or(false, |f| {
                             f.text.chars().last().map_or(false, |c| kinsoku::is_cjk_ideograph_or_kana(c))
                         });
@@ -6651,15 +6666,21 @@ impl LayoutEngine {
                                 // (5 lines Oxi vs 6 lines Word) traced to missing auto-space
                                 // around "URL" / "1.0" / "CC BY" Latin runs within CJK text.
                                 // Formula matches break_into_lines: ((fs/2)+0.5).floor()*0.5.
-                                let auto_space_extra = if para.style.auto_space_de {
+                                // Session 95 (2026-05-18) split DE (alpha) vs DN (digit).
+                                let auto_space_extra = {
                                     let prev_cjk_ideo = prev_char_emitted.map_or(false, kinsoku::is_cjk_ideograph_or_kana);
-                                    let prev_latin = prev_char_emitted.map_or(false, |c| c.is_ascii_alphanumeric());
+                                    let prev_alpha = prev_char_emitted.map_or(false, |c| c.is_ascii_alphabetic());
+                                    let prev_digit = prev_char_emitted.map_or(false, |c| c.is_ascii_digit());
                                     let cur_cjk_ideo = kinsoku::is_cjk_ideograph_or_kana(ch);
-                                    let cur_latin = ch.is_ascii_alphanumeric();
-                                    if (prev_cjk_ideo && cur_latin) || (prev_latin && cur_cjk_ideo) {
+                                    let cur_alpha = ch.is_ascii_alphabetic();
+                                    let cur_digit = ch.is_ascii_digit();
+                                    let de_boundary = (prev_cjk_ideo && cur_alpha) || (prev_alpha && cur_cjk_ideo);
+                                    let dn_boundary = (prev_cjk_ideo && cur_digit) || (prev_digit && cur_cjk_ideo);
+                                    if (de_boundary && para.style.auto_space_de)
+                                        || (dn_boundary && para.style.auto_space_dn) {
                                         ((font_size / 2.0) + 0.5).floor() * 0.5
                                     } else { 0.0 }
-                                } else { 0.0 };
+                                };
                                 let cw = cw + auto_space_extra;
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
@@ -7759,15 +7780,21 @@ impl LayoutEngine {
                 };
                 let cw = cw + cs + balance_extra_cs;
                 // R7.51: autoSpaceDE mirror — see cell renderer note.
-                let auto_space_extra = if para.style.auto_space_de {
+                // Session 95 (2026-05-18): split DE (alpha) vs DN (digit).
+                let auto_space_extra = {
                     let prev_cjk_ideo = prev_char_emitted.map_or(false, kinsoku::is_cjk_ideograph_or_kana);
-                    let prev_latin = prev_char_emitted.map_or(false, |c| c.is_ascii_alphanumeric());
+                    let prev_alpha = prev_char_emitted.map_or(false, |c| c.is_ascii_alphabetic());
+                    let prev_digit = prev_char_emitted.map_or(false, |c| c.is_ascii_digit());
                     let cur_cjk_ideo = kinsoku::is_cjk_ideograph_or_kana(ch);
-                    let cur_latin = ch.is_ascii_alphanumeric();
-                    if (prev_cjk_ideo && cur_latin) || (prev_latin && cur_cjk_ideo) {
+                    let cur_alpha = ch.is_ascii_alphabetic();
+                    let cur_digit = ch.is_ascii_digit();
+                    let de_boundary = (prev_cjk_ideo && cur_alpha) || (prev_alpha && cur_cjk_ideo);
+                    let dn_boundary = (prev_cjk_ideo && cur_digit) || (prev_digit && cur_cjk_ideo);
+                    if (de_boundary && para.style.auto_space_de)
+                        || (dn_boundary && para.style.auto_space_dn) {
                         ((font_size / 2.0) + 0.5).floor() * 0.5
                     } else { 0.0 }
-                } else { 0.0 };
+                };
                 let cw = cw + auto_space_extra;
                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                 let is_space = ch == ' ' || ch == '\u{3000}';

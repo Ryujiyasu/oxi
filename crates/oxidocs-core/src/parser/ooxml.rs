@@ -1505,6 +1505,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if !ds.auto_space_de {
                 style.auto_space_de = false;
             }
+            // Session 95 (2026-05-18) symmetric fix: inherit auto_space_dn
+            // (East Asian ↔ digit auto-spacing). S85 only handled auto_space_de
+            // because the layout code at that point gated digits on the same
+            // flag (is_ascii_alphanumeric). S95 split alpha vs digit at 4 call
+            // sites in mod.rs; without dn inheritance, a1d6/d4d126/de6e "ac"
+            // paragraphs would have dn=true (default) and over-space digits.
+            if !ds.auto_space_dn {
+                style.auto_space_dn = false;
+            }
         }
     }
 
