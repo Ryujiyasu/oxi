@@ -1815,7 +1815,7 @@ impl LayoutEngine {
         let mut mult_cumul_raw: f32 = 0.0;
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
-        let mut cursor_y = start_y;
+        let mut cursor = LayoutCursor::new(start_y);
         let mut lm2_cells: usize = 0;
         let mut prev_para_style_id: Option<String> = None;
         let mut prev_contextual_spacing: bool = false;
@@ -1872,14 +1872,14 @@ impl LayoutEngine {
                                 _ => anchor_y + pos.y,
                             };
                             let tb_bottom = tb_top + tb.height;
-                            if cursor_y >= tb_top && cursor_y < tb_bottom {
-                                cursor_y = tb_bottom;
+                            if cursor.cursor_y >= tb_top && cursor.cursor_y < tb_bottom {
+                                cursor.set(tb_bottom);
                             }
                         }
                     }
                 }
             }
-            block_y_positions.push(cursor_y);
+            block_y_positions.push(cursor.cursor_y);
             block_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
@@ -1969,8 +1969,8 @@ impl LayoutEngine {
                         .map(|r| r.has_last_rendered_page_break).unwrap_or(false);
                     let lrpb_should_break = if has_lrpb_at_start && !elements.is_empty() {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
-                        let remaining = (start_y + effective_content_h) - cursor_y;
-                        let consumed = cursor_y - start_y;
+                        let remaining = (start_y + effective_content_h) - cursor.cursor_y;
+                        let consumed = cursor.cursor_y - start_y;
                         let half_page = effective_content_h * 0.5;
                         est_h <= remaining && consumed > half_page
                     } else {
@@ -1984,7 +1984,7 @@ impl LayoutEngine {
                             height: page.size.height,
                             elements: std::mem::take(&mut elements),
                         });
-                        cursor_y = start_y;
+                        cursor.set(start_y);
                         current_column = 0;
                         start_x = col_x_positions[0];
                         content_width = col_widths[0];
@@ -1994,7 +1994,7 @@ impl LayoutEngine {
                         footnote_ids_current_page.clear();
                         commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
-                        *block_y_positions.last_mut().unwrap() = cursor_y;
+                        *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                     } else {
                         // R7.53 (2026-05-13): pre-commit DEFERRED to after
                         // layout_paragraph. Previously pre-committed here,
@@ -2012,20 +2012,20 @@ impl LayoutEngine {
                     // keepLines: if doesn't fit, advance column or page
                     if para.style.keep_lines && !elements.is_empty() {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
-                        let remaining = (start_y + effective_content_h) - cursor_y;
+                        let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
                             if num_columns > 1 && current_column + 1 < num_columns {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
                                 content_width = col_widths[current_column];
-                                cursor_y = start_y;
+                                cursor.set(start_y);
                             } else {
                                 pages.push(LayoutPage {
                                     width: page.size.width,
                                     height: page.size.height,
                                     elements: std::mem::take(&mut elements),
                                 });
-                                cursor_y = start_y;
+                                cursor.set(start_y);
                                 current_column = 0;
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
@@ -2037,7 +2037,7 @@ impl LayoutEngine {
                                 commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
-                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         }
                     }
 
@@ -2050,20 +2050,20 @@ impl LayoutEngine {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
                             let this_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                             let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None, false, None, None);
-                            let remaining = (start_y + effective_content_h) - cursor_y;
+                            let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                             if this_h + next_h > remaining && this_h > remaining && this_h + next_h <= effective_content_h {
                                 if num_columns > 1 && current_column + 1 < num_columns {
                                     current_column += 1;
                                     start_x = col_x_positions[current_column];
                                     content_width = col_widths[current_column];
-                                    cursor_y = start_y;
+                                    cursor.set(start_y);
                                 } else {
                                     pages.push(LayoutPage {
                                         width: page.size.width,
                                         height: page.size.height,
                                         elements: std::mem::take(&mut elements),
                                     });
-                                    cursor_y = start_y;
+                                    cursor.set(start_y);
                                     current_column = 0;
                                     start_x = col_x_positions[0];
                                     content_width = col_widths[0];
@@ -2073,7 +2073,7 @@ impl LayoutEngine {
                                     commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                                 }
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
-                                *block_y_positions.last_mut().unwrap() = cursor_y;
+                                *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                             }
                         }
                     }
@@ -2081,20 +2081,20 @@ impl LayoutEngine {
                     // Multi-column pre-check: advance column if paragraph won't fit
                     if num_columns > 1 {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
-                        let remaining = (start_y + effective_content_h) - cursor_y;
+                        let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
                             if current_column + 1 < num_columns {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
                                 content_width = col_widths[current_column];
-                                cursor_y = start_y;
+                                cursor.set(start_y);
                             } else {
                                 pages.push(LayoutPage {
                                     width: page.size.width,
                                     height: page.size.height,
                                     elements: std::mem::take(&mut elements),
                                 });
-                                cursor_y = start_y;
+                                cursor.set(start_y);
                                 current_column = 0;
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
@@ -2104,7 +2104,7 @@ impl LayoutEngine {
                                 commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
-                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         }
                     }
 
@@ -2145,7 +2145,7 @@ impl LayoutEngine {
                     let (para_elements, sa) = self.layout_paragraph(
                         para,
                         start_x,
-                        &mut cursor_y,
+                        &mut cursor,
                         content_width,
                         effective_content_h,
                         start_y,
@@ -2295,7 +2295,7 @@ impl LayoutEngine {
                             height: page.size.height,
                             elements: std::mem::take(&mut elements),
                         });
-                        cursor_y = start_y;
+                        cursor.set(start_y);
                         current_column = 0;
                         start_x = col_x_positions[0];
                         content_width = col_widths[0];
@@ -2310,11 +2310,11 @@ impl LayoutEngine {
                 }
                 Block::Table(table) => {
                     // COM-confirmed: prev paragraph's space_after is always added before table
-                    cursor_y += prev_space_after;
+                    cursor.advance(prev_space_after);
                     prev_space_after = 0.0;
 
                     let is_floating = table.style.position.is_some();
-                    let saved_cursor_y = cursor_y;
+                    let saved_cursor_y = cursor.cursor_y;
 
                     // Floating table (tblpPr): position relative to anchor
                     let mut candidate_y_top: f32 = 0.0;
@@ -2323,9 +2323,9 @@ impl LayoutEngine {
                         candidate_y_top = match pos.v_anchor.as_deref() {
                             Some("page") => pos.y,
                             Some("margin") => start_y + pos.y,
-                            _ => cursor_y + pos.y, // "text": offset from anchor para bottom
+                            _ => cursor.cursor_y + pos.y, // "text": offset from anchor para bottom
                         };
-                        cursor_y = candidate_y_top;
+                        cursor.set(candidate_y_top);
                         // R7.60 body-floating eligibility: vertAnchor="page" AND
                         // table positioned below top margin (in body region).
                         is_body_floating = pos.v_anchor.as_deref() == Some("page")
@@ -2335,7 +2335,7 @@ impl LayoutEngine {
                     let table_elements = self.layout_table(
                         table,
                         start_x,
-                        &mut cursor_y,
+                        &mut cursor,
                         content_width,
                         grid_pitch,
                         page.grid_char_pitch,
@@ -2348,7 +2348,7 @@ impl LayoutEngine {
                         &mut elements,
                         Some(block_idx),
                     );
-                    let candidate_y_bottom = cursor_y;
+                    let candidate_y_bottom = cursor.cursor_y;
 
                     // R7.60: for body-position vertAnchor=page floating tables,
                     // check overlap with previously-placed floating tables on the
@@ -2419,20 +2419,20 @@ impl LayoutEngine {
                         if needs_wrap_below && pages_added > 0 {
                             current_page_idx += pages_added;
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
-                            cursor_y = candidate_y_bottom + 1.5;
-                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                            cursor.set(candidate_y_bottom + 1.5);
+                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         } else if needs_wrap_below {
-                            cursor_y = candidate_y_bottom + 1.5;
+                            cursor.set(candidate_y_bottom + 1.5);
                         } else {
                             // Original behavior: floating tables don't advance text flow
-                            cursor_y = saved_cursor_y;
+                            cursor.set(saved_cursor_y);
                         }
                     } else {
                         let pages_added = pages.len() - pages_before;
                         if pages_added > 0 {
                             current_page_idx += pages_added;
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
-                            *block_y_positions.last_mut().unwrap() = cursor_y;
+                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                             if num_columns > 1 {
                                 current_column = 0;
                                 start_x = col_x_positions[0];
@@ -2444,32 +2444,32 @@ impl LayoutEngine {
                     prev_space_after = 0.0;
                 }
                 Block::Image(img) => {
-                    if cursor_y + img.height > start_y + content_height {
+                    if cursor.cursor_y + img.height > start_y + content_height {
                         if num_columns > 1 && current_column + 1 < num_columns {
                             current_column += 1;
                             start_x = col_x_positions[current_column];
                             content_width = col_widths[current_column];
-                            cursor_y = start_y;
+                            cursor.set(start_y);
                         } else {
                             pages.push(LayoutPage {
                                 width: page.size.width,
                                 height: page.size.height,
                                 elements: std::mem::take(&mut elements),
                             });
-                            cursor_y = start_y;
+                            cursor.set(start_y);
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
                             lm2_cells = 0; current_page_idx += 1;
                         }
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
-                        *block_y_positions.last_mut().unwrap() = cursor_y;
+                        *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                     }
-                    elements.push(LayoutElement::new(start_x, cursor_y, img.width, img.height, LayoutContent::Image {
+                    elements.push(LayoutElement::new(start_x, cursor.cursor_y, img.width, img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
                     }));
-                    cursor_y += img.height;
+                    cursor.advance(img.height);
                     prev_para_style_id = None;
                 }
                 Block::UnsupportedElement(_) => {
@@ -2482,14 +2482,14 @@ impl LayoutEngine {
                     let math_font_size: f32 = 10.5;
                     let x = page.margin.left;
                     let (math_elems, bbox) = crate::layout::math::emit_math_block(
-                        math_block, x, cursor_y, math_font_size,
+                        math_block, x, cursor.cursor_y, math_font_size,
                     );
                     if !math_elems.is_empty() {
                         elements.extend(math_elems);
                         // Advance by full bbox height + a line of descent leeway.
                         let advance = bbox.height().max(math_font_size * 1.2)
                             + math_font_size * 0.3;
-                        cursor_y += advance;
+                        cursor.advance(advance);
                     }
                 }
             }
@@ -2589,7 +2589,7 @@ impl LayoutEngine {
         let hdr_width = content_width;
         for (page_idx, lp) in pages.iter_mut().enumerate() {
             if !page.header.is_empty() {
-                let mut cy = header_y;
+                let mut cy = LayoutCursor::new(header_y);
                 for block in &page.header {
                     if let Block::Paragraph(para) = block {
                         let (hdr_elements, _) = self.layout_paragraph(
@@ -2617,7 +2617,7 @@ impl LayoutEngine {
                     }
                 }
                 let footer_top = page.size.height - footer_dist - footer_h;
-                let mut cy = footer_top;
+                let mut cy = LayoutCursor::new(footer_top);
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
                         let (ftr_elements, _) = self.layout_paragraph(
@@ -2845,8 +2845,8 @@ impl LayoutEngine {
                         // otherwise overflow would push a fake "page" and reset
                         // cy back to footnote_page_top, causing all footnotes to
                         // stack at the same Y (visible as overlapping notes).
-                        let mut cy = area_top + separator_h + separator_pad;
-                        let footnote_page_top = cy;
+                        let mut cy = LayoutCursor::new(area_top + separator_h + separator_pad);
+                        let footnote_page_top = cy.cursor_y;
                         let footnote_page_height_huge = 1e6_f32;
                         for note in &notes {
                             // Round 29: section-local sequential number (Word
@@ -3148,7 +3148,7 @@ impl LayoutEngine {
         // Initial cursor at top; for middle/bottom, compute content height first,
         // then offset all elements after layout.
         let v_anchor = text_box.v_text_anchor.as_deref().unwrap_or("t");
-        let mut cursor_y = abs_y + inset_t;
+        let mut cursor = LayoutCursor::new(abs_y + inset_t);
 
         // We layout content inside the text box without page-breaking.
         // Use dummy page/elements vecs since we don't want page breaks inside text boxes.
@@ -3157,7 +3157,7 @@ impl LayoutEngine {
 
         for block in &text_box.blocks {
             // Stop if we've exceeded the text box bounds
-            if cursor_y > abs_y + text_box.height - inset_b {
+            if cursor.cursor_y > abs_y + text_box.height - inset_b {
                 break;
             }
 
@@ -3166,11 +3166,11 @@ impl LayoutEngine {
                     let clip_bottom = abs_y + text_box.height;
                     // Capture para start Y before layout_paragraph advances cursor_y.
                     // Used below to anchor inner-paragraph shapes at their declared offset.
-                    let para_start_y = cursor_y;
+                    let para_start_y = cursor.cursor_y;
                     let (para_elements, _) = self.layout_paragraph(
                         para,
                         inner_x,
-                        &mut cursor_y,
+                        &mut cursor,
                         inner_width,
                         inner_height,
                         abs_y + inset_t,
@@ -3283,7 +3283,7 @@ impl LayoutEngine {
                     let table_elements = self.layout_table(
                         table,
                         inner_x,
-                        &mut cursor_y,
+                        &mut cursor,
                         inner_width,
                         None,
                         None,
@@ -3296,11 +3296,11 @@ impl LayoutEngine {
                     elements.extend(table_elements);
                 }
                 Block::Image(img) => {
-                    elements.push(LayoutElement::new(inner_x, cursor_y, img.width.min(inner_width), img.height, LayoutContent::Image {
+                    elements.push(LayoutElement::new(inner_x, cursor.cursor_y, img.width.min(inner_width), img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
                     }));
-                    cursor_y += img.height;
+                    cursor.advance(img.height);
                 }
                 Block::UnsupportedElement(_) => {}
                 Block::Math(_) => {
@@ -3330,7 +3330,7 @@ impl LayoutEngine {
                     }
                 }
             }
-            if min_y < max_y { max_y - min_y } else { cursor_y - (abs_y + inset_t) }
+            if min_y < max_y { max_y - min_y } else { cursor.cursor_y - (abs_y + inset_t) }
         };
         let v_shift = match v_anchor {
             "ctr" | "middle" | "middle-center" => ((inner_height - content_h) / 2.0).max(0.0),
@@ -3365,7 +3365,7 @@ impl LayoutEngine {
         &self,
         para: &Paragraph,
         start_x: f32,
-        cursor_y: &mut f32,
+        cursor: &mut LayoutCursor,
         content_width: f32,
         content_height: f32,
         page_top: f32,
@@ -3430,11 +3430,11 @@ impl LayoutEngine {
         // COM-confirmed: page 1 preserves space_before (H1 sb=24 → y=96=72+24).
         // Page 2+ suppresses it.
         let is_page_2_plus = !pages.is_empty() || !current_elements.is_empty();
-        if (*cursor_y - page_top).abs() < 0.01 && is_page_2_plus {
+        if (cursor.cursor_y - page_top).abs() < 0.01 && is_page_2_plus {
             effective_spacing = 0.0;
         }
 
-        *cursor_y += effective_spacing;
+        cursor.advance(effective_spacing);
 
         // Debug: dump per-paragraph cursor_y for Class A FAIL root cause investigation.
         // Gated by env OXI_DUMP_CURSOR_Y. Day 33 part 7 (option B).
@@ -3444,7 +3444,7 @@ impl LayoutEngine {
             let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(20).collect();
             eprintln!(
                 "[CY_DUMP] body_pi={} cursor_y={:.3} space_before={:.3} n_runs={} text={:?}",
-                pi_str, *cursor_y, effective_spacing, n_runs, txt
+                pi_str, cursor.cursor_y, effective_spacing, n_runs, txt
             );
         }
 
@@ -3561,7 +3561,7 @@ impl LayoutEngine {
             };
 
             // Page break check for marker
-            if *cursor_y + line_height > page_top + content_height {
+            if cursor.cursor_y + line_height > page_top + content_height {
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -3569,7 +3569,7 @@ impl LayoutEngine {
                 });
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
-                *cursor_y = page_top;
+                cursor.set(page_top);
             }
 
             // Bullet markers are scaled up (2x) so adjust Y to align with text center
@@ -3588,7 +3588,7 @@ impl LayoutEngine {
                 .map(|s| s.to_string());
             let marker_bold = self.resolve_bold(marker_style, &para.style);
             let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
-            elements.push(LayoutElement::new(marker_x, *cursor_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
+            elements.push(LayoutElement::new(marker_x, cursor.cursor_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
                     text: marker_text,
                     font_size: marker_font_size,
                     font_family: marker_font_family,
@@ -3829,15 +3829,15 @@ impl LayoutEngine {
                 page_top + content_height
             };
             let needs_page_break = if in_textbox { false } else {
-                *cursor_y + break_threshold > effective_break_bottom
+                cursor.cursor_y + break_threshold > effective_break_bottom
             };
             if std::env::var("OXI_DUMP_BREAK").is_ok() && line_idx == 0 {
                 let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
                 let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
                 eprintln!(
                     "[BR_DUMP] pi={} line0 cursor_y={:.3} eff_lh={:.3} line_h={:.3} sum={:.3} pg_top={:.3} pg_bot={:.3} brk={} text={:?}",
-                    pi_str, *cursor_y, effective_lh, line_height,
-                    *cursor_y + effective_lh, page_top, page_top + content_height,
+                    pi_str, cursor.cursor_y, effective_lh, line_height,
+                    cursor.cursor_y + effective_lh, page_top, page_top + content_height,
                     needs_page_break, txt
                 );
             }
@@ -3852,13 +3852,13 @@ impl LayoutEngine {
                     // Orphan: check if the next line would overflow — that would leave
                     // only 1 line on this page. Push entire paragraph to next page.
                     let next_h = line_heights.get(1).copied().unwrap_or(0.0);
-                    *cursor_y + line_height + next_h > page_top + content_height
+                    cursor.cursor_y + line_height + next_h > page_top + content_height
                         && !current_elements.is_empty()
                 } else if line_idx == lines.len() - 2 && !needs_page_break {
                     // Widow: if the last line would overflow to the next page alone,
                     // break BEFORE this line so at least 2 lines go to the next page.
                     let next_h = line_heights.get(line_idx + 1).copied().unwrap_or(0.0);
-                    *cursor_y + line_height + next_h > page_top + content_height
+                    cursor.cursor_y + line_height + next_h > page_top + content_height
                 } else {
                     false
                 }
@@ -3868,7 +3868,7 @@ impl LayoutEngine {
             if std::env::var("OXI_DUMP_WIDOW").is_ok() && line_idx == 0 {
                 let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
                 eprintln!("[WIDOW] line0 lines={} wc={} cursor_y={:.2} lh={:.2} next_h={:.2} limit={:.2} curr_empty={} break={} text={:?}",
-                    lines.len(), para.style.widow_control, *cursor_y, line_height,
+                    lines.len(), para.style.widow_control, cursor.cursor_y, line_height,
                     line_heights.get(1).copied().unwrap_or(0.0),
                     page_top + content_height, current_elements.is_empty(),
                     widow_orphan_break, txt);
@@ -3883,7 +3883,7 @@ impl LayoutEngine {
                 });
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
-                *cursor_y = page_top;
+                cursor.set(page_top);
                 // Step 0: widow/orphan moves all earlier lines (if any) of
                 // this paragraph to the new page. Re-slot any refs already
                 // attributed to page 0 into page 1, then open a new bucket
@@ -3909,7 +3909,7 @@ impl LayoutEngine {
                         height: page.size.height,
                         elements: std::mem::take(current_elements),
                     });
-                    *cursor_y = page_top;
+                    cursor.set(page_top);
                     return (Vec::new(), 0.0);
                 }
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
@@ -3920,7 +3920,7 @@ impl LayoutEngine {
                     height: page.size.height,
                     elements: std::mem::take(current_elements),
                 });
-                *cursor_y = page_top;
+                cursor.set(page_top);
                 // Step 0: lines [0, line_idx) stay on OLD page (their refs
                 // already accumulated in current bucket); open a fresh
                 // bucket so line_idx and beyond register on the NEW page.
@@ -4251,7 +4251,7 @@ impl LayoutEngine {
                 // Session 75 Phase D (2026-05-17): y is LINE BOX TOP, renderer adds
                 // text_y_off + baseline_adjust + vert_offset at draw time. See
                 // memory/session71_y_convention_refactor_design.md.
-                let mut el = LayoutElement::new(x, *cursor_y, adjusted_width, line_height, LayoutContent::Text {
+                let mut el = LayoutElement::new(x, cursor.cursor_y, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -4396,7 +4396,7 @@ impl LayoutEngine {
             // multi-author paragraphs still get a single unambiguous bar.
             if line_has_revision {
                 let bar_x = (start_x - 12.0).max(0.0);
-                let bar_y = *cursor_y;
+                let bar_y = cursor.cursor_y;
                 let bar_h = line_height;
                 let bar_w: f32 = 1.5;
                 elements.push(LayoutElement::new(
@@ -4423,7 +4423,7 @@ impl LayoutEngine {
                     // Session 75 Phase D: y is LINE BOX TOP; renderer adds text_y_off.
                     let mut el = LayoutElement::new(
                         line_x,
-                        *cursor_y,
+                        cursor.cursor_y,
                         0.0,
                         line_height,
                         LayoutContent::Text {
@@ -4481,7 +4481,7 @@ impl LayoutEngine {
                 let pitch_tw_i = (grid_pitch.unwrap() * 20.0).round() as i32;
                 let margin_tw = (page.margin.top * 20.0).round() as i32;
                 let cells = (line_height * 20.0 / pitch_tw_i as f32).round().max(1.0) as i32;
-                let cur_tw = (*cursor_y * 20.0).round() as i32;
+                let cur_tw = (cursor.cursor_y * 20.0).round() as i32;
                 let offset = (cur_tw - margin_tw).max(0);
                 let cell_remainder = offset % pitch_tw_i;
                 // R56c: distinguish "slightly past cell start" (uniform LM2
@@ -4501,7 +4501,7 @@ impl LayoutEngine {
                     let raw = cur_tw + cells * pitch_tw_i;
                     if raw % 10 == 0 { raw } else { (raw / 10 + 1) * 10 }
                 };
-                *cursor_y = target_tw as f32 / 20.0;
+                cursor.set(target_tw as f32 / 20.0);
                 cumul_line_idx += cells as usize;
             } else {
             // For single LM=0, gate by direction: only when raw advances MORE than rounded.
@@ -4541,7 +4541,7 @@ impl LayoutEngine {
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
                 };
-                *cursor_y += (cn - cc) as f32 / 20.0;
+                cursor.advance((cn - cc) as f32 / 20.0);
                 // Update cumulative raw position for Multiple spacing AND LM0 single.
                 if is_multiple_spacing || (grid_pitch.is_none() && is_single_lm0) {
                     if let Some(ref mut cr) = mult_cumul_raw {
@@ -4549,7 +4549,7 @@ impl LayoutEngine {
                     }
                 }
             } else {
-                *cursor_y += line_height;
+                cursor.advance(line_height);
             }
             // Round 7: ruby paragraph-tail expansion (V7 measurement) —
             // when the current paragraph contains any ruby annotation,
@@ -4559,7 +4559,7 @@ impl LayoutEngine {
             // estimate_para_height; this is the matching render-side
             // wiring so cursor positions match the estimate.
             if line_idx + 1 == lines.len() && ruby_para_expansion_pt > 0.0 {
-                *cursor_y += ruby_para_expansion_pt;
+                cursor.advance(ruby_para_expansion_pt);
             }
             // Only advance cumul index when cumulative round is active.
             // COM-confirmed (683f): paragraphs with non-uniform line heights
@@ -4584,7 +4584,7 @@ impl LayoutEngine {
                     height: page.size.height,
                     elements: page_elements,
                 });
-                *cursor_y = page_top;
+                cursor.set(page_top);
             }
         }
 
@@ -4592,8 +4592,8 @@ impl LayoutEngine {
         // adjacent to a RUN of ≥2 consecutive empty paragraphs get +0.5pt extra advance.
         // Only applies to LM0 no-grid single spacing. Skip if paragraph caused page break.
         if adjacent_to_empty_run && is_single_lm0 && grid_pitch.is_none()
-            && (*cursor_y - page_top).abs() > 0.1 {
-            *cursor_y += 0.5;
+            && (cursor.cursor_y - page_top).abs() > 0.1 {
+            cursor.advance(0.5);
         }
 
         let space_after = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
@@ -4608,7 +4608,7 @@ impl LayoutEngine {
         // Paragraph borders (e.g., Title style bottom border)
         if let Some(ref borders) = para.style.borders {
             let para_top = elements.first().map(|e| e.y).unwrap_or(start_x);
-            let para_bottom = *cursor_y;
+            let para_bottom = cursor.cursor_y;
             let border_x = start_x;
             let border_width = content_width;
 
@@ -4621,7 +4621,7 @@ impl LayoutEngine {
                 }));
                 // Advance cursor to border midpoint (COM-confirmed: space + bw/2).
                 // gen2_036 Title 26pt: lineH=34 + space(4) + bw/2(0.5) = 38.5 = Word.
-                *cursor_y = border_y + bw / 2.0;
+                cursor.set(border_y + bw / 2.0);
             }
             if let Some(ref top) = borders.top {
                 let bw = top.width;
@@ -6037,7 +6037,7 @@ impl LayoutEngine {
         &self,
         table: &Table,
         start_x: f32,
-        cursor_y: &mut f32,
+        cursor: &mut LayoutCursor,
         content_width: f32,
         grid_pitch: Option<f32>,
         grid_char_pitch: Option<f32>,
@@ -6125,7 +6125,7 @@ impl LayoutEngine {
         // Measured: 1row_outer4 marker_y=72.0, cell_y=97.5 → offset=0.5pt=top_bw.
         if table.style.border {
             let top_bw = table.style.border_width.unwrap_or(0.4);
-            *cursor_y += top_bw;
+            cursor.advance(top_bw);
         }
 
         let num_rows = table.rows.len();
@@ -6138,7 +6138,7 @@ impl LayoutEngine {
             // preserves the natural pre-pass to avoid 3a4f9f cascade — see
             // session79_adjust_lh_in_table_mixed_cell_valign_falsified.md).
             let mut visual_row_h: f32 = 0.0;
-            let row_entry_cursor_y = *cursor_y;
+            let row_entry_cursor_y = cursor.cursor_y;
 
             // First pass: calculate row height
             let mut grid_idx = row.grid_before as usize;
@@ -6297,7 +6297,7 @@ impl LayoutEngine {
             // Allow break if there are elements from previous rows OR from before the table
             let has_content = !elements.is_empty() || !current_elements.is_empty();
             let page_bottom = page_top + content_height;
-            let row_overflows = *cursor_y + row_height > page_bottom;
+            let row_overflows = cursor.cursor_y + row_height > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
             // ANY cell's FIRST paragraph carries `<w:lastRenderedPageBreak/>`
             // on its run[0], Word's saved render broke before this row.
@@ -6311,7 +6311,7 @@ impl LayoutEngine {
                     _ => false,
                 })
             });
-            let consumed_row = *cursor_y - page_top;
+            let consumed_row = cursor.cursor_y - page_top;
             // R7.48 (2026-05-13): tighten R7.47 threshold from > 0.5 to > 0.85.
             // OXI_DUMP_ROW_LRPB traces showed Oxi cursor_y/content_height at the
             // firing point: de6e fires at 0.904, 29dc6e at 0.868 (correct PASSes),
@@ -6331,7 +6331,7 @@ impl LayoutEngine {
                     })
                 }).next().unwrap_or_default();
                 eprintln!("[ROW_LRPB] row_idx={} cursor_y={:.2} row_h={:.2} page_bot={:.2} consumed_frac={:.3} row_overflows={} fire={} text={:?}",
-                    row_idx, *cursor_y, row_height, page_bottom,
+                    row_idx, cursor.cursor_y, row_height, page_bottom,
                     consumed_row/content_height, row_overflows, lrpb_row_should_break, preview);
             }
             // Row splitting: when cantSplit=false (default) and the row overflows,
@@ -6386,7 +6386,7 @@ impl LayoutEngine {
             let is_single_row_single_cell = table.rows.len() == 1
                 && table.rows.get(0).map_or(false, |r| r.cells.len() == 1);
             let widow_break_needed = row_idx == 0 && has_content && is_single_row_single_cell && {
-                let free_space = page_bottom - *cursor_y;
+                let free_space = page_bottom - cursor.cursor_y;
                 let widow_threshold = if let Some(pitch) = table_grid_pitch {
                     pitch * 4.0
                 } else { 58.0 };
@@ -6407,7 +6407,7 @@ impl LayoutEngine {
                     height: page_height,
                     elements: std::mem::take(current_elements),
                 });
-                *cursor_y = page_top;
+                cursor.set(page_top);
             }
 
             // Second pass: render cells
@@ -6462,7 +6462,7 @@ impl LayoutEngine {
                         } else {
                             format!("#{}", shading_color)
                         };
-                        elements.push(LayoutElement::new(cell_x, *cursor_y, cell_w, row_height, LayoutContent::CellShading {
+                        elements.push(LayoutElement::new(cell_x, cursor.cursor_y, cell_w, row_height, LayoutContent::CellShading {
                                 color: color_hex,
                         }));
                     }
@@ -6497,7 +6497,7 @@ impl LayoutEngine {
                     // COM-confirmed: nested table width = outer cell width - 2 × padding
                     let nested_x = cell_x + pad_l;
                     let nested_content_w = (cell_w - pad_l - pad_r).max(0.0);
-                    let mut nested_y = content_h;
+                    let mut nested_y = LayoutCursor::new(content_h);
                     let mut dummy_pages = Vec::new();
                     let mut dummy_elems = Vec::new();
                     let nested_elements = self.layout_table(
@@ -6511,7 +6511,7 @@ impl LayoutEngine {
                     for elem in nested_elements {
                         cell_elements.push(elem);
                     }
-                    content_h = nested_y;
+                    content_h = nested_y.cursor_y;
                 }
                 Block::Paragraph(para) => {
                 let para = para;
@@ -7101,12 +7101,12 @@ impl LayoutEngine {
                 };
 
                 // Emit cell elements with absolute Y positions
-                let dy = *cursor_y + pad_t + v_offset;
+                let dy = cursor.cursor_y + pad_t + v_offset;
                 if dump_table {
                     let valign = cell.v_align.as_deref().unwrap_or("(top)");
                     eprintln!(
                         "[TBL_DUMP]   row={} cell={} cursor_y={:.3} pad_t={:.3} pad_b={:.3} content_h={:.3} v_align={} v_offset={:.3} dy={:.3} row_h={:.3}",
-                        row_idx, cell_idx, *cursor_y, pad_t, pad_b, content_h, valign, v_offset, dy, row_height
+                        row_idx, cell_idx, cursor.cursor_y, pad_t, pad_b, content_h, valign, v_offset, dy, row_height
                     );
                 }
                 let is_vmerge_restart = cell.v_merge.as_deref() == Some("restart");
@@ -7139,7 +7139,7 @@ impl LayoutEngine {
                 });
                 if table.style.border || has_cell_borders {
                     let bx = cell_x;
-                    let by = *cursor_y;
+                    let by = cursor.cursor_y;
 
                     // Resolve border color and width from cell borders, falling back to table style
                     let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32) {
@@ -7218,7 +7218,7 @@ impl LayoutEngine {
             if max_actual_cell_h > row_height + 0.01 {
                 let old_h = row_height;
                 row_height = max_actual_cell_h;
-                let by = *cursor_y;
+                let by = cursor.cursor_y;
                 let old_bottom = by + old_h;
                 let new_bottom = by + row_height;
                 for elem in elements[elements_before_row..].iter_mut() {
@@ -7240,7 +7240,7 @@ impl LayoutEngine {
             // Row splitting across pages: when the row content extends beyond
             // the current page bottom, split elements between current and next page.
             // This handles single-cell rows with many paragraphs (e.g. list boxes).
-            let row_bottom = *cursor_y + row_height;
+            let row_bottom = cursor.cursor_y + row_height;
             if row_bottom > page_bottom + 0.5 && !row.cant_split {
                 // R7.56 (Day 34 part 25, 2026-05-13): respect mid-cell LRPB markers.
                 // If any element in this row carries `is_paragraph_start_with_lrpb`,
@@ -7262,7 +7262,7 @@ impl LayoutEngine {
                 // unaffected because there it was the only LRPB in the row (single
                 // element → first == min).
                 let lrpb_split_y = row_elements.iter()
-                    .find(|e| e.is_paragraph_start_with_lrpb && e.y > *cursor_y + 0.5)
+                    .find(|e| e.is_paragraph_start_with_lrpb && e.y > cursor.cursor_y + 0.5)
                     .map(|e| e.y)
                     .unwrap_or(f32::INFINITY);
                 let split_y = if lrpb_split_y.is_finite() && lrpb_split_y < page_bottom {
@@ -7689,9 +7689,9 @@ impl LayoutEngine {
                 elements = remaining;
                 let overflow_on_next = row_bottom - split_y;
                 let pages_used = ((overflow_on_next) / content_height).floor() as usize;
-                *cursor_y = page_top + overflow_on_next - (pages_used as f32 * content_height);
+                cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
             } else {
-                *cursor_y += row_height;
+                cursor.advance(row_height);
             }
         }
 
