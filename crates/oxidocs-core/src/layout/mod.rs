@@ -1,6 +1,10 @@
 mod kinsoku;
 pub mod math;
 mod ruby;
+/// Session 117: per-char compression algorithm for jc=both / distribute paragraphs.
+/// Not yet integrated into the layout pipeline — see docs/design/jc_both_per_char_compression.md.
+#[allow(dead_code)]
+pub mod jc_both_compress;
 
 use crate::font::{FontMetrics, FontMetricsRegistry};
 use crate::ir::*;
