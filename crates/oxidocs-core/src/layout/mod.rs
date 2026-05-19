@@ -7953,6 +7953,20 @@ impl LayoutEngine {
         // Without this the line-count estimate under-counts vs render, re-introducing
         // the Fix C estimate<render mismatch this function exists to prevent.
         let mut prev_char_emitted: Option<char> = None;
+        // Session 123 (2026-05-20): mirror the S118 jc=both wrap-decision lookahead
+        // from the cell renderer (mod.rs:6722-6727 and 6864-6895). Without this
+        // mirror, count_cell_lines predicts more lines than the renderer emits
+        // when OXI_JCBOTH_REFACTOR=1 packs an extra char on a line via per-char
+        // compression — re-introducing the very estimate<render mismatch this
+        // function exists to prevent (Fix C). Identical gate conditions: env var
+        // + jc∈{Justify,Distribute} + balanceSBDB + compressPunctuation, and
+        // per-run cs ≤ -0.1pt (= ≤ -2tw, S122 threshold).
+        let jc_refactor_enabled = std::env::var("OXI_JCBOTH_REFACTOR").is_ok();
+        let jc_gate_active = jc_refactor_enabled
+            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+            && self.balance_single_byte_double_byte_width
+            && self.compress_punctuation;
+        let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
 
         for run in &para.runs {
             let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -7961,6 +7975,8 @@ impl LayoutEngine {
             } else {
                 snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
             };
+            // S123: per-char trial-line for jc=both wrap-decision lookahead.
+            let mut buf_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
             for ch in run.text.chars() {
                 // Session 109 (2026-05-19): mirror the cell renderer's soft-line-
                 // break handling so the line-count estimate matches what the
@@ -7975,6 +7991,8 @@ impl LayoutEngine {
                     line_nonempty = false;
                     is_first_line = false;
                     prev_char_emitted = None;
+                    current_line_chars.clear();
+                    buf_chars.clear();
                     continue;
                 }
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
@@ -8032,18 +8050,45 @@ impl LayoutEngine {
                 let cw = cw + auto_space_extra;
                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                 let is_space = ch == ' ' || ch == '\u{3000}';
-                if !is_space && line_x + buf_w + cw > effective_wrap && !(!line_nonempty && !buf_nonempty) {
+                // S123: mirror cell renderer's compute_compression lookahead.
+                // When gate active + this run has neg cs + natural would overflow,
+                // ask whether per-char compression would let trial line fit. If yes,
+                // do NOT wrap — matches the actual render decision.
+                let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
+                let run_has_neg_cs = cs <= -0.1;
+                let would_overflow = if jc_gate_active && run_has_neg_cs && would_overflow_natural {
+                    let ch_ctx = crate::layout::jc_both_compress::CharContext {
+                        ch, natural_advance: cw, font_size,
+                    };
+                    let mut trial: Vec<crate::layout::jc_both_compress::CharContext> =
+                        Vec::with_capacity(current_line_chars.len() + buf_chars.len() + 1);
+                    trial.extend(current_line_chars.iter().cloned());
+                    trial.extend(buf_chars.iter().cloned());
+                    trial.push(ch_ctx);
+                    let r = crate::layout::jc_both_compress::compute_compression(
+                        &trial, effective_wrap, true,
+                    );
+                    !r.fits
+                } else {
+                    would_overflow_natural
+                };
+                if !is_space && would_overflow && !(!line_nonempty && !buf_nonempty) {
                     if kinsoku::is_line_start_prohibited(ch) {
                         buf_w += cw;
                         buf_nonempty = true;
+                        buf_chars.push(crate::layout::jc_both_compress::CharContext {
+                            ch, natural_advance: cw, font_size,
+                        });
                         line_x += buf_w;
                         line_nonempty = true;
+                        current_line_chars.extend(buf_chars.drain(..));
                         lines += 1;
                         line_x = 0.0;
                         buf_w = 0.0;
                         buf_nonempty = false;
                         line_nonempty = false;
                         is_first_line = false;
+                        current_line_chars.clear();
                         continue;
                     }
                     if buf_nonempty {
@@ -8051,14 +8096,19 @@ impl LayoutEngine {
                         line_nonempty = true;
                         buf_w = 0.0;
                         buf_nonempty = false;
+                        current_line_chars.extend(buf_chars.drain(..));
                     }
                     lines += 1;
                     line_x = 0.0;
                     line_nonempty = false;
                     is_first_line = false;
+                    current_line_chars.clear();
                 }
                 buf_w += cw;
                 buf_nonempty = true;
+                buf_chars.push(crate::layout::jc_both_compress::CharContext {
+                    ch, natural_advance: cw, font_size,
+                });
                 prev_char_emitted = Some(ch);
             }
             if buf_nonempty {
@@ -8066,6 +8116,7 @@ impl LayoutEngine {
                 line_nonempty = true;
                 buf_w = 0.0;
                 buf_nonempty = false;
+                current_line_chars.extend(buf_chars.drain(..));
             }
         }
         if line_nonempty {
