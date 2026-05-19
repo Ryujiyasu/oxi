@@ -6866,11 +6866,15 @@ impl LayoutEngine {
                                 // wrap if line CANNOT fit even with priority compression applied.
                                 // S119 tuned kanji_max_savings 0.6% → 0.1% to reduce over-fit.
                                 // S121 fix: require run.cs < 0 (matches original S112 trigger).
-                                // Without this, a1d6's cs=0 paragraphs spuriously over-fit
-                                // because they meet doc-level balanceSBDB+compressPunctuation
-                                // but Word doesn't compress them (no negative cs to balance).
+                                // S122 refinement: require run.cs ≤ -0.1pt (= ≤ -2tw). The
+                                // d1e8ac8 doc has a custom style "一太郎" with `cs=-1` (= -0.05pt,
+                                // 1 twip negative — effectively no compression). My gate `cs<0`
+                                // fired on those paragraphs and shifted them slightly, causing
+                                // -0.03 SSIM regression on d1e8 p.1. S113 grid showed Word
+                                // actually compresses at cs∈{-5,-9,-15,-20}tw = {-0.25..-1.0pt};
+                                // cs=-1tw=-0.05pt is below Word's compression threshold.
                                 let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
-                                let run_has_neg_cs = cs < 0.0;
+                                let run_has_neg_cs = cs <= -0.1;
                                 let would_overflow = if jc_gate_active && run_has_neg_cs && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                                         ch,
