@@ -76,9 +76,11 @@ pub fn digit_max_savings(natural: f32) -> f32 {
 /// Maximum compression possible for a fullwidth kanji.
 ///
 /// COM-observed at cw=1800 tl=9: kanji_mean 9.6 → 9.54pt = -0.06pt = 0.6%.
-/// Approximate as 0.6% of natural.
+/// S119: reduced from 0.6% to 0.1% (1/6 of observation) to minimize
+/// spurious compressions on kanji-heavy lines. Single-observation
+/// ratio doesn't generalize; we need a more conservative default.
 pub fn kanji_max_savings(natural: f32) -> f32 {
-    (natural * 0.006).max(0.0)
+    (natural * 0.001).max(0.0)
 }
 
 /// Classify a char into compression priority class.

@@ -6861,10 +6861,11 @@ impl LayoutEngine {
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
                                 let is_space = ch == ' ' || ch == '\u{3000}';
-                                // S118 wrap-decision: when env var ON + gate active, use
-                                // compute_compression on (current_line + buf + ch) to check
-                                // if line fits with per-char compression applied. Falls back
-                                // to natural overflow check when gate inactive.
+                                // S118 wrap-decision lookahead: when env var ON + gate active,
+                                // call compute_compression on (current_line + buf + ch) and only
+                                // wrap if line CANNOT fit even with priority compression applied.
+                                // S119 tuned kanji_max_savings 0.6% → 0.1% to reduce over-fit.
+                                // Refinement to algorithm goes in jc_both_compress, not here.
                                 let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
                                 let would_overflow = if jc_gate_active && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
