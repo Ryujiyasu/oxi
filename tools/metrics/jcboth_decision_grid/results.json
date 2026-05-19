@@ -1,0 +1,1533 @@
+{
+  "dg_cw1200_tl05": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw1200_tl07": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 7
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 4,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 67.5,
+        "text": "け\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "dg_cw1200_tl09": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 9
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 6,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.0,
+        "text": "けた匿\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "dg_cw1200_tl10": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 10
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 96.75,
+        "text": "けた匿名\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "dg_cw1200_tl12": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 12
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 10.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "けた匿名",
+        "n_chars": 4
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "デー\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw1200_tl14": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 14
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 10.35,
+    "kanji_n": 10,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "けた匿名",
+        "n_chars": 4
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 96.75,
+        "text": "データの\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "dg_cw1200_tl16": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 16
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 10.840909090909092,
+    "kanji_n": 11,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "けた匿名",
+        "n_chars": 4
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "データの",
+        "n_chars": 4
+      },
+      {
+        "y": 78.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "名称\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw1200_tl20": {
+    "meta": {
+      "cell_dxa": 1200,
+      "text_len": 20
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 11.035714285714286,
+    "kanji_n": 14,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 102.0,
+        "text": "１．提供を受",
+        "n_chars": 6
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "けた匿名",
+        "n_chars": 4
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "データの",
+        "n_chars": 4
+      },
+      {
+        "y": 78.75,
+        "x_start": 57.75,
+        "x_end": 93.0,
+        "text": "名称調査",
+        "n_chars": 4
+      },
+      {
+        "y": 90.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "結果\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw1500_tl05": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw1500_tl07": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw1500_tl09": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 9
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.875,
+    "kanji_n": 6,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 117.0,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "た匿\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw1500_tl10": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 10
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.857142857142858,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 117.0,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.0,
+        "text": "た匿名\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "dg_cw1500_tl12": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 12
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 117.0,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "た匿名デー\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw1500_tl14": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 14
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.975,
+    "kanji_n": 10,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 117.0,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 108.0,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 67.5,
+        "text": "の\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "dg_cw1500_tl16": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 16
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.9375,
+    "kanji_n": 12,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 117.0,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 108.0,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 87.0,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "dg_cw1500_tl20": {
+    "meta": {
+      "cell_dxa": 1500,
+      "text_len": 20
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 10.0,
+    "kanji_n": 15,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 117.0,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 108.0,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 108.0,
+        "text": "の名称調査結",
+        "n_chars": 6
+      },
+      {
+        "y": 78.75,
+        "x_start": 57.75,
+        "x_end": 67.5,
+        "text": "果\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "dg_cw1800_tl05": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw1800_tl07": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw1800_tl09": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 9
+    },
+    "dot_advance_pt": 7.5,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.535714285714286,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１．提供を受けた匿\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw1800_tl10": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 10
+    },
+    "dot_advance_pt": 7.5,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.642857142857142,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 132.0,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 67.5,
+        "text": "名\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "dg_cw1800_tl12": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 12
+    },
+    "dot_advance_pt": 7.5,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.666666666666666,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 132.0,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.0,
+        "text": "名デー\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "dg_cw1800_tl14": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 14
+    },
+    "dot_advance_pt": 7.5,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.613636363636363,
+    "kanji_n": 11,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 132.0,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "名データの\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw1800_tl16": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 16
+    },
+    "dot_advance_pt": 7.5,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.634615384615385,
+    "kanji_n": 13,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 132.0,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 125.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw1800_tl20": {
+    "meta": {
+      "cell_dxa": 1800,
+      "text_len": 20
+    },
+    "dot_advance_pt": 7.5,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 10.125,
+    "kanji_n": 16,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 132.0,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 123.0,
+        "text": "名データの名称",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 96.75,
+        "text": "調査結果\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "dg_cw1968_tl05": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw1968_tl07": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw1968_tl09": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 9
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.642857142857142,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 144.0,
+        "text": "１．提供を受けた匿\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw1968_tl10": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 10
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.65625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 150.0,
+        "text": "１．提供を受けた匿名\r",
+        "n_chars": 11
+      }
+    ]
+  },
+  "dg_cw1968_tl12": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 12
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.666666666666666,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "デー\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw1968_tl14": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 14
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.681818181818182,
+    "kanji_n": 11,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 96.75,
+        "text": "データの\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "dg_cw1968_tl16": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 16
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.634615384615385,
+    "kanji_n": 13,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "dg_cw1968_tl20": {
+    "meta": {
+      "cell_dxa": 1968,
+      "text_len": 20
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 10.03125,
+    "kanji_n": 16,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 131.25,
+        "text": "データの名称調査",
+        "n_chars": 8
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "結果\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw2200_tl05": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw2200_tl07": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw2200_tl09": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 9
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.642857142857142,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 144.0,
+        "text": "１．提供を受けた匿\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw2200_tl10": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 10
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.65625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 153.75,
+        "text": "１．提供を受けた匿名\r",
+        "n_chars": 11
+      }
+    ]
+  },
+  "dg_cw2200_tl12": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 12
+    },
+    "dot_advance_pt": 8.25,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.583333333333334,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 151.5,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 67.5,
+        "text": "ー\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "dg_cw2200_tl14": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 14
+    },
+    "dot_advance_pt": 8.25,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.613636363636363,
+    "kanji_n": 11,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 151.5,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.0,
+        "text": "ータの\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "dg_cw2200_tl16": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 16
+    },
+    "dot_advance_pt": 8.25,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.576923076923077,
+    "kanji_n": 13,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 151.5,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw2200_tl20": {
+    "meta": {
+      "cell_dxa": 2200,
+      "text_len": 20
+    },
+    "dot_advance_pt": 8.25,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.617647058823529,
+    "kanji_n": 17,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 151.5,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 144.75,
+        "text": "ータの名称調査結果\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw2500_tl05": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw2500_tl07": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw2500_tl09": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 9
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.642857142857142,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 144.0,
+        "text": "１．提供を受けた匿\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw2500_tl10": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 10
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.65625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 153.75,
+        "text": "１．提供を受けた匿名\r",
+        "n_chars": 11
+      }
+    ]
+  },
+  "dg_cw2500_tl12": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 12
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 10,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 172.5,
+        "text": "１．提供を受けた匿名デー\r",
+        "n_chars": 13
+      }
+    ]
+  },
+  "dg_cw2500_tl14": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 14
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.886363636363637,
+    "kanji_n": 11,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 166.5,
+        "text": "１．提供を受けた匿名デー",
+        "n_chars": 12
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "タの\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "dg_cw2500_tl16": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 16
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.865384615384615,
+    "kanji_n": 13,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 166.5,
+        "text": "１．提供を受けた匿名デー",
+        "n_chars": 12
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 96.75,
+        "text": "タの名称\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "dg_cw2500_tl20": {
+    "meta": {
+      "cell_dxa": 2500,
+      "text_len": 20
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.75,
+    "kanji_mean_advance_pt": 9.794117647058824,
+    "kanji_n": 17,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 166.5,
+        "text": "１．提供を受けた匿名デー",
+        "n_chars": 12
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 135.0,
+        "text": "タの名称調査結果\r",
+        "n_chars": 9
+      }
+    ]
+  },
+  "dg_cw3000_tl05": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw3000_tl07": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw3000_tl09": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 9
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.642857142857142,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 144.0,
+        "text": "１．提供を受けた匿\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw3000_tl10": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 10
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.65625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 153.75,
+        "text": "１．提供を受けた匿名\r",
+        "n_chars": 11
+      }
+    ]
+  },
+  "dg_cw3000_tl12": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 12
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 10,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 172.5,
+        "text": "１．提供を受けた匿名デー\r",
+        "n_chars": 13
+      }
+    ]
+  },
+  "dg_cw3000_tl14": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 14
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.625,
+    "kanji_n": 12,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 192.0,
+        "text": "１．提供を受けた匿名データの\r",
+        "n_chars": 15
+      }
+    ]
+  },
+  "dg_cw3000_tl16": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 16
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.634615384615385,
+    "kanji_n": 13,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 192.0,
+        "text": "１．提供を受けた匿名データの名",
+        "n_chars": 15
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 67.5,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "dg_cw3000_tl20": {
+    "meta": {
+      "cell_dxa": 3000,
+      "text_len": 20
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.617647058823529,
+    "kanji_n": 17,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 192.0,
+        "text": "１．提供を受けた匿名データの名",
+        "n_chars": 15
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "称調査結果\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw3500_tl05": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 5
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.75,
+    "kanji_n": 3,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 105.75,
+        "text": "１．提供を\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "dg_cw3500_tl07": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 7
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 5,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 124.5,
+        "text": "１．提供を受け\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "dg_cw3500_tl09": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 9
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.642857142857142,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 144.0,
+        "text": "１．提供を受けた匿\r",
+        "n_chars": 10
+      }
+    ]
+  },
+  "dg_cw3500_tl10": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 10
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.65625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 153.75,
+        "text": "１．提供を受けた匿名\r",
+        "n_chars": 11
+      }
+    ]
+  },
+  "dg_cw3500_tl12": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 12
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.6,
+    "kanji_n": 10,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 172.5,
+        "text": "１．提供を受けた匿名デー\r",
+        "n_chars": 13
+      }
+    ]
+  },
+  "dg_cw3500_tl14": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 14
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.625,
+    "kanji_n": 12,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 192.0,
+        "text": "１．提供を受けた匿名データの\r",
+        "n_chars": 15
+      }
+    ]
+  },
+  "dg_cw3500_tl16": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 16
+    },
+    "dot_advance_pt": 9.75,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.589285714285714,
+    "kanji_n": 14,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 210.75,
+        "text": "１．提供を受けた匿名データの名称\r",
+        "n_chars": 17
+      }
+    ]
+  },
+  "dg_cw3500_tl20": {
+    "meta": {
+      "cell_dxa": 3500,
+      "text_len": 20
+    },
+    "dot_advance_pt": 6.0,
+    "digit_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.617647058823529,
+    "kanji_n": 17,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 216.75,
+        "text": "１．提供を受けた匿名データの名称調査",
+        "n_chars": 18
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 77.25,
+        "text": "結果\r",
+        "n_chars": 3
+      }
+    ]
+  }
+}
