@@ -6689,6 +6689,13 @@ impl LayoutEngine {
                         // inner_w=94.1pt): Oxi was wrapping at 8 chars (94.1pt limit) but
                         // Word wraps at 9 chars (94.5pt fits in 104pt). The estimate-vs-
                         // render inconsistency was the source of the over-pump.
+                        //
+                        // Session 126 (2026-05-20) — A/B tested OXI_CELL_INNER_WRAP=1
+                        // (= switch wrap_base to inner_w). Phase 1: 53/55 → 49/55. 3a4f
+                        // went 11 paras delta=-1 → 1314 paras delta=+1 (catastrophic).
+                        // Confirms Word's rule is doc-dependent: 191cb uses cell_w extension,
+                        // b35 uses sub-inner_w fill-justify. No simple toggle works.
+                        // Pre-S125 conclusion "accept b35 limit" re-confirmed.
                         let wrap_base = cell_w;
                         let wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
                         let first_line_wrap_w = if p_first_line_indent < 0.0 {

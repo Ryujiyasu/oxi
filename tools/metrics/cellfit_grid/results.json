@@ -1,0 +1,664 @@
+[
+  {
+    "path": "cf_tcw1271_n4_both_b1.docx",
+    "text": "組織的管\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 5,
+        "text": "組織的管\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 4,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 1.54
+  },
+  {
+    "path": "cf_tcw1271_n4_left_b1.docx",
+    "text": "組織的管\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 5,
+        "text": "組織的管\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 4,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.61
+  },
+  {
+    "path": "cf_tcw1271_n5_both_b1.docx",
+    "text": "組織的管理\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 6,
+        "text": "組織的管理\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 5,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.39
+  },
+  {
+    "path": "cf_tcw1271_n5_left_b1.docx",
+    "text": "組織的管理\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 6,
+        "text": "組織的管理\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 5,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.36
+  },
+  {
+    "path": "cf_tcw1271_n6_both_b1.docx",
+    "text": "組織的管理措\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 6,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.36
+  },
+  {
+    "path": "cf_tcw1271_n6_left_b1.docx",
+    "text": "組織的管理措\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 6,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.38
+  },
+  {
+    "path": "cf_tcw1271_n7_both_b1.docx",
+    "text": "組織的管理措置\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 2,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      },
+      {
+        "y": 86.2,
+        "n": 1,
+        "text": "置",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 7,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.41
+  },
+  {
+    "path": "cf_tcw1271_n7_left_b1.docx",
+    "text": "組織的管理措置\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 2,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      },
+      {
+        "y": 86.2,
+        "n": 1,
+        "text": "置",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 7,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.42
+  },
+  {
+    "path": "cf_tcw1271_n8_both_b1.docx",
+    "text": "組織的管理措置の\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 2,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      },
+      {
+        "y": 86.2,
+        "n": 2,
+        "text": "置の",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 8,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.43
+  },
+  {
+    "path": "cf_tcw1271_n8_left_b1.docx",
+    "text": "組織的管理措置の\r\u0007",
+    "cell_w_pt": 63.54999923706055,
+    "n_lines": 2,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      },
+      {
+        "y": 86.2,
+        "n": 2,
+        "text": "置の",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1271,
+    "n_target": 8,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.4
+  },
+  {
+    "path": "cf_tcw1800_n4_both_b1.docx",
+    "text": "組織的管\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 5,
+        "text": "組織的管\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 4,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.33
+  },
+  {
+    "path": "cf_tcw1800_n4_left_b1.docx",
+    "text": "組織的管\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 5,
+        "text": "組織的管\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 4,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.33
+  },
+  {
+    "path": "cf_tcw1800_n5_both_b1.docx",
+    "text": "組織的管理\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 6,
+        "text": "組織的管理\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 5,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.35
+  },
+  {
+    "path": "cf_tcw1800_n5_left_b1.docx",
+    "text": "組織的管理\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 6,
+        "text": "組織的管理\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 5,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.34
+  },
+  {
+    "path": "cf_tcw1800_n6_both_b1.docx",
+    "text": "組織的管理措\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 6,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.36
+  },
+  {
+    "path": "cf_tcw1800_n6_left_b1.docx",
+    "text": "組織的管理措\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 6,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.36
+  },
+  {
+    "path": "cf_tcw1800_n7_both_b1.docx",
+    "text": "組織的管理措置\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 8,
+        "text": "組織的管理措置\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 7,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.38
+  },
+  {
+    "path": "cf_tcw1800_n7_left_b1.docx",
+    "text": "組織的管理措置\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 8,
+        "text": "組織的管理措置\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 7,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.37
+  },
+  {
+    "path": "cf_tcw1800_n8_both_b1.docx",
+    "text": "組織的管理措置の\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 9,
+        "text": "組織的管理措置の\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 8,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.41
+  },
+  {
+    "path": "cf_tcw1800_n8_left_b1.docx",
+    "text": "組織的管理措置の\r\u0007",
+    "cell_w_pt": 90.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 9,
+        "text": "組織的管理措置の\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 1800,
+    "n_target": 8,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.39
+  },
+  {
+    "path": "cf_tcw2000_n4_both_b1.docx",
+    "text": "組織的管\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 5,
+        "text": "組織的管\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 4,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.31
+  },
+  {
+    "path": "cf_tcw2000_n4_left_b1.docx",
+    "text": "組織的管\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 5,
+        "text": "組織的管\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 4,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.33
+  },
+  {
+    "path": "cf_tcw2000_n5_both_b1.docx",
+    "text": "組織的管理\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 6,
+        "text": "組織的管理\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 5,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.33
+  },
+  {
+    "path": "cf_tcw2000_n5_left_b1.docx",
+    "text": "組織的管理\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 6,
+        "text": "組織的管理\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 5,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.34
+  },
+  {
+    "path": "cf_tcw2000_n6_both_b1.docx",
+    "text": "組織的管理措\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 6,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.36
+  },
+  {
+    "path": "cf_tcw2000_n6_left_b1.docx",
+    "text": "組織的管理措\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 7,
+        "text": "組織的管理措\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 6,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.37
+  },
+  {
+    "path": "cf_tcw2000_n7_both_b1.docx",
+    "text": "組織的管理措置\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 8,
+        "text": "組織的管理措置\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 7,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.38
+  },
+  {
+    "path": "cf_tcw2000_n7_left_b1.docx",
+    "text": "組織的管理措置\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 8,
+        "text": "組織的管理措置\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 7,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.37
+  },
+  {
+    "path": "cf_tcw2000_n8_both_b1.docx",
+    "text": "組織的管理措置の\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 9,
+        "text": "組織的管理措置の\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 8,
+    "jc": "both",
+    "balance": true,
+    "elapsed_s": 0.39
+  },
+  {
+    "path": "cf_tcw2000_n8_left_b1.docx",
+    "text": "組織的管理措置の\r\u0007",
+    "cell_w_pt": 100.0,
+    "n_lines": 1,
+    "lines": [
+      {
+        "y": 72.8,
+        "n": 9,
+        "text": "組織的管理措置の\r\u0007",
+        "x_first": 1.0,
+        "x_last": 1.0,
+        "pitch": 0.0
+      }
+    ],
+    "tcw": 2000,
+    "n_target": 8,
+    "jc": "left",
+    "balance": true,
+    "elapsed_s": 0.38
+  }
+]
