@@ -6715,6 +6715,16 @@ impl LayoutEngine {
                         let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)>> = Vec::new();
                         let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)> = Vec::new();
                         let mut line_x: f32 = 0.0;
+                        // Session 118 jc=both refactor — gated by OXI_JCBOTH_REFACTOR env var.
+                        // When enabled, calls compute_compression from jc_both_compress module
+                        // for wrap-decision lookahead. Track per-char CharContext alongside
+                        // string buf so we can pass to compute_compression.
+                        let jc_refactor_enabled = std::env::var("OXI_JCBOTH_REFACTOR").is_ok();
+                        let jc_gate_active = jc_refactor_enabled
+                            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                            && self.balance_single_byte_double_byte_width
+                            && self.compress_punctuation;
+                        let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
                         let mut is_first_line = true;
                         // R7.51 (2026-05-13): autoSpaceDE state for CJK↔Latin transitions.
                         // Tracks the last emitted character across runs/buffers so we can
@@ -6738,6 +6748,8 @@ impl LayoutEngine {
                             };
                             let mut buf = String::new();
                             let mut buf_w: f32 = 0.0;
+                            // S118: per-char context for jc_both_compress integration.
+                            let mut buf_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
                             for ch in run.text.chars() {
                                 // Session 109 (2026-05-19): honour soft line breaks
                                 // (<w:br/>) and column/page break markers within table
@@ -6764,9 +6776,11 @@ impl LayoutEngine {
                                         ));
                                         buf.clear();
                                         buf_w = 0.0;
+                                        current_line_chars.extend(buf_chars.drain(..));
                                     }
                                     lines.push(std::mem::take(&mut current_line));
                                     line_x = 0.0;
+                                    current_line_chars.clear();
                                     is_first_line = false;
                                     prev_char_emitted = None;
                                     continue;
@@ -6847,19 +6861,47 @@ impl LayoutEngine {
                                 let effective_wrap = if is_first_line { first_line_wrap_w } else { wrap_w };
                                 // Trailing spaces don't trigger line wrapping (Word behavior)
                                 let is_space = ch == ' ' || ch == '\u{3000}';
-                                if !is_space && line_x + buf_w + cw > effective_wrap && !(current_line.is_empty() && buf.is_empty()) {
+                                // S118 wrap-decision: when env var ON + gate active, use
+                                // compute_compression on (current_line + buf + ch) to check
+                                // if line fits with per-char compression applied. Falls back
+                                // to natural overflow check when gate inactive.
+                                let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
+                                let would_overflow = if jc_gate_active && would_overflow_natural {
+                                    let ch_ctx = crate::layout::jc_both_compress::CharContext {
+                                        ch,
+                                        natural_advance: cw,
+                                        font_size,
+                                    };
+                                    let mut trial: Vec<crate::layout::jc_both_compress::CharContext> =
+                                        Vec::with_capacity(current_line_chars.len() + buf_chars.len() + 1);
+                                    trial.extend(current_line_chars.iter().cloned());
+                                    trial.extend(buf_chars.iter().cloned());
+                                    trial.push(ch_ctx);
+                                    let r = crate::layout::jc_both_compress::compute_compression(
+                                        &trial, effective_wrap, true,
+                                    );
+                                    !r.fits
+                                } else {
+                                    would_overflow_natural
+                                };
+                                if !is_space && would_overflow && !(current_line.is_empty() && buf.is_empty()) {
                                     // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
                                     if kinsoku::is_line_start_prohibited(ch) {
                                         // Add to buffer and break AFTER this char
                                         buf.push(ch);
                                         buf_w += cw;
+                                        buf_chars.push(crate::layout::jc_both_compress::CharContext {
+                                            ch, natural_advance: cw, font_size,
+                                        });
                                         if !buf.is_empty() {
                                             current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
                                             buf.clear();
                                             buf_w = 0.0;
+                                            current_line_chars.extend(buf_chars.drain(..));
                                         }
                                         lines.push(std::mem::take(&mut current_line));
                                         line_x = 0.0;
+                                        current_line_chars.clear();
                                         is_first_line = false;
                                         continue;
                                     }
@@ -6868,18 +6910,24 @@ impl LayoutEngine {
                                         current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
                                         buf.clear();
                                         buf_w = 0.0;
+                                        current_line_chars.extend(buf_chars.drain(..));
                                     }
                                     lines.push(std::mem::take(&mut current_line));
                                     line_x = 0.0;
+                                    current_line_chars.clear();
                                     is_first_line = false;
                                 }
                                 buf.push(ch);
                                 buf_w += cw;
+                                buf_chars.push(crate::layout::jc_both_compress::CharContext {
+                                    ch, natural_advance: cw, font_size,
+                                });
                                 prev_char_emitted = Some(ch);
                             }
                             if !buf.is_empty() {
                                 current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
                                 line_x += buf_w;
+                                current_line_chars.extend(buf_chars.drain(..));
                             }
                         }
                         if !current_line.is_empty() {
