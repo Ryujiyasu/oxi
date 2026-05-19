@@ -1,0 +1,9 @@
+{
+  "pages": [
+    {"page": 1, "width": 595.300, "height": 841.900, "elements": [
+      {"type": "text", "x": 58.450, "y": 42.500, "w": 93.450, "h": 12.000, "text": "１．提供を受けた", "font_size": 10.50, "para_idx": 0, "run_idx": null, "char_offset": null, "cell_para_idx": 0, "cell_row_idx": 0, "cell_col_idx": 0, "text_y_off": 0.250},
+      {"type": "text", "x": 68.050, "y": 54.500, "w": 83.850, "h": 12.000, "text": "匿名データの名", "font_size": 10.50, "para_idx": 0, "run_idx": null, "char_offset": null, "cell_para_idx": 0, "cell_row_idx": 0, "cell_col_idx": 0, "text_y_off": 0.250},
+      {"type": "text", "x": 68.050, "y": 66.500, "w": 10.500, "h": 12.000, "text": "称", "font_size": 10.50, "para_idx": 0, "run_idx": null, "char_offset": null, "cell_para_idx": 0, "cell_row_idx": 0, "cell_col_idx": 0, "text_y_off": 0.250}
+    ]}
+  ]
+}
