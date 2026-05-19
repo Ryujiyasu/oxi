@@ -1,0 +1,134 @@
+{
+  "v5_all_tblstyle_af": [
+    {
+      "text": "組織的管理",
+      "x_start": 76.584,
+      "x_end": 130.06,
+      "y": 87.069,
+      "fs": 10.56,
+      "n_chars": 5,
+      "width": 53.476,
+      "per_char": 10.695
+    },
+    {
+      "text": "措置 ",
+      "x_start": 76.584,
+      "x_end": 101.544,
+      "y": 100.629,
+      "fs": 10.56,
+      "n_chars": 3,
+      "width": 24.96,
+      "per_char": 8.32
+    }
+  ],
+  "v5_all_themefonts": [
+    {
+      "text": "組織的管理",
+      "x_start": 76.584,
+      "x_end": 130.06,
+      "y": 87.069,
+      "fs": 10.56,
+      "n_chars": 5,
+      "width": 53.476,
+      "per_char": 10.695
+    },
+    {
+      "text": "措置 ",
+      "x_start": 76.584,
+      "x_end": 101.544,
+      "y": 100.629,
+      "fs": 10.56,
+      "n_chars": 3,
+      "width": 24.96,
+      "per_char": 8.32
+    }
+  ],
+  "v5_all_themefonts_tblstyle": [
+    {
+      "text": "組織的管理",
+      "x_start": 76.584,
+      "x_end": 130.06,
+      "y": 87.069,
+      "fs": 10.56,
+      "n_chars": 5,
+      "width": 53.476,
+      "per_char": 10.695
+    },
+    {
+      "text": "措置 ",
+      "x_start": 76.584,
+      "x_end": 101.544,
+      "y": 100.629,
+      "fs": 10.56,
+      "n_chars": 3,
+      "width": 24.96,
+      "per_char": 8.32
+    }
+  ],
+  "v5_styles_fontTable": [
+    {
+      "text": "組織的管理",
+      "x_start": 76.584,
+      "x_end": 130.06,
+      "y": 87.069,
+      "fs": 10.56,
+      "n_chars": 5,
+      "width": 53.476,
+      "per_char": 10.695
+    },
+    {
+      "text": "措置 ",
+      "x_start": 76.584,
+      "x_end": 101.544,
+      "y": 100.629,
+      "fs": 10.56,
+      "n_chars": 3,
+      "width": 24.96,
+      "per_char": 8.32
+    }
+  ],
+  "v5_styles_theme": [
+    {
+      "text": "組織的管理",
+      "x_start": 76.584,
+      "x_end": 130.06,
+      "y": 87.069,
+      "fs": 10.56,
+      "n_chars": 5,
+      "width": 53.476,
+      "per_char": 10.695
+    },
+    {
+      "text": "措置 ",
+      "x_start": 76.584,
+      "x_end": 101.544,
+      "y": 100.629,
+      "fs": 10.56,
+      "n_chars": 3,
+      "width": 24.96,
+      "per_char": 8.32
+    }
+  ],
+  "v5_styles_theme_fontTable": [
+    {
+      "text": "組織的管理",
+      "x_start": 76.584,
+      "x_end": 130.06,
+      "y": 87.069,
+      "fs": 10.56,
+      "n_chars": 5,
+      "width": 53.476,
+      "per_char": 10.695
+    },
+    {
+      "text": "措置 ",
+      "x_start": 76.584,
+      "x_end": 101.544,
+      "y": 100.629,
+      "fs": 10.56,
+      "n_chars": 3,
+      "width": 24.96,
+      "per_char": 8.32
+    }
+  ]
+}
