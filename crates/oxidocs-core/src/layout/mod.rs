@@ -6723,6 +6723,38 @@ impl LayoutEngine {
                             let mut buf = String::new();
                             let mut buf_w: f32 = 0.0;
                             for ch in run.text.chars() {
+                                // Session 109 (2026-05-19): honour soft line breaks
+                                // (<w:br/>) and column/page break markers within table
+                                // cells. The OOXML parser converts <w:br/> to '\n' in
+                                // the run text (ooxml.rs:2569); the body renderer's
+                                // break_into_lines branch at line ~5109 picks them up,
+                                // but THIS cell-renderer ran them through the regular
+                                // char-width path, emitting a literal '\n' Text element
+                                // (~5pt wide) and keeping subsequent content on the
+                                // same visual line. LLA canary surfaced this as the
+                                // identical p.1 L14 mismatch across a1d6e4 / d4d126 /
+                                // de6e32 tokumei docs (S109).
+                                if ch == '\n' || ch == '\x0B' || ch == '\x0C' {
+                                    if !buf.is_empty() {
+                                        current_line.push((
+                                            buf.clone(), font_size, buf_w, bold,
+                                            run.style.italic, run.style.underline,
+                                            run.style.underline_style.clone(),
+                                            run.style.strikethrough,
+                                            font_family.clone(),
+                                            run.style.color.clone(),
+                                            run.style.highlight.clone(),
+                                            cs, run.style.text_scale.unwrap_or(100.0),
+                                        ));
+                                        buf.clear();
+                                        buf_w = 0.0;
+                                    }
+                                    lines.push(std::mem::take(&mut current_line));
+                                    line_x = 0.0;
+                                    is_first_line = false;
+                                    prev_char_emitted = None;
+                                    continue;
+                                }
                                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                                 // 2026-04-19: Apply charSpace as ABSOLUTE delta (not fs-scaled).
@@ -7857,6 +7889,21 @@ impl LayoutEngine {
                 snap_character_spacing(run.style.character_spacing.unwrap_or(0.0))
             };
             for ch in run.text.chars() {
+                // Session 109 (2026-05-19): mirror the cell renderer's soft-line-
+                // break handling so the line-count estimate matches what the
+                // renderer actually produces. Otherwise estimate < render →
+                // overflow cascade (the very failure mode this function exists
+                // to prevent, per the "Fix C" doc-comment above).
+                if ch == '\n' || ch == '\x0B' || ch == '\x0C' {
+                    lines += 1;
+                    line_x = 0.0;
+                    buf_w = 0.0;
+                    buf_nonempty = false;
+                    line_nonempty = false;
+                    is_first_line = false;
+                    prev_char_emitted = None;
+                    continue;
+                }
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                 if run.style.fit_text.is_none() && para.style.snap_to_grid {
