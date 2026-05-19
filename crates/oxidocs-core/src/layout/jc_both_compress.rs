@@ -60,9 +60,14 @@ pub fn snap_15tw(pt: f32) -> f32 {
 
 /// Maximum compression possible for a yakumono char.
 ///
-/// Yakumono compresses down to half-width (fs/2). The savings = natural - fs/2.
+/// S120: COM-observed across fs∈{9,10.5,12} that Word's minimum '．' advance
+/// is ~6.0pt regardless of fs — NOT fs/2. So the actual floor is
+/// max(6.0pt, fs/2). For fs=9 (fs/2=4.5), Word's min was 6.0pt observed
+/// (extended grid fs=9 cw=2500 tl=16). For fs=10.5/12, fs/2 floor of
+/// 5.25/6.0 ≈ matches observation. For fs=14+, fs/2 would dominate.
 pub fn yakumono_max_savings(natural: f32, font_size: f32) -> f32 {
-    (natural - font_size / 2.0).max(0.0)
+    let floor = (font_size / 2.0).max(6.0);
+    (natural - floor).max(0.0)
 }
 
 /// Maximum compression possible for a fullwidth digit/letter.
