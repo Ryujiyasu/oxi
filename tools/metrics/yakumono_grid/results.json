@@ -1,0 +1,1792 @@
+{
+  "g_meiryo_sz21_cs-9_dotF": {
+    "meta": {
+      "font_slug": "meiryo",
+      "font": "メイリオ",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": 6.0,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msgothic_sz21_cs-9_dotF": {
+    "meta": {
+      "font_slug": "msgothic",
+      "font": "ＭＳ ゴシック",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": 6.0,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-15_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -15,
+      "punct": "，"
+    },
+    "digit_advance_pt": 7.5,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 7.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 7.666666666666667,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 142.5,
+        "text": "１，提供を受けた匿名デー",
+        "n_chars": 12
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.75,
+        "text": "タの名称\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-15_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -15,
+      "punct": "．"
+    },
+    "digit_advance_pt": 7.5,
+    "dot_advance_pt": 7.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 7.666666666666667,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 142.5,
+        "text": "１．提供を受けた匿名デー",
+        "n_chars": 12
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.75,
+        "text": "タの名称\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-15_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -15,
+      "punct": "。"
+    },
+    "digit_advance_pt": 7.5,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 7.5,
+    "kanji_mean_advance_pt": 7.666666666666667,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 142.5,
+        "text": "１。提供を受けた匿名デー",
+        "n_chars": 12
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 87.75,
+        "text": "タの名称\r",
+        "n_chars": 5
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-20_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -20,
+      "punct": "，"
+    },
+    "digit_advance_pt": 6.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 6.75,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 7.083333333333333,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 142.5,
+        "text": "１，提供を受けた匿名データ",
+        "n_chars": 13
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 78.75,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-20_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -20,
+      "punct": "．"
+    },
+    "digit_advance_pt": 6.75,
+    "dot_advance_pt": 6.75,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 7.083333333333333,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 142.5,
+        "text": "１．提供を受けた匿名データ",
+        "n_chars": 13
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 78.75,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-20_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -20,
+      "punct": "。"
+    },
+    "digit_advance_pt": 6.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 6.75,
+    "kanji_mean_advance_pt": 7.083333333333333,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 142.5,
+        "text": "１。提供を受けた匿名データ",
+        "n_chars": 13
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 78.75,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-5_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -5,
+      "punct": "，"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 7.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 8.5,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１，提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 100.5,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-5_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -5,
+      "punct": "．"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": 7.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 8.5,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 100.5,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-5_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -5,
+      "punct": "。"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 7.5,
+    "kanji_mean_advance_pt": 8.5,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１。提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 100.5,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-9_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -9,
+      "punct": "，"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 8.25,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 8.416666666666666,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.75,
+        "text": "１，提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 98.25,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-9_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": 8.25,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 8.416666666666666,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.75,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 98.25,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz18_cs-9_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 18,
+      "fs_pt": 9.0,
+      "cs_tw": -9,
+      "punct": "。"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 8.25,
+    "kanji_mean_advance_pt": 8.416666666666666,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.75,
+        "text": "１。提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 98.25,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-15_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -15,
+      "punct": "，"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 9.0,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.28125,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１，提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 111.75,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-15_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -15,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": 9.0,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.28125,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 111.75,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-15_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -15,
+      "punct": "。"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 9.0,
+    "kanji_mean_advance_pt": 9.28125,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１。提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 111.75,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-20_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -20,
+      "punct": "，"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 7.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 8.5,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１，提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 100.5,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-20_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -20,
+      "punct": "．"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": 7.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 8.5,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１．提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 100.5,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-20_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -20,
+      "punct": "。"
+    },
+    "digit_advance_pt": 8.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 7.5,
+    "kanji_mean_advance_pt": 8.5,
+    "kanji_n": 9,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 141.0,
+        "text": "１。提供を受けた匿名デ",
+        "n_chars": 11
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 100.5,
+        "text": "ータの名称\r",
+        "n_chars": 6
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-5_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -5,
+      "punct": "，"
+    },
+    "digit_advance_pt": 9.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 10.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 10.21875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１，提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-5_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -5,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.75,
+    "dot_advance_pt": 10.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 10.21875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-5_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -5,
+      "punct": "。"
+    },
+    "digit_advance_pt": 9.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 10.5,
+    "kanji_mean_advance_pt": 10.21875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１。提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-9_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "，"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 6.0,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１，提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-9_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": 6.0,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz21_cs-9_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "。"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 6.0,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１。提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-15_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -15,
+      "punct": "，"
+    },
+    "digit_advance_pt": 10.5,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 8.25,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 10.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１，提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 131.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-15_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -15,
+      "punct": "．"
+    },
+    "digit_advance_pt": 10.5,
+    "dot_advance_pt": 8.25,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 10.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 131.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-15_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -15,
+      "punct": "。"
+    },
+    "digit_advance_pt": 10.5,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 8.25,
+    "kanji_mean_advance_pt": 10.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１。提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 131.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-20_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -20,
+      "punct": "，"
+    },
+    "digit_advance_pt": 9.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 10.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 10.21875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１，提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-20_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -20,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.75,
+    "dot_advance_pt": 10.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 10.21875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１．提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-20_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -20,
+      "punct": "。"
+    },
+    "digit_advance_pt": 9.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 10.5,
+    "kanji_mean_advance_pt": 10.21875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 139.5,
+        "text": "１。提供を受けた匿",
+        "n_chars": 9
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "名データの名称\r",
+        "n_chars": 8
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-5_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -5,
+      "punct": "，"
+    },
+    "digit_advance_pt": 11.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 11.25,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 11.678571428571429,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.0,
+        "text": "１，提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.0,
+        "text": "匿名データの名",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 69.75,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-5_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -5,
+      "punct": "．"
+    },
+    "digit_advance_pt": 11.25,
+    "dot_advance_pt": 11.25,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 11.678571428571429,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.0,
+        "text": "１．提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.0,
+        "text": "匿名データの名",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 69.75,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-5_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -5,
+      "punct": "。"
+    },
+    "digit_advance_pt": 11.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 11.25,
+    "kanji_mean_advance_pt": 11.678571428571429,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.0,
+        "text": "１。提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.0,
+        "text": "匿名データの名",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 69.75,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-9_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -9,
+      "punct": "，"
+    },
+    "digit_advance_pt": 11.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 11.25,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 11.785714285714286,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.75,
+        "text": "１，提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.75,
+        "text": "匿名データの名",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 69.0,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-9_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 11.25,
+    "dot_advance_pt": 11.25,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 11.785714285714286,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.75,
+        "text": "１．提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.75,
+        "text": "匿名データの名",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 69.0,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "g_msmincho_sz24_cs-9_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 24,
+      "fs_pt": 12.0,
+      "cs_tw": -9,
+      "punct": "。"
+    },
+    "digit_advance_pt": 11.25,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 11.25,
+    "kanji_mean_advance_pt": 11.785714285714286,
+    "kanji_n": 7,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.75,
+        "text": "１。提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.75,
+        "text": "匿名データの名",
+        "n_chars": 7
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 69.0,
+        "text": "称\r",
+        "n_chars": 2
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-15_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -15,
+      "punct": "，"
+    },
+    "digit_advance_pt": 12.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 13.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 13.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 137.25,
+        "text": "１，提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 95.25,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-15_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -15,
+      "punct": "．"
+    },
+    "digit_advance_pt": 12.75,
+    "dot_advance_pt": 13.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 13.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 137.25,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 95.25,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-15_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -15,
+      "punct": "。"
+    },
+    "digit_advance_pt": 12.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 13.5,
+    "kanji_mean_advance_pt": 13.5,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 137.25,
+        "text": "１。提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 128.25,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 95.25,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-20_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -20,
+      "punct": "，"
+    },
+    "digit_advance_pt": 12.0,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 8.25,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 12.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.0,
+        "text": "１，提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.0,
+        "text": "匿名データの",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 81.75,
+        "text": "名称\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-20_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -20,
+      "punct": "．"
+    },
+    "digit_advance_pt": 12.0,
+    "dot_advance_pt": 8.25,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 12.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.0,
+        "text": "１．提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.0,
+        "text": "匿名データの",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 81.75,
+        "text": "名称\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-20_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -20,
+      "punct": "。"
+    },
+    "digit_advance_pt": 12.0,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 8.25,
+    "kanji_mean_advance_pt": 12.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 138.0,
+        "text": "１。提供を受けた",
+        "n_chars": 8
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 129.0,
+        "text": "匿名データの",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 81.75,
+        "text": "名称\r",
+        "n_chars": 3
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-5_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -5,
+      "punct": "，"
+    },
+    "digit_advance_pt": 13.5,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 11.25,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 13.6875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 136.5,
+        "text": "１，提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 127.5,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 98.25,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-5_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -5,
+      "punct": "．"
+    },
+    "digit_advance_pt": 13.5,
+    "dot_advance_pt": 11.25,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 13.6875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 136.5,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 127.5,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 98.25,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-5_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -5,
+      "punct": "。"
+    },
+    "digit_advance_pt": 13.5,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 11.25,
+    "kanji_mean_advance_pt": 13.6875,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 136.5,
+        "text": "１。提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 127.5,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 98.25,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-9_commaF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -9,
+      "punct": "，"
+    },
+    "digit_advance_pt": 12.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": 13.5,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 13.40625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 136.5,
+        "text": "１，提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 127.5,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 97.5,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-9_dotF": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 12.75,
+    "dot_advance_pt": 13.5,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 13.40625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 136.5,
+        "text": "１．提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 127.5,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 97.5,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_msmincho_sz28_cs-9_kuten": {
+    "meta": {
+      "font_slug": "msmincho",
+      "font": "ＭＳ 明朝",
+      "sz_hp": 28,
+      "fs_pt": 14.0,
+      "cs_tw": -9,
+      "punct": "。"
+    },
+    "digit_advance_pt": 12.75,
+    "dot_advance_pt": null,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": 13.5,
+    "kanji_mean_advance_pt": 13.40625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 136.5,
+        "text": "１。提供を受け",
+        "n_chars": 7
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 127.5,
+        "text": "た匿名データ",
+        "n_chars": 6
+      },
+      {
+        "y": 66.75,
+        "x_start": 57.75,
+        "x_end": 97.5,
+        "text": "の名称\r",
+        "n_chars": 4
+      }
+    ]
+  },
+  "g_yugothic_sz21_cs-9_dotF": {
+    "meta": {
+      "font_slug": "yugothic",
+      "font": "游ゴシック",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": 6.0,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  },
+  "g_yumincho_sz21_cs-9_dotF": {
+    "meta": {
+      "font_slug": "yumincho",
+      "font": "游明朝",
+      "sz_hp": 21,
+      "fs_pt": 10.5,
+      "cs_tw": -9,
+      "punct": "．"
+    },
+    "digit_advance_pt": 9.0,
+    "dot_advance_pt": 6.0,
+    "comma_advance_pt": null,
+    "kuten_advance_pt": null,
+    "kanji_mean_advance_pt": 9.5625,
+    "kanji_n": 8,
+    "lines": [
+      {
+        "y": 42.75,
+        "x_start": 57.75,
+        "x_end": 140.25,
+        "text": "１．提供を受けた匿名",
+        "n_chars": 10
+      },
+      {
+        "y": 54.75,
+        "x_start": 57.75,
+        "x_end": 115.5,
+        "text": "データの名称\r",
+        "n_chars": 7
+      }
+    ]
+  }
+}
