@@ -3675,7 +3675,19 @@ impl LayoutEngine {
 
         // COM-confirmed (d77a): firstLineIndent reduces first line WIDTH but does
         // NOT shift start position. Text starts at margin, line is shorter.
-        let effective_first_indent = if effective_char_pitch.is_some() { 0.0 } else { first_line_indent };
+        //
+        // S109d fix (2026-05-19): the d77a-derived `effective=0` was zeroing out
+        // NEGATIVE first_indent (hanging) too, which loses the line-1 wrap
+        // credit. COM-confirmed on hanging+charGrid v2 repros (H1v2/H4v2/
+        // H9v2/H10v2/H3v2/4a36b62 para32): Word extends line 1 budget by
+        // -first_line_indent for hanging paragraphs. Now we only zero out
+        // POSITIVE first_indent (the d77a case); negative (hanging) keeps
+        // the raw value so break_into_lines credits the hanging extension.
+        let effective_first_indent = if effective_char_pitch.is_some() && first_line_indent >= 0.0 {
+            0.0
+        } else {
+            first_line_indent
+        };
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
