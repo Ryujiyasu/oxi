@@ -6865,9 +6865,13 @@ impl LayoutEngine {
                                 // call compute_compression on (current_line + buf + ch) and only
                                 // wrap if line CANNOT fit even with priority compression applied.
                                 // S119 tuned kanji_max_savings 0.6% → 0.1% to reduce over-fit.
-                                // Refinement to algorithm goes in jc_both_compress, not here.
+                                // S121 fix: require run.cs < 0 (matches original S112 trigger).
+                                // Without this, a1d6's cs=0 paragraphs spuriously over-fit
+                                // because they meet doc-level balanceSBDB+compressPunctuation
+                                // but Word doesn't compress them (no negative cs to balance).
                                 let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
-                                let would_overflow = if jc_gate_active && would_overflow_natural {
+                                let run_has_neg_cs = cs < 0.0;
+                                let would_overflow = if jc_gate_active && run_has_neg_cs && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                                         ch,
                                         natural_advance: cw,
