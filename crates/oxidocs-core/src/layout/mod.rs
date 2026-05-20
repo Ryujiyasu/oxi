@@ -6218,7 +6218,11 @@ impl LayoutEngine {
         // COM-confirmed (2026-04-09): top border displaces table content downward
         // by the border width. cell_top_y = table_start_y + top_border_width.
         // Measured: 1row_outer4 marker_y=72.0, cell_y=97.5 → offset=0.5pt=top_bw.
-        if table.style.border {
+        // S138 (2026-05-20): Bug A from S56 — this per-table top_bw add was
+        // 1 of 2 causes of tokumei row drift. OXI_BUG_A_REVERT=1 disables
+        // for A/B testing alongside OXI_SB_NO_SUPPRESS=1.
+        let bug_a_enabled = std::env::var("OXI_BUG_A_REVERT").is_err();
+        if bug_a_enabled && table.style.border {
             let top_bw = table.style.border_width.unwrap_or(0.4);
             cursor.advance(top_bw);
         }
@@ -6304,7 +6308,12 @@ impl LayoutEngine {
                             // suppression in layout_table cell loop at line ~5877. Without
                             // this, the row reserves extra height for borders even though
                             // the text is positioned correctly.
-                            if is_first_block_est && !vert_writing_active {
+                            // S136 (2026-05-20): TR_V200-V203 + R1A re-measurement show
+                            // Word DOES apply sb to first cell para (cell_para_y shifts
+                            // 4.35pt when sb=87). Day 33 part 17 premise is wrong.
+                            // OXI_SB_NO_SUPPRESS=1 disables both suppressions for A/B testing.
+                            let sb_suppress_enabled = std::env::var("OXI_SB_NO_SUPPRESS").is_err();
+                            if sb_suppress_enabled && is_first_block_est && !vert_writing_active {
                                 let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
                                     bl / 100.0 * pitch
                                 } else {
@@ -6717,7 +6726,11 @@ impl LayoutEngine {
                     } else {
                         (effective_line_spacing, effective_line_rule)
                     };
-                    let effective_space_before = if should_reset || is_first_block_in_cell {
+                    // S136 (2026-05-20): OXI_SB_NO_SUPPRESS=1 disables the first-cell-para
+                    // sb suppression (Day 33 part 17). TR_V200-V203 + R1A re-measurement
+                    // show Word DOES apply sb. Default off; env var enables revert behavior.
+                    let sb_suppress_enabled = std::env::var("OXI_SB_NO_SUPPRESS").is_err();
+                    let effective_space_before = if should_reset || (sb_suppress_enabled && is_first_block_in_cell) {
                         // Day 33 part 17 (2026-05-10): Word suppresses spacing.before
                         // for the first paragraph in a cell. COM-confirmed via 8 repros
                         // (row1_attr_isolation): R1A_spacing_lineRule has spacing.before=4.35pt
