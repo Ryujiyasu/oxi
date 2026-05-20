@@ -99,7 +99,20 @@ Before starting full refactor, attempt:
   regressions, ship as default-on. Else proceed with multi-phase
   refactor.
 
-### Phase 0 measurement (S146, 2026-05-21)
+### Phase 0 measurement CORRECTED (S147, 2026-05-21)
+
+S146 reported gen2 -0.98 but that was a measurement artifact (incomplete
+pagination data from killed background task). S147 re-ran cleanly:
+
+| Metric | OFF | Bundle (H8+SB+BugA) | Δ |
+|---|---|---|---|
+| mean IoU | 0.8893 | **0.8994** | **+0.0101** ✓ |
+| Phase 1 pass | 53/55 | 51/55 | -2 |
+
+**Bundle is actually MILDLY POSITIVE** on Phase 2 net. But Phase 1
+regresses (a1d6+d4d126 PASS→FAIL) so cannot ship default-on yet.
+
+### Phase 0 original (S146, INCORRECT data — kept for history)
 
 Tested H8+SB+BugA bundle on 52 measured docs (out of 55):
 
