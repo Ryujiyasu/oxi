@@ -204,7 +204,7 @@ unsafe fn render_page_elements(
                 text, font_size, font_family, bold, italic, color,
                 underline: _, underline_style, strikethrough,
                 highlight, character_spacing,
-                text_scale: _, ..
+                text_scale: _, is_vertical, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
                 // Session 75 Phase D (2026-05-17): el.y is LINE BOX TOP; pass
@@ -218,6 +218,7 @@ unsafe fn render_page_elements(
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, is_double_underline,
                     highlight.as_deref(), *character_spacing,
+                    *is_vertical,
                 )?;
             }
             LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
@@ -489,6 +490,7 @@ unsafe fn render_text(
     double_underline: bool,
     highlight: Option<&str>,
     character_spacing_pt: f32,
+    is_vertical: bool,
 ) -> windows::core::Result<()> {
     use windows::core::*;
     use windows::Win32::Graphics::Direct2D::*;
@@ -576,9 +578,42 @@ unsafe fn render_text(
     // placement at default origin. Full-corpus canary swept -0.25 .. -1.25pt
     // (5 values) and -1.0pt produced peak NET +2.2198 (110 wins / 41 regs)
     // on 177-doc p.1 baseline. See pipeline_data/dwrite_origin_shift_2026-05-03.md.
-    let origin = D2D_POINT_2F {
-        x: x_pt * PT_TO_DIP,
-        y: (y_pt - 1.0) * PT_TO_DIP,
+    // Session 133 (2026-05-20): vertical writing rotation.
+    // For tbRlV cells: apply a 90° CW rotation around the pivot point
+    // (x_pt + font_size_pt, y_pt). Pre-rotation, text would extend
+    // rightward from this pivot; post-rotation, it extends downward
+    // (and the rotated glyphs occupy x ∈ [x_pt, x_pt + font_size_pt],
+    // matching the cell's right-edge anchor convention from GDI S132).
+    let prior_transform = if is_vertical {
+        let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+        rt.GetTransform(&mut saved);
+        let pivot = D2D_POINT_2F {
+            x: (x_pt + font_size_pt) * PT_TO_DIP,
+            y: y_pt * PT_TO_DIP,
+        };
+        let mut rot = windows::Foundation::Numerics::Matrix3x2::default();
+        windows::Win32::Graphics::Direct2D::D2D1MakeRotateMatrix(90.0, pivot, &mut rot);
+        rt.SetTransform(&rot);
+        Some(saved)
+    } else {
+        None
+    };
+
+    let origin = if is_vertical {
+        // Draw at pivot point; rotation matrix maps it to itself.
+        // Text extends rightward in local frame, which after rotation
+        // becomes downward in screen frame.
+        D2D_POINT_2F {
+            x: (x_pt + font_size_pt) * PT_TO_DIP,
+            y: (y_pt - 1.0) * PT_TO_DIP,
+        }
+    } else {
+        // Original origin: DWrite glyph-top alignment fix (2026-05-03)
+        // shifts y up by 1pt; see comment in pre-S133 code path.
+        D2D_POINT_2F {
+            x: x_pt * PT_TO_DIP,
+            y: (y_pt - 1.0) * PT_TO_DIP,
+        }
     };
 
     rt.DrawTextLayout(
@@ -587,6 +622,11 @@ unsafe fn render_text(
         &brush,
         D2D1_DRAW_TEXT_OPTIONS_NONE,
     );
+
+    // Restore prior transform if we changed it for rotation.
+    if let Some(saved) = prior_transform {
+        rt.SetTransform(&saved);
+    }
 
     // Strikethrough drawn manually as a horizontal line spanning the element
     // width — matches GDI's MoveToEx/LineTo path. DirectWrite's SetStrikethrough
