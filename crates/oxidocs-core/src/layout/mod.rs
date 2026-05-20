@@ -6273,17 +6273,28 @@ impl LayoutEngine {
                 let mut cell_content_h_visual = pad_t;
                 let mut is_first_block_est = true;
 
+                // Session 131 (2026-05-20): vertical writing — cell height
+                // along the page-y axis equals the sum of vertical-text lengths
+                // (chars × font_size), not the wrapped-horizontal line count.
+                // Gated by OXI_VERT_WRITING env var.
+                let vert_writing_active = self.is_vert_writing_active(cell);
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
-                            let mut para_h = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
-                            let mut para_h_visual = self.estimate_para_height_emit(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                            let (mut para_h, mut para_h_visual) = if vert_writing_active {
+                                let h = self.vert_para_height(para);
+                                (h, h)
+                            } else {
+                                let p1 = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                                let p2 = self.estimate_para_height_emit(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                                (p1, p2)
+                            };
                             // Day 33 part 17 (2026-05-10): subtract space_before for first
                             // paragraph in cell to match Word's behavior. Mirrors the
                             // suppression in layout_table cell loop at line ~5877. Without
                             // this, the row reserves extra height for borders even though
                             // the text is positioned correctly.
-                            if is_first_block_est {
+                            if is_first_block_est && !vert_writing_active {
                                 let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
                                     bl / 100.0 * pitch
                                 } else {
@@ -6559,6 +6570,13 @@ impl LayoutEngine {
                 // not 6 chars (which would require 59.85pt cell_w with overflow).
                 let inner_w = (cell_w - pad_l - pad_r).max(0.0);
                 let mut cell_elements: Vec<LayoutElement> = Vec::new();
+                // Session 131: vertical writing anchor — Word reports
+                // Information(6) for ALL paragraphs in a vert-text cell at
+                // the cell top y (= row top). Snapshot the cell-entry content_h
+                // so all vert paragraphs emit at that relative_y. This matches
+                // the 2ea81a COM-confirmed pattern where 予納する理由 / （い
+                // ずれかを選択） / empty all report y=478 (row top).
+                let vert_cell_anchor_h: f32 = 0.0;
                 let mut content_h: f32 = 0.0;
 
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
@@ -6600,6 +6618,63 @@ impl LayoutEngine {
                 }
                 Block::Paragraph(para) => {
                 let para = para;
+                    // Session 131 (2026-05-20): vertical writing early-exit.
+                    // For tbRlV cells, emit one Text element per paragraph at
+                    // relative_y=0 (Word's COM Information(6) on a vert-cell
+                    // paragraph returns the row-top y for all paragraphs in
+                    // that cell). Cell content_h grows by vert_para_height so
+                    // row-height calc reflects the vertical-text extent.
+                    // The renderer (S132 GDI, S133 DWrite) is responsible for
+                    // actual 90° CW rotation when emitting glyphs; this layout
+                    // step only ensures positional correctness for pagination.
+                    if self.is_vert_writing_active(cell) {
+                        let vert_h = self.vert_para_height(para);
+                        let first_run_style = para.runs.first()
+                            .map(|r| r.style.clone())
+                            .unwrap_or_default();
+                        let first_run_fs = self.resolve_font_size(&first_run_style, &para.style);
+                        let para_text: String = para.runs.iter()
+                            .flat_map(|r| r.text.chars())
+                            .collect();
+                        let font_family = self.resolve_font_family_for_text(
+                            &para_text, &first_run_style, &para.style,
+                        ).map(|s| s.to_string());
+                        // Word's COM Information(6) returns the cell-top y for
+                        // ALL vert-cell paragraphs (verified on 2ea81a tbl=1
+                        // row=8: 予納する理由, （いずれかを選択）, empty para
+                        // all report y=478). Anchor all vert paragraphs at the
+                        // cell-entry content_h, not the running content_h.
+                        let mut elem = LayoutElement::new(
+                            cell_x + pad_l,
+                            vert_cell_anchor_h,
+                            (cell_w - pad_l - pad_r).max(0.0),
+                            first_run_fs,
+                            LayoutContent::Text {
+                                text: para_text,
+                                font_size: first_run_fs,
+                                font_family,
+                                bold: self.resolve_bold(&first_run_style, &para.style),
+                                italic: first_run_style.italic,
+                                underline: first_run_style.underline,
+                                underline_style: first_run_style.underline_style.clone(),
+                                strikethrough: first_run_style.strikethrough,
+                                color: first_run_style.color.clone(),
+                                highlight: first_run_style.highlight.clone(),
+                                character_spacing: 0.0,
+                                field_type: None,
+                                text_scale: first_run_style.text_scale.unwrap_or(100.0),
+                            },
+                        );
+                        elem.paragraph_index = block_idx;
+                        elem.cell_paragraph_index = Some(cell_para_counter);
+                        elem.cell_row_index = Some(row_idx);
+                        elem.cell_col_index = Some(cell_idx);
+                        cell_elements.push(elem);
+                        content_h += vert_h;
+                        cell_para_counter += 1;
+                        is_first_block_in_cell = false;
+                        continue;
+                    }
                     // Apply table style pPr as fallback (ECMA-376: table style pPr < paragraph style < direct)
                     // Word resets line spacing to Single and space_after to 0 for table cell
                     // paragraphs that inherit from Normal style (no direct spacing in pPr).
@@ -8130,6 +8205,41 @@ impl LayoutEngine {
             lines += 1;
         }
         lines.max(1)
+    }
+
+    /// Session 131 (2026-05-20): vertical-writing helpers.
+    ///
+    /// `is_vert_writing_active(cell)` returns true when `OXI_VERT_WRITING=1`
+    /// env var is set AND the cell has `text_direction == "tbRlV"`. We only
+    /// support tbRlV in this implementation (chars rotated 90° CW). The
+    /// tbRl variant (chars upright) is not implemented; none of the 4
+    /// affected baseline docs use it.
+    ///
+    /// `vert_para_height(para)` returns the natural vertical extent of the
+    /// paragraph along the writing direction: sum(n_chars × font_size)
+    /// per run. COM-measured against 2ea81a tbl=1 row=8: 14 chars × 8pt
+    /// = 112pt, Word cell.Height = 113.15pt (≈1pt inter-paragraph gap).
+    fn is_vert_writing_active(&self, cell: &TableCell) -> bool {
+        if std::env::var("OXI_VERT_WRITING").is_err() {
+            return false;
+        }
+        cell.text_direction.as_deref() == Some("tbRlV")
+    }
+
+    fn vert_para_height(&self, para: &Paragraph) -> f32 {
+        let mut h = 0.0_f32;
+        for run in &para.runs {
+            let fs = self.resolve_font_size(&run.style, &para.style);
+            let n_chars = run.text.chars().count() as f32;
+            h += n_chars * fs;
+        }
+        // Empty paragraph still occupies one line-height slot (matches
+        // Word's behavior of preserving an empty vertical paragraph mark).
+        if h <= 0.0 {
+            let default_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
+            return default_fs;
+        }
+        h
     }
 
     fn estimate_para_height(
