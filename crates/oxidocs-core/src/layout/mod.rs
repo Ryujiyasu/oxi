@@ -8178,7 +8178,12 @@ impl LayoutEngine {
                                 && char_space_pt > 0.0 && font_size < default_fs;
                             let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
                                 && char_space_pt > 0.0 && font_size <= default_fs;
-                            if !(h6_skip || h7_skip) {
+                            // S158 (2026-05-21): added missing H8 site — was the only
+                            // cell-related site without H8 gating. V800y bisection
+                            // traced a1d6 +14pt residual drift to this code path.
+                            let h8_skip = std::env::var("OXI_LEGACY_GRID_KERN").is_err()
+                                && char_space_pt > 0.0;
+                            if !(h6_skip || h7_skip || h8_skip) {
                                 cw = if char_space_pt >= 0.0 {
                                     font_size * pitch / default_fs
                                 } else {
