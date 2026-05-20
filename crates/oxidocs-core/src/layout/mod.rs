@@ -5118,9 +5118,16 @@ impl LayoutEngine {
                         //   wraps to 2 (33 × 10.555 expansion = 348.3pt overflows).
                         let h6_gate_enabled = std::env::var("OXI_H6_GRID_GATE").is_ok();
                         let h7_gate_enabled = std::env::var("OXI_H7_GRID_GATE_LE").is_ok();
+                        // S145 H8 (2026-05-21): per LibreOffice ww8par.cxx ImportDop,
+                        // MS_WORD_COMP_GRID_METRICS is SET unconditionally for all Word
+                        // imported docs. LibreOffice itrform2.cxx then SKIPS grid kern
+                        // portions when MS_WORD_COMP_GRID_METRICS && !vertical. So MS
+                        // Word actually NEVER applies grid char-pitch for horizontal text.
+                        // OXI_H8_NO_GRID_KERN=1 skips entirely (no font_size check).
+                        let h8_gate_enabled = std::env::var("OXI_H8_NO_GRID_KERN").is_ok();
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
-                        if h6_trigger || h7_trigger {
+                        if h6_trigger || h7_trigger || h8_gate_enabled {
                             0.0
                         } else {
                             let expected_w = if char_space_pt >= 0.0 {
@@ -5136,6 +5143,7 @@ impl LayoutEngine {
                         && ch != ' ' && ch != '\t' && ch != '\n'
                         && crate::font::is_fullwidth(ch)
                         && !yakumono_compressed[char_index]
+                        && std::env::var("OXI_H8_NO_GRID_KERN").is_err()
                     {
                         pitch - char_width
                     } else { 0.0 }
@@ -6928,7 +6936,8 @@ impl LayoutEngine {
                                                 && char_space_pt > 0.0 && font_size < default_fs;
                                             let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
                                                 && char_space_pt > 0.0 && font_size <= default_fs;
-                                            if !(h6_skip || h7_skip) {
+                                            let h8_skip = std::env::var("OXI_H8_NO_GRID_KERN").is_ok();
+                                            if !(h6_skip || h7_skip || h8_skip) {
                                                 cw = if char_space_pt >= 0.0 {
                                                     font_size * pitch / default_fs
                                                 } else {
