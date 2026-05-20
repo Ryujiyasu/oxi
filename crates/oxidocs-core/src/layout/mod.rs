@@ -5127,8 +5127,10 @@ impl LayoutEngine {
                         // S148 (2026-05-21) H8 refinement: only skip POSITIVE expansion
                         // (kern portions). Word DOES apply negative compression (e.g.
                         // b35 charSpace=-2714 → chars narrower than natural).
-                        let h8_gate_enabled = std::env::var("OXI_H8_NO_GRID_KERN").is_ok();
-                        let h8_trigger = h8_gate_enabled && char_space_pt > 0.0;
+                        // S151 DEFAULT ON: H8 enabled by default. OXI_LEGACY_GRID_KERN=1
+                        // restores legacy behavior (apply char_grid_extra for positive too).
+                        let h8_disabled = std::env::var("OXI_LEGACY_GRID_KERN").is_ok();
+                        let h8_trigger = !h8_disabled && char_space_pt > 0.0;
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
                         if h6_trigger || h7_trigger || h8_trigger {
@@ -5147,7 +5149,7 @@ impl LayoutEngine {
                         && ch != ' ' && ch != '\t' && ch != '\n'
                         && crate::font::is_fullwidth(ch)
                         && !yakumono_compressed[char_index]
-                        && std::env::var("OXI_H8_NO_GRID_KERN").is_err()
+                        && std::env::var("OXI_LEGACY_GRID_KERN").is_ok()
                     {
                         pitch - char_width
                     } else { 0.0 }
@@ -6246,21 +6248,21 @@ impl LayoutEngine {
         // by the border width. cell_top_y = table_start_y + top_border_width.
         // Measured: 1row_outer4 marker_y=72.0, cell_y=97.5 → offset=0.5pt=top_bw.
         // S138 (2026-05-20): Bug A from S56 — this per-table top_bw add was
-        // 1 of 2 causes of tokumei row drift. OXI_BUG_A_REVERT=1 disables
-        // for A/B testing alongside OXI_SB_NO_SUPPRESS=1.
-        // S148 (2026-05-21) H9: BugA correct for type="lines" docs (04b88e,
-        // d77a, etc.) but wrong for type="linesAndChars" (tokumei). Gate
-        // BugA revert by docGrid type: only skip when linesAndChars present
-        // (grid_char_pitch.is_some()). OXI_H9_BUGA_BY_TYPE=1 enables and
-        // OVERRIDES the OXI_BUG_A_REVERT global setting.
-        let h9_buga_by_type = std::env::var("OXI_H9_BUGA_BY_TYPE").is_ok();
+        // 1 of 2 causes of tokumei row drift.
+        // S148 (2026-05-21) H9 DEFAULT ON (S151): BugA correct for type="lines"
+        // docs (04b88e/d77a/34140b9c/b35/683ffc) but wrong for type="linesAndChars"
+        // (tokumei/29dc6e). Apply BugA only for non-linesAndChars docs.
+        // OXI_LEGACY_BUGA_ALWAYS=1 restores legacy behavior (BugA always applies).
+        // OXI_BUG_A_REVERT=1 still works as research toggle (always skip BugA).
+        let h9_disabled = std::env::var("OXI_LEGACY_BUGA_ALWAYS").is_ok();
         let bug_a_revert_env = std::env::var("OXI_BUG_A_REVERT").is_ok();
-        let bug_a_enabled = if h9_buga_by_type {
-            // H9 mode: apply BugA only for non-linesAndChars docs
-            grid_char_pitch.is_none()
+        let bug_a_enabled = if bug_a_revert_env {
+            false  // research toggle: always skip
+        } else if h9_disabled {
+            true   // legacy: always apply
         } else {
-            // Legacy: respect global env var
-            !bug_a_revert_env
+            // Default (S151): apply only for non-linesAndChars docs
+            grid_char_pitch.is_none()
         };
         if bug_a_enabled && table.style.border {
             let top_bw = table.style.border_width.unwrap_or(0.4);
@@ -6352,7 +6354,11 @@ impl LayoutEngine {
                             // Word DOES apply sb to first cell para (cell_para_y shifts
                             // 4.35pt when sb=87). Day 33 part 17 premise is wrong.
                             // OXI_SB_NO_SUPPRESS=1 disables both suppressions for A/B testing.
-                            let sb_suppress_enabled = std::env::var("OXI_SB_NO_SUPPRESS").is_err();
+                            // S151 DEFAULT ON: SB suppression is now DISABLED by default
+                            // (sb correctly applied to first cell para). OXI_LEGACY_SB_SUPPRESS=1
+                            // restores Day 33 part 17 suppression behavior.
+                            let sb_suppress_enabled = std::env::var("OXI_LEGACY_SB_SUPPRESS").is_ok()
+                                && std::env::var("OXI_SB_NO_SUPPRESS").is_err();
                             if sb_suppress_enabled && is_first_block_est && !vert_writing_active {
                                 let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
                                     bl / 100.0 * pitch
@@ -6769,7 +6775,10 @@ impl LayoutEngine {
                     // S136 (2026-05-20): OXI_SB_NO_SUPPRESS=1 disables the first-cell-para
                     // sb suppression (Day 33 part 17). TR_V200-V203 + R1A re-measurement
                     // show Word DOES apply sb. Default off; env var enables revert behavior.
-                    let sb_suppress_enabled = std::env::var("OXI_SB_NO_SUPPRESS").is_err();
+                    // S151 DEFAULT ON: sb is now correctly applied (suppression disabled
+                    // by default). OXI_LEGACY_SB_SUPPRESS=1 restores legacy suppression.
+                    let sb_suppress_enabled = std::env::var("OXI_LEGACY_SB_SUPPRESS").is_ok()
+                        && std::env::var("OXI_SB_NO_SUPPRESS").is_err();
                     let effective_space_before = if should_reset || (sb_suppress_enabled && is_first_block_in_cell) {
                         // Day 33 part 17 (2026-05-10): Word suppresses spacing.before
                         // for the first paragraph in a cell. COM-confirmed via 8 repros
@@ -6953,7 +6962,8 @@ impl LayoutEngine {
                                                 && char_space_pt > 0.0 && font_size < default_fs;
                                             let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
                                                 && char_space_pt > 0.0 && font_size <= default_fs;
-                                            let h8_skip = std::env::var("OXI_H8_NO_GRID_KERN").is_ok()
+                                            // S151 H8 default ON: skip positive char_grid_extra
+                                            let h8_skip = std::env::var("OXI_LEGACY_GRID_KERN").is_err()
                                                 && char_space_pt > 0.0;
                                             if !(h6_skip || h7_skip || h8_skip) {
                                                 cw = if char_space_pt >= 0.0 {
