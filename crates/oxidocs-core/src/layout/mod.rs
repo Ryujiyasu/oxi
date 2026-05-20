@@ -5124,10 +5124,14 @@ impl LayoutEngine {
                         // portions when MS_WORD_COMP_GRID_METRICS && !vertical. So MS
                         // Word actually NEVER applies grid char-pitch for horizontal text.
                         // OXI_H8_NO_GRID_KERN=1 skips entirely (no font_size check).
+                        // S148 (2026-05-21) H8 refinement: only skip POSITIVE expansion
+                        // (kern portions). Word DOES apply negative compression (e.g.
+                        // b35 charSpace=-2714 → chars narrower than natural).
                         let h8_gate_enabled = std::env::var("OXI_H8_NO_GRID_KERN").is_ok();
+                        let h8_trigger = h8_gate_enabled && char_space_pt > 0.0;
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
-                        if h6_trigger || h7_trigger || h8_gate_enabled {
+                        if h6_trigger || h7_trigger || h8_trigger {
                             0.0
                         } else {
                             let expected_w = if char_space_pt >= 0.0 {
@@ -6244,7 +6248,20 @@ impl LayoutEngine {
         // S138 (2026-05-20): Bug A from S56 — this per-table top_bw add was
         // 1 of 2 causes of tokumei row drift. OXI_BUG_A_REVERT=1 disables
         // for A/B testing alongside OXI_SB_NO_SUPPRESS=1.
-        let bug_a_enabled = std::env::var("OXI_BUG_A_REVERT").is_err();
+        // S148 (2026-05-21) H9: BugA correct for type="lines" docs (04b88e,
+        // d77a, etc.) but wrong for type="linesAndChars" (tokumei). Gate
+        // BugA revert by docGrid type: only skip when linesAndChars present
+        // (grid_char_pitch.is_some()). OXI_H9_BUGA_BY_TYPE=1 enables and
+        // OVERRIDES the OXI_BUG_A_REVERT global setting.
+        let h9_buga_by_type = std::env::var("OXI_H9_BUGA_BY_TYPE").is_ok();
+        let bug_a_revert_env = std::env::var("OXI_BUG_A_REVERT").is_ok();
+        let bug_a_enabled = if h9_buga_by_type {
+            // H9 mode: apply BugA only for non-linesAndChars docs
+            grid_char_pitch.is_none()
+        } else {
+            // Legacy: respect global env var
+            !bug_a_revert_env
+        };
         if bug_a_enabled && table.style.border {
             let top_bw = table.style.border_width.unwrap_or(0.4);
             cursor.advance(top_bw);
@@ -6936,7 +6953,8 @@ impl LayoutEngine {
                                                 && char_space_pt > 0.0 && font_size < default_fs;
                                             let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
                                                 && char_space_pt > 0.0 && font_size <= default_fs;
-                                            let h8_skip = std::env::var("OXI_H8_NO_GRID_KERN").is_ok();
+                                            let h8_skip = std::env::var("OXI_H8_NO_GRID_KERN").is_ok()
+                                                && char_space_pt > 0.0;
                                             if !(h6_skip || h7_skip || h8_skip) {
                                                 cw = if char_space_pt >= 0.0 {
                                                     font_size * pitch / default_fs
