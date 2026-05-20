@@ -599,6 +599,7 @@ fn emit_text_at(
             field_type: None,
             character_spacing: 0.0,
             text_scale: 100.0,
+            is_vertical: false,
         },
     )
 }

@@ -139,7 +139,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, text_scale, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, text_scale, is_vertical, ..
                     } => {
                         // Session 75 Phase D (2026-05-17): elem.y is LINE BOX TOP;
                         // glyph_y = LBT + text_y_off is where TextOutW/underline/
@@ -191,11 +191,26 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         SetTextColor(mem_dc, rgb);
 
                         // Create font
+                        // Session 132 (2026-05-20): vertical writing — set
+                        // lfEscapement = lfOrientation = -900 (tenths of CCW
+                        // degrees) for 90° CW rotation. tbRlV cells flow top-
+                        // to-bottom with each character rotated 90° CW. GDI
+                        // takes the TextOutW origin as the rotated baseline
+                        // start. For the simple case (vAlign=top, single
+                        // paragraph), the layout-emitted x,y is at cell left-
+                        // top; we shift x by font_size to anchor at the right
+                        // edge of the first (top-most) rotated character
+                        // since rotated chars extend leftward from origin.
                         let weight = if *bold { 700i32 } else { 400i32 };
                         let ital = if *italic { 1u32 } else { 0u32 };
                         let family_wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+                        let (escapement, orientation) = if *is_vertical {
+                            (-900i32, -900i32)
+                        } else {
+                            (0i32, 0i32)
+                        };
                         let font = CreateFontW(
-                            -fs, lf_width, 0, 0, weight,
+                            -fs, lf_width, escapement, orientation, weight,
                             ital, 0, 0,
                             1, // DEFAULT_CHARSET
                             0, 0,
@@ -213,7 +228,20 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                         // Draw text
                         let text_wide: Vec<u16> = text.encode_utf16().collect();
-                        TextOutW(mem_dc, x, glyph_y, &text_wide);
+                        // For vertical text, anchor the rotated glyphs along
+                        // the right edge of the cell. The TextOutW origin in
+                        // rotated mode is at the BASELINE start of the first
+                        // glyph (= top-right of unrotated char). Shifting
+                        // x_draw rightward by fs places the rotated chars
+                        // starting at the cell's right side. This matches
+                        // Word's tbRlV reading direction (text flows down-
+                        // right).
+                        let (x_draw, y_draw) = if *is_vertical {
+                            (x + fs, glyph_y)
+                        } else {
+                            (x, glyph_y)
+                        };
+                        TextOutW(mem_dc, x_draw, y_draw, &text_wide);
 
                         // Reset character extra
                         if cs_px != 0 {

@@ -892,6 +892,12 @@ pub enum LayoutContent {
         /// Horizontal font scale percentage (100 = default, <100 compresses glyphs)
         /// OOXML w:w value. Renderer applies via CreateFontW lfWidth.
         text_scale: f32,
+        /// Session 132 (2026-05-20): true if this text element should be
+        /// rendered with 90° CW rotation (textDirection="tbRlV" cells).
+        /// GDI: set LOGFONT.lfEscapement = -900. DWrite: apply per-run
+        /// transform matrix. Default false (horizontal flow).
+        #[cfg_attr(feature = "serde", serde(default))]
+        is_vertical: bool,
     },
     Image {
         data: Vec<u8>,
@@ -3622,6 +3628,7 @@ impl LayoutEngine {
                     field_type: None,
                     character_spacing: 0.0,
                     text_scale: 100.0,
+                    is_vertical: false,
             }));
         }
 
@@ -4355,6 +4362,7 @@ impl LayoutEngine {
                             snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing
                         },
                         text_scale: frag.style.text_scale.unwrap_or(100.0),
+                        is_vertical: false,
                 });
                 // Session 72 Phase A: populate text_y_off (y still includes it).
                 el.text_y_off = text_y_off + baseline_adjust + vert_offset;
@@ -4438,6 +4446,7 @@ impl LayoutEngine {
                                     field_type: None,
                                     character_spacing: ruby_char_spacing,
                                     text_scale: 100.0,
+                                    is_vertical: false,
                                 },
                             );
                             if let Some(pi) = body_para_index {
@@ -4525,6 +4534,7 @@ impl LayoutEngine {
                             field_type: None,
                             character_spacing: 0.0,
                             text_scale: 100.0,
+                            is_vertical: false,
                         },
                     );
                     // Session 72 Phase A: populate text_y_off (y still includes it).
@@ -6663,6 +6673,8 @@ impl LayoutEngine {
                                 character_spacing: 0.0,
                                 field_type: None,
                                 text_scale: first_run_style.text_scale.unwrap_or(100.0),
+                                // Session 132: flag for renderer rotation.
+                                is_vertical: true,
                             },
                         );
                         elem.paragraph_index = block_idx;
@@ -7204,6 +7216,7 @@ impl LayoutEngine {
                                             character_spacing: 0.0,
                                             field_type: None,
                                             text_scale: 100.0,
+                                            is_vertical: false,
                                         },
                                     );
                                     // Session 72 Phase A: populate text_y_off.
@@ -7241,6 +7254,7 @@ impl LayoutEngine {
                                         character_spacing: *cs + justify_char_spacing + grid_cs_adj,
                                         field_type: None,
                                         text_scale: *ts,
+                                        is_vertical: false,
                                 });
                                 // Session 72 Phase A: populate text_y_off (y still includes it).
                                 cell_el.text_y_off = cell_text_y_off;
