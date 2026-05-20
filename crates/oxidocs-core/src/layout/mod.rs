@@ -5117,7 +5117,10 @@ impl LayoutEngine {
                         //   (33 chars × 10pt = 330pt natural fits 345pt cell) but Oxi
                         //   wraps to 2 (33 × 10.555 expansion = 348.3pt overflows).
                         let h6_gate_enabled = std::env::var("OXI_H6_GRID_GATE").is_ok();
-                        if h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs {
+                        let h7_gate_enabled = std::env::var("OXI_H7_GRID_GATE_LE").is_ok();
+                        let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
+                        let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
+                        if h6_trigger || h7_trigger {
                             0.0
                         } else {
                             let expected_w = if char_space_pt >= 0.0 {
@@ -6923,7 +6926,9 @@ impl LayoutEngine {
                                             // S141 H6: skip expansion when font_size < default_fs
                                             let h6_skip = std::env::var("OXI_H6_GRID_GATE").is_ok()
                                                 && char_space_pt > 0.0 && font_size < default_fs;
-                                            if !h6_skip {
+                                            let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
+                                                && char_space_pt > 0.0 && font_size <= default_fs;
+                                            if !(h6_skip || h7_skip) {
                                                 cw = if char_space_pt >= 0.0 {
                                                     font_size * pitch / default_fs
                                                 } else {
@@ -8134,7 +8139,9 @@ impl LayoutEngine {
                             // S141 H6: skip expansion when font_size < default_fs
                             let h6_skip = std::env::var("OXI_H6_GRID_GATE").is_ok()
                                 && char_space_pt > 0.0 && font_size < default_fs;
-                            if !h6_skip {
+                            let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
+                                && char_space_pt > 0.0 && font_size <= default_fs;
+                            if !(h6_skip || h7_skip) {
                                 cw = if char_space_pt >= 0.0 {
                                     font_size * pitch / default_fs
                                 } else {
