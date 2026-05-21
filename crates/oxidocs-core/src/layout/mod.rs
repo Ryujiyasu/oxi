@@ -6199,14 +6199,39 @@ impl LayoutEngine {
                     //   offset = (line_height - fontSize)/2
                     // Both reduce to (line_height - fontSize)/2 because line_height = pitch
                     // in the single-cell case.
-                    let font_size = if !line.fragments.is_empty() {
+                    // S166 (2026-05-21): centering uses font's natural line height,
+                    // not raw font_size. Phase A measurement (Word COM ground truth for
+                    // 49 baseline docs) showed Oxi's previous `(line_height - font_size)/2`
+                    // formula gave consistent +1.25-2.25pt over-offset on 10+ clean docs.
+                    // Word's actual formula uses the font's table-cell line height
+                    // (MS Mincho 10.5pt = 14.5pt; Latin 10.5pt = ~12.5pt). Paired with
+                    // visual-position IoU metric (element_iou_diff.py R166), full baseline:
+                    // mean IoU 0.9254 → 0.9295 (+0.0041), pass 12 → 15, Phase 1 53/55 unchanged.
+                    // 12 docs gain (incl. 6a39b1/8bc929 → 1.0), 6 small losses (worst -0.031).
+                    // OXI_LEGACY_TEXT_Y_FONT_SIZE=1 restores prior `(linePitch-font_size)/2`.
+                    let use_legacy = std::env::var("OXI_LEGACY_TEXT_Y_FONT_SIZE").is_ok();
+                    let centering_height = if !line.fragments.is_empty() {
                         line.fragments.iter()
-                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .map(|f| {
+                                let fs = f.style.font_size.unwrap_or(para_font_size);
+                                if use_legacy {
+                                    fs
+                                } else {
+                                    let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                    m.word_line_height_table_cell(fs)
+                                }
+                            })
                             .fold(0.0_f32, f32::max)
-                    } else { para_font_size };
+                    } else {
+                        if use_legacy { para_font_size } else {
+                            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                            m.word_line_height_table_cell(para_font_size)
+                        }
+                    };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
-                        let raw = (line_height - font_size).max(0.0) / 2.0;
+                        let raw = (line_height - centering_height).max(0.0) / 2.0;
                         // Round to 0.5pt (10 twips) — COM-confirmed best fit
                         (raw * 2.0 + 0.5).floor() / 2.0
                     } else {
@@ -6214,12 +6239,27 @@ impl LayoutEngine {
                     }
                 } else {
                     // LM0: same centering formula as LM1/LM2 single cell.
-                    let font_size = if !line.fragments.is_empty() {
+                    let use_legacy = std::env::var("OXI_LEGACY_TEXT_Y_FONT_SIZE").is_ok();
+                    let centering_height = if !line.fragments.is_empty() {
                         line.fragments.iter()
-                            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+                            .map(|f| {
+                                let fs = f.style.font_size.unwrap_or(para_font_size);
+                                if use_legacy {
+                                    fs
+                                } else {
+                                    let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                    m.word_line_height_table_cell(fs)
+                                }
+                            })
                             .fold(0.0_f32, f32::max)
-                    } else { para_font_size };
-                    let raw = (line_height - font_size).max(0.0) / 2.0;
+                    } else {
+                        if use_legacy { para_font_size } else {
+                            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                            m.word_line_height_table_cell(para_font_size)
+                        }
+                    };
+                    let raw = (line_height - centering_height).max(0.0) / 2.0;
                     (raw * 2.0 + 0.5).floor() / 2.0
                 }
             }

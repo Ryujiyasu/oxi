@@ -230,6 +230,11 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
         used.add(best)
         opage, oidx = best
         orec = oxi_by_page[opage][oidx][1]
+        # S166 (2026-05-21): use visual text top (= line_top + text_y_off) for
+        # oxi_y, to align with Word's Information(6) which returns text top.
+        # OXI_IOU_USE_LINE_TOP=1 restores prior behavior (line top compare).
+        use_visual = os.environ.get("OXI_IOU_USE_LINE_TOP") is None
+        oxi_text_y_off = orec.get("text_y_off", 0.0) if use_visual else 0.0
         raw_matches.append({
             "word_i": wp["i"],
             "word_page": wpage,
@@ -237,7 +242,7 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
             "word_h": wp["h"],
             "in_table": bool(wp.get("in_table", False)),
             "oxi_page": opage,
-            "oxi_y": orec["y"],
+            "oxi_y": orec["y"] + oxi_text_y_off,
             "oxi_h": orec["h"],
             "matched": True,
         })
