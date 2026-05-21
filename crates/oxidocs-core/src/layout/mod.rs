@@ -4607,9 +4607,23 @@ impl LayoutEngine {
             // but only when raw_per_line > rounded_per_line (preserves page breaks).
             let is_last = line_idx == lines.len() - 1;
             // Round 30: linesAndChars Single spacing uses pitch-based cumulative round.
+            // Session 161 (2026-05-21): LM2 cell-advance path is skipped for
+            // paragraphs whose `<w:snapToGrid w:val="0"/>` opts them out of grid
+            // snap. d1e8 has docGrid linesAndChars + snapToGrid=0 paragraphs
+            // whose Word line height is NATURAL (12.75pt sz=10.5, 14.25pt sz=11),
+            // not grid pitch (14.6pt). Without this gate, LM2 cell-advance
+            // forces ~15pt per paragraph → cumulative drift accumulates.
+            // Full-baseline verification (env-gated trial, 2026-05-21):
+            //   - Phase 1: 53/55 UNCHANGED
+            //   - Phase 2: mean IoU 0.9191 → 0.9236 (+0.0045 strict increase)
+            //   - 5 improvements (d1e8 +0.259 dominant), 1 regression
+            //     (1636d28e -0.0233 on wi=89-93, separate issue)
+            // `OXI_LEGACY_LM2_IGNORE_STG=1` restores the prior behaviour.
+            let stg_respect = std::env::var("OXI_LEGACY_LM2_IGNORE_STG").is_err();
             let is_lm2_single = lm2_grid_cells.is_some()
                 && page.grid_char_pitch.is_some()
                 && grid_pitch.map_or(false, |p| p > 0.0)
+                && (!stg_respect || para.style.snap_to_grid)
                 && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
                     (Some("exact"), _) | (Some("atLeast"), _) => false,
                     (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
