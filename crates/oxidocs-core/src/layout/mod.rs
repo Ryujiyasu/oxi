@@ -8436,7 +8436,11 @@ impl LayoutEngine {
     /// per run. COM-measured against 2ea81a tbl=1 row=8: 14 chars × 8pt
     /// = 112pt, Word cell.Height = 113.15pt (≈1pt inter-paragraph gap).
     fn is_vert_writing_active(&self, cell: &TableCell) -> bool {
-        if std::env::var("OXI_VERT_WRITING").is_err() {
+        // S166 (2026-05-21): vertical writing default ON. Full baseline verified:
+        // 2ea81a 0.8812 → 0.9112 (+0.030), 459f 0.9617 → 0.9654 (+0.004),
+        // ed025 0.7895 → 0.7923 (+0.003). Phase 1 53/55 unchanged.
+        // OXI_LEGACY_NO_VERT_WRITING=1 disables.
+        if std::env::var("OXI_LEGACY_NO_VERT_WRITING").is_ok() {
             return false;
         }
         cell.text_direction.as_deref() == Some("tbRlV")
