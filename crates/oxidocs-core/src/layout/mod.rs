@@ -7020,7 +7020,21 @@ impl LayoutEngine {
                         // Confirms Word's rule is doc-dependent: 191cb uses cell_w extension,
                         // b35 uses sub-inner_w fill-justify. No simple toggle works.
                         // Pre-S125 conclusion "accept b35 limit" re-confirmed.
-                        let wrap_base = cell_w;
+                        // S172 (2026-05-22): conditional inner_w wrap for d77a-class cells.
+                        // Discriminator: hanging-indent paragraph + single-cell row + cell
+                        // within body width. This matches d77a/29dc6e/b35/31420af's
+                        // structure (single-column body-width-sized tables with hanging
+                        // paragraphs) while excluding 1636d (multi-cell), a47e (cell > body),
+                        // and 191cb (multi-cell narrow). OXI_LEGACY_NO_CELL_HANG_INNER=1 disables.
+                        let cell_hang_inner = std::env::var("OXI_LEGACY_NO_CELL_HANG_INNER").is_err()
+                            && p_first_line_indent_raw < 0.0
+                            && row.cells.len() == 1
+                            && cell_w <= content_width;
+                        let wrap_base = if cell_hang_inner {
+                            (cell_w - pad_l - pad_r).max(0.0)
+                        } else {
+                            cell_w
+                        };
                         let wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
                         let first_line_wrap_w = if p_first_line_indent < 0.0 {
                             (wrap_base - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
