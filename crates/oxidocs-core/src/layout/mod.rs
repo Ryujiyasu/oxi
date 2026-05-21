@@ -6646,26 +6646,34 @@ impl LayoutEngine {
             let mut max_actual_cell_h: f32 = row_height;
             let elements_before_row = elements.len();
             // Apply gridBefore: skip leading grid columns
-            let mut cell_x = table_x + col_widths[..row.grid_before as usize].iter().sum::<f32>();
+            let mut grid_idx: usize = row.grid_before as usize;
+            let mut cell_x = table_x + col_widths[..grid_idx.min(col_widths.len())].iter().sum::<f32>();
             let num_cells = row.cells.len();
             for (cell_idx, cell) in row.cells.iter().enumerate() {
                 let span = cell.grid_span.max(1) as usize;
                 // vMerge="continue" cells: skip content but still draw borders
                 let is_vmerge_continue = cell.v_merge.as_deref() == Some("continue") || cell.v_merge.as_deref() == Some("");
-                let grid_end = (col_widths.len()).min(
-                    col_widths.iter().enumerate()
-                        .scan(0.0f32, |acc, (i, w)| { *acc += w; Some((i, *acc)) })
-                        .find(|(_, acc)| (*acc - cell_x + table_x).abs() < 0.1)
-                        .map(|(i, _)| i + span)
-                        .unwrap_or(col_widths.len())
-                );
-                // Calculate cell width from grid columns
-                let cell_start_grid = col_widths.iter()
-                    .scan(0.0f32, |acc, w| { let prev = *acc; *acc += w; Some(prev) })
-                    .enumerate()
-                    .find(|(_, acc)| (cell_x - table_x - acc).abs() < 0.5)
-                    .map(|(i, _)| i)
-                    .unwrap_or(0);
+                // S163 (2026-05-21): track grid_idx directly instead of recovering it
+                // via cumulative-offset find with 0.5pt tolerance. The find was brittle
+                // when consecutive grid columns included sub-pt spacer widths (ed025
+                // Tables(7) row 4 has grid[8]=0.5pt spacer between gridSpan=2 cells;
+                // cell 7's cell_x matched grid[8] under float precision instead of
+                // grid[9]=33.75pt, causing 'トン' to wrap to 2 lines → +18pt content_h
+                // → row growth via max_actual_cell_h → +16.5pt drift propagating
+                // through pages 5-8). The first-pass row-height calc already tracks
+                // grid_idx directly (line 6354); this aligns the second pass.
+                // OXI_LEGACY_GRIDIDX_FIND=1 restores the legacy find logic for A/B.
+                let use_legacy_find = std::env::var("OXI_LEGACY_GRIDIDX_FIND").is_ok();
+                let cell_start_grid = if use_legacy_find {
+                    col_widths.iter()
+                        .scan(0.0f32, |acc, w| { let prev = *acc; *acc += w; Some(prev) })
+                        .enumerate()
+                        .find(|(_, acc)| (cell_x - table_x - acc).abs() < 0.5)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0)
+                } else {
+                    grid_idx.min(col_widths.len().saturating_sub(1))
+                };
                 let cell_end_grid = (cell_start_grid + span).min(col_widths.len());
                 let cell_w: f32 = col_widths[cell_start_grid..cell_end_grid].iter().sum();
 
@@ -7617,6 +7625,7 @@ impl LayoutEngine {
                 }
 
                 cell_x += cell_w;
+                grid_idx += span;
             }
 
             if dump_table {
