@@ -6992,7 +6992,10 @@ impl LayoutEngine {
                         // When enabled, calls compute_compression from jc_both_compress module
                         // for wrap-decision lookahead. Track per-char CharContext alongside
                         // string buf so we can pass to compute_compression.
-                        let jc_refactor_enabled = std::env::var("OXI_JCBOTH_REFACTOR").is_ok();
+                        // S166 (2026-05-21): default ON. Baseline: mean IoU 0.9301 → 0.9303,
+                        // 15076df 0.8799 → 0.8850 (+0.005), no other doc moved.
+                        // OXI_LEGACY_NO_JCBOTH_REFACTOR=1 disables.
+                        let jc_refactor_enabled = std::env::var("OXI_LEGACY_NO_JCBOTH_REFACTOR").is_err();
                         let jc_gate_active = jc_refactor_enabled
                             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
                             && self.balance_single_byte_double_byte_width
@@ -8247,7 +8250,8 @@ impl LayoutEngine {
         // function exists to prevent (Fix C). Identical gate conditions: env var
         // + jc∈{Justify,Distribute} + balanceSBDB + compressPunctuation, and
         // per-run cs ≤ -0.1pt (= ≤ -2tw, S122 threshold).
-        let jc_refactor_enabled = std::env::var("OXI_JCBOTH_REFACTOR").is_ok();
+        // S166: default ON (see comment near mod.rs:6995).
+        let jc_refactor_enabled = std::env::var("OXI_LEGACY_NO_JCBOTH_REFACTOR").is_err();
         let jc_gate_active = jc_refactor_enabled
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             && self.balance_single_byte_double_byte_width
