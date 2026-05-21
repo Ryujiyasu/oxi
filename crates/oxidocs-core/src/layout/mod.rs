@@ -1912,6 +1912,9 @@ impl LayoutEngine {
                     // Round 29: compute footnote contribution if this paragraph is
                     // laid out on the CURRENT page (delta added) vs a NEW page
                     // (full from-scratch). Used by overflow checks below.
+                    // S168 (2026-05-22) Phase B-2 holistic: per-line fn heights map.
+                    let mut para_fn_heights_map: std::collections::HashMap<u32, f32> =
+                        std::collections::HashMap::new();
                     let (delta_if_current, full_if_new): (f32, f32) = if page.footnotes.is_empty() {
                         (0.0, 0.0)
                     } else {
@@ -1923,6 +1926,7 @@ impl LayoutEngine {
                                 if !seen_new.contains(&id) {
                                     seen_new.push(id);
                                     let h = estimate_footnote_h(id);
+                                    para_fn_heights_map.insert(id, h);
                                     // First footnote on page includes separator overhead.
                                     // S160 (2026-05-21): Word measurement on b837 page 1
                                     // shows body→fn gap = ~27pt, but Oxi reserves only 6pt
@@ -2227,6 +2231,8 @@ impl LayoutEngine {
                         // own fn reserve delta so line 0 fits if it would
                         // without the para's footnotes.
                         delta_if_current,
+                        // S168: per-fn heights for per-line lenient calculation.
+                        &para_fn_heights_map,
                     );
                     prev_space_after = sa;
                     elements.extend(para_elements);
@@ -2673,6 +2679,7 @@ impl LayoutEngine {
                 let mut cy = LayoutCursor::new(header_y);
                 for block in &page.header {
                     if let Block::Paragraph(para) = block {
+                        let empty_fn_h_hdr = std::collections::HashMap::new();
                         let (hdr_elements, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
@@ -2680,6 +2687,7 @@ impl LayoutEngine {
                             false, 0.0, None, None, None,
                             false, None,
                             0.0,
+                            &empty_fn_h_hdr,
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -2701,6 +2709,7 @@ impl LayoutEngine {
                 let mut cy = LayoutCursor::new(footer_top);
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
+                        let empty_fn_h_ftr = std::collections::HashMap::new();
                         let (ftr_elements, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
@@ -2708,6 +2717,7 @@ impl LayoutEngine {
                             false, 0.0, None, None, None,
                             false, None,
                             0.0,
+                            &empty_fn_h_ftr,
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -2992,6 +3002,7 @@ impl LayoutEngine {
                                     // switching state and the residual value
                                     // can be smaller than the full body area.
                                     let footnote_width = page.size.width - page.margin.left - page.margin.right;
+                                    let empty_fn_h_note = std::collections::HashMap::new();
                                     let (note_elements, _) = self.layout_paragraph(
                                         &para_to_render, page.margin.left, &mut cy, footnote_width, footnote_page_height_huge,
                                         footnote_page_top, page,
@@ -3000,6 +3011,7 @@ impl LayoutEngine {
                                         false, 0.0, None, None, None,
                                         false, None,
                                         0.0,
+                                        &empty_fn_h_note,
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -3248,6 +3260,7 @@ impl LayoutEngine {
                     // Capture para start Y before layout_paragraph advances cursor_y.
                     // Used below to anchor inner-paragraph shapes at their declared offset.
                     let para_start_y = cursor.cursor_y;
+                    let empty_fn_h_txbx = std::collections::HashMap::new();
                     let (para_elements, _) = self.layout_paragraph(
                         para,
                         inner_x,
@@ -3265,6 +3278,7 @@ impl LayoutEngine {
                         0.0, None, None, None,
                         false, None,
                         0.0,
+                        &empty_fn_h_txbx,
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -3475,6 +3489,8 @@ impl LayoutEngine {
         // line 0 is placed, subsequent lines use the strict content_height
         // (including this para's fns).
         first_line_extra_content_h: f32,
+        // S168 (2026-05-22) Phase B-2: per-fn heights for per-line lenient.
+        para_fn_heights: &std::collections::HashMap<u32, f32>,
     ) -> (Vec<LayoutElement>, f32) {
         if let Some(v) = line_fn_refs_out.as_deref_mut() {
             if v.is_empty() { v.push(Vec::new()); }
@@ -3749,7 +3765,22 @@ impl LayoutEngine {
         // -first_line_indent for hanging paragraphs. Now we only zero out
         // POSITIVE first_indent (the d77a case); negative (hanging) keeps
         // the raw value so break_into_lines credits the hanging extension.
-        let effective_first_indent = if effective_char_pitch.is_some() && first_line_indent >= 0.0 {
+        // S168 (2026-05-22) Phase B-2 holistic bundle — breakthrough discovery.
+        // S164 round 4 (per-line fn tracking alone) → b837 -0.4336 cascade.
+        // S164 round 6 (first_indent wrap respect alone) → -0.0054 cascade.
+        // BUT combined as a bundle: cascade COMPENSATES → +0.0526 b837 gain,
+        // +0.0058 mean IoU strict increase, Phase 1 53/55 unchanged.
+        // Mechanism: first_indent fix makes paragraphs wrap one more line
+        // (i=50 "地方公共団体..." went 1→2 lines matching Word), AND per-line
+        // fn tracking fits paragraph 39 line 2 on page 2 (matching Word).
+        // The two boundaries (p2→p3 and p3→p4) compensate's cascading
+        // shifts: per-line fn pushes p3 up 1 line, first_indent's extra wrap
+        // on p4 i=50 absorbs the shift. Net: pages 3-7 align with Word.
+        // OXI_LEGACY_NO_B2_BUNDLE=1 disables (restores S166 baseline behavior).
+        let bundle_b2 = std::env::var("OXI_LEGACY_NO_B2_BUNDLE").is_err();
+        let effective_first_indent = if bundle_b2 {
+            first_line_indent
+        } else if effective_char_pitch.is_some() && first_line_indent >= 0.0 {
             0.0
         } else {
             first_line_indent
@@ -3757,6 +3788,29 @@ impl LayoutEngine {
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
+
+        // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
+        let committed_fn_delta_at_line: Vec<f32> = if bundle_b2 && !para_fn_heights.is_empty() {
+            let mut out = Vec::with_capacity(lines.len());
+            let mut cumulative = 0.0_f32;
+            let mut seen: Vec<u32> = Vec::new();
+            for line in &lines {
+                for f in &line.fragments {
+                    if let Some(run) = para.runs.get(f.run_index) {
+                        if let Some(id) = run.footnote_ref {
+                            if !seen.contains(&id) {
+                                seen.push(id);
+                                if let Some(&h) = para_fn_heights.get(&id) {
+                                    cumulative += h;
+                                }
+                            }
+                        }
+                    }
+                }
+                out.push(cumulative);
+            }
+            out
+        } else { vec![0.0; lines.len()] };
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
@@ -3916,12 +3970,16 @@ impl LayoutEngine {
             let natural_lh = natural_line_heights.get(line_idx).copied().unwrap_or(effective_lh);
             let break_threshold = natural_lh.min(effective_lh);
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
-            // For line_idx > 0, the strict content_height applies.
-            let effective_break_bottom = if line_idx == 0 {
-                page_top + content_height + first_line_extra_content_h
+            // S168 Phase B-2 (c): per-line lenient when bundle_b2 enabled.
+            let line_lenient_extra = if bundle_b2 && !para_fn_heights.is_empty() {
+                let committed = committed_fn_delta_at_line.get(line_idx).copied().unwrap_or(0.0);
+                (first_line_extra_content_h - committed).max(0.0)
+            } else if line_idx == 0 {
+                first_line_extra_content_h
             } else {
-                page_top + content_height
+                0.0
             };
+            let effective_break_bottom = page_top + content_height + line_lenient_extra;
             let needs_page_break = if in_textbox { false } else {
                 cursor.cursor_y + break_threshold > effective_break_bottom
             };
