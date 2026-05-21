@@ -7438,6 +7438,30 @@ impl LayoutEngine {
                             let cell_max_fs: f32 = line.iter()
                                 .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                 .fold(0.0_f32, f32::max);
+                            // S175 (2026-05-22): match body's S166 fix — use word_line_height_table_cell
+                            // (font's natural height incl. ascent+descent) as centering height,
+                            // not raw font_size. The +2pt table-cell drift cluster (15f9/338c92/
+                            // 8efcd/cb8be/04b88e/b5f706/29dc6e and others, 62 docs with the
+                            // adjustLineHeightInTable XML tag) is caused by treating font_size
+                            // as natural height in the centering formula. Body was fixed in
+                            // S166; cell was missed. OXI_LEGACY_CELL_FONT_CENTERING=1 restores
+                            // prior cell_max_fs-based centering.
+                            let use_legacy_cell = std::env::var("OXI_LEGACY_CELL_FONT_CENTERING").is_ok();
+                            let cell_centering_height: f32 = if use_legacy_cell || line.is_empty() {
+                                cell_max_fs
+                            } else {
+                                line.iter()
+                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts)| {
+                                        let mut rs = RunStyle::default();
+                                        rs.font_size = Some(*fs);
+                                        rs.bold = *bold;
+                                        rs.italic = *italic;
+                                        if let Some(ff) = font_family { rs.font_family = Some(ff.clone()); }
+                                        let m = self.metrics_for_text(text, &rs, &para.style);
+                                        m.word_line_height_table_cell(*fs)
+                                    })
+                                    .fold(0.0_f32, f32::max)
+                            };
                             let cell_text_y_off = match (effective_line_rule, effective_line_spacing) {
                                 (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                                     // Session 76 Mech A fix (2026-05-17): cells are
@@ -7449,8 +7473,8 @@ impl LayoutEngine {
                                     0.25
                                 }
                                 _ => {
-                                    // Single/auto grid-snapped: center fontSize within lh.
-                                    let raw = (lh - cell_max_fs).max(0.0) / 2.0;
+                                    // Single/auto grid-snapped: center within lh using natural lh.
+                                    let raw = (lh - cell_centering_height).max(0.0) / 2.0;
                                     (raw * 2.0 + 0.5).floor() / 2.0
                                 }
                             };
