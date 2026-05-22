@@ -6088,7 +6088,20 @@ impl LayoutEngine {
                 let snapped = if para_style.snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            (((base + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch
+                            // S195: narrower grid-snap tolerance — empty paragraph
+                            // whose natural lh slightly exceeds pitch (e.g. 14pt MS
+                            // Mincho 18.126pt at 18pt pitch). Without this it
+                            // over-snaps to 2 cells (36pt). 3a4f pi=132 pattern.
+                            // Gate: empty paragraph + base just over pitch (≤ pitch + 0.5).
+                            // OXI_LEGACY_NO_GRID_SNAP_TOL=1 restores.
+                            let is_empty = line.fragments.iter()
+                                .all(|f| f.text.is_empty());
+                            let just_over_pitch = base > pitch && base <= pitch + 0.5;
+                            let apply_tol = is_empty
+                                && just_over_pitch
+                                && std::env::var("OXI_LEGACY_NO_GRID_SNAP_TOL").is_err();
+                            let tol = if apply_tol { 0.5 } else { 0.0 };
+                            (((base - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch
                         } else { base }
                     } else { base }
                 } else { base };
@@ -6108,7 +6121,15 @@ impl LayoutEngine {
                 if snap_to_grid && is_single_line {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
+                            // S195: narrower grid-snap tolerance (see comment above)
+                            let is_empty = line.fragments.iter()
+                                .all(|f| f.text.is_empty());
+                            let just_over_pitch = spaced > pitch && spaced <= pitch + 0.5;
+                            let apply_tol = is_empty
+                                && just_over_pitch
+                                && std::env::var("OXI_LEGACY_NO_GRID_SNAP_TOL").is_err();
+                            let tol = if apply_tol { 0.5 } else { 0.0 };
+                            return (((spaced - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
                     }
                 }
