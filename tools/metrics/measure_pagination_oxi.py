@@ -100,6 +100,14 @@ def aggregate_dump(dump: dict) -> dict:
                     key = base_key + (instance,)
             slot = groups.setdefault(key, {
                 "para_idx": pi,
+                # S177 (2026-05-22): preserve cell identity so the positional
+                # matcher (pagination_diff_positional.py) can enumerate
+                # paragraphs in document order. Text-prefix matching alone
+                # produces false matches on docs with repeated short prefixes
+                # (d4d126: 365 paras, many empty/□/○; misled S173 hypothesis).
+                "cell_para_idx": cpi,
+                "cell_row_idx": cri,
+                "cell_col_idx": cci,
                 "text_parts": [],
                 "y_min": el["y"],
                 "x_min": el["x"],
@@ -124,6 +132,9 @@ def aggregate_dump(dump: dict) -> dict:
             text = text.replace("\n", "").replace("\r", "")[:30]
             records.append({
                 "para_idx": slot["para_idx"],
+                "cell_para_idx": slot["cell_para_idx"],
+                "cell_row_idx": slot["cell_row_idx"],
+                "cell_col_idx": slot["cell_col_idx"],
                 "text": text,
                 "y": round(slot["y_min"], 2),
                 "x": round(slot["x_min"], 2),
