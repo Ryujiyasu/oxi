@@ -2038,6 +2038,20 @@ fn parse_paragraph_properties(
                         style.contextual_spacing = enabled;
                     }
                     "spacing" => {
+                        // S178 (2026-05-22): mirror the Start branch's
+                        // has_direct_spacing assignment. Self-closing
+                        // `<w:spacing .../>` (common form for cell pPr that
+                        // only carries beforeLines/afterLines) was leaving
+                        // has_direct_spacing=false → cell-render `should_reset`
+                        // zeroed effective_space_before/after for the para
+                        // even though OOXML had the spacing. 191cb 厚生労働大臣
+                        // cpi=4: bl=Some(50), sb_dir=Some(6.8), pitch=Some(13.6)
+                        // → esb=0 in dump (should be 6.8). Set unconditionally;
+                        // gate at layout call-site with OXI_LEGACY_NO_EMPTY_SPACING_HDS
+                        // to restore pre-fix behavior.
+                        if std::env::var("OXI_LEGACY_NO_EMPTY_SPACING_HDS").is_err() {
+                            style.has_direct_spacing = true;
+                        }
                         let mut line_val: Option<f32> = None;
                         let mut line_rule: Option<String> = None;
                         for attr in e.attributes().flatten() {
