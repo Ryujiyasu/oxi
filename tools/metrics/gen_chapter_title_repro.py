@@ -124,12 +124,23 @@ def empty_heading3() -> str:
             '<w:t xml:space="preserve">　</w:t></w:r></w:p>')
 
 
-def make_doc_body(sz: int, bold: bool, font: str, with_h3: bool = False) -> str:
+def empty_inline_sz28_bold() -> str:
+    """S194: matches 3a4f's actual pi=132 pattern — empty paragraph
+    with inline pPr/rPr sz=28 bold + small ind. No pStyle."""
+    return ('<w:p><w:pPr>'
+            '<w:ind w:left="210" w:hanging="210"/>'
+            '<w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+            '</w:pPr></w:p>')
+
+
+def make_doc_body(sz: int, bold: bool, font: str, with_h3: bool = False, with_inline_sz28: bool = False) -> str:
     paras = []
     for i in range(1, 6):
         paras.append(body_para(i))
     if with_h3:
         paras.append(empty_heading3())
+    if with_inline_sz28:
+        paras.append(empty_inline_sz28_bold())
     paras.append(chapter_title(sz, bold, font))
     for i in range(6, 11):
         paras.append(body_para(i))
@@ -144,22 +155,25 @@ def make_doc_body(sz: int, bold: bool, font: str, with_h3: bool = False) -> str:
 
 
 VARIANTS = [
-    # (label, sz, bold, font, with_empty_heading3_before_chapter)
-    ('A_14bold_MS',          28, True,  'ＭＳ 明朝', False),
-    ('B_11_MS',              22, False, 'ＭＳ 明朝', False),
-    ('C_14_MS',              28, False, 'ＭＳ 明朝', False),
-    ('D_14bold_Arial',       28, True,  'Arial',    False),
-    # S188 P-B extension: with empty heading-3 before chapter (3a4f pattern)
-    ('E_14bold_MS_h3',       28, True,  'ＭＳ 明朝', True),
-    ('F_11_MS_h3',           22, False, 'ＭＳ 明朝', True),
-    # S189: same as E/F but heading-3 has full numPr (matches 3a4f exactly)
-    ('G_14bold_MS_h3_numPr', 28, True,  'ＭＳ 明朝', True),
-    ('H_11_MS_h3_numPr',     22, False, 'ＭＳ 明朝', True),
+    # (label, sz, bold, font, with_empty_heading3, with_inline_sz28_empty)
+    ('A_14bold_MS',          28, True,  'ＭＳ 明朝', False, False),
+    ('B_11_MS',              22, False, 'ＭＳ 明朝', False, False),
+    ('C_14_MS',              28, False, 'ＭＳ 明朝', False, False),
+    ('D_14bold_Arial',       28, True,  'Arial',    False, False),
+    # S188 P-B extension: with empty heading-3 before chapter (mistaken hypothesis)
+    ('E_14bold_MS_h3',       28, True,  'ＭＳ 明朝', True,  False),
+    ('F_11_MS_h3',           22, False, 'ＭＳ 明朝', True,  False),
+    # S189: same as E/F but heading-3 has full numPr
+    ('G_14bold_MS_h3_numPr', 28, True,  'ＭＳ 明朝', True,  False),
+    ('H_11_MS_h3_numPr',     22, False, 'ＭＳ 明朝', True,  False),
+    # S194: CORRECT 3a4f pattern — empty paragraph with INLINE pPr/rPr sz=28 bold (no pStyle)
+    ('I_inline_sz28_empty',  28, True,  'ＭＳ 明朝', False, True),
+    ('J_inline_sz28_empty_11ch', 22, False, 'ＭＳ 明朝', False, True),
 ]
 
 
-def write_docx(label: str, sz: int, bold: bool, font: str, with_h3: bool = False):
-    doc_xml = make_doc_body(sz, bold, font, with_h3)
+def write_docx(label: str, sz: int, bold: bool, font: str, with_h3: bool = False, with_inline_sz28: bool = False):
+    doc_xml = make_doc_body(sz, bold, font, with_h3, with_inline_sz28)
     path = OUT / f'CT_{label}.docx'
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('[Content_Types].xml', CONTENT_TYPES)
