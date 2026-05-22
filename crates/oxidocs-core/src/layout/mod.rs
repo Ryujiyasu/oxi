@@ -8271,7 +8271,28 @@ impl LayoutEngine {
                 let pages_used = ((overflow_on_next) / content_height).floor() as usize;
                 cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
             } else {
-                cursor.advance(row_height);
+                // S200 (2026-05-22): visual/cursor decoupling for Word's per-row
+                // +0.5pt table row pitch overhead with sparse-content narrow gate.
+                // COM matrix M01-M14: when docGrid is present AND row content fits
+                // within one linePitch (sparse cells), Word's row pitch = linePitch + 0.5pt.
+                // When row content is multi-line / fills the grid (content-driven),
+                // Oxi's row_height already > linePitch and Word's existing logic
+                // gives correct positions; +0.5pt would over-correct.
+                // Discriminator: |row_height - linePitch| < 0.5pt (sparse cell).
+                // Using advance_split: cursor_y advances by row_height (preserves
+                // Phase 1 pagination 53/55), visual_y advances by row_height + 0.5pt
+                // (corrects element positions). OXI_LEGACY_NO_TBL_ROW_PLUS_HALF=1
+                // disables the fix.
+                let legacy = std::env::var("OXI_LEGACY_NO_TBL_ROW_PLUS_HALF").is_ok();
+                let apply_plus_half = !legacy
+                    && table_grid_pitch
+                        .map(|p| (row_height - p).abs() < 0.5)
+                        .unwrap_or(false);
+                if apply_plus_half {
+                    cursor.advance_split(row_height, row_height + 0.5);
+                } else {
+                    cursor.advance(row_height);
+                }
             }
         }
 
