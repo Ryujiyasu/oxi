@@ -82,10 +82,13 @@ PARA = ('<w:p>'
         '</w:p>')
 
 
-def make_tbl_borders(has_border: bool, has_inside_h: bool) -> str:
+def make_tbl_borders(has_border: bool, has_inside_h: bool, outer_sz: int = 4) -> str:
     if not has_border:
         return ''
-    inner = '<w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/>'
+    inner = (f'<w:top w:val="single" w:sz="{outer_sz}"/>'
+             f'<w:left w:val="single" w:sz="{outer_sz}"/>'
+             f'<w:bottom w:val="single" w:sz="{outer_sz}"/>'
+             f'<w:right w:val="single" w:sz="{outer_sz}"/>')
     if has_inside_h:
         inner += '<w:insideH w:val="single" w:sz="4"/>'
     return f'<w:tblBorders>{inner}</w:tblBorders>'
@@ -97,14 +100,22 @@ def make_tcMar(explicit_zero: bool) -> str:
     return '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/></w:tcMar>'
 
 
-def make_row(r_idx: int, tr_height: int | None, has_border: bool, explicit_tcMar: bool) -> str:
+def make_row(r_idx: int, tr_height: int | None, has_border: bool,
+             explicit_tcMar: bool, tc_top_sz: int = 4) -> str:
     trpr = ''
     if tr_height is not None:
         trpr = f'<w:trPr><w:trHeight w:val="{tr_height}"/></w:trPr>'
 
     tcPr_parts = ['<w:tcW w:w="9000" w:type="dxa"/>']
     if has_border:
-        tcPr_parts.append('<w:tcBorders><w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/></w:tcBorders>')
+        tcPr_parts.append(
+            f'<w:tcBorders>'
+            f'<w:top w:val="single" w:sz="{tc_top_sz}"/>'
+            f'<w:left w:val="single" w:sz="4"/>'
+            f'<w:bottom w:val="single" w:sz="4"/>'
+            f'<w:right w:val="single" w:sz="4"/>'
+            f'</w:tcBorders>'
+        )
     tcPr_parts.append(make_tcMar(explicit_tcMar))
     tcPr = '<w:tcPr>' + ''.join(p for p in tcPr_parts if p) + '</w:tcPr>'
 
@@ -114,21 +125,29 @@ def make_row(r_idx: int, tr_height: int | None, has_border: bool, explicit_tcMar
 
 def make_table(num_rows: int, has_border: bool, has_inside_h: bool,
                tr_height: int | None, explicit_tcMar: bool,
-               t_idx: int = 0) -> str:
+               t_idx: int = 0, outer_sz: int = 4,
+               first_row_top_sz: int | None = None) -> str:
+    """first_row_top_sz: if set, overrides row 0's tc top border (matches
+    7ead52's pattern where only row 0 has sz=12 top, rest use default)."""
     tbl_pr_parts = ['<w:tblW w:w="9000" w:type="dxa"/>']
-    tbl_pr_parts.append(make_tbl_borders(has_border, has_inside_h))
+    tbl_pr_parts.append(make_tbl_borders(has_border, has_inside_h, outer_sz))
     tbl_pr_parts.append('<w:tblLook w:val="04A0"/>')
     tbl_pr = '<w:tblPr>' + ''.join(p for p in tbl_pr_parts if p) + '</w:tblPr>'
     grid = '<w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid>'
-    rows = ''.join(make_row(t_idx * 10 + i, tr_height, has_border, explicit_tcMar) for i in range(num_rows))
+    rows = ''
+    for i in range(num_rows):
+        tc_top = first_row_top_sz if (i == 0 and first_row_top_sz is not None) else 4
+        rows += make_row(t_idx * 10 + i, tr_height, has_border, explicit_tcMar, tc_top)
     return f'<w:tbl>{tbl_pr}{grid}{rows}</w:tbl>'
 
 
 def make_doc(num_tables: int, num_rows_per_table: int,
              has_border: bool, has_inside_h: bool,
-             tr_height: int | None, explicit_tcMar: bool) -> bytes:
+             tr_height: int | None, explicit_tcMar: bool,
+             outer_sz: int = 4, first_row_top_sz: int | None = None) -> bytes:
     tables = ''.join(
-        make_table(num_rows_per_table, has_border, has_inside_h, tr_height, explicit_tcMar, t)
+        make_table(num_rows_per_table, has_border, has_inside_h, tr_height,
+                   explicit_tcMar, t, outer_sz, first_row_top_sz)
         for t in range(num_tables)
     )
     body = f'{tables}<w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>'
@@ -145,22 +164,31 @@ def make_doc(num_tables: int, num_rows_per_table: int,
 
 
 VARIANTS = [
-    # (label, num_tables, num_rows, has_border, has_inside_h, tr_height, explicit_tcMar)
-    ('A_1tbl_1row',           1, 1, True,  False, None, False),
-    ('B_5tbl_1row',           5, 1, True,  False, None, False),
-    ('C_5tbl_1row_trH660',    5, 1, True,  False, 660,  False),
-    ('D_1tbl_5row_insideH',   1, 5, True,  True,  None, False),
-    ('E_1tbl_5row_noInsideH', 1, 5, True,  False, None, False),
-    ('F_1tbl_5row_insH_trH', 1, 5, True,  True,  660,  False),
-    ('G_5tbl_1row_NoBorder',  5, 1, False, False, None, False),
-    ('H_5tbl_1row_tcMar0',    5, 1, True,  False, None, True),
+    # (label, num_tables, num_rows, has_border, has_inside_h, tr_height, explicit_tcMar,
+    #  outer_sz, first_row_top_sz)
+    ('A_1tbl_1row',              1, 1, True,  False, None, False, 4,  None),
+    ('B_5tbl_1row',              5, 1, True,  False, None, False, 4,  None),
+    ('C_5tbl_1row_trH660',       5, 1, True,  False, 660,  False, 4,  None),
+    ('D_1tbl_5row_insideH',      1, 5, True,  True,  None, False, 4,  None),
+    ('E_1tbl_5row_noInsideH',    1, 5, True,  False, None, False, 4,  None),
+    ('F_1tbl_5row_insH_trH',     1, 5, True,  True,  660,  False, 4,  None),
+    ('G_5tbl_1row_NoBorder',     5, 1, False, False, None, False, 4,  None),
+    ('H_5tbl_1row_tcMar0',       5, 1, True,  False, None, True,  4,  None),
+    # S183: 7ead52-style variants (sz=12 outer border + trH + insideH)
+    ('I_1tbl_5row_sz12_insH',    1, 5, True,  True,  None, False, 12, None),
+    ('J_1tbl_5row_sz12_insH_trH', 1, 5, True, True,  860,  False, 12, None),
+    ('K_1tbl_5row_sz12_noInsH_trH', 1, 5, True, False, 860, False, 12, None),
+    # 7ead52's actual: sz=12 only on row 0 top (not on inside-H rows)
+    ('L_1tbl_5row_row0sz12_trH', 1, 5, True,  True,  860,  False, 4,  12),
 ]
 
 
 def write_docx(label: str, num_tables: int, num_rows: int,
                has_border: bool, has_inside_h: bool,
-               tr_height: int | None, explicit_tcMar: bool):
-    doc_bytes = make_doc(num_tables, num_rows, has_border, has_inside_h, tr_height, explicit_tcMar)
+               tr_height: int | None, explicit_tcMar: bool,
+               outer_sz: int = 4, first_row_top_sz: int | None = None):
+    doc_bytes = make_doc(num_tables, num_rows, has_border, has_inside_h,
+                          tr_height, explicit_tcMar, outer_sz, first_row_top_sz)
     path = os.path.join(OUT_DIR, f'RBM_{label}.docx')
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('[Content_Types].xml', CONTENT_TYPES)
