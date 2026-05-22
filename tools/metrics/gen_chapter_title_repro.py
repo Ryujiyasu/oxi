@@ -29,6 +29,7 @@ CONTENT_TYPES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 </Types>'''
 RELS_ROOT = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -38,7 +39,26 @@ DOC_RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
 </Relationships>'''
+
+NUMBERING = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="33">
+    <w:lvl w:ilvl="2">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimalFullWidth"/>
+      <w:lvlRestart w:val="0"/>
+      <w:pStyle w:val="3"/>
+      <w:suff w:val="space"/>
+      <w:lvlText w:val="【第%3条"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="57" w:hanging="57"/></w:pPr>
+      <w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="50"><w:abstractNumId w:val="33"/></w:num>
+</w:numbering>'''
 STYLES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:docDefaults>
@@ -56,7 +76,10 @@ STYLES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <w:basedOn w:val="a"/>
     <w:next w:val="a"/>
     <w:qFormat/>
-    <w:pPr><w:outlineLvl w:val="2"/></w:pPr>
+    <w:pPr>
+      <w:numPr><w:ilvl w:val="2"/><w:numId w:val="50"/></w:numPr>
+      <w:outlineLvl w:val="2"/>
+    </w:pPr>
     <w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/></w:rPr>
   </w:style>
 </w:styles>'''
@@ -129,6 +152,9 @@ VARIANTS = [
     # S188 P-B extension: with empty heading-3 before chapter (3a4f pattern)
     ('E_14bold_MS_h3',       28, True,  'ＭＳ 明朝', True),
     ('F_11_MS_h3',           22, False, 'ＭＳ 明朝', True),
+    # S189: same as E/F but heading-3 has full numPr (matches 3a4f exactly)
+    ('G_14bold_MS_h3_numPr', 28, True,  'ＭＳ 明朝', True),
+    ('H_11_MS_h3_numPr',     22, False, 'ＭＳ 明朝', True),
 ]
 
 
@@ -141,6 +167,7 @@ def write_docx(label: str, sz: int, bold: bool, font: str, with_h3: bool = False
         z.writestr('word/_rels/document.xml.rels', DOC_RELS)
         z.writestr('word/styles.xml', STYLES)
         z.writestr('word/settings.xml', SETTINGS)
+        z.writestr('word/numbering.xml', NUMBERING)
         z.writestr('word/document.xml', doc_xml.encode('utf-8'))
     print(f'  wrote {path}')
 
