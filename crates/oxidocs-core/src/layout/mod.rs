@@ -5255,10 +5255,9 @@ impl LayoutEngine {
                         // S148 (2026-05-21) H8 refinement: only skip POSITIVE expansion
                         // (kern portions). Word DOES apply negative compression (e.g.
                         // b35 charSpace=-2714 → chars narrower than natural).
-                        // S151 DEFAULT ON: H8 enabled by default. OXI_LEGACY_GRID_KERN=1
-                        // restores legacy behavior (apply char_grid_extra for positive too).
-                        let h8_disabled = std::env::var("OXI_LEGACY_GRID_KERN").is_ok();
-                        let h8_trigger = !h8_disabled && char_space_pt > 0.0;
+                        // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN
+                        // legacy env-var fallback during hardening pass.
+                        let h8_trigger = char_space_pt > 0.0;
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
                         if h6_trigger || h7_trigger || h8_trigger {
@@ -5272,16 +5271,10 @@ impl LayoutEngine {
                             expected_w - char_width
                         }
                     } else { 0.0 }
-                } else if let Some(pitch) = grid_char_pitch {
-                    if pitch > 0.0 && char_width > 0.0
-                        && ch != ' ' && ch != '\t' && ch != '\n'
-                        && crate::font::is_fullwidth(ch)
-                        && !yakumono_compressed[char_index]
-                        && std::env::var("OXI_LEGACY_GRID_KERN").is_ok()
-                    {
-                        pitch - char_width
-                    } else { 0.0 }
                 } else { 0.0 };
+                // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN legacy
+                // env-var-only branch (was `else if let Some(pitch) = grid_char_pitch`
+                // gated entirely by env::var().is_ok()).
                 // For negative extras, fold into char_width directly so fragment
                 // widths (positioning) reflect the shrink. For positive extras,
                 // keep the existing separate-accumulator model (padding for positioning).
@@ -6527,7 +6520,6 @@ impl LayoutEngine {
                 let mut cell_content_h = pad_t;
                 // Session 79c: parallel emit-equivalent content_h for visual_row_h
                 let mut cell_content_h_visual = pad_t;
-                let mut is_first_block_est = true;
 
                 // Session 131 (2026-05-20): vertical writing — cell height
                 // along the page-y axis equals the sum of vertical-text lengths
@@ -6553,23 +6545,11 @@ impl LayoutEngine {
                             // S136 (2026-05-20): TR_V200-V203 + R1A re-measurement show
                             // Word DOES apply sb to first cell para (cell_para_y shifts
                             // 4.35pt when sb=87). Day 33 part 17 premise is wrong.
-                            // OXI_SB_NO_SUPPRESS=1 disables both suppressions for A/B testing.
-                            // S151 DEFAULT ON: SB suppression is now DISABLED by default
-                            // (sb correctly applied to first cell para). OXI_LEGACY_SB_SUPPRESS=1
-                            // restores Day 33 part 17 suppression behavior.
-                            let sb_suppress_enabled = std::env::var("OXI_LEGACY_SB_SUPPRESS").is_ok()
-                                && std::env::var("OXI_SB_NO_SUPPRESS").is_err();
-                            if sb_suppress_enabled && is_first_block_est && !vert_writing_active {
-                                let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
-                                    bl / 100.0 * pitch
-                                } else {
-                                    para.style.space_before
-                                        .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
-                                        .unwrap_or(0.0)
-                                };
-                                para_h -= sb_added;
-                                para_h_visual -= sb_added;
-                            }
+                            // S239 (2026-05-23): removed OXI_LEGACY_SB_SUPPRESS and
+                            // OXI_SB_NO_SUPPRESS legacy env-var fallbacks during
+                            // hardening pass. The `if sb_suppress_enabled` block
+                            // was dead code (LEGACY var default false → block
+                            // never executed). S151 default ON since 2026-05-21.
                             cell_content_h += para_h;
                             cell_content_h_visual += para_h_visual;
                         }
@@ -6601,7 +6581,6 @@ impl LayoutEngine {
                         }
                         _ => {}
                     }
-                    is_first_block_est = false;
                 }
                 cell_content_h += pad_b;
                 cell_content_h_visual += pad_b;
@@ -6846,7 +6825,6 @@ impl LayoutEngine {
 
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
                 let is_exact = row.height_rule.as_deref() == Some("exact");
-                let mut is_first_block_in_cell = true;
                 // R7.32: count Paragraph blocks within this cell so each cell
                 // paragraph can be distinguished in the dump output.
                 let mut cell_para_counter: usize = 0;
@@ -6939,7 +6917,6 @@ impl LayoutEngine {
                         cell_elements.push(elem);
                         content_h += vert_h;
                         cell_para_counter += 1;
-                        is_first_block_in_cell = false;
                         continue;
                     }
                     // Apply table style pPr as fallback (ECMA-376: table style pPr < paragraph style < direct)
@@ -6975,11 +6952,11 @@ impl LayoutEngine {
                     // S136 (2026-05-20): OXI_SB_NO_SUPPRESS=1 disables the first-cell-para
                     // sb suppression (Day 33 part 17). TR_V200-V203 + R1A re-measurement
                     // show Word DOES apply sb. Default off; env var enables revert behavior.
-                    // S151 DEFAULT ON: sb is now correctly applied (suppression disabled
-                    // by default). OXI_LEGACY_SB_SUPPRESS=1 restores legacy suppression.
-                    let sb_suppress_enabled = std::env::var("OXI_LEGACY_SB_SUPPRESS").is_ok()
-                        && std::env::var("OXI_SB_NO_SUPPRESS").is_err();
-                    let effective_space_before = if should_reset || (sb_suppress_enabled && is_first_block_in_cell) {
+                    // S239 (2026-05-23): removed OXI_LEGACY_SB_SUPPRESS and
+                    // OXI_SB_NO_SUPPRESS legacy env-var fallbacks (LEGACY var
+                    // default false → suppression branch was dead). S151
+                    // default ON since 2026-05-21.
+                    let effective_space_before = if should_reset {
                         // Day 33 part 17 (2026-05-10): Word suppresses spacing.before
                         // for the first paragraph in a cell. COM-confirmed via 8 repros
                         // (row1_attr_isolation): R1A_spacing_lineRule has spacing.before=4.35pt
@@ -7181,8 +7158,8 @@ impl LayoutEngine {
                                             let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
                                                 && char_space_pt > 0.0 && font_size <= default_fs;
                                             // S151 H8 default ON: skip positive char_grid_extra
-                                            let h8_skip = std::env::var("OXI_LEGACY_GRID_KERN").is_err()
-                                                && char_space_pt > 0.0;
+                                            // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
+                                            let h8_skip = char_space_pt > 0.0;
                                             if !(h6_skip || h7_skip || h8_skip) {
                                                 cw = if char_space_pt >= 0.0 {
                                                     font_size * pitch / default_fs
@@ -7650,7 +7627,6 @@ impl LayoutEngine {
                 }
                 _ => {}
                 } // match block
-                is_first_block_in_cell = false;
                 } // for block
                 } // if !is_vmerge_continue
 
@@ -8536,8 +8512,8 @@ impl LayoutEngine {
                             // S158 (2026-05-21): added missing H8 site — was the only
                             // cell-related site without H8 gating. V800y bisection
                             // traced a1d6 +14pt residual drift to this code path.
-                            let h8_skip = std::env::var("OXI_LEGACY_GRID_KERN").is_err()
-                                && char_space_pt > 0.0;
+                            // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
+                            let h8_skip = char_space_pt > 0.0;
                             if !(h6_skip || h7_skip || h8_skip) {
                                 cw = if char_space_pt >= 0.0 {
                                     font_size * pitch / default_fs
@@ -8758,7 +8734,6 @@ impl LayoutEngine {
             }
             let inner_w = cell_w.max(0.0);
             let mut cell_content_h = pad_t;
-            let mut is_first_block_est = true;
             let vert_writing_active = self.is_vert_writing_active(cell);
             for block in &cell.blocks {
                 match block {
@@ -8770,18 +8745,9 @@ impl LayoutEngine {
                                 table.style.para_style.as_ref(), true,
                                 grid_char_pitch, grid_char_cw_ratio)
                         };
-                        let sb_suppress_enabled = std::env::var("OXI_LEGACY_SB_SUPPRESS").is_ok()
-                            && std::env::var("OXI_SB_NO_SUPPRESS").is_err();
-                        if sb_suppress_enabled && is_first_block_est && !vert_writing_active {
-                            let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
-                                bl / 100.0 * pitch
-                            } else {
-                                para.style.space_before
-                                    .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
-                                    .unwrap_or(0.0)
-                            };
-                            para_h -= sb_added;
-                        }
+                        // S239 (2026-05-23): removed OXI_LEGACY_SB_SUPPRESS and
+                        // OXI_SB_NO_SUPPRESS legacy env-var fallbacks (dead code
+                        // since LEGACY var default false). S151 default ON.
                         cell_content_h += para_h;
                     }
                     Block::Table(nested) => {
@@ -8811,7 +8777,6 @@ impl LayoutEngine {
                     }
                     _ => {}
                 }
-                is_first_block_est = false;
             }
             cell_content_h += pad_b;
             row_height = row_height.max(cell_content_h);
