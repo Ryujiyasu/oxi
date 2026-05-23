@@ -1946,15 +1946,13 @@ impl LayoutEngine {
                                         // (sweep showed sep_extra=5-9 all give same
                                         // result, sep_extra>=10 regresses Phase 1).
                                         // b837 IoU 0.5855 → 0.6921 (+0.1066).
-                                        // OXI_LEGACY_FN_SEP_GAP=1 restores 0pt extra.
-                                        let sep_extra: f32 = if std::env::var("OXI_LEGACY_FN_SEP_GAP").is_ok() {
-                                            0.0
-                                        } else {
-                                            std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                                .ok()
-                                                .and_then(|v| v.parse().ok())
-                                                .unwrap_or(6.0)
-                                        };
+                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
+                                        // legacy env-var fallback during hardening pass.
+                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
+                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
+                                            .ok()
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(6.0);
                                         full += 6.0 + sep_extra;
                                         delta += 6.0 + sep_extra;
                                     }
@@ -1984,14 +1982,13 @@ impl LayoutEngine {
                                     // above separator (Word measurement: ~21pt missing).
                                     if ids.is_empty() {
                                         // S160: see estimate-path comment near line 1934.
-                                        let sep_extra: f32 = if std::env::var("OXI_LEGACY_FN_SEP_GAP").is_ok() {
-                                            0.0
-                                        } else {
-                                            std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                                .ok()
-                                                .and_then(|v| v.parse().ok())
-                                                .unwrap_or(6.0)
-                                        };
+                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
+                                        // legacy env-var fallback during hardening pass.
+                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
+                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
+                                            .ok()
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(6.0);
                                         *reserve += 6.0 + sep_extra;
                                     }
                                     ids.push(id);
@@ -2304,14 +2301,13 @@ impl LayoutEngine {
                                 if !footnote_ids_current_page.contains(id) {
                                     if footnote_ids_current_page.is_empty() {
                                         // S160: see estimate-path comment near line 1934.
-                                        let sep_extra: f32 = if std::env::var("OXI_LEGACY_FN_SEP_GAP").is_ok() {
-                                            0.0
-                                        } else {
-                                            std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                                .ok()
-                                                .and_then(|v| v.parse().ok())
-                                                .unwrap_or(6.0)
-                                        };
+                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
+                                        // legacy env-var fallback during hardening pass.
+                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
+                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
+                                            .ok()
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(6.0);
                                         footnote_reserve_current += 6.0 + sep_extra;
                                     }
                                     footnote_ids_current_page.push(*id);
@@ -2330,14 +2326,13 @@ impl LayoutEngine {
                                 if !footnote_ids_current_page.contains(id) {
                                     if footnote_ids_current_page.is_empty() {
                                         // S160: see estimate-path comment near line 1934.
-                                        let sep_extra: f32 = if std::env::var("OXI_LEGACY_FN_SEP_GAP").is_ok() {
-                                            0.0
-                                        } else {
-                                            std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                                .ok()
-                                                .and_then(|v| v.parse().ok())
-                                                .unwrap_or(6.0)
-                                        };
+                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
+                                        // legacy env-var fallback during hardening pass.
+                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
+                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
+                                            .ok()
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(6.0);
                                         footnote_reserve_current += 6.0 + sep_extra;
                                     }
                                     footnote_ids_current_page.push(*id);
