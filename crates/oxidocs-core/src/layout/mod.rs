@@ -4676,12 +4676,12 @@ impl LayoutEngine {
             //   - Phase 2: mean IoU 0.9191 → 0.9236 (+0.0045 strict increase)
             //   - 5 improvements (d1e8 +0.259 dominant), 1 regression
             //     (1636d28e -0.0233 on wi=89-93, separate issue)
-            // `OXI_LEGACY_LM2_IGNORE_STG=1` restores the prior behaviour.
-            let stg_respect = std::env::var("OXI_LEGACY_LM2_IGNORE_STG").is_err();
+            // S236+S237 (2026-05-23): removed OXI_LEGACY_LM2_IGNORE_STG
+            // legacy env-var fallback during hardening pass.
             let is_lm2_single = lm2_grid_cells.is_some()
                 && page.grid_char_pitch.is_some()
                 && grid_pitch.map_or(false, |p| p > 0.0)
-                && (!stg_respect || para.style.snap_to_grid)
+                && para.style.snap_to_grid
                 && match (para.style.line_spacing_rule.as_deref(), para.style.line_spacing) {
                     (Some("exact"), _) | (Some("atLeast"), _) => false,
                     (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
@@ -6807,18 +6807,10 @@ impl LayoutEngine {
                 // → row growth via max_actual_cell_h → +16.5pt drift propagating
                 // through pages 5-8). The first-pass row-height calc already tracks
                 // grid_idx directly (line 6354); this aligns the second pass.
-                // OXI_LEGACY_GRIDIDX_FIND=1 restores the legacy find logic for A/B.
-                let use_legacy_find = std::env::var("OXI_LEGACY_GRIDIDX_FIND").is_ok();
-                let cell_start_grid = if use_legacy_find {
-                    col_widths.iter()
-                        .scan(0.0f32, |acc, w| { let prev = *acc; *acc += w; Some(prev) })
-                        .enumerate()
-                        .find(|(_, acc)| (cell_x - table_x - acc).abs() < 0.5)
-                        .map(|(i, _)| i)
-                        .unwrap_or(0)
-                } else {
-                    grid_idx.min(col_widths.len().saturating_sub(1))
-                };
+                // S237 (2026-05-23): removed OXI_LEGACY_GRIDIDX_FIND legacy
+                // env-var fallback (was the pre-fix `col_widths.iter().find()`
+                // float-precision lookup); the index-aligned path is canonical.
+                let cell_start_grid = grid_idx.min(col_widths.len().saturating_sub(1));
                 let cell_end_grid = (cell_start_grid + span).min(col_widths.len());
                 let cell_w: f32 = col_widths[cell_start_grid..cell_end_grid].iter().sum();
 
@@ -7072,9 +7064,10 @@ impl LayoutEngine {
                         // within body width. This matches d77a/29dc6e/b35/31420af's
                         // structure (single-column body-width-sized tables with hanging
                         // paragraphs) while excluding 1636d (multi-cell), a47e (cell > body),
-                        // and 191cb (multi-cell narrow). OXI_LEGACY_NO_CELL_HANG_INNER=1 disables.
-                        let cell_hang_inner = std::env::var("OXI_LEGACY_NO_CELL_HANG_INNER").is_err()
-                            && p_first_line_indent_raw < 0.0
+                        // and 191cb (multi-cell narrow).
+                        // S237 (2026-05-23): removed OXI_LEGACY_NO_CELL_HANG_INNER
+                        // legacy env-var fallback during hardening pass.
+                        let cell_hang_inner = p_first_line_indent_raw < 0.0
                             && row.cells.len() == 1
                             && cell_w <= content_width;
                         let wrap_base = if cell_hang_inner {
@@ -7491,10 +7484,10 @@ impl LayoutEngine {
                             // 8efcd/cb8be/04b88e/b5f706/29dc6e and others, 62 docs with the
                             // adjustLineHeightInTable XML tag) is caused by treating font_size
                             // as natural height in the centering formula. Body was fixed in
-                            // S166; cell was missed. OXI_LEGACY_CELL_FONT_CENTERING=1 restores
-                            // prior cell_max_fs-based centering.
-                            let use_legacy_cell = std::env::var("OXI_LEGACY_CELL_FONT_CENTERING").is_ok();
-                            let cell_centering_height: f32 = if use_legacy_cell || line.is_empty() {
+                            // S166; cell was missed.
+                            // S237 (2026-05-23): removed OXI_LEGACY_CELL_FONT_CENTERING
+                            // legacy env-var fallback during hardening pass.
+                            let cell_centering_height: f32 = if line.is_empty() {
                                 cell_max_fs
                             } else {
                                 line.iter()

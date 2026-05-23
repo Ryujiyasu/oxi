@@ -2047,11 +2047,9 @@ fn parse_paragraph_properties(
                         // even though OOXML had the spacing. 191cb 厚生労働大臣
                         // cpi=4: bl=Some(50), sb_dir=Some(6.8), pitch=Some(13.6)
                         // → esb=0 in dump (should be 6.8). Set unconditionally;
-                        // gate at layout call-site with OXI_LEGACY_NO_EMPTY_SPACING_HDS
-                        // to restore pre-fix behavior.
-                        if std::env::var("OXI_LEGACY_NO_EMPTY_SPACING_HDS").is_err() {
-                            style.has_direct_spacing = true;
-                        }
+                        // S237 (2026-05-23): removed OXI_LEGACY_NO_EMPTY_SPACING_HDS
+                        // legacy env-var fallback during hardening pass.
+                        style.has_direct_spacing = true;
                         let mut line_val: Option<f32> = None;
                         let mut line_rule: Option<String> = None;
                         for attr in e.attributes().flatten() {
