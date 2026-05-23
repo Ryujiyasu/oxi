@@ -1,3 +1,7 @@
+// PdfBuilder scaffold + render_* helpers below are retained as a reference
+// implementation; the active path is docx_to_pdf → doc_to_pdf → oxipdf_core.
+#![allow(dead_code, unused_variables, unused_imports)]
+
 use std::collections::HashMap;
 use std::fs;
 use oxidocs_core::ir::{Block, Paragraph, Table, Alignment, TextBox, FloatingPosition};

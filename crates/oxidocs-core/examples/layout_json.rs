@@ -1,3 +1,7 @@
+// Diagnostic tool: emits a textual line-by-line layout dump. Some scratch
+// counters (para_y, para_line_count) are kept for ad-hoc instrumentation.
+#![allow(unused_variables, unused_assignments)]
+
 use oxidocs_core::{parse_docx, layout};
 use std::io::Write;
 

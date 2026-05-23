@@ -7,6 +7,7 @@ use crate::ir::*;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use std::io::Write;
+#[cfg(test)]
 use std::collections::HashMap;
 
 /// Build a PDF file from a `PdfDocument` and return the bytes.

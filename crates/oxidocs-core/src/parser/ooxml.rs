@@ -6698,6 +6698,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn parse_table_grid_ignores_tblGridChange_prior_columns() {
         // Without the drain, the prior <w:gridCol w="999"/> inside tblGridChange
         // would be appended to the columns vector. With the drain, only the
@@ -6726,6 +6727,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn parse_num_pr_ignores_numberingChange_prior_values() {
         // Without the drain, prior <w:numId val="999"/> inside numberingChange
         // would silently overwrite the current numId.
