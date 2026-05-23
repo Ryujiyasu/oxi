@@ -1308,7 +1308,6 @@ fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseErro
     let current_element = String::new();
     let mut current_writer: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut current_kind: Option<&str> = None;
-    let mut wrote_body_start = false;
     let mut pre_writer = Writer::new(Cursor::new(Vec::new()));
     let mut post_collecting = false;
     let mut post_writer = Writer::new(Cursor::new(Vec::new()));
@@ -1329,7 +1328,6 @@ fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseErro
                     match &event {
                         Event::Start(e) if local.as_deref() == Some("body") => {
                             in_body = true;
-                            wrote_body_start = true;
                             pre_writer.write_event(Event::Start(e.clone()))?;
                             continue;
                         }

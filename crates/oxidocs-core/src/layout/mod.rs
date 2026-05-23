@@ -4924,7 +4924,9 @@ impl LayoutEngine {
         let mut word = String::new();
         let mut word_width: f32 = 0.0;
         let mut word_natural_width: f32 = 0.0; // 2-pass wrap: natural (pre-compression) width
-        let mut word_grid_extra: f32 = 0.0; // charGrid extra width for line-break
+        // S245 (2026-05-24): removed dead variable `word_grid_extra`
+        // (assigned/incremented at 3 sites but never read after S243
+        // removed `current_grid_extra`).
         let mut word_style: Option<RunStyle> = None;
         let mut word_field_type: Option<FieldType> = None;
         let mut word_run_index: usize = 0;
@@ -4962,7 +4964,6 @@ impl LayoutEngine {
                     current_width_tw += word_width_tw;
                     word_width = 0.0;
                     word_natural_width = 0.0;
-                    word_grid_extra = 0.0;
                 }
             };
         }
@@ -5347,7 +5348,7 @@ impl LayoutEngine {
                         word_char_offset = char_pos_in_run;
                     }
                     word.push(ch);
-                    word_width += char_width; word_grid_extra += char_grid_extra;
+                    word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
                     flush_word!(style);
                 } else if kinsoku::is_cjk(ch) {
@@ -5609,7 +5610,7 @@ impl LayoutEngine {
                         word_char_offset = char_pos_in_run;
                     }
                     word.push(ch);
-                    word_width += char_width; word_grid_extra += char_grid_extra;
+                    word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
                 }
                 char_pos_in_run += 1; // character index (not byte offset) for JS compatibility
@@ -7911,7 +7912,7 @@ impl LayoutEngine {
                 let mut next_page_elems: Vec<LayoutElement> = Vec::new();
 
                 for elem in row_elements {
-                    let elem_top = elem.y;
+                    let _elem_top = elem.y;
                     match &elem.content {
                         LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width } => {
                             // Horizontal borders: keep on their respective page
@@ -8227,7 +8228,7 @@ impl LayoutEngine {
                     let mut overflow: Vec<LayoutElement> = Vec::new();
 
                     for elem in remaining {
-                        let elem_top = elem.y;
+                        let _elem_top = elem.y;
                         match &elem.content {
                             LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width } => {
                                 if (y1 - y2).abs() < 0.1 {

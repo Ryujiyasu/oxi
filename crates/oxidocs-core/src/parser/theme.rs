@@ -113,9 +113,10 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     let mut current_color_name: Option<String> = None;
     let mut in_major_font = false;
     let mut in_minor_font = false;
-    // Track if <a:ea> was present but empty (typeface="") — suppresses script-based fallback
-    let mut ea_empty_major = false;
-    let mut ea_empty_minor = false;
+    // S245 (2026-05-24): removed dead variables `ea_empty_major` and
+    // `ea_empty_minor` (set in conditional branches when <a:ea typeface=""/>
+    // is encountered but never read — the planned "suppress script-based
+    // fallback" wiring was never connected).
 
     loop {
         match reader.read_event() {
@@ -182,9 +183,9 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if !val.is_empty() {
                                     theme.major_font_ea = Some(val);
-                                } else {
-                                    ea_empty_major = true; // ea="" suppresses Jpan fallback
                                 }
+                                // empty typeface ignored (would suppress Jpan fallback;
+                                // wiring not implemented — see S245 cleanup note)
                             }
                         }
                     }
@@ -194,9 +195,8 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if !val.is_empty() {
                                     theme.minor_font_ea = Some(val);
-                                } else {
-                                    ea_empty_minor = true;
                                 }
+                                // empty typeface ignored (see ea_empty_major comment)
                             }
                         }
                     }
