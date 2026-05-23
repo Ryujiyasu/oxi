@@ -7728,15 +7728,22 @@ impl LayoutEngine {
                         if all_have_h {
                             effective_row_h = effective_row_h.max(span_h);
                         } else if relax_vmerge {
-                            // S218 relax: compute natural h for rows lacking trHeight.
-                            // For row_idx use the already-computed row_height (already
-                            // includes the trHeight semantic). For span rows beyond
-                            // row_idx, compute via helper and apply trHeight semantic.
+                            // S218 relax: compute span height when trHeight missing.
+                            // S222 (2026-05-23): for row_idx, use the already-computed
+                            // `effective_row_h` (= max of row_height, visual_row_h,
+                            // max_actual_cell_h — matches emit). Pre-S222 used
+                            // `row_height` alone (pre-pass natural, non-grid-snap),
+                            // which underestimated by ~14pt for 2-line grid-snapped
+                            // cells (b5f706 p2 row 1: 21.75 vs 36.5). For future
+                            // span rows, helper now also uses
+                            // `estimate_para_height_emit` so its natural h matches
+                            // emit grid-snap. S220 attempted this but was blocked
+                            // by derive_oxi_heights noise; S221 resolved that.
                             let mut relaxed_span_h: f32 = 0.0;
                             for ri in row_idx..(row_idx + span_count) {
                                 let r = &table.rows[ri];
                                 let eff_h = if ri == row_idx {
-                                    row_height
+                                    effective_row_h
                                 } else {
                                     let nat = self.estimate_table_row_natural_h(
                                         r, &col_widths,
@@ -8702,12 +8709,18 @@ impl LayoutEngine {
             in_cell, grid_char_pitch, grid_char_cw_ratio, false)
     }
 
-    /// S218 (2026-05-23): natural row height for a single table row.
+    /// S218 (2026-05-23) / S222 (2026-05-23): emit-equivalent row height
+    /// for a single table row, matching what the emit pass renders.
     /// Mirrors the inlined logic at the top of the table row-loop
-    /// (lines 6473-6604). Used by the S217 vmerge=restart vAlign relax
-    /// path to compute the merged-span height when trHeight is missing
-    /// on some span rows. Does NOT apply trHeight constraint or
-    /// zero-fallback — caller layers those.
+    /// (lines 6473-6604) but uses `estimate_para_height_emit`
+    /// (force_grid_snap=true) instead of `estimate_para_height` so the
+    /// returned height accounts for the cell line-height grid snap that
+    /// the emit pass applies. S218 originally used the non-snap variant,
+    /// which underestimated row height by ~14pt for typical 2-line cells
+    /// (b5f706 p2 row 1: pre-pass 21.75 vs emit 36.5). S220 attempted
+    /// this fix but was blocked by derive_oxi_heights metric noise,
+    /// resolved in S221; S222 re-applies. Caller layers trHeight semantic
+    /// and zero-fallback.
     fn estimate_table_row_natural_h(
         &self,
         row: &TableRow,
@@ -8753,7 +8766,7 @@ impl LayoutEngine {
                         let mut para_h = if vert_writing_active {
                             self.vert_para_height(para)
                         } else {
-                            self.estimate_para_height(para, inner_w, table_grid_pitch,
+                            self.estimate_para_height_emit(para, inner_w, table_grid_pitch,
                                 table.style.para_style.as_ref(), true,
                                 grid_char_pitch, grid_char_cw_ratio)
                         };
@@ -8779,7 +8792,7 @@ impl LayoutEngine {
                                 let mut nc_h = 0.0_f32;
                                 for nb in &nc.blocks {
                                     if let Block::Paragraph(np) = nb {
-                                        nc_h += self.estimate_para_height(np, nested_w / 2.0,
+                                        nc_h += self.estimate_para_height_emit(np, nested_w / 2.0,
                                             table_grid_pitch, nested.style.para_style.as_ref(),
                                             true, grid_char_pitch, grid_char_cw_ratio);
                                     }
