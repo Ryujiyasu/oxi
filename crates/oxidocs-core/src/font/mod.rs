@@ -93,7 +93,7 @@ impl FontMetrics {
     /// use even-pixel rounding: ceil_even(ppem). GDI-measured 2026-03-29.
     /// This matters at small font sizes (7-10pt) where ppem is odd.
     pub fn char_width_pt(&self, c: char, font_size: f32) -> f32 {
-        let ppem = (font_size * 96.0 / 72.0).round();
+        let _ppem = (font_size * 96.0 / 72.0).round();
         let advance_em = self.char_width_em(c);
 
         // CJK monospace fonts (UPM=256): COM confirmed — fullwidth = fontSize, halfwidth = fontSize/2

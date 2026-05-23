@@ -2635,7 +2635,7 @@ impl LayoutEngine {
 
         // Layout floating images and add to the correct layout page
         for img in &page.floating_images {
-            if let Some(ref pos) = img.position {
+            if let Some(ref _pos) = img.position {
                 let (abs_x, abs_y) = self.resolve_floating_image_position(img, page, &block_y_positions);
                 // Use the same page as the anchor block
                 let target_page = block_page_indices
@@ -5711,7 +5711,7 @@ impl LayoutEngine {
                         i += 1;
                         continue;
                     }
-                    let tab_pos = line.fragments[i].tab_position.unwrap_or(0.0);
+                    let _tab_pos = line.fragments[i].tab_position.unwrap_or(0.0);
                     // Measure the segment width after this tab until next tab or end of line
                     let mut segment_width: f32 = 0.0;
                     let mut decimal_offset: Option<f32> = None;
@@ -5960,7 +5960,7 @@ impl LayoutEngine {
         grid_pitch: Option<f32>,
         in_table_cell: bool,
     ) -> f32 {
-        let default_style = RunStyle::default();
+        let _default_style = RunStyle::default();
 
         let mut max_ascent: f32 = 0.0;
         let mut max_descent: f32 = 0.0;
@@ -6477,8 +6477,8 @@ impl LayoutEngine {
                     continue;
                 }
                 let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
-                let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
-                let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
+                let _pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
+                let _pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
                 // Round 30: implicit border padding (matches second pass)
@@ -6493,7 +6493,7 @@ impl LayoutEngine {
                 // OOXML default single border sz=4 = 0.5pt (4/8).
                 let bw = table.style.border_width.unwrap_or(if table.style.border { 0.5 } else { 0.0 });
                 let is_last = row_idx + 1 == num_rows;
-                let border_overhead = if is_last {
+                let _border_overhead = if is_last {
                     if table.style.border { bw } else { 0.0 }
                 } else if table.style.has_inside_h {
                     bw
@@ -6744,7 +6744,7 @@ impl LayoutEngine {
             // Apply gridBefore: skip leading grid columns
             let mut grid_idx: usize = row.grid_before as usize;
             let mut cell_x = table_x + col_widths[..grid_idx.min(col_widths.len())].iter().sum::<f32>();
-            let num_cells = row.cells.len();
+            let _num_cells = row.cells.len();
             for (cell_idx, cell) in row.cells.iter().enumerate() {
                 let span = cell.grid_span.max(1) as usize;
                 // vMerge="continue" cells: skip content but still draw borders
@@ -6798,7 +6798,7 @@ impl LayoutEngine {
                 // Previous comment claimed "Word uses cell_w" but b35 組織的管理措置
                 // cell wraps at 4 chars (= 4×10.5=42pt fits in 49.05pt inner-pad area)
                 // not 6 chars (which would require 59.85pt cell_w with overflow).
-                let inner_w = (cell_w - pad_l - pad_r).max(0.0);
+                let _inner_w = (cell_w - pad_l - pad_r).max(0.0);
                 let mut cell_elements: Vec<LayoutElement> = Vec::new();
                 // Session 131: vertical writing anchor — Word reports
                 // Information(6) for ALL paragraphs in a vert-text cell at
@@ -8807,7 +8807,7 @@ impl LayoutEngine {
     ) -> f32 {
         let mut height = 0.0;
         // Table cells snap to grid in default Word mode
-        let snap = para.style.snap_to_grid;
+        let _snap = para.style.snap_to_grid;
         // COM-confirmed (2026-03-31): table cells inherit Normal style's lineSpacing.
         // Only override with table style if it explicitly defines lineSpacing.
         let raw_ls = para.style.line_spacing
@@ -8862,7 +8862,7 @@ impl LayoutEngine {
             }
             height += h_added;
         } else {
-            let para_font_size = self.resolve_font_size(
+            let _para_font_size = self.resolve_font_size(
                 para.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
                 &para.style,
             );

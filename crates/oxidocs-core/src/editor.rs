@@ -560,7 +560,7 @@ impl DocxEditor {
         let mut table_row_insertions: Vec<(usize, usize, Vec<String>)> = Vec::new();
         let mut table_row_deletions: Vec<(usize, usize)> = Vec::new();
         let mut cell_text_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
-        let image_insertions: Vec<(usize, usize)> = Vec::new(); // (body_index, pending_image_index)
+        let _image_insertions: Vec<(usize, usize)> = Vec::new(); // (body_index, pending_image_index)
 
         let mut image_counter = 0usize;
 
@@ -604,7 +604,7 @@ impl DocxEditor {
                 DocxEdit::SetCellText { table_index, row, col, text } => {
                     cell_text_edits.insert((*table_index, *row, *col), text.clone());
                 }
-                DocxEdit::InsertImage { index, width_pt, height_pt, content_type, .. } => {
+                DocxEdit::InsertImage { index, width_pt, height_pt, content_type: _, .. } => {
                     if image_counter < self.pending_images.len() {
                         let rel_id = &self.pending_images[image_counter].rel_id;
                         let xml_frag = generate_image_paragraph_xml(
@@ -1305,7 +1305,7 @@ fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseErro
     let mut postamble = String::new();
     let mut in_body = false;
     let mut body_depth: i32 = 0;
-    let current_element = String::new();
+    let _current_element = String::new();
     let mut current_writer: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut current_kind: Option<&str> = None;
     let mut pre_writer = Writer::new(Cursor::new(Vec::new()));
@@ -1377,7 +1377,7 @@ fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseErro
                             post_collecting = true;
                             post_writer.write_event(Event::End(e.clone()))?;
                         }
-                        Event::Text(e) => {
+                        Event::Text(_e) => {
                             // Whitespace between body elements — ignore
                         }
                         _ => {
@@ -1991,7 +1991,7 @@ fn patch_paragraph_xml(
                     }
                     "r" if in_run => {
                         // If this run needs formatting but had no rPr, add one
-                        if let Some(fmt) = run_format_edits.get(&run_idx) {
+                        if let Some(_fmt) = run_format_edits.get(&run_idx) {
                             // rPr wasn't seen for this run — we need to inject it
                             // But we've already written the run content...
                             // This is handled by checking if rPr was seen when run started.

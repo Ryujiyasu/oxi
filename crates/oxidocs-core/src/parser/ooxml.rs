@@ -364,7 +364,7 @@ impl OoxmlParser {
                 // Validate relationship target path against traversal attacks
                 let path = match oxi_common::security::sanitize_rel_target("word", &rel.target) {
                     Ok(p) => p,
-                    Err(e) => {
+                    Err(_e) => {
                         continue;
                     }
                 };
@@ -3079,7 +3079,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         has_no_stroke = true;
                                     }
                                 }
-                                Ok(Event::End(se)) => {
+                                Ok(Event::End(_se)) => {
                                     ln_depth -= 1;
                                     if ln_depth == 0 {
                                         break;
