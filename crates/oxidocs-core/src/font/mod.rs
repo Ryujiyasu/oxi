@@ -753,13 +753,15 @@ impl FontMetricsRegistry {
 /// Check if a character is CJK or a symbol that GDI renders with an East Asian font.
 fn is_cjk_or_symbol(c: char) -> bool {
     let cp = c as u32;
+    // S244 (2026-05-24): collapsed 5 redundant CJK subranges that were
+    // already covered by 0x2E80..=0x9FFF (CJK symbols/Hiragana/Katakana/
+    // Katakana phonetic/Enclosed CJK). Documentation comments preserved
+    // on the master range below.
     matches!(cp,
-        0x2E80..=0x9FFF |    // CJK radicals, kangxi, CJK unified ideographs
-        0x3000..=0x303F |    // CJK symbols and punctuation
-        0x3040..=0x309F |    // Hiragana
-        0x30A0..=0x30FF |    // Katakana
-        0x31F0..=0x31FF |    // Katakana phonetic extensions
-        0x3200..=0x33FF |    // Enclosed CJK, CJK compatibility
+        // 0x2E80..=0x9FFF: CJK radicals, kangxi, ideographs, symbols,
+        // punctuation, Hiragana, Katakana, Katakana phonetic ext,
+        // Enclosed CJK, CJK compatibility (master range)
+        0x2E80..=0x9FFF |
         0xF900..=0xFAFF |    // CJK compatibility ideographs
         0xFE30..=0xFE4F |    // CJK compatibility forms
         0xFF00..=0xFFEF |    // Halfwidth and fullwidth forms

@@ -3071,7 +3071,7 @@ impl LayoutEngine {
                 Some("margin") | Some("column") | Some("character") => page.margin.left + pos.x,
                 Some("leftMarginArea") => pos.x,
                 Some("rightMarginArea") => (page.size.width - page.margin.right) + pos.x,
-                _ | None => page.margin.left + pos.x,
+                _ => page.margin.left + pos.x,
             }
         };
 
@@ -3102,7 +3102,7 @@ impl LayoutEngine {
                 Some("margin") => page.margin.top + pos.y,
                 Some("topMarginArea") => pos.y,
                 Some("bottomMarginArea") => (page.size.height - page.margin.bottom) + pos.y,
-                _ | None => page.margin.top + pos.y,
+                _ => page.margin.top + pos.y,
             }
         };
 
