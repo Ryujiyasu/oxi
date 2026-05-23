@@ -6435,14 +6435,11 @@ impl LayoutEngine {
         // S148 (2026-05-21) H9 DEFAULT ON (S151): BugA correct for type="lines"
         // docs (04b88e/d77a/34140b9c/b35/683ffc) but wrong for type="linesAndChars"
         // (tokumei/29dc6e). Apply BugA only for non-linesAndChars docs.
-        // OXI_LEGACY_BUGA_ALWAYS=1 restores legacy behavior (BugA always applies).
-        // OXI_BUG_A_REVERT=1 still works as research toggle (always skip BugA).
-        let h9_disabled = std::env::var("OXI_LEGACY_BUGA_ALWAYS").is_ok();
-        let bug_a_revert_env = std::env::var("OXI_BUG_A_REVERT").is_ok();
-        let bug_a_enabled = if bug_a_revert_env {
+        // S242 (2026-05-23): removed OXI_LEGACY_BUGA_ALWAYS legacy env-var
+        // fallback during hardening pass. OXI_BUG_A_REVERT preserved as
+        // research toggle (binary opt-out for diagnostic purposes).
+        let bug_a_enabled = if std::env::var("OXI_BUG_A_REVERT").is_ok() {
             false  // research toggle: always skip
-        } else if h9_disabled {
-            true   // legacy: always apply
         } else {
             // Default (S151): apply only for non-linesAndChars docs
             grid_char_pitch.is_none()
