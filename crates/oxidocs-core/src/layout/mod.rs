@@ -3771,21 +3771,16 @@ impl LayoutEngine {
         // The two boundaries (p2→p3 and p3→p4) compensate's cascading
         // shifts: per-line fn pushes p3 up 1 line, first_indent's extra wrap
         // on p4 i=50 absorbs the shift. Net: pages 3-7 align with Word.
-        // OXI_LEGACY_NO_B2_BUNDLE=1 disables (restores S166 baseline behavior).
-        let bundle_b2 = std::env::var("OXI_LEGACY_NO_B2_BUNDLE").is_err();
-        let effective_first_indent = if bundle_b2 {
-            first_line_indent
-        } else if effective_char_pitch.is_some() && first_line_indent >= 0.0 {
-            0.0
-        } else {
-            first_line_indent
-        };
+        // S241 (2026-05-23): removed OXI_LEGACY_NO_B2_BUNDLE legacy
+        // env-var fallback during hardening pass. S168 Phase B-2 bundle
+        // is the canonical path.
+        let effective_first_indent = first_line_indent;
         let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
-        let committed_fn_delta_at_line: Vec<f32> = if bundle_b2 && !para_fn_heights.is_empty() {
+        let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
             let mut out = Vec::with_capacity(lines.len());
             let mut cumulative = 0.0_f32;
             let mut seen: Vec<u32> = Vec::new();
@@ -3965,8 +3960,8 @@ impl LayoutEngine {
             let natural_lh = natural_line_heights.get(line_idx).copied().unwrap_or(effective_lh);
             let break_threshold = natural_lh.min(effective_lh);
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
-            // S168 Phase B-2 (c): per-line lenient when bundle_b2 enabled.
-            let line_lenient_extra = if bundle_b2 && !para_fn_heights.is_empty() {
+            // S168 Phase B-2 (c): per-line lenient.
+            let line_lenient_extra = if !para_fn_heights.is_empty() {
                 let committed = committed_fn_delta_at_line.get(line_idx).copied().unwrap_or(0.0);
                 (first_line_extra_content_h - committed).max(0.0)
             } else if line_idx == 0 {
