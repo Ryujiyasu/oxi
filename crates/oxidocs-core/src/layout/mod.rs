@@ -7705,7 +7705,6 @@ impl LayoutEngine {
                 // vmerge=continue. When ALL rows in the span have trHeight set,
                 // use sum of trHeights as effective_row_h (covers 7ead's table).
                 // Falls back to current row 0 behavior otherwise.
-                // OXI_LEGACY_VMERGE_VALIGN_ROW0=1 opts out (legacy row-0-only).
                 // See session216_vmerge_valign_bug_confirmed.md.
                 //
                 // S218 (2026-05-23) DEFAULT ON: when some span rows lack
@@ -7715,13 +7714,13 @@ impl LayoutEngine {
                 // matcher-detected +0.0110) and b5f706 p2 (11 cells, matcher-
                 // invisible due to MIN_MATCH_LEN=2 on single-char "丸"
                 // markers). Phase 1 53/55 unchanged, 0 IoU regressions.
-                // OXI_LEGACY_VMERGE_VALIGN_STRICT=1 restores S217 strict
-                // gate (only fires when ALL span rows have trHeight set).
+                //
+                // S236 (2026-05-23) removed OXI_LEGACY_VMERGE_VALIGN_ROW0 and
+                // OXI_LEGACY_VMERGE_VALIGN_STRICT legacy env-var fallbacks
+                // during hardening pass; both gates have been stable since
+                // ship (~17-18 sessions).
                 let is_vmerge_restart_for_valign = cell.v_merge.as_deref() == Some("restart");
-                let legacy_vmerge = std::env::var("OXI_LEGACY_VMERGE_VALIGN_ROW0").is_ok();
-                let relax_vmerge = std::env::var("OXI_LEGACY_VMERGE_VALIGN_STRICT").is_err();
-                if !legacy_vmerge
-                    && is_vmerge_restart_for_valign
+                if is_vmerge_restart_for_valign
                     && cell.v_align.is_some()
                 {
                     let target_grid = cell_start_grid;
@@ -7753,7 +7752,7 @@ impl LayoutEngine {
                         }
                         if all_have_h {
                             effective_row_h = effective_row_h.max(span_h);
-                        } else if relax_vmerge {
+                        } else {
                             // S218 relax: compute span height when trHeight missing.
                             // S222 (2026-05-23): for row_idx, use the already-computed
                             // `effective_row_h` (= max of row_height, visual_row_h,
@@ -8398,13 +8397,13 @@ impl LayoutEngine {
                 // Discriminator: |row_height - linePitch| < 0.5pt (sparse cell).
                 // Using advance_split: cursor_y advances by row_height (preserves
                 // Phase 1 pagination 53/55), visual_y advances by row_height + 0.5pt
-                // (corrects element positions). OXI_LEGACY_NO_TBL_ROW_PLUS_HALF=1
-                // disables the fix.
-                let legacy = std::env::var("OXI_LEGACY_NO_TBL_ROW_PLUS_HALF").is_ok();
-                let apply_plus_half = !legacy
-                    && table_grid_pitch
-                        .map(|p| (row_height - p).abs() < 0.5)
-                        .unwrap_or(false);
+                // (corrects element positions).
+                // S236 (2026-05-23) removed OXI_LEGACY_NO_TBL_ROW_PLUS_HALF
+                // legacy env-var fallback during hardening pass; the gate
+                // has been stable since S200 (~35 sessions).
+                let apply_plus_half = table_grid_pitch
+                    .map(|p| (row_height - p).abs() < 0.5)
+                    .unwrap_or(false);
                 if apply_plus_half {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else {
@@ -8695,13 +8694,9 @@ impl LayoutEngine {
     /// per run. COM-measured against 2ea81a tbl=1 row=8: 14 chars × 8pt
     /// = 112pt, Word cell.Height = 113.15pt (≈1pt inter-paragraph gap).
     fn is_vert_writing_active(&self, cell: &TableCell) -> bool {
-        // S166 (2026-05-21): vertical writing default ON. Full baseline verified:
-        // 2ea81a 0.8812 → 0.9112 (+0.030), 459f 0.9617 → 0.9654 (+0.004),
-        // ed025 0.7895 → 0.7923 (+0.003). Phase 1 53/55 unchanged.
-        // OXI_LEGACY_NO_VERT_WRITING=1 disables.
-        if std::env::var("OXI_LEGACY_NO_VERT_WRITING").is_ok() {
-            return false;
-        }
+        // S166 (2026-05-21): vertical writing default ON. Stable across 70+
+        // sessions; S236 (2026-05-23) removed OXI_LEGACY_NO_VERT_WRITING
+        // legacy env-var fallback during hardening pass.
         cell.text_direction.as_deref() == Some("tbRlV")
     }
 
