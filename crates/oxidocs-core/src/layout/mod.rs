@@ -6119,13 +6119,12 @@ impl LayoutEngine {
                             // Mincho 18.126pt at 18pt pitch). Without this it
                             // over-snaps to 2 cells (36pt). 3a4f pi=132 pattern.
                             // Gate: empty paragraph + base just over pitch (≤ pitch + 0.5).
-                            // OXI_LEGACY_NO_GRID_SNAP_TOL=1 restores.
+                            // S238 (2026-05-23): removed OXI_LEGACY_NO_GRID_SNAP_TOL
+                            // legacy env-var fallback during hardening pass.
                             let is_empty = line.fragments.iter()
                                 .all(|f| f.text.is_empty());
                             let just_over_pitch = base > pitch && base <= pitch + 0.5;
-                            let apply_tol = is_empty
-                                && just_over_pitch
-                                && std::env::var("OXI_LEGACY_NO_GRID_SNAP_TOL").is_err();
+                            let apply_tol = is_empty && just_over_pitch;
                             let tol = if apply_tol { 0.5 } else { 0.0 };
                             (((base - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch
                         } else { base }
@@ -6151,9 +6150,7 @@ impl LayoutEngine {
                             let is_empty = line.fragments.iter()
                                 .all(|f| f.text.is_empty());
                             let just_over_pitch = spaced > pitch && spaced <= pitch + 0.5;
-                            let apply_tol = is_empty
-                                && just_over_pitch
-                                && std::env::var("OXI_LEGACY_NO_GRID_SNAP_TOL").is_err();
+                            let apply_tol = is_empty && just_over_pitch;
                             let tol = if apply_tol { 0.5 } else { 0.0 };
                             return (((spaced - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
@@ -6313,26 +6310,20 @@ impl LayoutEngine {
                     // visual-position IoU metric (element_iou_diff.py R166), full baseline:
                     // mean IoU 0.9254 → 0.9295 (+0.0041), pass 12 → 15, Phase 1 53/55 unchanged.
                     // 12 docs gain (incl. 6a39b1/8bc929 → 1.0), 6 small losses (worst -0.031).
-                    // OXI_LEGACY_TEXT_Y_FONT_SIZE=1 restores prior `(linePitch-font_size)/2`.
-                    let use_legacy = std::env::var("OXI_LEGACY_TEXT_Y_FONT_SIZE").is_ok();
+                    // S238 (2026-05-23): removed OXI_LEGACY_TEXT_Y_FONT_SIZE
+                    // legacy env-var fallback during hardening pass.
                     let centering_height = if !line.fragments.is_empty() {
                         line.fragments.iter()
                             .map(|f| {
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                                if use_legacy {
-                                    fs
-                                } else {
-                                    let m = self.metrics_for_text(&f.text, &f.style, para_style);
-                                    m.word_line_height_table_cell(fs)
-                                }
+                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                m.word_line_height_table_cell(fs)
                             })
                             .fold(0.0_f32, f32::max)
                     } else {
-                        if use_legacy { para_font_size } else {
-                            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                            let m = self.metrics_for_para_mark(&rpr_ref, para_style);
-                            m.word_line_height_table_cell(para_font_size)
-                        }
+                        let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                        m.word_line_height_table_cell(para_font_size)
                     };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
@@ -6344,25 +6335,20 @@ impl LayoutEngine {
                     }
                 } else {
                     // LM0: same centering formula as LM1/LM2 single cell.
-                    let use_legacy = std::env::var("OXI_LEGACY_TEXT_Y_FONT_SIZE").is_ok();
+                    // S238 (2026-05-23): removed OXI_LEGACY_TEXT_Y_FONT_SIZE
+                    // legacy env-var fallback during hardening pass.
                     let centering_height = if !line.fragments.is_empty() {
                         line.fragments.iter()
                             .map(|f| {
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
-                                if use_legacy {
-                                    fs
-                                } else {
-                                    let m = self.metrics_for_text(&f.text, &f.style, para_style);
-                                    m.word_line_height_table_cell(fs)
-                                }
+                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                m.word_line_height_table_cell(fs)
                             })
                             .fold(0.0_f32, f32::max)
                     } else {
-                        if use_legacy { para_font_size } else {
-                            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                            let m = self.metrics_for_para_mark(&rpr_ref, para_style);
-                            m.word_line_height_table_cell(para_font_size)
-                        }
+                        let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                        m.word_line_height_table_cell(para_font_size)
                     };
                     let raw = (line_height - centering_height).max(0.0) / 2.0;
                     (raw * 2.0 + 0.5).floor() / 2.0
@@ -7106,9 +7092,9 @@ impl LayoutEngine {
                         // string buf so we can pass to compute_compression.
                         // S166 (2026-05-21): default ON. Baseline: mean IoU 0.9301 → 0.9303,
                         // 15076df 0.8799 → 0.8850 (+0.005), no other doc moved.
-                        // OXI_LEGACY_NO_JCBOTH_REFACTOR=1 disables.
-                        let jc_refactor_enabled = std::env::var("OXI_LEGACY_NO_JCBOTH_REFACTOR").is_err();
-                        let jc_gate_active = jc_refactor_enabled
+                        // S238 (2026-05-23): removed OXI_LEGACY_NO_JCBOTH_REFACTOR
+                        // legacy env-var fallback during hardening pass.
+                        let jc_gate_active = true
                             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
                             && self.balance_single_byte_double_byte_width
                             && self.compress_punctuation;
@@ -8498,9 +8484,9 @@ impl LayoutEngine {
         // + jc∈{Justify,Distribute} + balanceSBDB + compressPunctuation, and
         // per-run cs ≤ -0.1pt (= ≤ -2tw, S122 threshold).
         // S166: default ON (see comment near mod.rs:6995).
-        let jc_refactor_enabled = std::env::var("OXI_LEGACY_NO_JCBOTH_REFACTOR").is_err();
-        let jc_gate_active = jc_refactor_enabled
-            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+        // S238 (2026-05-23): removed OXI_LEGACY_NO_JCBOTH_REFACTOR
+        // legacy env-var fallback during hardening pass.
+        let jc_gate_active = matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             && self.balance_single_byte_double_byte_width
             && self.compress_punctuation;
         let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
