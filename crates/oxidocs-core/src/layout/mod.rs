@@ -767,20 +767,18 @@ fn apply_revision_styling_to_run(
             run.style.color = Some(color_hex);
         }
         "moveFrom" => {
-            // Word default: double-strikethrough in green. The renderer's
-            // strikethrough primitive is single-line; settle for that in v1
-            // — visually distinguishable from a regular delete by the green
-            // tint. Upgrade to a "double" style when R-11 lands.
+            // R-11 v2 (R66, 2026-04-29): Word default is double-strikethrough
+            // in green. COM-confirmed by pixel sampling fixture_08 (two
+            // full-width green strike lines 1pt apart on the moved runs).
             run.style.strikethrough = true;
+            run.style.double_strikethrough = true;
             run.style.color = Some(color_hex);
         }
         "moveTo" => {
-            // Word default: double-underline in green. Same rationale as
-            // moveFrom — single underline in green for v1, upgrade in R-11.
+            // R-11 v2 (R66): Word default is double-underline in green.
+            // COM-confirmed by pixel sampling fixture_08.
             run.style.underline = true;
-            if run.style.underline_style.is_none() {
-                run.style.underline_style = Some("single".to_string());
-            }
+            run.style.underline_style = Some("double".to_string());
             run.style.color = Some(color_hex);
         }
         _ => {
@@ -885,6 +883,10 @@ pub enum LayoutContent {
         underline: bool,
         underline_style: Option<String>,
         strikethrough: bool,
+        /// R-11 v2 (R66): w:dstrike emits double strikethrough.
+        /// Propagated from RunStyle.double_strikethrough; renderers may
+        /// fall back to single strikethrough in v1.
+        double_strikethrough: bool,
         color: Option<String>,
         highlight: Option<String>,
         field_type: Option<FieldType>,
@@ -3691,6 +3693,7 @@ impl LayoutEngine {
                     underline: marker_style.underline,
                     underline_style: marker_style.underline_style.clone(),
                     strikethrough: marker_style.strikethrough,
+                    double_strikethrough: marker_style.double_strikethrough,
                     color: marker_color,
                     highlight: marker_style.highlight.clone(),
                     field_type: None,
@@ -4458,6 +4461,7 @@ impl LayoutEngine {
                         underline: frag.style.underline,
                         underline_style: frag.style.underline_style.clone(),
                         strikethrough: frag.style.strikethrough,
+                        double_strikethrough: frag.style.double_strikethrough,
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
@@ -4546,6 +4550,7 @@ impl LayoutEngine {
                                     underline: false,
                                     underline_style: None,
                                     strikethrough: false,
+                                    double_strikethrough: false,
                                     color: ruby_color,
                                     highlight: None,
                                     field_type: None,
@@ -4634,6 +4639,7 @@ impl LayoutEngine {
                             underline: false,
                             underline_style: None,
                             strikethrough: false,
+                            double_strikethrough: false,
                             color: None,
                             highlight: None,
                             field_type: None,
@@ -6891,6 +6897,7 @@ impl LayoutEngine {
                                 underline: first_run_style.underline,
                                 underline_style: first_run_style.underline_style.clone(),
                                 strikethrough: first_run_style.strikethrough,
+                                double_strikethrough: first_run_style.double_strikethrough,
                                 color: first_run_style.color.clone(),
                                 highlight: first_run_style.highlight.clone(),
                                 character_spacing: 0.0,
@@ -7492,6 +7499,7 @@ impl LayoutEngine {
                                             underline: marker_style.underline,
                                             underline_style: marker_style.underline_style.clone(),
                                             strikethrough: marker_style.strikethrough,
+                                            double_strikethrough: marker_style.double_strikethrough,
                                             color: self.resolve_color(&marker_style, &para.style).map(|s| s.to_string()),
                                             highlight: marker_style.highlight.clone(),
                                             character_spacing: 0.0,
@@ -7530,6 +7538,7 @@ impl LayoutEngine {
                                         underline: *underline,
                                         underline_style: underline_style.clone(),
                                         strikethrough: *strikethrough,
+                                        double_strikethrough: false,
                                         color: color.clone(),
                                         highlight: highlight.clone(),
                                         character_spacing: *cs + justify_char_spacing + grid_cs_adj,
