@@ -210,7 +210,13 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
                     if n < MIN_MATCH_LEN:
                         continue
                     if wt[:n] == ot[:n]:
-                        dist = (radius, -n)
+                        # S214: tie-break by y proximity. When multiple Oxi
+                        # paragraphs match the same prefix on the same page,
+                        # prefer the one whose y is closest to Word's y.
+                        # Prevents artifacts where matcher picked first by
+                        # iteration order, mispairing distant paragraphs.
+                        y_diff = abs(_orec.get("y", 0.0) - wp["y"])
+                        dist = (radius, -n, y_diff)
                         if best is None or dist < best_dist:
                             best = (cand_page, idx)
                             best_dist = dist
