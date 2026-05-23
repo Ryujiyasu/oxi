@@ -9,6 +9,7 @@ use super::ParseError;
 #[derive(Debug, Clone)]
 pub struct NumberingLevel {
     /// Level index (0-8)
+    #[allow(dead_code)]
     pub ilvl: u8,
     /// Number format: "bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", etc.
     pub num_fmt: String,
@@ -29,6 +30,7 @@ pub struct NumberingLevel {
 /// An abstract numbering definition containing levels
 #[derive(Debug, Clone)]
 pub struct AbstractNum {
+    #[allow(dead_code)]
     pub abstract_num_id: String,
     pub levels: HashMap<u8, NumberingLevel>,
 }
@@ -55,6 +57,7 @@ pub struct ResolvedMarker {
 impl NumberingDefinitions {
     /// Resolve the marker text and hanging indent for a given numId and ilvl.
     /// For numbered lists, increments the counter.
+    #[allow(dead_code)]
     pub fn resolve_marker(
         &self,
         num_id: &str,

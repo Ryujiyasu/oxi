@@ -420,6 +420,7 @@ fn parse_para_properties_block_with_alignment(reader: &mut Reader<&[u8]>) -> Res
 }
 
 /// Parse a paragraph properties block (<w:pPr>...</w:pPr>) and return ParagraphStyle
+#[allow(dead_code)]
 fn parse_para_properties_block(reader: &mut Reader<&[u8]>) -> Result<ParagraphStyle, ParseError> {
     let mut style = ParagraphStyle::default();
     let mut depth = 1;

@@ -866,6 +866,7 @@ impl LayoutElement {
     }
 
     /// Create a text element with source location for hit testing.
+    #[allow(dead_code)]
     fn text(x: f32, y: f32, width: f32, height: f32, content: LayoutContent,
             para_idx: usize, run_idx: usize, char_offset: usize) -> Self {
         Self { x, y, width, height, content,
@@ -896,7 +897,6 @@ pub enum LayoutContent {
         /// rendered with 90° CW rotation (textDirection="tbRlV" cells).
         /// GDI: set LOGFONT.lfEscapement = -900. DWrite: apply per-run
         /// transform matrix. Default false (horizontal flow).
-        #[cfg_attr(feature = "serde", serde(default))]
         is_vertical: bool,
     },
     Image {
@@ -1590,6 +1590,7 @@ impl LayoutEngine {
         }
     }
 
+    #[allow(unused_assignments)]
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
         // R-05b: reduce body content width when the document has comments —
         // makes room for the right-margin balloon column. Header / footer /
@@ -3451,6 +3452,7 @@ impl LayoutEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(unused_assignments)]
     fn layout_paragraph(
         &self,
         para: &Paragraph,
@@ -4879,6 +4881,7 @@ impl LayoutEngine {
         (elements, space_after)
     }
 
+    #[allow(unused_assignments)]
     fn break_into_lines(
         &self,
         fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
@@ -6166,6 +6169,7 @@ impl LayoutEngine {
     ///   Shape 4 (exact=22pt fontSize=14pt → 8pt offset).
     ///
     /// Returns the offset from line-box top to where text should start.
+    #[allow(unused_assignments)]
     fn text_y_offset_for_line(
         &self,
         line: &Line,
@@ -8415,6 +8419,7 @@ impl LayoutEngine {
     /// Fix C: estimate_para_height previously used break_into_lines (with yakumono
     /// compression) which fit more chars per line than the cell renderer actually
     /// produces. estimate under-counted → render overflowed → page cascade.
+    #[allow(unused_assignments)]
     fn count_cell_lines(
         &self,
         para: &Paragraph,

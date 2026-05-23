@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesText, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
@@ -237,6 +237,7 @@ pub struct DocxEditor {
     pending_images: Vec<PendingImage>,
 }
 
+#[allow(dead_code)]
 struct PendingImage {
     rel_id: String,
     data: Vec<u8>,
@@ -1296,6 +1297,7 @@ fn generate_image_paragraph_xml(
 // ===========================================================================
 
 /// Split document XML into preamble (before body content), body segments, and postamble.
+#[allow(unused_assignments)]
 fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut segments = Vec::new();
@@ -2109,6 +2111,7 @@ fn patch_paragraph_xml(
 /// Handle the case where a run needs formatting but has no existing rPr.
 /// This is done by post-processing: if SetRunFormat targets a run that has no rPr,
 /// we inject one after the `<w:r>` or `<w:r ...>` opening tag.
+#[allow(dead_code)]
 fn inject_rpr_into_run(run_xml: &str, props: &RunProps) -> String {
     let rpr = generate_rpr_xml(props);
     if rpr.is_empty() {
@@ -2332,6 +2335,7 @@ fn escape_xml(s: &str) -> String {
 }
 
 // Keep old function name for compatibility
+#[allow(dead_code)]
 fn local_name(name: &[u8]) -> String {
     local_name_from_bytes(name)
 }

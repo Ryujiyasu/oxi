@@ -7,6 +7,7 @@ use super::ParseError;
 
 #[derive(Debug, Clone)]
 pub struct Relationship {
+    #[allow(dead_code)]
     pub id: String,
     pub rel_type: String,
     pub target: String,

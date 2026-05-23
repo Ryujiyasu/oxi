@@ -1026,6 +1026,7 @@ mod tests {
 /// At ppem=14, GDI applies hinting that changes hiragana/katakana glyph widths
 /// from the nominal 14px to smaller values. This causes text wrapping differences.
 /// Measured via GetTextExtentPoint32W on Windows with MS Mincho/Gothic at -14px.
+#[allow(dead_code)]
 fn gdi_kana_width_px_ppem14(c: char) -> Option<f32> {
     match c {
         'ぁ' => Some(10.0), 'あ' => Some(13.0), 'ぃ' => Some(11.0), 'い' => Some(13.0),

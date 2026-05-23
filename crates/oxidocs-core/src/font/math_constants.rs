@@ -97,6 +97,7 @@ pub struct MathConstants {
 }
 
 /// Full MATH table payload: constants + metadata.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct MathConstantsFile {
     font: String,

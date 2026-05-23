@@ -118,6 +118,7 @@ pub fn ruby_expansion_pt(ruby: &Ruby, base_pt: f32) -> f32 {
 ///
 /// `base_text_w_pt` and `ruby_text_w_pt` should both be measured at
 /// their respective font sizes.
+#[allow(dead_code)]
 pub fn ruby_field_width_pt(base_text_w_pt: f32, ruby_text_w_pt: f32) -> f32 {
     base_text_w_pt.max(ruby_text_w_pt)
 }
