@@ -1627,7 +1627,7 @@ impl LayoutEngine {
         } else {
             0.0
         };
-        let mut start_y = page.margin.top.max(header_bottom);
+        let start_y = page.margin.top.max(header_bottom);
 
         // §11.2.2 LM2 unified P0 formula (Round 23, COM-confirmed 2026-04-08).
         // In linesAndChars (LM2) mode, the FIRST body paragraph is allocated a
@@ -3494,7 +3494,7 @@ impl LayoutEngine {
 
         // Apply paragraph spacing (space_before).
         // Word uses max(prev_space_after, space_before) — spacing collapse.
-        let mut space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+        let space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
             // beforeLines is specified as percentage of linePitch (e.g., 50 = 0.5 lines).
             // COM-confirmed (2026-04-06): the value is exact (bl/100 * pitch), no grid snap.
             // beforeLines=50 at pitch=17.5 gives exactly 8.75pt, not 17.5pt.
@@ -3625,7 +3625,7 @@ impl LayoutEngine {
         if let Some(ref marker) = para.style.list_marker {
             let default_style = RunStyle::default();
             let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
-            let mut marker_font_size = self.resolve_font_size(marker_style, &para.style);
+            let marker_font_size = self.resolve_font_size(marker_style, &para.style);
             // Symbol font bullets (•/●) have large glyphs relative to em-square.
             // No font size adjustment needed — use the paragraph's font size directly.
             let marker_metrics = self.metrics_for(marker_style, &para.style);
@@ -4915,7 +4915,8 @@ impl LayoutEngine {
         // Avoids f32 rounding drift that causes ±0.1pt error over 40+ characters.
         let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
         let mut compress_used = false; // true after compression-based overflow absorption
-        let mut current_grid_extra: f32 = 0.0; // charGrid extra for line-break
+        // S243 (2026-05-24): removed dead variable `current_grid_extra`
+        // (assigned/incremented in 8 sites but never read).
 
         // Word buffer spans across fragment boundaries so that a single word
         // split across two runs (e.g. "te" in Run1 + "st" in Run2) is kept
@@ -4944,8 +4945,7 @@ impl LayoutEngine {
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
-                        current_grid_extra = 0.0;
+                        current_width = 0.0; current_width_tw = 0; compress_used = false;
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
@@ -4960,7 +4960,6 @@ impl LayoutEngine {
                     });
                     current_width += word_width;
                     current_width_tw += word_width_tw;
-                    current_grid_extra += word_grid_extra;
                     word_width = 0.0;
                     word_natural_width = 0.0;
                     word_grid_extra = 0.0;
@@ -5286,7 +5285,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -5335,7 +5334,7 @@ impl LayoutEngine {
                                 run_index: frag_run_index,
                                 char_offset: char_pos_in_run,
                             });
-                            current_width += char_width; current_width_tw += pt_to_tw(char_width); current_grid_extra += char_grid_extra;
+                            current_width += char_width; current_width_tw += pt_to_tw(char_width);
                         }
                     }
                 } else if is_break_after(ch) {
@@ -5530,7 +5529,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; compress_used = false;
                             continue;
                         }
 
@@ -5555,7 +5554,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
@@ -5576,7 +5575,6 @@ impl LayoutEngine {
                     });
                     current_width += char_width;
                     current_width_tw += pt_to_tw(char_width);
-                    current_grid_extra += char_grid_extra;
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -5629,7 +5627,7 @@ impl LayoutEngine {
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty()
                 && !para_all_whitespace {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_grid_extra = 0.0; compress_used = false;
+                current_width = 0.0; current_width_tw = 0; compress_used = false;
             }
             current_line.fragments.push(LineFragment {
                 text: word,
@@ -6481,7 +6479,7 @@ impl LayoutEngine {
                 let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
-                let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+                let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
                 // Round 30: implicit border padding (matches second pass)
                 if pad_t == 0.0 && table.style.border {
                     pad_t = table.style.border_width.unwrap_or(0.4);
@@ -6516,7 +6514,7 @@ impl LayoutEngine {
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
-                            let (mut para_h, mut para_h_visual) = if vert_writing_active {
+                            let (para_h, para_h_visual) = if vert_writing_active {
                                 let h = self.vert_para_height(para);
                                 (h, h)
                             } else {
@@ -6769,7 +6767,7 @@ impl LayoutEngine {
                 let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
-                let mut pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+                let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
 
                 // Round 30 (2026-04-09): When cell top/bottom padding is 0 and
                 // the table has borders, add the border width as implicit padding.
@@ -8187,7 +8185,6 @@ impl LayoutEngine {
                 // Handle multi-page overflow: if next_page_elems still overflow,
                 // keep splitting into additional pages.
                 let mut remaining = next_page_elems;
-                let mut current_split_base = page_top;
                 loop {
                     // Find the maximum Y in remaining elements.
                     // R7.77 (Session 62, 2026-05-16): exclude PresetShape elements
@@ -8725,7 +8722,7 @@ impl LayoutEngine {
             for block in &cell.blocks {
                 match block {
                     Block::Paragraph(para) => {
-                        let mut para_h = if vert_writing_active {
+                        let para_h = if vert_writing_active {
                             self.vert_para_height(para)
                         } else {
                             self.estimate_para_height_emit(para, inner_w, table_grid_pitch,

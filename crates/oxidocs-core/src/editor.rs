@@ -560,7 +560,7 @@ impl DocxEditor {
         let mut table_row_insertions: Vec<(usize, usize, Vec<String>)> = Vec::new();
         let mut table_row_deletions: Vec<(usize, usize)> = Vec::new();
         let mut cell_text_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
-        let mut image_insertions: Vec<(usize, usize)> = Vec::new(); // (body_index, pending_image_index)
+        let image_insertions: Vec<(usize, usize)> = Vec::new(); // (body_index, pending_image_index)
 
         let mut image_counter = 0usize;
 
@@ -1305,7 +1305,7 @@ fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseErro
     let mut postamble = String::new();
     let mut in_body = false;
     let mut body_depth: i32 = 0;
-    let mut current_element = String::new();
+    let current_element = String::new();
     let mut current_writer: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut current_kind: Option<&str> = None;
     let mut wrote_body_start = false;
@@ -2088,7 +2088,7 @@ fn patch_paragraph_xml(
 
     // Post-processing: if paragraph format was requested but no pPr existed,
     // inject it after the opening <w:p> tag
-    let mut result_bytes = writer.into_inner().into_inner();
+    let result_bytes = writer.into_inner().into_inner();
     if !ppr_seen && para_format.is_some() {
         let result_str = String::from_utf8(result_bytes).map_err(|_| ParseError::InvalidAttribute("UTF-8 error".to_string()))?;
         let ppr = generate_ppr_xml(para_format.unwrap());

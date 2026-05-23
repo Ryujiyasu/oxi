@@ -162,7 +162,7 @@ pub fn compute_compression(
     }
 
     // Helper: apply uniform compression to indices, capped by per-char max.
-    let mut apply = |indices: &[usize],
+    let apply = |indices: &[usize],
                       max_fn: &dyn Fn(&CharContext) -> f32,
                       final_adv: &mut [f32],
                       remaining: &mut f32| {
