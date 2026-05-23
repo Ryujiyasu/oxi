@@ -7672,7 +7672,53 @@ impl LayoutEngine {
                 // logic) preserved to avoid 3a4f9f cascade. Also fall back to
                 // max_actual_cell_h in case visual_row_h underestimated for
                 // unusual cells (defensive).
-                let effective_row_h = row_height.max(visual_row_h).max(max_actual_cell_h);
+                let mut effective_row_h = row_height.max(visual_row_h).max(max_actual_cell_h);
+                // S217 (2026-05-23): vmerge=restart cells with vAlign should
+                // center across the FULL merged span, not just row 0.
+                // Look ahead to count span rows where the same grid column has
+                // vmerge=continue. When ALL rows in the span have trHeight set,
+                // use sum of trHeights as effective_row_h (covers 7ead's table).
+                // Falls back to current row 0 behavior otherwise.
+                // OXI_LEGACY_VMERGE_VALIGN_ROW0=1 opts out (legacy row-0-only).
+                // See session216_vmerge_valign_bug_confirmed.md.
+                let is_vmerge_restart_for_valign = cell.v_merge.as_deref() == Some("restart");
+                let legacy_vmerge = std::env::var("OXI_LEGACY_VMERGE_VALIGN_ROW0").is_ok();
+                if !legacy_vmerge
+                    && is_vmerge_restart_for_valign
+                    && cell.v_align.is_some()
+                {
+                    let target_grid = cell_start_grid;
+                    let mut span_count = 1usize;
+                    for next_ri in (row_idx + 1)..num_rows {
+                        let next_row = &table.rows[next_ri];
+                        let mut next_grid = next_row.grid_before as usize;
+                        let mut continues = false;
+                        for next_cell in &next_row.cells {
+                            let next_span = next_cell.grid_span.max(1) as usize;
+                            if next_grid == target_grid {
+                                if matches!(next_cell.v_merge.as_deref(),
+                                            Some("continue") | Some("")) {
+                                    continues = true;
+                                }
+                                break;
+                            }
+                            next_grid += next_span;
+                        }
+                        if continues { span_count += 1; } else { break; }
+                    }
+                    if span_count > 1 {
+                        let mut span_h: f32 = 0.0;
+                        let mut all_have_h = true;
+                        for ri in row_idx..(row_idx + span_count) {
+                            if let Some(h) = table.rows[ri].height {
+                                span_h += h;
+                            } else { all_have_h = false; break; }
+                        }
+                        if all_have_h {
+                            effective_row_h = effective_row_h.max(span_h);
+                        }
+                    }
+                }
                 let v_offset = match cell.v_align.as_deref() {
                     Some("center") => ((effective_row_h - pad_t - pad_b - content_h) / 2.0).max(0.0),
                     Some("bottom") => (effective_row_h - pad_t - pad_b - content_h).max(0.0),
