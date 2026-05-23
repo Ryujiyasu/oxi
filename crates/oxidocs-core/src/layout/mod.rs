@@ -7681,8 +7681,19 @@ impl LayoutEngine {
                 // Falls back to current row 0 behavior otherwise.
                 // OXI_LEGACY_VMERGE_VALIGN_ROW0=1 opts out (legacy row-0-only).
                 // See session216_vmerge_valign_bug_confirmed.md.
+                //
+                // S218 (2026-05-23) DEFAULT ON: when some span rows lack
+                // trHeight, compute natural row height for those rows via
+                // estimate_table_row_natural_h (mirrors the main loop's
+                // row-height pre-pass). Affects 459f05 p2 (4 cells,
+                // matcher-detected +0.0110) and b5f706 p2 (11 cells, matcher-
+                // invisible due to MIN_MATCH_LEN=2 on single-char "丸"
+                // markers). Phase 1 53/55 unchanged, 0 IoU regressions.
+                // OXI_LEGACY_VMERGE_VALIGN_STRICT=1 restores S217 strict
+                // gate (only fires when ALL span rows have trHeight set).
                 let is_vmerge_restart_for_valign = cell.v_merge.as_deref() == Some("restart");
                 let legacy_vmerge = std::env::var("OXI_LEGACY_VMERGE_VALIGN_ROW0").is_ok();
+                let relax_vmerge = std::env::var("OXI_LEGACY_VMERGE_VALIGN_STRICT").is_err();
                 if !legacy_vmerge
                     && is_vmerge_restart_for_valign
                     && cell.v_align.is_some()
@@ -7716,6 +7727,33 @@ impl LayoutEngine {
                         }
                         if all_have_h {
                             effective_row_h = effective_row_h.max(span_h);
+                        } else if relax_vmerge {
+                            // S218 relax: compute natural h for rows lacking trHeight.
+                            // For row_idx use the already-computed row_height (already
+                            // includes the trHeight semantic). For span rows beyond
+                            // row_idx, compute via helper and apply trHeight semantic.
+                            let mut relaxed_span_h: f32 = 0.0;
+                            for ri in row_idx..(row_idx + span_count) {
+                                let r = &table.rows[ri];
+                                let eff_h = if ri == row_idx {
+                                    row_height
+                                } else {
+                                    let nat = self.estimate_table_row_natural_h(
+                                        r, &col_widths,
+                                        default_pad_l, default_pad_r,
+                                        default_pad_t, default_pad_b,
+                                        table, table_grid_pitch,
+                                        grid_char_pitch, grid_char_cw_ratio,
+                                    );
+                                    match (r.height, r.height_rule.as_deref()) {
+                                        (Some(h), Some("exact")) => h,
+                                        (Some(h), _) => nat.max(h),
+                                        (None, _) => nat,
+                                    }
+                                };
+                                relaxed_span_h += eff_h;
+                            }
+                            effective_row_h = effective_row_h.max(relaxed_span_h);
                         }
                     }
                 }
@@ -8662,6 +8700,111 @@ impl LayoutEngine {
     ) -> f32 {
         self.estimate_para_height_inner(para, available_width, grid_pitch, table_para_style,
             in_cell, grid_char_pitch, grid_char_cw_ratio, false)
+    }
+
+    /// S218 (2026-05-23): natural row height for a single table row.
+    /// Mirrors the inlined logic at the top of the table row-loop
+    /// (lines 6473-6604). Used by the S217 vmerge=restart vAlign relax
+    /// path to compute the merged-span height when trHeight is missing
+    /// on some span rows. Does NOT apply trHeight constraint or
+    /// zero-fallback — caller layers those.
+    fn estimate_table_row_natural_h(
+        &self,
+        row: &TableRow,
+        col_widths: &[f32],
+        default_pad_l: f32,
+        default_pad_r: f32,
+        default_pad_t: f32,
+        default_pad_b: f32,
+        table: &Table,
+        table_grid_pitch: Option<f32>,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> f32 {
+        let _ = (default_pad_l, default_pad_r); // unused; inner_w uses cell_w directly
+        let mut row_height: f32 = 0.0;
+        let mut grid_idx = row.grid_before as usize;
+        for cell in row.cells.iter() {
+            let span = cell.grid_span.max(1) as usize;
+            if cell.v_merge.as_deref() == Some("continue")
+                || cell.v_merge.as_deref() == Some("")
+                || cell.v_merge.as_deref() == Some("restart")
+            {
+                grid_idx += span;
+                continue;
+            }
+            if grid_idx + span > col_widths.len() {
+                grid_idx += span;
+                continue;
+            }
+            let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
+            let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
+            let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+            if pad_t == 0.0 && table.style.border {
+                pad_t = table.style.border_width.unwrap_or(0.4);
+            }
+            let inner_w = cell_w.max(0.0);
+            let mut cell_content_h = pad_t;
+            let mut is_first_block_est = true;
+            let vert_writing_active = self.is_vert_writing_active(cell);
+            for block in &cell.blocks {
+                match block {
+                    Block::Paragraph(para) => {
+                        let mut para_h = if vert_writing_active {
+                            self.vert_para_height(para)
+                        } else {
+                            self.estimate_para_height(para, inner_w, table_grid_pitch,
+                                table.style.para_style.as_ref(), true,
+                                grid_char_pitch, grid_char_cw_ratio)
+                        };
+                        let sb_suppress_enabled = std::env::var("OXI_LEGACY_SB_SUPPRESS").is_ok()
+                            && std::env::var("OXI_SB_NO_SUPPRESS").is_err();
+                        if sb_suppress_enabled && is_first_block_est && !vert_writing_active {
+                            let sb_added = if let (Some(bl), Some(pitch)) = (para.style.before_lines, table_grid_pitch) {
+                                bl / 100.0 * pitch
+                            } else {
+                                para.style.space_before
+                                    .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
+                                    .unwrap_or(0.0)
+                            };
+                            para_h -= sb_added;
+                        }
+                        cell_content_h += para_h;
+                    }
+                    Block::Table(nested) => {
+                        let nested_w = inner_w.max(0.0);
+                        for nr in &nested.rows {
+                            let mut nr_h = 0.0_f32;
+                            for nc in &nr.cells {
+                                let mut nc_h = 0.0_f32;
+                                for nb in &nc.blocks {
+                                    if let Block::Paragraph(np) = nb {
+                                        nc_h += self.estimate_para_height(np, nested_w / 2.0,
+                                            table_grid_pitch, nested.style.para_style.as_ref(),
+                                            true, grid_char_pitch, grid_char_cw_ratio);
+                                    }
+                                }
+                                nr_h = nr_h.max(nc_h);
+                            }
+                            if let Some(h) = nr.height {
+                                match nr.height_rule.as_deref() {
+                                    Some("exact") => { nr_h = h; }
+                                    Some("atLeast") => { nr_h = nr_h.max(h); }
+                                    _ => {}
+                                }
+                            }
+                            cell_content_h += nr_h;
+                        }
+                    }
+                    _ => {}
+                }
+                is_first_block_est = false;
+            }
+            cell_content_h += pad_b;
+            row_height = row_height.max(cell_content_h);
+            grid_idx += span;
+        }
+        row_height
     }
 
     /// Session 79c (2026-05-17): variant that matches the actual cell emit
