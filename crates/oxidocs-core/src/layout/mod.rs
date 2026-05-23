@@ -4978,7 +4978,8 @@ impl LayoutEngine {
             };
         }
 
-        for &(text, style, frag_field_type, frag_run_index, frag_char_start) in fragments {
+        let n_fragments = fragments.len();
+        for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
 
@@ -5503,10 +5504,35 @@ impl LayoutEngine {
                         //   1. ch is a hangable CJK punct (、。）」 etc.), AND
                         //   2. next char (if any) is NOT line-start-prohibited
                         //      (otherwise hanging would push a still-prohibited char to L2 head).
-                        // Otherwise, apply oikomi shift back.
+                        //
+                        // S228 (2026-05-23) v2: block hang ONLY when the
+                        // current line has already absorbed earlier overflow
+                        // (compress_used=true) AND the hang would compound
+                        // the cheat. c7b923 wi=43 line 3: char ん at +36tw
+                        // overflow gets absorbed (has_pair from mid-line 。）),
+                        // then 。 at +129tw hangs. Both cheats stack to
+                        // produce 46 chars instead of Word's 33-34.
+                        // Word likely refuses the second cheat: if a line
+                        // already absorbed overflow, hanging a further
+                        // sentence-terminator past the right margin is
+                        // disallowed.
+                        // Gate fires ONLY when:
+                        //   - compress_used = true (line already cheated), AND
+                        //   - ch is `。` or `．` (sentence terminator), AND
+                        //   - last char of last fragment (= paragraph end)
+                        // OXI_LEGACY_HANG_NO_S228_GATE=1 disables.
                         let next_ch = chars_vec.get(char_index + 1).copied();
                         let next_is_proh = next_ch.map_or(false, kinsoku::is_line_start_prohibited);
-                        let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh;
+                        let legacy_s228 = std::env::var("OXI_LEGACY_HANG_NO_S228_GATE").is_ok();
+                        let is_para_last_char = frag_outer_idx + 1 == n_fragments
+                            && char_index + 1 == chars_vec.len();
+                        let is_sentence_terminator = matches!(ch, '。' | '．');
+                        let s228_block_hang = !legacy_s228
+                            && compress_used
+                            && is_para_last_char
+                            && is_sentence_terminator;
+                        let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
+                            && !s228_block_hang;
 
                         if can_hang {
                             current_line.fragments.push(LineFragment {
