@@ -106,9 +106,25 @@ def load_oxi(doc_id: str) -> dict | None:
         return json.load(f)
 
 
+def _is_h_reference(text: str) -> bool:
+    """S221 (2026-05-23): a record contributes to next-y h calculation only
+    if its normalized text has length >= MIN_MATCH_LEN. Mirrors the matcher
+    filter so single-char markers (b5f706 "丸", 3a4f single-char cells)
+    don't distort matched paragraphs' h via next-y diff collapse when
+    their layout y shifts (S220 incident: vmerge fix moved "丸" cells
+    closer to neighbors, shrinking oh from 18.5 → 9.25 and crashing
+    iou_pos 0.973 → 0.947 on 10 cells in b5f706 pg2)."""
+    return len(normalize_text(text or "")) >= MIN_MATCH_LEN
+
+
 def derive_word_heights(paragraphs: list[dict]) -> list[dict]:
     """For each Word paragraph, derive height from next-paragraph y diff
-    (within same page). For last on page, use DEFAULT_LINE_H."""
+    (within same page). For last on page, use DEFAULT_LINE_H.
+
+    S221 (2026-05-23): only multi-char paragraphs (len >= MIN_MATCH_LEN)
+    are used as next-y reference points. Single-char markers are NOT
+    excluded from the output (they still appear with derived h) but they
+    don't act as h boundaries for OTHER paragraphs."""
     out = []
     for i, p in enumerate(paragraphs):
         if p.get("y") is None or p.get("page") is None:
@@ -120,6 +136,8 @@ def derive_word_heights(paragraphs: list[dict]) -> list[dict]:
                 break
             if np.get("y") is None:
                 continue
+            if not _is_h_reference(np.get("text", "")):
+                continue  # S221: skip single-char neighbors as h reference
             if np["y"] > p["y"]:
                 h = np["y"] - p["y"]
                 break
@@ -138,6 +156,9 @@ def derive_oxi_heights(pages: dict[str, list[dict]]) -> list[dict]:
     removed — y is already in the correct convention. text_y_off remains
     in records as diagnostic only. See
     memory/session71_y_convention_refactor_design.md.
+
+    S221 (2026-05-23): only multi-char paragraphs (len >= MIN_MATCH_LEN)
+    are used as next-y reference points (symmetric with derive_word_heights).
     """
     out = []
     for page_str in sorted(pages.keys(), key=int):
@@ -150,6 +171,8 @@ def derive_oxi_heights(pages: dict[str, list[dict]]) -> list[dict]:
             h = None
             for j in range(i + 1, len(sorted_recs)):
                 nr = sorted_recs[j]
+                if not _is_h_reference(nr.get("text", "")):
+                    continue  # S221: skip single-char neighbors as h reference
                 if nr["y"] > r["y"]:
                     h = nr["y"] - r["y"]
                     break
