@@ -603,6 +603,8 @@ fn emit_balloons_for_layout_page(
 /// S254 — Bold.
 /// S255 — Font, Font Size, All Caps, Character Spacing, Superscript
 ///        (vertical_align), Shading.
+/// S256 — Outline, Emboss, Imprint, Shadow, Hidden (vanish),
+///        Double Strikethrough.
 pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunStyle) -> Option<String> {
     let mut axes: Vec<String> = Vec::new();
     if prior.bold != current.bold {
@@ -650,6 +652,30 @@ pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunSt
         } else {
             axes.push("Shading".to_string());
         }
+    }
+    // S256: bool decoration toggles (outline, emboss, imprint, shadow,
+    // vanish→Hidden, double_strikethrough→Double Strikethrough). Each is
+    // a single rPr bool; we only report a toggle (not direction), so
+    // turn-off shows the same label as turn-on. Word's "Formatted:"
+    // balloon does the same — it reports the property name, not the
+    // before/after values.
+    if prior.outline != current.outline {
+        axes.push("Outline".to_string());
+    }
+    if prior.emboss != current.emboss {
+        axes.push("Emboss".to_string());
+    }
+    if prior.imprint != current.imprint {
+        axes.push("Imprint".to_string());
+    }
+    if prior.shadow != current.shadow {
+        axes.push("Shadow".to_string());
+    }
+    if prior.vanish != current.vanish {
+        axes.push("Hidden".to_string());
+    }
+    if prior.double_strikethrough != current.double_strikethrough {
+        axes.push("Double Strikethrough".to_string());
     }
     if axes.is_empty() {
         None

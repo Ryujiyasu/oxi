@@ -1893,7 +1893,6 @@ fn fixture_22_layout_pprchange_inline_numPr_attach() {
 /// (3 NEW non-R72 rPr axes). fixture_23 toggles outline + emboss in a
 /// single rPrChange to exercise both new branches plus comma-join.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff outline/emboss axes not implemented"]
 fn fixture_23_layout_rprchange_outline_emboss() {
     let Some(bytes) = read_fixture("fixture_23_rPrChange_outline_emboss.docx") else {
         eprintln!("skipping: fixture_23 missing");
@@ -2104,7 +2103,6 @@ fn fixture_25_layout_rprchange_highlight_position_em() {
 /// fixture_24 toggles all three in one rPrChange, exercises the new
 /// branches plus comma-join across them.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff shadow/vanish/dstrike axes not implemented"]
 fn fixture_24_layout_rprchange_shadow_vanish_dstrike() {
     let Some(bytes) = read_fixture("fixture_24_rPrChange_shadow_vanish_dstrike.docx") else {
         eprintln!("skipping: fixture_24 missing");
