@@ -726,6 +726,7 @@ pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunSt
 /// S257 — Keep With Next, Page Break Before, Widow/Orphan Control
 ///        (inverted phrasing on turn-off), Right-to-Left (bidi),
 ///        Text Alignment.
+/// S258 — Borders Added, Tab Stops Added, Numbering (num_id).
 pub fn describe_ppr_diff(change: &crate::ir::PropertyChange, current: &crate::ir::Paragraph) -> Option<String> {
     let mut axes: Vec<String> = Vec::new();
     if let Some(prior_pstyle) = change.prior_paragraph_style.as_deref() {
@@ -764,6 +765,33 @@ pub fn describe_ppr_diff(change: &crate::ir::PropertyChange, current: &crate::ir
                 axes.push(format!("Text Alignment: {val}"));
             } else {
                 axes.push("Text Alignment".to_string());
+            }
+        }
+        // S258: borders/tab_stops/numPr. Word reports these as
+        // side-summary additions in the "Formatted:" balloon rather than
+        // enumerating each border edge / tab position; the test fixtures
+        // assert the summary phrasing. ParagraphBorders / TabStop / etc.
+        // don't derive PartialEq (Vec<TabStop> + Option<ParagraphBorders>
+        // with nested option types would require a wide derive cascade),
+        // so we use presence/absence as the discriminator — only "Added"
+        // and "Removed" cases are surfaced. A "Changed" case requires
+        // PartialEq derives across the IR border/tab structs; defer
+        // until a fixture needs it.
+        if prior_pstyle.borders.is_none() && current.style.borders.is_some() {
+            axes.push("Borders Added".to_string());
+        } else if prior_pstyle.borders.is_some() && current.style.borders.is_none() {
+            axes.push("Borders Removed".to_string());
+        }
+        if prior_pstyle.tab_stops.is_empty() && !current.style.tab_stops.is_empty() {
+            axes.push("Tab Stops Added".to_string());
+        } else if !prior_pstyle.tab_stops.is_empty() && current.style.tab_stops.is_empty() {
+            axes.push("Tab Stops Removed".to_string());
+        }
+        if prior_pstyle.num_id != current.style.num_id {
+            if let Some(id) = current.style.num_id.as_deref() {
+                axes.push(format!("Numbering: list {id}"));
+            } else {
+                axes.push("Numbering Removed".to_string());
             }
         }
     }

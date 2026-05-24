@@ -1758,7 +1758,6 @@ fn fixture_19_layout_pprchange_keep_next() {
 /// adds a bottom border via pPrChange whose prior pPr was empty
 /// (no border). Body must mention "Borders Added".
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff borders axis not implemented"]
 fn fixture_20_layout_pprchange_borders_added() {
     let Some(bytes) = read_fixture("fixture_20_pPrChange_borders.docx") else {
         eprintln!("skipping: fixture_20 missing");
@@ -1801,7 +1800,6 @@ fn fixture_20_layout_pprchange_borders_added() {
 /// only summary (mirror of R93 borders side-summary). fixture_21 adds
 /// 3 tab stops via pPrChange whose prior pPr was empty.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff tabs axis not implemented"]
 fn fixture_21_layout_pprchange_tabs_added() {
     let Some(bytes) = read_fixture("fixture_21_pPrChange_tabs.docx") else {
         eprintln!("skipping: fixture_21 missing");
@@ -1849,7 +1847,6 @@ fn fixture_21_layout_pprchange_tabs_added() {
 /// empty. Body must contain "Numbering: list 1".
 #[test]
 #[allow(non_snake_case)]
-#[ignore = "pre-existing: describe_ppr_diff inline numPr axis not implemented"]
 fn fixture_22_layout_pprchange_inline_numPr_attach() {
     let Some(bytes) = read_fixture("fixture_22_pPrChange_numPr.docx") else {
         eprintln!("skipping: fixture_22 missing");
