@@ -1432,7 +1432,6 @@ fn fixture_13_layout_emits_pprchange_margin_balloon() {
 /// font_family branch (added R71) and the helper's comma-join behaviour
 /// when more than one property toggles in a single revision.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff multi-property output not implemented"]
 fn fixture_14_layout_rprchange_multi_property_describe_diff() {
     let Some(bytes) = read_fixture("fixture_14_rPrChange_font.docx") else {
         eprintln!("skipping: fixture_14 missing");
@@ -1495,7 +1494,6 @@ fn fixture_14_layout_rprchange_multi_property_describe_diff() {
 /// R72 adds `prior_alignment` to PropertyChange so the parser can
 /// capture the prior `<w:jc>` and the helper can render the diff.
 #[test]
-#[ignore = "pre-existing: R-12 pPrChange alignment-toggle balloon not implemented"]
 fn fixture_15_layout_pprchange_alignment_toggle() {
     let Some(bytes) = read_fixture("fixture_15_pPrChange_alignment.docx") else {
         eprintln!("skipping: fixture_15 missing");
@@ -1559,7 +1557,6 @@ fn fixture_15_layout_pprchange_alignment_toggle() {
 /// _spacing in a single rPrChange to exercise (a) the new branches and
 /// (b) the comma-join across multiple new-axis diffs.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff caps/spacing axes not implemented"]
 fn fixture_16_layout_rprchange_caps_and_spacing() {
     let Some(bytes) = read_fixture("fixture_16_rPrChange_caps_spacing.docx") else {
         eprintln!("skipping: fixture_16 missing");
@@ -1612,7 +1609,6 @@ fn fixture_16_layout_rprchange_caps_and_spacing() {
 /// toggles vertical_align=superscript + shading=#FFFF00 in a single
 /// rPrChange to exercise both new branches plus comma-join.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff valign/shading axes not implemented"]
 fn fixture_17_layout_rprchange_valign_and_shading() {
     let Some(bytes) = read_fixture("fixture_17_rPrChange_vAlign_shading.docx") else {
         eprintln!("skipping: fixture_17 missing");
@@ -1666,7 +1662,6 @@ fn fixture_17_layout_rprchange_valign_and_shading() {
 /// "Paragraph Shading: FFFF00" (the "Paragraph " prefix
 /// disambiguates from the run-level "Shading:" added in R87).
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff paragraph-shading axis not implemented"]
 fn fixture_18_layout_pprchange_paragraph_shading() {
     let Some(bytes) = read_fixture("fixture_18_pPrChange_shading.docx") else {
         eprintln!("skipping: fixture_18 missing");

@@ -599,13 +599,57 @@ fn emit_balloons_for_layout_page(
 /// OOXML names (e.g., "Bold" not "w:b"). Axis labels are visible to
 /// end users in the margin balloon.
 ///
-/// This scaffold ships with Bold only (R-12 v1). Subsequent ships add
-/// more axes incrementally; the comma-join structure is already in
-/// place to absorb them.
+/// Supported axes (extended each ship — comma-join already in place):
+/// S254 — Bold.
+/// S255 — Font, Font Size, All Caps, Character Spacing, Superscript
+///        (vertical_align), Shading.
 pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunStyle) -> Option<String> {
     let mut axes: Vec<String> = Vec::new();
     if prior.bold != current.bold {
         axes.push("Bold".to_string());
+    }
+    if prior.font_family != current.font_family {
+        if let Some(name) = current.font_family.as_deref() {
+            axes.push(format!("Font: {name}"));
+        } else {
+            axes.push("Font".to_string());
+        }
+    }
+    if prior.font_size != current.font_size {
+        if let Some(sz) = current.font_size {
+            // Word renders integer font sizes plainly; only show decimals
+            // when the value isn't a whole number.
+            let label = if sz.fract().abs() < f32::EPSILON {
+                format!("Font Size: {}pt", sz as i32)
+            } else {
+                format!("Font Size: {sz}pt")
+            };
+            axes.push(label);
+        } else {
+            axes.push("Font Size".to_string());
+        }
+    }
+    if prior.all_caps != current.all_caps {
+        axes.push("All Caps".to_string());
+    }
+    if prior.character_spacing != current.character_spacing {
+        axes.push("Character Spacing".to_string());
+    }
+    if prior.vertical_align != current.vertical_align {
+        use crate::ir::VerticalAlign;
+        let label = match current.vertical_align {
+            Some(VerticalAlign::Superscript) => "Superscript",
+            Some(VerticalAlign::Subscript) => "Subscript",
+            Some(VerticalAlign::Baseline) | None => "Vertical Alignment: Baseline",
+        };
+        axes.push(label.to_string());
+    }
+    if prior.shading != current.shading {
+        if let Some(hex) = current.shading.as_deref() {
+            axes.push(format!("Shading: {hex}"));
+        } else {
+            axes.push("Shading".to_string());
+        }
     }
     if axes.is_empty() {
         None
@@ -620,13 +664,36 @@ pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunSt
 /// "Formatted: …" string shape so the renderer doesn't need to know
 /// which kind of change produced it.
 ///
-/// This scaffold ships with Indent Left only (R-12 v2). Subsequent
-/// ships add Alignment, Numbering, Borders, etc.
+/// Supported axes (extended each ship):
+/// S254 — Indent Left.
+/// S255 — Alignment (from `prior_alignment`, which is stored outside
+///        `prior_paragraph_style` because `Paragraph.alignment` is a
+///        top-level IR field), Paragraph Shading.
 pub fn describe_ppr_diff(change: &crate::ir::PropertyChange, current: &crate::ir::Paragraph) -> Option<String> {
     let mut axes: Vec<String> = Vec::new();
     if let Some(prior_pstyle) = change.prior_paragraph_style.as_deref() {
         if prior_pstyle.indent_left != current.style.indent_left {
             axes.push("Indent Left".to_string());
+        }
+        if prior_pstyle.shading != current.style.shading {
+            if let Some(hex) = current.style.shading.as_deref() {
+                axes.push(format!("Paragraph Shading: {hex}"));
+            } else {
+                axes.push("Paragraph Shading".to_string());
+            }
+        }
+    }
+    if let Some(prior_align) = change.prior_alignment {
+        if prior_align != current.alignment {
+            use crate::ir::Alignment;
+            let label = match current.alignment {
+                Alignment::Left => "Left",
+                Alignment::Center => "Centered",
+                Alignment::Right => "Right",
+                Alignment::Justify => "Justified",
+                Alignment::Distribute => "Distributed",
+            };
+            axes.push(format!("Alignment: {label}"));
         }
     }
     if axes.is_empty() {
