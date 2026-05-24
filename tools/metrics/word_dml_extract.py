@@ -23,17 +23,38 @@ def extract_dml(docx_path: str) -> dict:
 
     doc = word.Documents.Open(os.path.abspath(docx_path), ReadOnly=True)
 
+    # `doc.PageSetup.*` returns 9999999.0 (Word's WdInformation `_undefined`
+    # sentinel) when the document's sections have DIFFERING values. S266 fix
+    # (S262 29dc6e_order_01.docx case): the doc has 2 sections with margins
+    # 1701twips vs 1361twips → `doc.PageSetup.TopMargin` is unusable. Fall back
+    # to section 1's PageSetup, which has consistent values per section. Also
+    # capture per-section overrides so downstream tools can distinguish sections.
+    s1_ps = doc.Sections(1).PageSetup
+    section_setups = []
+    for si in range(1, doc.Sections.Count + 1):
+        sps = doc.Sections(si).PageSetup
+        section_setups.append({
+            "section": si,
+            "page_width": sps.PageWidth,
+            "page_height": sps.PageHeight,
+            "margin_top": sps.TopMargin,
+            "margin_bottom": sps.BottomMargin,
+            "margin_left": sps.LeftMargin,
+            "margin_right": sps.RightMargin,
+        })
+
     result = {
         "file": os.path.basename(docx_path),
         "pages": doc.ComputeStatistics(2),  # wdStatisticPages
         "page_setup": {
-            "page_width": doc.PageSetup.PageWidth,
-            "page_height": doc.PageSetup.PageHeight,
-            "margin_top": doc.PageSetup.TopMargin,
-            "margin_bottom": doc.PageSetup.BottomMargin,
-            "margin_left": doc.PageSetup.LeftMargin,
-            "margin_right": doc.PageSetup.RightMargin,
+            "page_width": s1_ps.PageWidth,
+            "page_height": s1_ps.PageHeight,
+            "margin_top": s1_ps.TopMargin,
+            "margin_bottom": s1_ps.BottomMargin,
+            "margin_left": s1_ps.LeftMargin,
+            "margin_right": s1_ps.RightMargin,
         },
+        "sections": section_setups,
         "paragraphs": [],
         "tables": [],
     }
