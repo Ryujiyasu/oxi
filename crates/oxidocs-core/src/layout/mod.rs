@@ -30,19 +30,22 @@ fn is_break_after(ch: char) -> bool {
 /// Word's default 8-color rotation for tracked-change author tints. The
 /// author's `color_index` in `Document.authors` selects a slot here.
 ///
-/// COM-confirmed against Word 16.0 (2026-04-25, see
+/// COM-confirmed against Word 16.0 (see
 /// `docs/spec/comments_tracked_changes/com_measurements/PIXEL_PASS_README.md`):
-///   - Slot 0 → #D03337 (Alice in fixture_05/06/07/10)
-///   - Slot 1 → #5B2C90 (Bob in fixture_10)
+///   - Slot 0 → #D03337 (Alice in fixture_05/06/07/10, 2026-04-25)
+///   - Slot 1 → #5B2C90 (Bob in fixture_10, 2026-04-25)
+///   - Slot 2 → #478103 (Carol in fixture_12, R65 2026-04-29 — distinct
+///     from the move-revision green #2B6033; the earlier conflation has
+///     been corrected, see PHASE_2_CLOSEOUT.md item 9).
 ///
-/// Slots 2..7 are Word's documented rotation defaults but not yet COM-confirmed
-/// — they need a 3+author fixture. The list below is the Word/Office reviewing
+/// Slots 3..7 are Word's documented rotation defaults but not yet COM-confirmed
+/// — they need a 4+author fixture. The list below is the Word/Office reviewing
 /// palette as published by Microsoft; if a future measurement contradicts a
 /// specific slot, replace just that entry.
 const REVISION_AUTHOR_PALETTE: [&str; 8] = [
-    "#D03337", // 0 — confirmed
-    "#5B2C90", // 1 — confirmed
-    "#2B6033", // 2 — green (also used for moves regardless of author)
+    "#D03337", // 0 — confirmed (Alice)
+    "#5B2C90", // 1 — confirmed (Bob)
+    "#478103", // 2 — confirmed (Carol, R65)
     "#ED7D31", // 3 — orange
     "#4472C4", // 4 — blue
     "#843C0C", // 5 — brown
@@ -67,7 +70,9 @@ const REVISION_MOVE_COLOR: &str = "#2B6033";
 const COMMENT_HIGHLIGHT_TINT_PALETTE: [&str; 8] = [
     "#FAE6E7", // 0 — Alice, COM-confirmed
     "#EFEAF4", // 1 — Bob (derived from #5B2C90)
-    "#EAEFEA", // 2 — derived from #2B6033
+    "#EAEFEA", // 2 — placeholder (slot 2 base is #478103 per R65; this tint is the
+               //     legacy derivation against the old #2B6033 conflation and awaits
+               //     re-derivation when a 3+author comments fixture forces it.)
     "#FCEEE0", // 3 — derived from #ED7D31
     "#E8ECF6", // 4 — derived from #4472C4
     "#F2EAE4", // 5 — derived from #843C0C

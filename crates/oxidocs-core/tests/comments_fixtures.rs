@@ -2354,7 +2354,6 @@ fn fixture_12_three_reviewers_palette_assigns_slots_0_1_2() {
 /// Asserting against the constant pins the Oxi side; the comment above
 /// the test records the open ground-truth question.
 #[test]
-#[ignore = "pre-existing: palette slot 2 (Carol) assignment not implemented"]
 fn fixture_12_layout_third_author_uses_palette_slot_2() {
     let Some(bytes) = read_fixture("fixture_12_three_reviewers.docx") else {
         eprintln!("skipping: fixture_12 missing");
