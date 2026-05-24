@@ -139,7 +139,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, highlight, character_spacing, text_scale, is_vertical, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, double_strikethrough, highlight, character_spacing, text_scale, is_vertical, ..
                     } => {
                         // Session 75 Phase D (2026-05-17): elem.y is LINE BOX TOP;
                         // glyph_y = LBT + text_y_off is where TextOutW/underline/
@@ -284,14 +284,28 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             let _ = DeleteObject(pen);
                         }
 
-                        if *strikethrough {
+                        if *strikethrough || *double_strikethrough {
                             let mut tm = TEXTMETRICW::default();
                             GetTextMetricsW(mem_dc, &mut tm);
                             let st_y = glyph_y + tm.tmAscent / 2;
                             let st_pen = CreatePen(PS_SOLID, 1, rgb);
                             let old_pen = SelectObject(mem_dc, st_pen);
-                            MoveToEx(mem_dc, x, st_y, None);
-                            LineTo(mem_dc, x + ew, st_y);
+                            if *double_strikethrough {
+                                // R66: two parallel lines around the single-strike y.
+                                // Gap is 0.18 × fs (supersampled px) — larger than the
+                                // DWrite 0.08 because GDI here renders in a supersampled
+                                // DC then downsamples, halving the visual separation.
+                                let gap = ((fs as f64 * 0.18).round() as i32).max(3);
+                                let st_y1 = st_y - gap / 2;
+                                let st_y2 = st_y1 + gap;
+                                MoveToEx(mem_dc, x, st_y1, None);
+                                LineTo(mem_dc, x + ew, st_y1);
+                                MoveToEx(mem_dc, x, st_y2, None);
+                                LineTo(mem_dc, x + ew, st_y2);
+                            } else {
+                                MoveToEx(mem_dc, x, st_y, None);
+                                LineTo(mem_dc, x + ew, st_y);
+                            }
                             SelectObject(mem_dc, old_pen);
                             let _ = DeleteObject(st_pen);
                         }

@@ -202,7 +202,7 @@ unsafe fn render_page_elements(
         match &el.content {
             LayoutContent::Text {
                 text, font_size, font_family, bold, italic, color,
-                underline: _, underline_style, strikethrough,
+                underline: _, underline_style, strikethrough, double_strikethrough,
                 highlight, character_spacing,
                 text_scale: _, is_vertical, ..
             } => {
@@ -216,7 +216,7 @@ unsafe fn render_page_elements(
                     el.x, el.y + el.text_y_off, el.width, el.height,
                     text, font_family.as_deref().unwrap_or("Calibri"),
                     *font_size, *bold, *italic, color.as_deref(),
-                    *strikethrough, is_double_underline,
+                    *strikethrough, *double_strikethrough, is_double_underline,
                     highlight.as_deref(), *character_spacing,
                     *is_vertical,
                 )?;
@@ -487,6 +487,7 @@ unsafe fn render_text(
     italic: bool,
     color: Option<&str>,
     strikethrough: bool,
+    double_strikethrough: bool,
     double_underline: bool,
     highlight: Option<&str>,
     character_spacing_pt: f32,
@@ -637,7 +638,7 @@ unsafe fn render_text(
     // pipeline_data/dwrite_underline_investigation_2026-05-02.md. Double
     // underline (w:val="double") is scoped to one baseline doc — 1ec1091177b1
     // — and rendered explicitly below per fix-path B from the same investigation.)
-    if strikethrough {
+    if strikethrough || double_strikethrough {
         let mut count: u32 = 0;
         let _ = layout.GetLineMetrics(None, &mut count);
         let baseline_dip = if count > 0 {
@@ -648,11 +649,31 @@ unsafe fn render_text(
         } else { font_size_pt * PT_TO_DIP * 0.8 };
         let thickness = (font_size_pt * PT_TO_DIP * 0.06).max(1.0);
         let y_dip = y_pt * PT_TO_DIP + baseline_dip - baseline_dip * 0.30;
-        rt.DrawLine(
-            D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: y_dip },
-            D2D_POINT_2F { x: (x_pt + w_pt) * PT_TO_DIP, y: y_dip },
-            &brush, thickness, None,
-        );
+        let x_start = x_pt * PT_TO_DIP;
+        let x_end = (x_pt + w_pt) * PT_TO_DIP;
+        if double_strikethrough {
+            // R66 v1: two parallel lines centered on the single-strike y.
+            // Gap mirrors the double_underline heuristic below (font_size * 0.08).
+            let gap_dip = (font_size_pt * PT_TO_DIP * 0.08).max(1.0);
+            let y1 = y_dip - gap_dip * 0.5;
+            let y2 = y_dip + gap_dip * 0.5;
+            rt.DrawLine(
+                D2D_POINT_2F { x: x_start, y: y1 },
+                D2D_POINT_2F { x: x_end,   y: y1 },
+                &brush, thickness, None,
+            );
+            rt.DrawLine(
+                D2D_POINT_2F { x: x_start, y: y2 },
+                D2D_POINT_2F { x: x_end,   y: y2 },
+                &brush, thickness, None,
+            );
+        } else {
+            rt.DrawLine(
+                D2D_POINT_2F { x: x_start, y: y_dip },
+                D2D_POINT_2F { x: x_end,   y: y_dip },
+                &brush, thickness, None,
+            );
+        }
     }
 
     if double_underline {
