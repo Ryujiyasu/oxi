@@ -9,7 +9,7 @@
 use std::fs;
 
 use oxidocs_core::parser::parse_docx;
-use oxidocs_core::ir::{Block, MathBlock, MathExpr, FracBarType};
+use oxidocs_core::ir::{Block, MathBlock, MathExpr, FracBarType, LimLoc, BarPos, LimitPos};
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     // Tests run with CWD at the crate root; fixtures are two levels up.
@@ -121,12 +121,232 @@ fn fixture_04_sqrt_produces_radical() {
     }
 }
 
+/// Load fixture and return its first Display-style content vector.
+/// Panics on missing/parse failure — callers gate on `fixture_path(...).exists()`.
+fn load_display_content(name: &str) -> Vec<MathExpr> {
+    let path = fixture_path(name);
+    let data = fs::read(&path).unwrap();
+    let doc = parse_docx(&data).unwrap();
+    let mb = find_first_math(&doc).expect("no Math block");
+    match mb {
+        MathBlock::Display { content, .. } => content.clone(),
+        MathBlock::Inline(_) => panic!("expected Display block"),
+    }
+}
+
 #[test]
-fn all_ten_fixtures_parse_without_error() {
+fn fixture_05_nary_sum_produces_nary() {
+    let path = fixture_path("05_nary_sum.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("05_nary_sum.docx");
+    assert_eq!(content.len(), 1);
+    match &content[0] {
+        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
+            assert_eq!(*op, '∑');
+            assert_eq!(*lim_loc, LimLoc::UndOvr);
+            assert!(matches!(sub.as_deref(), Some(MathExpr::Text(s)) if s == "i=1"));
+            assert!(matches!(sup.as_deref(), Some(MathExpr::Text(s)) if s == "n"));
+            assert!(matches!(**operand, MathExpr::Text(ref s) if s == "i"));
+        }
+        other => panic!("expected Nary, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_06_matrix_2x2_produces_delimited_matrix() {
+    let path = fixture_path("06_matrix_2x2.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("06_matrix_2x2.docx");
+    assert_eq!(content.len(), 1);
+    match &content[0] {
+        MathExpr::Delimiter { beg, end, sep, content: inner } => {
+            assert_eq!(*beg, '[');
+            assert_eq!(*end, ']');
+            assert!(sep.is_none());
+            match **inner {
+                MathExpr::Matrix { ref rows, cols, .. } => {
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!(cols, 2);
+                }
+                ref other => panic!("expected Matrix inside Delimiter, got {:?}", other),
+            }
+        }
+        other => panic!("expected Delimiter, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_07_acc_hat_produces_accent() {
+    let path = fixture_path("07_acc_hat.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("07_acc_hat.docx");
+    assert_eq!(content.len(), 1);
+    match &content[0] {
+        MathExpr::Accent { accent, base } => {
+            // Combining circumflex U+0302.
+            assert_eq!(*accent, '\u{0302}');
+            assert!(matches!(**base, MathExpr::Text(ref s) if s == "x"));
+        }
+        other => panic!("expected Accent, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_08_box_produces_box_expr() {
+    let path = fixture_path("08_box.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("08_box.docx");
+    assert_eq!(content.len(), 1);
+    match &content[0] {
+        MathExpr::BoxExpr(inner) => {
+            assert!(matches!(**inner, MathExpr::Text(ref s) if s == "x+1"));
+        }
+        other => panic!("expected BoxExpr, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_09_bar_produces_top_bar() {
+    let path = fixture_path("09_bar.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("09_bar.docx");
+    assert_eq!(content.len(), 1);
+    match &content[0] {
+        MathExpr::Bar { pos, base } => {
+            assert_eq!(*pos, BarPos::Top);
+            assert!(matches!(**base, MathExpr::Text(ref s) if s == "x"));
+        }
+        other => panic!("expected Bar, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_10_limit_produces_lower_limit_function() {
+    let path = fixture_path("10_limit.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("10_limit.docx");
+    assert_eq!(content.len(), 1);
+    match &content[0] {
+        MathExpr::Limit { base, lim, pos } => {
+            assert_eq!(*pos, LimitPos::Lower);
+            match **base {
+                MathExpr::Function { ref name, ref arg } => {
+                    assert!(matches!(**name, MathExpr::Text(ref s) if s == "lim"));
+                    assert!(matches!(**arg, MathExpr::Text(ref s) if s == "f(x)"));
+                }
+                ref other => panic!("expected Function as Limit base, got {:?}", other),
+            }
+            assert!(matches!(**lim, MathExpr::Text(ref s) if s == "x→0"));
+        }
+        other => panic!("expected Limit, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_11_einstein_produces_text_then_superscript() {
+    let path = fixture_path("11_einstein.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("11_einstein.docx");
+    assert_eq!(content.len(), 2);
+    assert!(matches!(content[0], MathExpr::Text(ref s) if s == "E = m"));
+    match &content[1] {
+        MathExpr::Superscript { base, sup } => {
+            assert!(matches!(**base, MathExpr::Text(ref s) if s == "c"));
+            assert!(matches!(**sup, MathExpr::Text(ref s) if s == "2"));
+        }
+        other => panic!("expected Superscript, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_12_quadratic_produces_fraction_with_radical() {
+    let path = fixture_path("12_quadratic.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("12_quadratic.docx");
+    assert_eq!(content.len(), 2);
+    assert!(matches!(content[0], MathExpr::Text(ref s) if s == "x = "));
+    match &content[1] {
+        MathExpr::Fraction { num, den, bar_type } => {
+            assert_eq!(*bar_type, FracBarType::Bar);
+            // Denominator is "2a".
+            assert!(matches!(**den, MathExpr::Text(ref s) if s == "2a"));
+            // Numerator wraps "-b ± " and a Radical (no degree).
+            match **num {
+                MathExpr::Seq(ref items) => {
+                    assert_eq!(items.len(), 2);
+                    assert!(matches!(items[0], MathExpr::Text(ref s) if s == "-b ± "));
+                    assert!(matches!(items[1], MathExpr::Radical { ref degree, .. } if degree.is_none()));
+                }
+                ref other => panic!("expected Seq numerator, got {:?}", other),
+            }
+        }
+        other => panic!("expected Fraction, got {:?}", other),
+    }
+}
+
+#[test]
+fn fixture_13_euler_id_produces_superscript_then_text() {
+    let path = fixture_path("13_euler_id.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("13_euler_id.docx");
+    assert_eq!(content.len(), 2);
+    match &content[0] {
+        MathExpr::Superscript { base, sup } => {
+            assert!(matches!(**base, MathExpr::Text(ref s) if s == "e"));
+            assert!(matches!(**sup, MathExpr::Text(ref s) if s == "iπ"));
+        }
+        other => panic!("expected Superscript, got {:?}", other),
+    }
+    assert!(matches!(content[1], MathExpr::Text(ref s) if s == " + 1 = 0"));
+}
+
+#[test]
+fn fixture_14_gaussian_produces_integral_with_subsup_limits() {
+    let path = fixture_path("14_gaussian.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("14_gaussian.docx");
+    assert_eq!(content.len(), 3);
+    match &content[0] {
+        MathExpr::Nary { op, sub, sup, lim_loc, .. } => {
+            assert_eq!(*op, '∫');
+            // Definite integral inline → limits as scripts, not over/under.
+            assert_eq!(*lim_loc, LimLoc::SubSup);
+            assert!(matches!(sub.as_deref(), Some(MathExpr::Text(s)) if s == "-∞"));
+            assert!(matches!(sup.as_deref(), Some(MathExpr::Text(s)) if s == "∞"));
+        }
+        other => panic!("expected Nary, got {:?}", other),
+    }
+    assert!(matches!(content[1], MathExpr::Text(ref s) if s == " = "));
+    assert!(matches!(content[2], MathExpr::Radical { ref degree, .. } if degree.is_none()));
+}
+
+#[test]
+fn fixture_15_sum_series_produces_nested_nary_with_fraction_operand() {
+    let path = fixture_path("15_sum_series.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("15_sum_series.docx");
+    assert_eq!(content.len(), 3);
+    match &content[0] {
+        MathExpr::Nary { op, operand, lim_loc, .. } => {
+            assert_eq!(*op, '∑');
+            assert_eq!(*lim_loc, LimLoc::UndOvr);
+            // Operand is a fraction 1/n^2.
+            assert!(matches!(**operand, MathExpr::Fraction { .. }));
+        }
+        other => panic!("expected Nary, got {:?}", other),
+    }
+    assert!(matches!(content[1], MathExpr::Text(ref s) if s == " = "));
+    assert!(matches!(content[2], MathExpr::Fraction { .. }));
+}
+
+#[test]
+fn all_fifteen_fixtures_parse_without_error() {
     for name in [
         "01_frac.docx", "02_sup.docx", "03_sub.docx", "04_sqrt.docx",
         "05_nary_sum.docx", "06_matrix_2x2.docx", "07_acc_hat.docx",
         "08_box.docx", "09_bar.docx", "10_limit.docx",
+        "11_einstein.docx", "12_quadratic.docx", "13_euler_id.docx",
+        "14_gaussian.docx", "15_sum_series.docx",
     ] {
         let path = fixture_path(name);
         if !path.exists() {
