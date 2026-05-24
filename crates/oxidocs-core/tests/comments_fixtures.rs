@@ -1300,7 +1300,6 @@ fn fixture_08_layout_moves_render_in_green() {
 /// style diff between `rpr_change.prior_run_style` and the run's current
 /// style.
 #[test]
-#[ignore = "pre-existing: R-12 balloon emission for rPrChange not implemented"]
 fn fixture_09_layout_emits_rprchange_margin_balloon() {
     let Some(bytes) = read_fixture("fixture_09_rPrChange_bold.docx") else {
         eprintln!("skipping: fixture_09 missing");
@@ -1364,7 +1363,6 @@ fn fixture_09_layout_emits_rprchange_margin_balloon() {
 /// synthetic comment_id must use the `pprchange:` prefix to keep
 /// run-level and paragraph-level entries distinguishable.
 #[test]
-#[ignore = "pre-existing: R-12 balloon emission for pPrChange not implemented"]
 fn fixture_13_layout_emits_pprchange_margin_balloon() {
     let Some(bytes) = read_fixture("fixture_13_pPrChange_indent.docx") else {
         eprintln!("skipping: fixture_13 missing");

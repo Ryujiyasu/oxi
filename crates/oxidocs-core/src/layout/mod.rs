@@ -587,6 +587,265 @@ fn emit_balloons_for_layout_page(
     }
 }
 
+/// R-12: build a "Formatted: …" balloon body describing what changed
+/// between an rPrChange's prior run style and the run's current style.
+/// Returns `None` when no axis in the supported set differs (the caller
+/// then suppresses the balloon — empty bodies would still anchor a
+/// balloon, which is not Word's behaviour for no-op rPrChanges).
+///
+/// Each axis appends a label to `axes`; the final body is
+/// `"Formatted: " + axes.join(", ")`. Per Word's "Formatted:" markup
+/// vocabulary, label phrasing is human-readable rather than literal
+/// OOXML names (e.g., "Bold" not "w:b"). Axis labels are visible to
+/// end users in the margin balloon.
+///
+/// This scaffold ships with Bold only (R-12 v1). Subsequent ships add
+/// more axes incrementally; the comma-join structure is already in
+/// place to absorb them.
+pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunStyle) -> Option<String> {
+    let mut axes: Vec<String> = Vec::new();
+    if prior.bold != current.bold {
+        axes.push("Bold".to_string());
+    }
+    if axes.is_empty() {
+        None
+    } else {
+        Some(format!("Formatted: {}", axes.join(", ")))
+    }
+}
+
+/// R-12 v2: paragraph-level companion to `describe_rpr_diff`. Compares
+/// the pPrChange's prior paragraph style (and prior alignment) against
+/// the paragraph's current style + alignment. Returns the same
+/// "Formatted: …" string shape so the renderer doesn't need to know
+/// which kind of change produced it.
+///
+/// This scaffold ships with Indent Left only (R-12 v2). Subsequent
+/// ships add Alignment, Numbering, Borders, etc.
+pub fn describe_ppr_diff(change: &crate::ir::PropertyChange, current: &crate::ir::Paragraph) -> Option<String> {
+    let mut axes: Vec<String> = Vec::new();
+    if let Some(prior_pstyle) = change.prior_paragraph_style.as_deref() {
+        if prior_pstyle.indent_left != current.style.indent_left {
+            axes.push("Indent Left".to_string());
+        }
+    }
+    if axes.is_empty() {
+        None
+    } else {
+        Some(format!("Formatted: {}", axes.join(", ")))
+    }
+}
+
+/// R-12: emit one narrow "Formatted: …" balloon per rPrChange / pPrChange
+/// found on this layout page. Mirrors `emit_balloons_for_layout_page` but
+/// the anchor is the paragraph itself (not a `commentRangeStart` marker)
+/// and the comment_id uses a synthetic prefix so the renderer / tests
+/// can distinguish R-12 balloons from R-05 comment balloons:
+///
+///   - `rprchange:<sequence>` for run-level changes
+///   - `pprchange:<sequence>` for paragraph-level changes
+///
+/// Resolved=true is hard-coded — per fixture_09's COM-confirmed
+/// expectation, R-12 balloons use the narrow grey geometry regardless
+/// of whether the underlying revision is resolved. The R-05 comment
+/// balloon's resolved/unresolved distinction is about
+/// `<w15:commentEx done="1"/>`, which doesn't apply to rPrChange.
+fn emit_property_change_balloons_for_layout_page(
+    layout_page: &mut LayoutPage,
+    doc: &Document,
+    ir_page_idx: usize,
+) {
+    use std::collections::HashMap;
+
+    let ir_page = match doc.pages.get(ir_page_idx) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Same anchor-resolution strategy as the comment balloon pass: map
+    // paragraph_index → first rendered (x, y) so an empty / marker-only
+    // paragraph still has a stable anchor.
+    let mut para_first_xy: HashMap<usize, (f32, f32)> = HashMap::new();
+    for el in &layout_page.elements {
+        if !matches!(&el.content, LayoutContent::Text { .. }) {
+            continue;
+        }
+        if let Some(pi) = el.paragraph_index {
+            para_first_xy.entry(pi).or_insert((el.x, el.y));
+        }
+    }
+
+    let author_to_idx: HashMap<&str, usize> = doc
+        .authors
+        .iter()
+        .map(|a| (a.display.as_str(), a.color_index))
+        .collect();
+
+    #[derive(Debug)]
+    struct PendingPCBalloon {
+        cid: String,
+        author: String,
+        author_color_index: usize,
+        body: String,
+        anchor_x: f32,
+        anchor_y: f32,
+        balloon_left: f32,
+        balloon_width: f32,
+        balloon_height: f32,
+        y: f32,
+    }
+
+    let page_w = layout_page.width;
+    let balloon_right_inset = 4.0;
+    // R-12 always uses narrow geometry (resolved width).
+    let balloon_width = 190.1;
+    let balloon_left = (page_w - balloon_right_inset - balloon_width).max(0.0);
+    let avg_glyph_pt = 5.0;
+    let max_chars_per_line = ((balloon_width - 8.0) / avg_glyph_pt).max(1.0) as usize;
+
+    let mut pending: Vec<PendingPCBalloon> = Vec::new();
+    let mut next_sequence: usize = 0;
+
+    for (pi, block) in ir_page.blocks.iter().enumerate() {
+        let Block::Paragraph(p) = block else { continue };
+        let Some(&(anchor_x, anchor_y)) = para_first_xy.get(&pi) else { continue };
+
+        // pPrChange (paragraph-level).
+        if let Some(change) = &p.ppr_change {
+            if let Some(body) = describe_ppr_diff(change, p) {
+                let cid = format!("pprchange:{next_sequence}");
+                next_sequence += 1;
+                let author = change.author.clone().unwrap_or_default();
+                let color_idx = author_to_idx
+                    .get(author.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let body_lines = body
+                    .lines()
+                    .map(|l| (l.chars().count().max(1) + max_chars_per_line - 1) / max_chars_per_line)
+                    .sum::<usize>()
+                    .max(1);
+                // Same height accounting as R-05 balloons (chip + body + pads).
+                let line_height = 14.0;
+                let chip_h = 14.0;
+                let section_pad = 4.0;
+                let outer_pad = 8.0;
+                let balloon_height =
+                    outer_pad + chip_h + section_pad + body_lines as f32 * line_height + outer_pad;
+                pending.push(PendingPCBalloon {
+                    cid,
+                    author,
+                    author_color_index: color_idx,
+                    body,
+                    anchor_x,
+                    anchor_y,
+                    balloon_left,
+                    balloon_width,
+                    balloon_height,
+                    y: anchor_y,
+                });
+            }
+        }
+
+        // rPrChange (run-level). Multiple runs may carry rpr_change; each
+        // becomes its own balloon. fixture_09 has 1, fixture_14 has 1,
+        // multi-run fixtures fan out to N.
+        for run in &p.runs {
+            let Some(change) = &run.rpr_change else { continue };
+            let Some(prior_rstyle) = change.prior_run_style.as_deref() else { continue };
+            let Some(body) = describe_rpr_diff(prior_rstyle, &run.style) else { continue };
+            let cid = format!("rprchange:{next_sequence}");
+            next_sequence += 1;
+            let author = change.author.clone().unwrap_or_default();
+            let color_idx = author_to_idx
+                .get(author.as_str())
+                .copied()
+                .unwrap_or(0);
+            let body_lines = body
+                .lines()
+                .map(|l| (l.chars().count().max(1) + max_chars_per_line - 1) / max_chars_per_line)
+                .sum::<usize>()
+                .max(1);
+            let line_height = 14.0;
+            let chip_h = 14.0;
+            let section_pad = 4.0;
+            let outer_pad = 8.0;
+            let balloon_height =
+                outer_pad + chip_h + section_pad + body_lines as f32 * line_height + outer_pad;
+            pending.push(PendingPCBalloon {
+                cid,
+                author,
+                author_color_index: color_idx,
+                body,
+                anchor_x,
+                anchor_y,
+                balloon_left,
+                balloon_width,
+                balloon_height,
+                y: anchor_y,
+            });
+        }
+    }
+
+    if pending.is_empty() {
+        return;
+    }
+
+    // Stack to prevent overlap, same algorithm as R-05d.
+    pending.sort_by(|a, b| {
+        a.anchor_y
+            .partial_cmp(&b.anchor_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    {
+        let mut ys: Vec<(f32, f32)> = pending
+            .iter()
+            .map(|pb| (pb.anchor_y, pb.balloon_height))
+            .collect();
+        stack_balloon_ys(&mut ys, BALLOON_STACK_GAP);
+        for (pb, (resolved_y, _)) in pending.iter_mut().zip(ys.iter()) {
+            pb.y = *resolved_y;
+        }
+    }
+
+    for pb in pending {
+        let connector_color = COMMENT_HIGHLIGHT_TINT_PALETTE
+            [pb.author_color_index % COMMENT_HIGHLIGHT_TINT_PALETTE.len()]
+        .to_string();
+        let to_x = pb.balloon_left;
+        let to_y = pb.y + 5.0;
+        layout_page.elements.push(LayoutElement::new(
+            pb.anchor_x.min(to_x),
+            pb.anchor_y.min(to_y),
+            (to_x - pb.anchor_x).abs(),
+            (to_y - pb.anchor_y).abs(),
+            LayoutContent::BalloonConnector {
+                from_x: pb.anchor_x,
+                from_y: pb.anchor_y,
+                to_x,
+                to_y,
+                color_hex: connector_color,
+            },
+        ));
+        layout_page.elements.push(LayoutElement::new(
+            pb.balloon_left,
+            pb.y,
+            pb.balloon_width,
+            pb.balloon_height,
+            LayoutContent::Balloon {
+                comment_id: pb.cid,
+                author: pb.author,
+                author_color_index: pb.author_color_index,
+                resolved: true, // R-12 balloons are narrow regardless of underlying revision state
+                body: pb.body,
+                replies: Vec::new(),
+                anchor_x: pb.anchor_x,
+                anchor_y: pb.anchor_y,
+            },
+        ));
+    }
+}
+
 /// 6pt vertical gap between stacked balloons (R-05d). Approximate; Word's
 /// actual gap looks closer to 4-8pt depending on density. Pixel-tune in
 /// R-05g once GDI render lands and we can A/B compare.
@@ -1247,6 +1506,17 @@ impl LayoutEngine {
             for (layout_idx, layout_page) in pages.iter_mut().enumerate() {
                 let ir_idx = layout_to_ir_page[layout_idx];
                 emit_balloons_for_layout_page(layout_page, &doc_resolved, ir_idx);
+            }
+        }
+
+        // R-12 post-pass: emit narrow "Formatted: …" balloons for
+        // rPrChange / pPrChange revisions. Gated by show_comments (the
+        // margin-balloon column visibility toggle) — these are visually
+        // peer to comment balloons.
+        if self.show_comments {
+            for (layout_idx, layout_page) in pages.iter_mut().enumerate() {
+                let ir_idx = layout_to_ir_page[layout_idx];
+                emit_property_change_balloons_for_layout_page(layout_page, &doc_resolved, ir_idx);
             }
         }
 
