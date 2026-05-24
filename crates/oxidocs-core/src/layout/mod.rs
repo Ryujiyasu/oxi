@@ -605,6 +605,7 @@ fn emit_balloons_for_layout_page(
 ///        (vertical_align), Shading.
 /// S256 — Outline, Emboss, Imprint, Shadow, Hidden (vanish),
 ///        Double Strikethrough.
+/// S257 — Highlight, Position, Emphasis Mark.
 pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunStyle) -> Option<String> {
     let mut axes: Vec<String> = Vec::new();
     if prior.bold != current.bold {
@@ -677,6 +678,33 @@ pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunSt
     if prior.double_strikethrough != current.double_strikethrough {
         axes.push("Double Strikethrough".to_string());
     }
+    if prior.highlight != current.highlight {
+        if let Some(name) = current.highlight.as_deref() {
+            axes.push(format!("Highlight: {name}"));
+        } else {
+            axes.push("Highlight".to_string());
+        }
+    }
+    if prior.position != current.position {
+        if let Some(pos) = current.position {
+            // Word renders integer points plainly; show decimals when needed.
+            let label = if pos.fract().abs() < f32::EPSILON {
+                format!("Position: {}pt", pos as i32)
+            } else {
+                format!("Position: {pos}pt")
+            };
+            axes.push(label);
+        } else {
+            axes.push("Position".to_string());
+        }
+    }
+    if prior.emphasis_mark != current.emphasis_mark {
+        if let Some(mark) = current.emphasis_mark.as_deref() {
+            axes.push(format!("Emphasis Mark: {mark}"));
+        } else {
+            axes.push("Emphasis Mark".to_string());
+        }
+    }
     if axes.is_empty() {
         None
     } else {
@@ -695,6 +723,9 @@ pub fn describe_rpr_diff(prior: &crate::ir::RunStyle, current: &crate::ir::RunSt
 /// S255 — Alignment (from `prior_alignment`, which is stored outside
 ///        `prior_paragraph_style` because `Paragraph.alignment` is a
 ///        top-level IR field), Paragraph Shading.
+/// S257 — Keep With Next, Page Break Before, Widow/Orphan Control
+///        (inverted phrasing on turn-off), Right-to-Left (bidi),
+///        Text Alignment.
 pub fn describe_ppr_diff(change: &crate::ir::PropertyChange, current: &crate::ir::Paragraph) -> Option<String> {
     let mut axes: Vec<String> = Vec::new();
     if let Some(prior_pstyle) = change.prior_paragraph_style.as_deref() {
@@ -706,6 +737,33 @@ pub fn describe_ppr_diff(change: &crate::ir::PropertyChange, current: &crate::ir
                 axes.push(format!("Paragraph Shading: {hex}"));
             } else {
                 axes.push("Paragraph Shading".to_string());
+            }
+        }
+        if prior_pstyle.keep_next != current.style.keep_next {
+            axes.push("Keep With Next".to_string());
+        }
+        if prior_pstyle.page_break_before != current.style.page_break_before {
+            axes.push("Page Break Before".to_string());
+        }
+        if prior_pstyle.widow_control != current.style.widow_control {
+            // Inverted phrasing — fixture_26 turns widow_control OFF and
+            // expects "Not Widow/Orphan Control". The ON direction is
+            // (informally) the no-op default, so we always label the
+            // OFF state explicitly.
+            if !current.style.widow_control {
+                axes.push("Not Widow/Orphan Control".to_string());
+            } else {
+                axes.push("Widow/Orphan Control".to_string());
+            }
+        }
+        if prior_pstyle.bidi != current.style.bidi {
+            axes.push("Right-to-Left".to_string());
+        }
+        if prior_pstyle.text_alignment != current.style.text_alignment {
+            if let Some(val) = current.style.text_alignment.as_deref() {
+                axes.push(format!("Text Alignment: {val}"));
+            } else {
+                axes.push("Text Alignment".to_string());
             }
         }
     }

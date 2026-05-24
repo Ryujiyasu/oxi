@@ -1715,7 +1715,6 @@ fn fixture_18_layout_pprchange_paragraph_shading() {
 /// numPr through PropertyChange's prior_num_pr is a future R72-style
 /// 3-layer extension; R89 ships the simpler keep_* bool axes.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff keepNext axis not implemented"]
 fn fixture_19_layout_pprchange_keep_next() {
     let Some(bytes) = read_fixture("fixture_19_pPrChange_keep_next.docx") else {
         eprintln!("skipping: fixture_19 missing");
@@ -1944,7 +1943,6 @@ fn fixture_23_layout_rprchange_outline_emboss() {
 /// ON and text_alignment="top" in one pPrChange.
 #[test]
 #[allow(non_snake_case)]
-#[ignore = "pre-existing: describe_ppr_diff bidi/textAlign axes not implemented"]
 fn fixture_27_layout_pprchange_bidi_textAlign() {
     let Some(bytes) = read_fixture("fixture_27_pPrChange_bidi_textAlign.docx") else {
         eprintln!("skipping: fixture_27 missing");
@@ -1996,7 +1994,6 @@ fn fixture_27_layout_pprchange_bidi_textAlign() {
 /// page_break_before ON and widow_control OFF in one pPrChange.
 #[test]
 #[allow(non_snake_case)]
-#[ignore = "pre-existing: describe_ppr_diff pageBreak/widow axes not implemented"]
 fn fixture_26_layout_pprchange_pageBreak_widow() {
     let Some(bytes) = read_fixture("fixture_26_pPrChange_pageBreak_widow.docx") else {
         eprintln!("skipping: fixture_26 missing");
@@ -2047,7 +2044,6 @@ fn fixture_26_layout_pprchange_pageBreak_widow() {
 /// + emphasis_mark (3 user-visible Word props, Option-typed). fixture_25
 /// toggles all three in one rPrChange.
 #[test]
-#[ignore = "pre-existing: describe_ppr_diff highlight/position/em axes not implemented"]
 fn fixture_25_layout_rprchange_highlight_position_em() {
     let Some(bytes) = read_fixture("fixture_25_rPrChange_highlight_position.docx") else {
         eprintln!("skipping: fixture_25 missing");
