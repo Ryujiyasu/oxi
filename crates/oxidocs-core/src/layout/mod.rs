@@ -70,9 +70,8 @@ const REVISION_MOVE_COLOR: &str = "#2B6033";
 const COMMENT_HIGHLIGHT_TINT_PALETTE: [&str; 8] = [
     "#FAE6E7", // 0 — Alice, COM-confirmed
     "#EFEAF4", // 1 — Bob (derived from #5B2C90)
-    "#EAEFEA", // 2 — placeholder (slot 2 base is #478103 per R65; this tint is the
-               //     legacy derivation against the old #2B6033 conflation and awaits
-               //     re-derivation when a 3+author comments fixture forces it.)
+    "#E9F0E1", // 2 — derived from #478103 (R65 base correction, re-derived
+               //     in b2cedc6 via the 12/88 white-blend formula)
     "#FCEEE0", // 3 — derived from #ED7D31
     "#E8ECF6", // 4 — derived from #4472C4
     "#F2EAE4", // 5 — derived from #843C0C
@@ -107,7 +106,7 @@ pub fn comment_balloon_fill(author_color_index: usize, resolved: bool) -> &'stat
 const COMMENT_HIGHLIGHT_RESOLVED_PALETTE: [&str; 8] = [
     "#F1EDEC", // 0 — Alice resolved, COM-confirmed
     "#EFEEF1", // 1 — Bob resolved
-    "#EEEEEC", // 2 — derived green
+    "#EBEDE9", // 2 — derived from #E9F0E1 (R65 base correction)
     "#F2EDE6", // 3 — derived orange
     "#EBEDF1", // 4 — derived blue
     "#EFECEA", // 5 — derived brown
