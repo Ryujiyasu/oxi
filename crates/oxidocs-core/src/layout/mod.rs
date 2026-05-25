@@ -4451,8 +4451,18 @@ impl LayoutEngine {
             // actual rendering applies widow protection anyway — S281 found
             // Oxi is consistently 1 page ahead of Word starting at pi=20,
             // which is exactly a 1-line orphan that Word pushes to next page.
+            //
+            // S283 (2026-05-25): refined to only apply force-widow on paragraphs
+            // with ≥5 lines. Falsified hypothesis: "force widow on any 2+ line
+            // paragraph". d77a sample test showed 4-line paragraph pi=46
+            // (text "イは、編集・加工等の二次利用を行った") regressed: Word
+            // does NOT widow-protect it, but force_widow=1 pushed it forward,
+            // cascading 2 trailing empty paragraphs (pi=47, pi=48) to wrong
+            // page. The b837 win came from pi=20 (7 lines); threshold ≥5 keeps
+            // that win while leaving shorter paragraphs alone.
             let force_widow = std::env::var("OXI_FORCE_WIDOW").is_ok();
-            let widow_effective = para.style.widow_control || force_widow;
+            let widow_effective = para.style.widow_control
+                || (force_widow && lines.len() >= 5);
             let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2 {
                 if line_idx == 0 && !needs_page_break {
                     // Orphan: check if the next line would overflow — that would leave
