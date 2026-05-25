@@ -8789,13 +8789,18 @@ impl LayoutEngine {
                 }
 
                 elements = remaining;
-                // S269 Pattern A fix (env-gated, default off): replace geometric
-                // overflow with structural line_pitch snap matching Word's measured
-                // formula `body_y = last_cont_top + lh × (1 + trailing_empty)`. 4
-                // real-doc splits (d77a t5/t8/t10 + e3c545 t2) + CR_6 minimal repro
-                // confirm formula (residuals ≤ 1pt). Current geometric formula
-                // undercounts by ~1 line_pitch per wrap, causing -15pt/wrap drift
-                // (S264 d77a) and cascade through subsequent body paragraphs.
+                // S269 Pattern A fix (default ON since S269 part 7): replace
+                // geometric overflow with structural line_pitch snap matching
+                // Word's measured formula `body_y = last_cont_top + lh ×
+                // (1 + trailing_empty)`. 4 real-doc splits (d77a t5/t8/t10 +
+                // e3c545 t2) + CR_6 minimal repro confirm formula (residuals
+                // ≤ 1pt). Original geometric formula undercount ~1 line_pitch
+                // per wrap caused -15pt/wrap drift (S264 d77a) cascading
+                // through subsequent body paragraphs.
+                //
+                // Phase 1+2+SSIM verify all met before flipping default
+                // (commit dda9a58 + S269 part 6 SSIM measurement on multi-page
+                // baseline). OXI_PATTERN_A_DISABLE=1 opt-out for diagnostic.
                 //
                 // trailing_empty_count = max across row.cells of consecutive
                 // trailing empty paragraphs. v3 data shows boolean 0/1 (no doc
@@ -8813,7 +8818,8 @@ impl LayoutEngine {
                 //   (b) no-border layout tables (d4d126 31x4 border=false) where the row's
                 //       bottom is similarly determined by the longest cell's content
                 let allow_fix = row.cells.len() == 1 || !table.style.border;
-                if std::env::var("OXI_PATTERN_A_FIX").is_ok() && allow_fix {
+                let fix_disabled = std::env::var("OXI_PATTERN_A_DISABLE").is_ok();
+                if !fix_disabled && allow_fix {
                     let last_cont_top = elements.iter()
                         .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
                         .map(|e| e.y)
