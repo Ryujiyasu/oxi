@@ -8797,19 +8797,28 @@ impl LayoutEngine {
                 // undercounts by ~1 line_pitch per wrap, causing -15pt/wrap drift
                 // (S264 d77a) and cascade through subsequent body paragraphs.
                 //
-                // This env-gated version only handles the simple case (no
-                // trailing-empty cell paragraphs). Full trailing-empty count
-                // threading is deferred to a future session.
+                // trailing_empty_count = max across row.cells of consecutive
+                // trailing empty paragraphs. v3 data shows boolean 0/1 (no doc
+                // observed with 2+ trailing empties), but counting handles future
+                // cases. d77a t8/t10 + e3c545 t2 each have 1 trailing empty
+                // (formula ×2); CR_6 has 0 (formula ×1).
                 if std::env::var("OXI_PATTERN_A_FIX").is_ok() {
                     let last_cont_top = elements.iter()
                         .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
                         .map(|e| e.y)
                         .fold(f32::NEG_INFINITY, f32::max);
+                    let trailing_empty_count = row.cells.iter()
+                        .map(|cell| {
+                            cell.blocks.iter().rev()
+                                .take_while(|b| matches!(b, Block::Paragraph(p)
+                                    if p.runs.iter().all(|r| r.text.is_empty())))
+                                .count()
+                        })
+                        .max()
+                        .unwrap_or(0);
                     if last_cont_top.is_finite() {
                         if let Some(lh) = table_grid_pitch {
-                            // Simple case: cell ends with non-empty paragraph.
-                            // trailing_empty=0 → cursor = last_cont_top + lh.
-                            cursor.set(last_cont_top + lh);
+                            cursor.set(last_cont_top + lh * (1.0 + trailing_empty_count as f32));
                         } else {
                             // No docGrid: fallback to geometric.
                             let overflow_on_next = row_bottom - split_y;

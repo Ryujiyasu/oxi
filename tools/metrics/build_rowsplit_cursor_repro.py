@@ -177,6 +177,34 @@ def make_cr6():
     doc.save(OUT_DIR / "CR_6_adjustLineHeight_flag.docx")
 
 
+def make_cr7():
+    """S269 add: CR_6 with TRAILING EMPTY paragraph in cell. Mirrors
+    d77a t8/t10 + e3c545 t2 (3 of 4 real-doc splits). Word formula
+    predicts body = last_cont_top + lh × (1 + 1 trailing_empty) = +2×lh.
+    Without trailing-empty handling, Oxi would still place body at
+    last_cont_top + lh × 1 → -lh deficit."""
+    doc = build_base(filler_n=52)
+    add_adjust_line_height_in_table(doc)
+    text = "あ" * 2500 + "終"
+    table = doc.add_table(rows=1, cols=1)
+    set_table_borders_all(table)
+    cell = table.cell(0, 0)
+    # First para: long content
+    p = cell.paragraphs[0]
+    for r in list(p._p.findall(qn('w:r'))):
+        p._p.remove(r)
+    run = p.add_run(text)
+    set_run_gothic(run, pt=10.5)
+    # Trailing empty paragraph inside the same cell. Use an empty run rather
+    # than no run so Oxi's parser captures the Paragraph block. The runs are
+    # all-empty-text → trailing_empty_count detects it.
+    trail_p = cell.add_paragraph()
+    trail_run = trail_p.add_run("")
+    set_run_gothic(trail_run, pt=10.5)
+    add_body_para(doc, "AFTER_TABLE_BODY_PARA")
+    doc.save(OUT_DIR / "CR_7_trailing_empty.docx")
+
+
 if __name__ == "__main__":
     make_cr1()
     make_cr2()
@@ -184,6 +212,7 @@ if __name__ == "__main__":
     make_cr4()
     make_cr5()
     make_cr6()
+    make_cr7()
     print("Built:")
     for f in sorted(OUT_DIR.glob("*.docx")):
         print(" ", f.name)
