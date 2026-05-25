@@ -7547,10 +7547,27 @@ impl LayoutEngine {
                         // and 191cb (multi-cell narrow).
                         // S237 (2026-05-23): removed OXI_LEGACY_NO_CELL_HANG_INNER
                         // legacy env-var fallback during hardening pass.
+                        // S301 (2026-05-26): EXPERIMENTAL extension to subtract cell padding
+                        // from wrap budget for 2-cell-row hanging-indent paragraphs in
+                        // tblLayout="fixed" tables. COM-confirmed wins on 29dc6e (+0.035),
+                        // d4d126 (+0.124), 3a4f9fbe (+0.017) when enabled. Offset by small
+                        // regression on 191cb (-0.023) and a few other 2-cell fixed-layout
+                        // docs. Net-flat on the 55-doc Phase 2 gate (0.9558 → 0.9557 ≈ 0).
+                        // Kept env-gated OFF by default per the OXI_FORCE_WIDOW pattern —
+                        // future refinement may find a tighter discriminator (e.g. gridCol
+                        // count, paragraph style profile) that captures only the wins.
+                        //   OXI_S301_ENABLE=1 turns on the extended wrap-padding subtraction.
+                        // See `tools/fixtures/phase2_wrap_samples/v4..v7` for repros and
+                        // memory/session301_phase2_s301_attempt.md for COM data.
                         let cell_hang_inner = p_first_line_indent_raw < 0.0
                             && row.cells.len() == 1
                             && cell_w <= content_width;
-                        let wrap_base = if cell_hang_inner {
+                        let s301_layout_fixed = std::env::var("OXI_S301_ENABLE").is_ok()
+                            && table.style.layout.as_deref() == Some("fixed")
+                            && (pad_l + pad_r) > 0.0
+                            && row.cells.len() == 2
+                            && cell_w <= content_width;
+                        let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
