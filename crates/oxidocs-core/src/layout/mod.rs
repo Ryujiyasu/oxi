@@ -4461,17 +4461,20 @@ impl LayoutEngine {
             // page. The b837 win came from pi=20 (7 lines); threshold ≥5 keeps
             // that win while leaving shorter paragraphs alone.
             //
-            // S284 (2026-05-25): flipped to DEFAULT ON. Full widow-off corpus
-            // scan (61 docs with `<w:widowControl w:val="0"/>` in Normal
-            // style): 3 wins (b837 +4, db9ca1 +2, d77a +1), 58 neutral,
-            // **0 regressions**, net +7 page-match improvement. Non-widow-off
-            // docs (206) unaffected because `para.style.widow_control == true`
-            // already and `||` short-circuits — the threshold only matters
-            // when widow was explicitly disabled via the doc/style chain.
-            // Opt-out via OXI_FORCE_WIDOW_DISABLE=1 retained for diagnostic
-            // isolation (S269p7 / S277 hardening pattern).
-            let disable = std::env::var("OXI_FORCE_WIDOW_DISABLE").is_ok();
-            let force_widow = !disable;
+            // S284 attempt (2026-05-25): flipped to DEFAULT ON based on
+            // page-match improvement. REVERTED in S285: the page-match
+            // metric was misleading because Word's `.Range.Information`
+            // idx field is NOT document XML order — some paragraphs render
+            // OUT of idx order on the same page (e.g. b837 p2 has idx=22
+            // at y=160.5 and idx=21 at y=646.5 on the same page). The
+            // `idx = pi + 1` mapping inflated page-match counts. Actual
+            // Phase 2 IoU gate result with the fix ON:
+            //   b837   0.7466 → 0.4790  (-0.268, REGRESSION)
+            //   d77a   0.7719 → 0.9123  (+0.140, improvement)
+            //   db9ca1 0.9829 → 0.7945  (-0.188, REGRESSION)
+            // Net Phase 2 gate fails. Reverted to env-gated OPT-IN with
+            // OXI_FORCE_WIDOW=1; keep the ≥5-lines threshold from S283.
+            let force_widow = std::env::var("OXI_FORCE_WIDOW").is_ok();
             let widow_effective = para.style.widow_control
                 || (force_widow && lines.len() >= 5);
             let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2 {
