@@ -60,6 +60,20 @@ def set_section_docgrid(section, line_pitch_tw=360):
     sectPr.append(dg)
 
 
+def add_adjust_line_height_in_table(doc):
+    """Insert <w:adjustLineHeightInTable/> into settings.xml.
+    d77a + most real docs have this flag; python-docx omits by default.
+    Without it, Oxi (and Word, per Day 28 V70 measurement) renders cell
+    paragraphs at text_render_height instead of snapping to docGrid linePitch."""
+    settings = doc.settings.element
+    # Remove any existing one to avoid duplicates
+    for e in settings.findall(qn('w:adjustLineHeightInTable')):
+        settings.remove(e)
+    el = OxmlElement('w:adjustLineHeightInTable')
+    # Insert near the top of settings (after zoom/view if present)
+    settings.insert(0, el)
+
+
 def build_base(filler_n: int = 40):
     """Base doc: many fillers to push content near bottom."""
     doc = Document()
@@ -125,10 +139,51 @@ def make_cr3():
     doc.save(OUT_DIR / "CR_3_one_line_plus_empty.docx")
 
 
+def make_cr4():
+    """S269 add: content sized to force overflow in Oxi's CURRENT geometric
+    accounting (lines emitted at text_render_height=13.5pt for MS Gothic 10.5pt).
+    Need > 698/13.5 ≈ 51 lines × 43 chars/line ≈ 2200 chars worth in cell.
+    3500 chars ≈ 81 lines × 13.5 = 1094pt → forces multi-page row split."""
+    doc = build_base(filler_n=52)
+    text = "あ" * 3500 + "終"
+    add_table_with_long_para(doc, text)
+    add_body_para(doc, "AFTER_TABLE_BODY_PARA")
+    doc.save(OUT_DIR / "CR_4_multipage_content.docx")
+
+
+def make_cr5():
+    """S269 add: small filler so table starts mid-pg1 with enough free
+    space to bypass widow gate, content sized to overflow ~2 lines."""
+    doc = build_base(filler_n=30)
+    text = "あ" * 700 + "終"
+    add_table_with_long_para(doc, text)
+    add_body_para(doc, "AFTER_TABLE_BODY_PARA")
+    doc.save(OUT_DIR / "CR_5_no_widow_overflow.docx")
+
+
+def make_cr6():
+    """S269 add: CR_4 + <w:adjustLineHeightInTable/> flag (matches d77a).
+    With the flag, Oxi snaps cell lines to docGrid linePitch=18pt (per Day 28
+    V70). This is the proper d77a-equivalent minimal repro for Pattern A:
+    Bug #2 (mod.rs:8794 cursor.set geometric vs structural) without the
+    flag-absent cell-line-spacing divergence that confused CR_4 measurement."""
+    doc = build_base(filler_n=52)
+    add_adjust_line_height_in_table(doc)
+    # 2500 chars / 43 per line ≈ 58 lines × 18pt = 1044pt
+    # pg3 content area ≈ 698pt → ~38 lines fit, 20 overflow → multi-page split
+    text = "あ" * 2500 + "終"
+    add_table_with_long_para(doc, text)
+    add_body_para(doc, "AFTER_TABLE_BODY_PARA")
+    doc.save(OUT_DIR / "CR_6_adjustLineHeight_flag.docx")
+
+
 if __name__ == "__main__":
     make_cr1()
     make_cr2()
     make_cr3()
+    make_cr4()
+    make_cr5()
+    make_cr6()
     print("Built:")
     for f in sorted(OUT_DIR.glob("*.docx")):
         print(" ", f.name)

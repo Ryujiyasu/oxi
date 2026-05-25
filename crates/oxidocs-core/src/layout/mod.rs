@@ -8789,9 +8789,44 @@ impl LayoutEngine {
                 }
 
                 elements = remaining;
-                let overflow_on_next = row_bottom - split_y;
-                let pages_used = ((overflow_on_next) / content_height).floor() as usize;
-                cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                // S269 Pattern A fix (env-gated, default off): replace geometric
+                // overflow with structural line_pitch snap matching Word's measured
+                // formula `body_y = last_cont_top + lh × (1 + trailing_empty)`. 4
+                // real-doc splits (d77a t5/t8/t10 + e3c545 t2) + CR_6 minimal repro
+                // confirm formula (residuals ≤ 1pt). Current geometric formula
+                // undercounts by ~1 line_pitch per wrap, causing -15pt/wrap drift
+                // (S264 d77a) and cascade through subsequent body paragraphs.
+                //
+                // This env-gated version only handles the simple case (no
+                // trailing-empty cell paragraphs). Full trailing-empty count
+                // threading is deferred to a future session.
+                if std::env::var("OXI_PATTERN_A_FIX").is_ok() {
+                    let last_cont_top = elements.iter()
+                        .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
+                        .map(|e| e.y)
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    if last_cont_top.is_finite() {
+                        if let Some(lh) = table_grid_pitch {
+                            // Simple case: cell ends with non-empty paragraph.
+                            // trailing_empty=0 → cursor = last_cont_top + lh.
+                            cursor.set(last_cont_top + lh);
+                        } else {
+                            // No docGrid: fallback to geometric.
+                            let overflow_on_next = row_bottom - split_y;
+                            let pages_used = ((overflow_on_next) / content_height).floor() as usize;
+                            cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                        }
+                    } else {
+                        // No text on final page (border-only): geometric fallback.
+                        let overflow_on_next = row_bottom - split_y;
+                        let pages_used = ((overflow_on_next) / content_height).floor() as usize;
+                        cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                    }
+                } else {
+                    let overflow_on_next = row_bottom - split_y;
+                    let pages_used = ((overflow_on_next) / content_height).floor() as usize;
+                    cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                }
             } else {
                 // S200 (2026-05-22): visual/cursor decoupling for Word's per-row
                 // +0.5pt table row pitch overhead with sparse-content narrow gate.
