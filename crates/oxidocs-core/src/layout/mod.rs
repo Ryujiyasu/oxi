@@ -4610,12 +4610,16 @@ impl LayoutEngine {
                 // and rendering. RA repro (5 fns on one para) reproduces.
                 // Fix: walk forward from each captured run_idx through
                 // consecutive footnote_ref-bearing runs and append their ids.
-                // Env-gated DEFAULT OFF (S151/S239 pattern: dev → verify on
-                // full baseline → default on). RA/RD repros + b837 unchanged
-                // confirm correctness; full baseline verify pending. Set
-                // OXI_FN_REF_RUN_SWEEP=1 to enable.
-                let enable = std::env::var("OXI_FN_REF_RUN_SWEEP").is_ok();
-                if enable {
+                // S277 (2026-05-25): flipped to DEFAULT ON. Baseline scan
+                // (267 docs in tools/golden-test/documents/docx/) found ZERO
+                // paragraphs with 2+ adjacent fn-ref runs → fix is a no-op on
+                // baseline (no Phase 1/2/SSIM risk by construction). RA/RD
+                // minimal repros (5 and 10 adjacent fn-refs) confirm the fix
+                // renders all fns instead of silently dropping fns 2..N.
+                // Opt-out via OXI_FN_REF_RUN_SWEEP_DISABLE=1 retained for
+                // diagnostic isolation (S269 part 7 hardening pattern).
+                let disable = std::env::var("OXI_FN_REF_RUN_SWEEP_DISABLE").is_ok();
+                if !disable {
                     let captured: Vec<usize> = seen.clone();
                     for &captured_idx in &captured {
                         let mut i = captured_idx + 1;
