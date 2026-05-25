@@ -362,3 +362,152 @@ fn all_fifteen_fixtures_parse_without_error() {
             "{} should produce exactly 1 Block::Math", name);
     }
 }
+
+// =============================================================================
+// S293 — deeper content-level assertions on existing OMML fixtures.
+//
+// The fixture_NN_* tests above pin the OUTER variant (Fraction/Nary/Matrix/
+// Radical/etc.) and a small number of leaf properties. These additional tests
+// walk one level deeper into the structure to pin per-cell / per-operand /
+// per-radicand content, which would otherwise drift silently if the parser
+// later changes its inner-element handling.
+// =============================================================================
+
+fn text_of(e: &MathExpr) -> Option<&str> {
+    if let MathExpr::Text(s) = e { Some(s.as_str()) } else { None }
+}
+
+#[test]
+fn fixture_06_matrix_cells_contain_a_b_c_d() {
+    // 2×2 matrix with cells [['a', 'b'], ['c', 'd']] — pin each cell's text
+    // (previously only the matrix shape 2×2 was asserted).
+    let path = fixture_path("06_matrix_2x2.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("06_matrix_2x2.docx");
+    let MathExpr::Delimiter { content: inner, .. } = &content[0] else {
+        panic!("expected outer Delimiter");
+    };
+    let MathExpr::Matrix { rows, .. } = inner.as_ref() else {
+        panic!("expected Matrix inside Delimiter");
+    };
+    let expected = [["a", "b"], ["c", "d"]];
+    for (ri, row) in rows.iter().enumerate() {
+        for (ci, cell) in row.iter().enumerate() {
+            assert_eq!(text_of(cell), Some(expected[ri][ci]),
+                "matrix[{}][{}]", ri, ci);
+        }
+    }
+}
+
+#[test]
+fn fixture_12_quadratic_radical_contains_discriminant_structure() {
+    // The radicand inside the quadratic formula's √ is "b² - 4ac".
+    // This is rendered as Seq[Superscript(b, 2), Text(" - 4ac")].
+    // Pin both pieces so a future parser change to merge them into a single
+    // Text() would fail loudly.
+    let path = fixture_path("12_quadratic.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("12_quadratic.docx");
+    let MathExpr::Fraction { num, .. } = &content[1] else {
+        panic!("expected Fraction at content[1]");
+    };
+    let MathExpr::Seq(items) = num.as_ref() else {
+        panic!("expected Seq numerator");
+    };
+    let MathExpr::Radical { radicand, .. } = &items[1] else {
+        panic!("expected Radical at numerator[1]");
+    };
+    let MathExpr::Seq(radicand_items) = radicand.as_ref() else {
+        panic!("expected Seq inside radicand, got {:?}", radicand);
+    };
+    assert_eq!(radicand_items.len(), 2,
+        "radicand has 2 elements: b² and ' - 4ac'");
+    let MathExpr::Superscript { base, sup } = &radicand_items[0] else {
+        panic!("radicand[0] should be Superscript (b²)");
+    };
+    assert_eq!(text_of(base), Some("b"));
+    assert_eq!(text_of(sup), Some("2"));
+    assert_eq!(text_of(&radicand_items[1]), Some(" - 4ac"));
+}
+
+#[test]
+fn fixture_14_gaussian_integrand_is_e_to_negative_x_with_dx() {
+    // ∫_{-∞}^{∞} e^{-x} dx = √π
+    // (The actual gaussian integral uses e^{-x²}, but this fixture is the
+    // simplified e^{-x} form. Either way: integrand is Seq[Superscript(e,
+    // -x), " dx"], and the right-hand side equals √π.)
+    let path = fixture_path("14_gaussian.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("14_gaussian.docx");
+    let MathExpr::Nary { operand, .. } = &content[0] else {
+        panic!("expected Nary at content[0]");
+    };
+    let MathExpr::Seq(items) = operand.as_ref() else {
+        panic!("integrand should be Seq");
+    };
+    let MathExpr::Superscript { base, sup } = &items[0] else {
+        panic!("integrand[0] should be e^{{-x}} Superscript");
+    };
+    assert_eq!(text_of(base), Some("e"));
+    assert_eq!(text_of(sup), Some("-x"));
+    assert_eq!(text_of(&items[1]), Some(" dx"));
+    // RHS = √π
+    let MathExpr::Radical { radicand, degree } = &content[2] else {
+        panic!("content[2] should be Radical");
+    };
+    assert!(degree.is_none(), "RHS √ has no degree");
+    assert_eq!(text_of(radicand), Some("π"));
+}
+
+#[test]
+fn fixture_15_sum_series_operand_is_one_over_n_squared() {
+    // ∑_{n=1}^{∞} 1/n² = π²/6
+    // Pin: operand fraction is 1 / n², RHS fraction is π² / 6.
+    let path = fixture_path("15_sum_series.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("15_sum_series.docx");
+    let MathExpr::Nary { operand, .. } = &content[0] else {
+        panic!("expected Nary at content[0]");
+    };
+    let MathExpr::Fraction { num, den, .. } = operand.as_ref() else {
+        panic!("operand should be Fraction");
+    };
+    // Numerator = "1"
+    assert_eq!(text_of(num), Some("1"), "operand numerator");
+    // Denominator = n²
+    let MathExpr::Superscript { base, sup } = den.as_ref() else {
+        panic!("operand denominator should be Superscript n^2, got {:?}", den);
+    };
+    assert_eq!(text_of(base), Some("n"));
+    assert_eq!(text_of(sup), Some("2"));
+
+    // RHS = π² / 6
+    let MathExpr::Fraction { num: rnum, den: rden, .. } = &content[2] else {
+        panic!("content[2] should be Fraction");
+    };
+    let MathExpr::Superscript { base, sup } = rnum.as_ref() else {
+        panic!("RHS numerator should be π²");
+    };
+    assert_eq!(text_of(base), Some("π"));
+    assert_eq!(text_of(sup), Some("2"));
+    assert_eq!(text_of(rden), Some("6"));
+}
+
+#[test]
+fn fixture_05_nary_sum_handles_complete_summand_structure() {
+    // Existing test pins sub="i=1", sup="n", operand="i". Add depth: the
+    // outer fixture is the full ∑_{i=1}^{n} i = n(n+1)/2 expression? No,
+    // this fixture is just the LHS ∑_{i=1}^{n} i. Pin that the full
+    // content.len()==1 (no RHS) and the operator is the correct unicode
+    // n-ary summation, not a regular Σ codepoint.
+    let path = fixture_path("05_nary_sum.docx");
+    if !path.exists() { return; }
+    let content = load_display_content("05_nary_sum.docx");
+    assert_eq!(content.len(), 1, "summand has no RHS");
+    let MathExpr::Nary { op, .. } = &content[0] else {
+        panic!("expected Nary");
+    };
+    // U+2211 N-ARY SUMMATION (not U+03A3 Greek capital sigma)
+    assert_eq!(*op as u32, 0x2211,
+        "summation operator must be U+2211, got U+{:04X}", *op as u32);
+}
