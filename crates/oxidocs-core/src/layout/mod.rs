@@ -4598,6 +4598,37 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // S276 (2026-05-25): fn-ref run adjacent-merge fix. After
+                // renumber_note_refs rewrites <w:footnoteReference w:id="N"/>
+                // markers to single-digit text ("1","2","3",...), adjacent
+                // fn-ref runs collapse into a single LineFragment in the
+                // line-break loop (word_run_index is only set at word START,
+                // not within a word; consecutive digit runs merge as a single
+                // "word"). Result: only the FIRST fn-ref's run_index appears
+                // in line.fragments; subsequent fn-refs are invisible to the
+                // attribution loop above, silently dropping their reservation
+                // and rendering. RA repro (5 fns on one para) reproduces.
+                // Fix: walk forward from each captured run_idx through
+                // consecutive footnote_ref-bearing runs and append their ids.
+                // Env-gated DEFAULT OFF (S151/S239 pattern: dev → verify on
+                // full baseline → default on). RA/RD repros + b837 unchanged
+                // confirm correctness; full baseline verify pending. Set
+                // OXI_FN_REF_RUN_SWEEP=1 to enable.
+                let enable = std::env::var("OXI_FN_REF_RUN_SWEEP").is_ok();
+                if enable {
+                    let captured: Vec<usize> = seen.clone();
+                    for &captured_idx in &captured {
+                        let mut i = captured_idx + 1;
+                        while i < para.runs.len() {
+                            if let Some(id) = para.runs[i].footnote_ref {
+                                if !bucket.contains(&id) { bucket.push(id); }
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
