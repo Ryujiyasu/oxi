@@ -4445,7 +4445,15 @@ impl LayoutEngine {
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
             // check if only 1 line would fit on this page — if so, push the
             // entire paragraph to the next page.
-            let widow_orphan_break = if !in_textbox && para.style.widow_control && lines.len() >= 2 {
+            // S282 (2026-05-25): experimental env-gate OXI_FORCE_WIDOW=1 to
+            // apply widow protection regardless of para.style.widow_control.
+            // b837 has <w:widowControl w:val="0"/> in Normal style but Word's
+            // actual rendering applies widow protection anyway — S281 found
+            // Oxi is consistently 1 page ahead of Word starting at pi=20,
+            // which is exactly a 1-line orphan that Word pushes to next page.
+            let force_widow = std::env::var("OXI_FORCE_WIDOW").is_ok();
+            let widow_effective = para.style.widow_control || force_widow;
+            let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2 {
                 if line_idx == 0 && !needs_page_break {
                     // Orphan: check if the next line would overflow — that would leave
                     // only 1 line on this page. Push entire paragraph to next page.
