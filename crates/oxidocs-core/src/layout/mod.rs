@@ -4460,7 +4460,18 @@ impl LayoutEngine {
             // cascading 2 trailing empty paragraphs (pi=47, pi=48) to wrong
             // page. The b837 win came from pi=20 (7 lines); threshold ≥5 keeps
             // that win while leaving shorter paragraphs alone.
-            let force_widow = std::env::var("OXI_FORCE_WIDOW").is_ok();
+            //
+            // S284 (2026-05-25): flipped to DEFAULT ON. Full widow-off corpus
+            // scan (61 docs with `<w:widowControl w:val="0"/>` in Normal
+            // style): 3 wins (b837 +4, db9ca1 +2, d77a +1), 58 neutral,
+            // **0 regressions**, net +7 page-match improvement. Non-widow-off
+            // docs (206) unaffected because `para.style.widow_control == true`
+            // already and `||` short-circuits — the threshold only matters
+            // when widow was explicitly disabled via the doc/style chain.
+            // Opt-out via OXI_FORCE_WIDOW_DISABLE=1 retained for diagnostic
+            // isolation (S269p7 / S277 hardening pattern).
+            let disable = std::env::var("OXI_FORCE_WIDOW_DISABLE").is_ok();
+            let force_widow = !disable;
             let widow_effective = para.style.widow_control
                 || (force_widow && lines.len() >= 5);
             let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2 {
