@@ -8802,7 +8802,18 @@ impl LayoutEngine {
                 // observed with 2+ trailing empties), but counting handles future
                 // cases. d77a t8/t10 + e3c545 t2 each have 1 trailing empty
                 // (formula ×2); CR_6 has 0 (formula ×1).
-                if std::env::var("OXI_PATTERN_A_FIX").is_ok() {
+                // S269 part 5: gate fix on (single-column rows) OR (no-border tables).
+                // Multi-col bordered tables (ed025 10x4 / b35123 13x2 etc.) show
+                // -0.29/-0.33 IoU regression with fix because cell-wise trailing_empty
+                // in shorter cells doesn't translate to row-bottom advance — longer
+                // cells already determine the row geometry. The structural formula
+                // `last_cont_top + lh × (1+te)` was derived from 1x1 (d77a t5/t8/t10 +
+                // e3c545 t2) and generalizes cleanly to:
+                //   (a) single-column N-row tables where each row's cell determines bottom
+                //   (b) no-border layout tables (d4d126 31x4 border=false) where the row's
+                //       bottom is similarly determined by the longest cell's content
+                let allow_fix = row.cells.len() == 1 || !table.style.border;
+                if std::env::var("OXI_PATTERN_A_FIX").is_ok() && allow_fix {
                     let last_cont_top = elements.iter()
                         .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
                         .map(|e| e.y)
