@@ -1514,6 +1514,19 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if !ds.auto_space_dn {
                 style.auto_space_dn = false;
             }
+            // S301 (2026-05-26) symmetric fix: inherit word_wrap from style
+            // (false overrides default true). Mirrors snap_to_grid /
+            // auto_space_de / auto_space_dn. Style "ac" (一太郎) used by
+            // 29dc6e / d4d126 / etc. sets `<w:wordWrap w:val="0"/>` to enable
+            // CJK-aware break-anywhere wrap. Without this inheritance, the
+            // S301 wrap-padding discriminator (`!para.style.word_wrap`) could
+            // not distinguish 29dc6e (style "ac", wordWrap=0) from 191cb
+            // (no pStyle, wordWrap=true) — both ended up `word_wrap=true` in
+            // the IR despite Word's actual behavior diverging on exactly
+            // that property.
+            if !ds.word_wrap {
+                style.word_wrap = false;
+            }
         }
     }
 
