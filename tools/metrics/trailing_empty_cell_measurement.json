@@ -1,0 +1,22 @@
+{
+  "v1_text_only.docx": {
+    "word_y": 120.0,
+    "oxi_y": 119.9,
+    "dy": -0.09999999999999432
+  },
+  "v2_text_plus_empty.docx": {
+    "word_y": 131.25,
+    "oxi_y": 131.5,
+    "dy": 0.25
+  },
+  "v3_text_plus_2empty.docx": {
+    "word_y": 143.25,
+    "oxi_y": 143.1,
+    "dy": -0.15000000000000568
+  },
+  "v4_only_empty.docx": {
+    "word_y": 96.75,
+    "oxi_y": 96.6,
+    "dy": -0.15000000000000568
+  }
+}

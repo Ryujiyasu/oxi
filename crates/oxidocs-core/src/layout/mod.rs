@@ -8922,10 +8922,47 @@ impl LayoutEngine {
                         if let Some(lh) = table_grid_pitch {
                             cursor.set(last_cont_top + lh * (1.0 + trailing_empty_count as f32));
                         } else {
-                            // No docGrid: fallback to geometric.
-                            let overflow_on_next = row_bottom - split_y;
-                            let pages_used = ((overflow_on_next) / content_height).floor() as usize;
-                            cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                            // S304 (2026-05-26): no-docGrid extension of Pattern A.
+                            // When docGrid is absent, derive `lh` from the last text
+                            // element's own height. Same formula shape — cursor lands
+                            // at last_cont_top + lh × (1 + trailing_empty) — so the
+                            // body content that follows the table starts at last
+                            // text's bottom + trailing-empty space (if any).
+                            //
+                            // The pre-fix geometric formula at `row_bottom - split_y`
+                            // undercounts when many wrap lines overflow to the next
+                            // page (`row_height` derived from cell content stays in
+                            // line-pitch units while `row_bottom - split_y` collapses
+                            // page-fold geometry). e3c545 LOD code listing (1×1 table,
+                            // 70+ lines, no docGrid) showed a uniform -11pt cursor
+                            // drift on p6 → cascades 12-15pt across 24 body
+                            // paragraphs (S304 diagnosis).
+                            //
+                            // OXI_PATTERN_A_DISABLE (parent block guard) disables
+                            // this together with the docGrid path. Allow_fix gate
+                            // (row.cells.len() == 1 || !table.style.border) confines
+                            // the change to the same cell topologies as S269.
+                            let last_cont_h: f32 = elements.iter()
+                                .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
+                                .filter(|e| (e.y - last_cont_top).abs() < 0.5)
+                                .map(|e| e.height)
+                                .fold(0.0_f32, f32::max);
+                            if last_cont_h > 0.0 {
+                                cursor.set(
+                                    last_cont_top
+                                        + last_cont_h
+                                            * (1.0 + trailing_empty_count as f32),
+                                );
+                            } else {
+                                let overflow_on_next = row_bottom - split_y;
+                                let pages_used =
+                                    ((overflow_on_next) / content_height).floor() as usize;
+                                cursor.set(
+                                    page_top
+                                        + overflow_on_next
+                                        - (pages_used as f32 * content_height),
+                                );
+                            }
                         }
                     } else {
                         // No text on final page (border-only): geometric fallback.
