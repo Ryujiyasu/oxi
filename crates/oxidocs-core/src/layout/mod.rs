@@ -5232,7 +5232,28 @@ impl LayoutEngine {
                 let cell_aligned = cell_remainder < 10 || cell_remainder > pitch_tw_i - 10;
                 let target_tw = if cell_aligned {
                     // Cell-aligned (or near-aligned): pre-R56 absolute formula
-                    let k = offset / pitch_tw_i;
+                    //
+                    // S324 (2026-05-26) — env-gated fix for cell-near-boundary
+                    // case. R56c treats both <10tw (after cell start) and
+                    // >pitch-10tw (before next cell) as "aligned", but the
+                    // formula `(k + cells) * pitch` assumes cur is at cell-k
+                    // start. For cur "near NEXT cell start" (cell_rem >
+                    // pitch-10), this UNDERSHOOTS by 1 cell — cursor stays
+                    // at cur+~0pt instead of advancing one line. d1e8ac8
+                    // para 11→12 trace: cur_tw=5780 cell_rem=284 → target
+                    // 5790 (+0.5pt) instead of 6080 (+15pt). With S324_FIX,
+                    // k is incremented when cell_rem > pitch-10. R56's
+                    // "cur slightly past cell start" case (cell_rem<10)
+                    // is preserved.
+                    let s324_fix = std::env::var("OXI_S324_FIX_CELL_BOUNDARY")
+                        .map(|v| v != "0" && v != "false")
+                        .unwrap_or(false);
+                    let k_raw = offset / pitch_tw_i;
+                    let k = if s324_fix && cell_remainder > pitch_tw_i - 10 {
+                        k_raw + 1
+                    } else {
+                        k_raw
+                    };
                     let target_n = k + cells;
                     ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10
                 } else {
