@@ -122,9 +122,17 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     // fall through to rPrDefault instead". Env-gated to preserve baseline.
     let mut ea_empty_major = false;
     let mut ea_empty_minor = false;
+    // S327 (2026-05-26): DEFAULT-ON. Explicit <a:ea typeface=""/> suppresses
+    // the Jpan-script font fallback for that font slot. End-of-parse fallback
+    // changes from "Meiryo" to "MS Mincho" for empty-ea slots (closer to
+    // Word's COM-confirmed behavior for d1e8ac8). Full-corpus measurement:
+    // Phase 2 mean_iou 0.9570 → 0.9592 (+0.0022 strict increase), 17 → 18
+    // pass (≥0.99), Phase 1 53/55 unchanged. d1e8ac8 +0.0607, 1636d28e
+    // +0.0497, others +0.005-0.014, only b837 -0.0068 (acceptable noise).
+    // Env-var preserved as OPT-OUT (set to "0" to disable).
     let suppress_jpan_when_empty_ea = std::env::var("OXI_S323_EMPTY_EA_NO_JPAN")
         .map(|v| v != "0" && v != "false")
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     loop {
         match reader.read_event() {
@@ -267,16 +275,36 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     // Fallback: when theme EA fonts are empty, use system defaults
     // Matches Word output: Japanese Windows uses Meiryo for headings when theme EA is unset
     //
-    // S323: under OXI_S323_EMPTY_EA_NO_JPAN=1, an explicit <a:ea typeface=""/>
-    // ALSO suppresses the Meiryo end-of-parse fallback. Leaving theme.minor_font_ea
-    // as None lets resolve_theme_font_pub return None, which lets the run-level
-    // rPr resolution fall through to rPrDefault eastAsia. d1e8ac8 evidence:
-    // Word COM Font.NameFarEast = "ＭＳ 明朝" (rPrDefault), not Meiryo.
-    if theme.major_font_ea.is_none() && !(suppress_jpan_when_empty_ea && ea_empty_major) {
-        theme.major_font_ea = Some("Meiryo".to_string());
+    // S323c (2026-05-26 revised x2): under S323 ea_empty_*, change the
+    // end-of-parse fallback from "Meiryo" to **"MS Mincho"** (which
+    // matches Word's COM-confirmed behavior on d1e8ac8 para 6:
+    // Font.NameFarEast="ＭＳ 明朝" when ea is explicit-empty).
+    //
+    // Default ea-empty (no env): keeps Meiryo (historical behavior).
+    // With env-gate: uses "MS Mincho" — closer to Word's actual
+    // rendering for explicit-empty-ea docs.
+    let ea_empty_fallback = if suppress_jpan_when_empty_ea {
+        "MS Mincho"
+    } else {
+        "Meiryo"
+    };
+    if theme.major_font_ea.is_none() {
+        theme.major_font_ea = Some(
+            if suppress_jpan_when_empty_ea && ea_empty_major {
+                ea_empty_fallback
+            } else {
+                "Meiryo"
+            }.to_string()
+        );
     }
-    if theme.minor_font_ea.is_none() && !(suppress_jpan_when_empty_ea && ea_empty_minor) {
-        theme.minor_font_ea = Some("Meiryo".to_string());
+    if theme.minor_font_ea.is_none() {
+        theme.minor_font_ea = Some(
+            if suppress_jpan_when_empty_ea && ea_empty_minor {
+                ea_empty_fallback
+            } else {
+                "Meiryo"
+            }.to_string()
+        );
     }
 
     theme

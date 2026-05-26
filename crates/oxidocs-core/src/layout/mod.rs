@@ -5245,9 +5245,10 @@ impl LayoutEngine {
                     // k is incremented when cell_rem > pitch-10. R56's
                     // "cur slightly past cell start" case (cell_rem<10)
                     // is preserved.
+                    // S327 DEFAULT-ON. Env-var preserved as OPT-OUT.
                     let s324_fix = std::env::var("OXI_S324_FIX_CELL_BOUNDARY")
                         .map(|v| v != "0" && v != "false")
-                        .unwrap_or(false);
+                        .unwrap_or(true);
                     let k_raw = offset / pitch_tw_i;
                     let k = if s324_fix && cell_remainder > pitch_tw_i - 10 {
                         k_raw + 1
@@ -5261,9 +5262,10 @@ impl LayoutEngine {
                     // padding was the source of the +0.5pt/line cascade
                     // accumulating across paragraphs after S324 corrected
                     // the missing-cell advance.
+                    // S327 DEFAULT-ON. Env-var preserved as OPT-OUT.
                     let s325_fix = std::env::var("OXI_S325_PROPER_CEIL")
                         .map(|v| v != "0" && v != "false")
-                        .unwrap_or(false);
+                        .unwrap_or(true);
                     if s325_fix {
                         let raw = margin_tw + target_n * pitch_tw_i;
                         if raw % 10 == 0 { raw } else { (raw / 10 + 1) * 10 }
@@ -5279,9 +5281,10 @@ impl LayoutEngine {
                     // CLAUDE.md S301 first attempt showed CEIL→ROUND was
                     // catastrophic STANDALONE, but the cascade-broken state
                     // after S324+S325 may make ROUND viable.
+                    // S327 DEFAULT-ON. Env-var preserved as OPT-OUT.
                     let s326_round = std::env::var("OXI_S326_MID_CELL_ROUND")
                         .map(|v| v != "0" && v != "false")
-                        .unwrap_or(false);
+                        .unwrap_or(true);
                     let raw = cur_tw + cells * pitch_tw_i;
                     if s326_round {
                         // ROUND-half-up to 10tw: (x + 5) / 10 * 10
