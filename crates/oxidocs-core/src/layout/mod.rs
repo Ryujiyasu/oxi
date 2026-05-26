@@ -5255,7 +5255,21 @@ impl LayoutEngine {
                         k_raw
                     };
                     let target_n = k + cells;
-                    ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10
+                    // S325 (2026-05-26): when S324 is on, ALSO change the
+                    // cell_aligned padding from always-+10tw to proper
+                    // ceiling (matches mid-cell branch). The always-+10tw
+                    // padding was the source of the +0.5pt/line cascade
+                    // accumulating across paragraphs after S324 corrected
+                    // the missing-cell advance.
+                    let s325_fix = std::env::var("OXI_S325_PROPER_CEIL")
+                        .map(|v| v != "0" && v != "false")
+                        .unwrap_or(false);
+                    if s325_fix {
+                        let raw = margin_tw + target_n * pitch_tw_i;
+                        if raw % 10 == 0 { raw } else { (raw / 10 + 1) * 10 }
+                    } else {
+                        ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10
+                    }
                 } else {
                     // Mid-cell from irregular predecessor: cursor-relative +
                     // proper ceiling (no 10tw over-shoot)
