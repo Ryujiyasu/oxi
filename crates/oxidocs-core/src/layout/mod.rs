@@ -8243,7 +8243,74 @@ impl LayoutEngine {
                             } else { all_have_h = false; break; }
                         }
                         if all_have_h {
-                            effective_row_h = effective_row_h.max(span_h);
+                            // S305 (2026-05-26) [opt-in via OXI_S305_ENABLE]:
+                            // for the trHeight-declared path, use natural row
+                            // height as an atLeast floor when content overflow
+                            // is detected on any subsequent row. Pre-fix path
+                            // (default) sums declared trHeight only.
+                            //
+                            // Wins (when enabled): 31420af1a08f mean_iou
+                            // 0.8697 → 0.9471 (+0.0774) — cell (7,1)/(9,1)
+                            // "物理的管理措置"/"技術的管理措置" vMerge=restart
+                            // headers move from cell top to merged-span center
+                            // matching Word.
+                            //
+                            // Losses (why kept opt-in): 3a4f9fbe1a83 and
+                            // ed025cbecffb regress Phase 1 pagination (PASS
+                            // → FAIL, 39 + 1 paragraph page_delta=-1) when
+                            // the gate fires on their tables — the relaxed
+                            // span height moves a row's vMerge content far
+                            // enough that downstream layout cascades push a
+                            // few paragraphs to earlier pages. Need a tighter
+                            // discriminator before flipping default.
+                            let opt_in = std::env::var("OXI_S305_ENABLE").is_ok();
+                            const OVERFLOW_GATE_PT: f32 = 20.0;
+                            let mut should_relax = false;
+                            if opt_in {
+                                for ri in (row_idx + 1)..(row_idx + span_count) {
+                                    let r = &table.rows[ri];
+                                    if let (Some(h), rule) = (r.height, r.height_rule.as_deref()) {
+                                        if rule == Some("exact") { continue; }
+                                        let nat = self.estimate_table_row_natural_h(
+                                            r, &col_widths,
+                                            default_pad_l, default_pad_r,
+                                            default_pad_t, default_pad_b,
+                                            table, table_grid_pitch,
+                                            grid_char_pitch, grid_char_cw_ratio,
+                                        );
+                                        if nat > h + OVERFLOW_GATE_PT {
+                                            should_relax = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if should_relax {
+                                let mut relaxed_span_h: f32 = 0.0;
+                                for ri in row_idx..(row_idx + span_count) {
+                                    let r = &table.rows[ri];
+                                    let eff_h = if ri == row_idx {
+                                        effective_row_h
+                                    } else {
+                                        let nat = self.estimate_table_row_natural_h(
+                                            r, &col_widths,
+                                            default_pad_l, default_pad_r,
+                                            default_pad_t, default_pad_b,
+                                            table, table_grid_pitch,
+                                            grid_char_pitch, grid_char_cw_ratio,
+                                        );
+                                        match (r.height, r.height_rule.as_deref()) {
+                                            (Some(h), Some("exact")) => h,
+                                            (Some(h), _) => nat.max(h),
+                                            (None, _) => nat,
+                                        }
+                                    };
+                                    relaxed_span_h += eff_h;
+                                }
+                                effective_row_h = effective_row_h.max(relaxed_span_h);
+                            } else {
+                                effective_row_h = effective_row_h.max(span_h);
+                            }
                         } else {
                             // S218 relax: compute span height when trHeight missing.
                             // S222 (2026-05-23): for row_idx, use the already-computed
