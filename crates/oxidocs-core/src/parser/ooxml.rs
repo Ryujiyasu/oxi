@@ -5190,6 +5190,28 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                     "p" if depth == 0 => {
                         let pr = parse_paragraph(reader, ctx, styles)?;
                         blocks.push(Block::Paragraph(pr.paragraph));
+                        // S331 (2026-05-26): forward inline images from cell
+                        // paragraphs so cell height includes drawing. Body-level
+                        // parser does this at line 736/781; cell parser was
+                        // dropping pr.inline_images, pr.math_blocks etc.,
+                        // causing cells with inline drawings to be shorter than
+                        // Word renders them. Env-gated default OFF until
+                        // corpus measurement confirms net improvement.
+                        if std::env::var("OXI_S331_CELL_INLINE_IMG").as_deref() == Ok("1") {
+                            for mb in pr.math_blocks {
+                                blocks.push(Block::Math(mb));
+                            }
+                            blocks.extend(pr.inline_images);
+                            // S331b (2026-05-26): also forward floating (anchored)
+                            // drawings as Block::Image so cell height accounts
+                            // for them. Word wraps anchored drawings inside
+                            // cells differently from body (wrap=topAndBottom
+                            // is dominant inside cells), so treating them as
+                            // inline-flow images is a reasonable approximation.
+                            for fimg in pr.floating_images {
+                                blocks.push(Block::Image(fimg));
+                            }
+                        }
                     }
                     "tbl" if depth == 0 => {
                         let table = parse_table(reader, ctx, styles)?;

@@ -7190,6 +7190,18 @@ impl LayoutEngine {
                                 cell_content_h_visual += nr_h;
                             }
                         }
+                        Block::Image(img) => {
+                            // S331 (2026-05-26): account for inline drawing
+                            // height in cell. Pairs with parser fix at
+                            // parser/ooxml.rs:5190 (forwards pr.inline_images
+                            // to cell.blocks). Without this, cell height
+                            // calculation ignores the drawing → cell renders
+                            // shorter than Word → downstream content cascades
+                            // to wrong page. Gated by parser-side env so this
+                            // arm only matches when fix is active.
+                            cell_content_h += img.height;
+                            cell_content_h_visual += img.height;
+                        }
                         _ => {}
                     }
                 }
