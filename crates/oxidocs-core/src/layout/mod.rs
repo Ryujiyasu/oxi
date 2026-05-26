@@ -5271,10 +5271,26 @@ impl LayoutEngine {
                         ((margin_tw + target_n * pitch_tw_i) / 10 + 1) * 10
                     }
                 } else {
-                    // Mid-cell from irregular predecessor: cursor-relative +
-                    // proper ceiling (no 10tw over-shoot)
+                    // Mid-cell from irregular predecessor: cursor-relative.
+                    //
+                    // S326 (2026-05-26) env-gated: change CEIL → ROUND-half-up.
+                    // Even with proper ceiling, raw=5772 → 5780 (+8tw)
+                    // accumulates ~0.5pt/paragraph over many lines.
+                    // CLAUDE.md S301 first attempt showed CEIL→ROUND was
+                    // catastrophic STANDALONE, but the cascade-broken state
+                    // after S324+S325 may make ROUND viable.
+                    let s326_round = std::env::var("OXI_S326_MID_CELL_ROUND")
+                        .map(|v| v != "0" && v != "false")
+                        .unwrap_or(false);
                     let raw = cur_tw + cells * pitch_tw_i;
-                    if raw % 10 == 0 { raw } else { (raw / 10 + 1) * 10 }
+                    if s326_round {
+                        // ROUND-half-up to 10tw: (x + 5) / 10 * 10
+                        ((raw + 5) / 10) * 10
+                    } else if raw % 10 == 0 {
+                        raw
+                    } else {
+                        (raw / 10 + 1) * 10
+                    }
                 };
                 cursor.set(target_tw as f32 / 20.0);
                 cumul_line_idx += cells as usize;
