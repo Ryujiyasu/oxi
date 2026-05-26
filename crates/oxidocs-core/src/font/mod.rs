@@ -248,13 +248,33 @@ impl FontMetrics {
     ///
     /// See tools/metrics/verify_exact_cjk.py for the measurement script.
     pub fn is_cjk_83_64_font(&self) -> bool {
-        matches!(
-            self.family.as_str(),
-            "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
-                | "Yu Gothic Regular" | "Yu Gothic Bold"
-                | "Yu Mincho Regular" | "Yu Mincho Demibold"
-                | "Meiryo"
-        )
+        // S322 (2026-05-26) — env-gated EXCLUDE Yu Mincho/Yu Gothic from
+        // the 83/64 list to test the hypothesis: Yu* fonts have natural
+        // win_a+win_d/upm ≈ 1.287 (already tall enough), while MS Mincho/
+        // MS Gothic have ratio 1.0 (need 83/64 multiplier to reach Word's
+        // rendered line height). d1e8ac8 evidence: Yu Mincho 11pt should
+        // be ~14.5pt (Word), not 18.5pt (current 83/64 Oxi). Yu Gothic's
+        // historical 17.55pt @ 10.5pt validation may have been from a
+        // different scenario or single-run-explicit-rFonts case.
+        // Default OFF preserves baseline; OXI_S322_EXCLUDE_YU=1 to test.
+        let exclude_yu = std::env::var("OXI_S322_EXCLUDE_YU")
+            .map(|v| v != "0" && v != "false")
+            .unwrap_or(false);
+        if exclude_yu {
+            matches!(
+                self.family.as_str(),
+                "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
+                    | "Meiryo"
+            )
+        } else {
+            matches!(
+                self.family.as_str(),
+                "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
+                    | "Yu Gothic Regular" | "Yu Gothic Bold"
+                    | "Yu Mincho Regular" | "Yu Mincho Demibold"
+                    | "Meiryo"
+            )
+        }
     }
 }
 
