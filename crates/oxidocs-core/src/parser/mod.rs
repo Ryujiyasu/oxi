@@ -1,7 +1,7 @@
 mod numbering;
 mod ooxml;
 pub mod omml;
-mod relationships;
+pub mod relationships;
 mod styles;
 pub mod theme;
 
