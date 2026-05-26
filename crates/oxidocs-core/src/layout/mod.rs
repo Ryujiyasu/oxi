@@ -6903,11 +6903,24 @@ impl LayoutEngine {
                         // bias matching this over-application. FLOOR
                         // variant `(raw*2).floor() / 2` would reduce these
                         // by 0.5pt. Default OFF preserves baseline exactly.
+                        //
+                        // S329 (2026-05-26) — env-gated ROUND variant.
+                        // FLOOR was empirically falsified (d1e8ac8 -0.0071)
+                        // because raw values in (0.25, 0.5) were over-
+                        // corrected. ROUND-half-away-from-zero `(raw*2).round()/2`
+                        // is conservative: matches CEIL for raw in [0.25, 0.5]
+                        // (preserves d1e8ac8 tuning), differs only for
+                        // raw < 0.25 (the strict over-application case).
                         let use_floor = std::env::var("OXI_S328_FLOOR_CENTER")
+                            .map(|v| v != "0" && v != "false")
+                            .unwrap_or(false);
+                        let use_round = std::env::var("OXI_S329_ROUND_CENTER")
                             .map(|v| v != "0" && v != "false")
                             .unwrap_or(false);
                         if use_floor {
                             (raw * 2.0).floor() / 2.0
+                        } else if use_round {
+                            (raw * 2.0).round() / 2.0
                         } else {
                             (raw * 2.0 + 0.5).floor() / 2.0
                         }
@@ -6932,12 +6945,17 @@ impl LayoutEngine {
                         m.word_line_height_table_cell(para_font_size)
                     };
                     let raw = (line_height - centering_height).max(0.0) / 2.0;
-                    // S328 (2026-05-26) — see comment above (LM1/LM2 branch).
+                    // S328/S329 (2026-05-26) — see comments above (LM1/LM2 branch).
                     let use_floor = std::env::var("OXI_S328_FLOOR_CENTER")
+                        .map(|v| v != "0" && v != "false")
+                        .unwrap_or(false);
+                    let use_round = std::env::var("OXI_S329_ROUND_CENTER")
                         .map(|v| v != "0" && v != "false")
                         .unwrap_or(false);
                     if use_floor {
                         (raw * 2.0).floor() / 2.0
+                    } else if use_round {
+                        (raw * 2.0).round() / 2.0
                     } else {
                         (raw * 2.0 + 0.5).floor() / 2.0
                     }
