@@ -6894,8 +6894,23 @@ impl LayoutEngine {
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
                         let raw = (line_height - centering_height).max(0.0) / 2.0;
-                        // Round to 0.5pt (10 twips) — COM-confirmed best fit
-                        (raw * 2.0 + 0.5).floor() / 2.0
+                        // S328 (2026-05-26) — env-gated FLOOR variant.
+                        // Default formula `(raw*2 + 0.5).floor() / 2` is
+                        // CEIL-half-up to 0.5pt grid: for raw=0.25 returns
+                        // 0.5pt (over-applied by 0.5pt vs Word's measured
+                        // 0.0pt for some font+size combos). 35/55 docs in
+                        // Phase 2 baseline have exactly +0.5pt first-line
+                        // bias matching this over-application. FLOOR
+                        // variant `(raw*2).floor() / 2` would reduce these
+                        // by 0.5pt. Default OFF preserves baseline exactly.
+                        let use_floor = std::env::var("OXI_S328_FLOOR_CENTER")
+                            .map(|v| v != "0" && v != "false")
+                            .unwrap_or(false);
+                        if use_floor {
+                            (raw * 2.0).floor() / 2.0
+                        } else {
+                            (raw * 2.0 + 0.5).floor() / 2.0
+                        }
                     } else {
                         0.0
                     }
@@ -6917,7 +6932,15 @@ impl LayoutEngine {
                         m.word_line_height_table_cell(para_font_size)
                     };
                     let raw = (line_height - centering_height).max(0.0) / 2.0;
-                    (raw * 2.0 + 0.5).floor() / 2.0
+                    // S328 (2026-05-26) — see comment above (LM1/LM2 branch).
+                    let use_floor = std::env::var("OXI_S328_FLOOR_CENTER")
+                        .map(|v| v != "0" && v != "false")
+                        .unwrap_or(false);
+                    if use_floor {
+                        (raw * 2.0).floor() / 2.0
+                    } else {
+                        (raw * 2.0 + 0.5).floor() / 2.0
+                    }
                 }
             }
         }
