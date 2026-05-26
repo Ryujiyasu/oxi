@@ -113,10 +113,18 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     let mut current_color_name: Option<String> = None;
     let mut in_major_font = false;
     let mut in_minor_font = false;
-    // S245 (2026-05-24): removed dead variables `ea_empty_major` and
-    // `ea_empty_minor` (set in conditional branches when <a:ea typeface=""/>
-    // is encountered but never read — the planned "suppress script-based
-    // fallback" wiring was never connected).
+    // S323 (2026-05-26): re-wire `ea_empty_*` flags. S245 removed these
+    // because they were dead; d1e8ac8 evidence shows the suppression IS
+    // needed. Word's COM Font.NameFarEast for d1e8ac8 para 6 (殿) returns
+    // "ＭＳ 明朝" (from rPrDefault inheritance), NOT "游明朝" (theme's
+    // Jpan-script font). So Word's behavior: <a:ea typeface=""/> means
+    // "EA slot explicitly empty — do NOT use Jpan script as fallback,
+    // fall through to rPrDefault instead". Env-gated to preserve baseline.
+    let mut ea_empty_major = false;
+    let mut ea_empty_minor = false;
+    let suppress_jpan_when_empty_ea = std::env::var("OXI_S323_EMPTY_EA_NO_JPAN")
+        .map(|v| v != "0" && v != "false")
+        .unwrap_or(false);
 
     loop {
         match reader.read_event() {
@@ -183,9 +191,10 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if !val.is_empty() {
                                     theme.major_font_ea = Some(val);
+                                } else {
+                                    // S323: record explicit-empty-ea
+                                    ea_empty_major = true;
                                 }
-                                // empty typeface ignored (would suppress Jpan fallback;
-                                // wiring not implemented — see S245 cleanup note)
                             }
                         }
                     }
@@ -195,14 +204,21 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if !val.is_empty() {
                                     theme.minor_font_ea = Some(val);
+                                } else {
+                                    // S323: record explicit-empty-ea
+                                    ea_empty_minor = true;
                                 }
-                                // empty typeface ignored (see ea_empty_major comment)
                             }
                         }
                     }
                     // Script-specific fonts (e.g. <a:font script="Jpan" typeface="ＭＳ ゴシック"/>)
-                    // Matches Word output: ea="" does NOT suppress Jpan font lookup.
-                    // Word uses Jpan supplemental font even when ea typeface is empty.
+                    // Historically Oxi used Jpan as the EA fallback even when
+                    // <a:ea typeface=""/> was explicit-empty (S245 comment said
+                    // "matches Word output"). S323 (2026-05-26) d1e8ac8 evidence
+                    // overturns that: Word COM Font.NameFarEast for para 6 (殿)
+                    // returns "ＭＳ 明朝" (rPrDefault), not "游明朝" (theme Jpan).
+                    // So under OXI_S323_EMPTY_EA_NO_JPAN=1, explicit-empty <a:ea>
+                    // SUPPRESSES the Jpan fallback for that font slot.
                     "font" if (in_major_font || in_minor_font) => {
                         let mut script = String::new();
                         let mut typeface = String::new();
@@ -216,10 +232,12 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                             }
                         }
                         if script == "Jpan" && !typeface.is_empty() {
-                            if in_major_font && theme.major_font_ea.is_none() {
+                            let suppress_major = suppress_jpan_when_empty_ea && ea_empty_major;
+                            let suppress_minor = suppress_jpan_when_empty_ea && ea_empty_minor;
+                            if in_major_font && theme.major_font_ea.is_none() && !suppress_major {
                                 theme.major_font_ea = Some(typeface.clone());
                             }
-                            if in_minor_font && theme.minor_font_ea.is_none() {
+                            if in_minor_font && theme.minor_font_ea.is_none() && !suppress_minor {
                                 theme.minor_font_ea = Some(typeface);
                             }
                         }
@@ -248,10 +266,16 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
 
     // Fallback: when theme EA fonts are empty, use system defaults
     // Matches Word output: Japanese Windows uses Meiryo for headings when theme EA is unset
-    if theme.major_font_ea.is_none() {
+    //
+    // S323: under OXI_S323_EMPTY_EA_NO_JPAN=1, an explicit <a:ea typeface=""/>
+    // ALSO suppresses the Meiryo end-of-parse fallback. Leaving theme.minor_font_ea
+    // as None lets resolve_theme_font_pub return None, which lets the run-level
+    // rPr resolution fall through to rPrDefault eastAsia. d1e8ac8 evidence:
+    // Word COM Font.NameFarEast = "ＭＳ 明朝" (rPrDefault), not Meiryo.
+    if theme.major_font_ea.is_none() && !(suppress_jpan_when_empty_ea && ea_empty_major) {
         theme.major_font_ea = Some("Meiryo".to_string());
     }
-    if theme.minor_font_ea.is_none() {
+    if theme.minor_font_ea.is_none() && !(suppress_jpan_when_empty_ea && ea_empty_minor) {
         theme.minor_font_ea = Some("Meiryo".to_string());
     }
 
