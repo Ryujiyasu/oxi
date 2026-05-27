@@ -204,12 +204,31 @@ impl OoxmlParser {
         }
 
         // Post-process: fix charGrid pitch using actual default font size.
-        // parse_section_properties uses 10.5pt placeholder; correct with Normal style font size.
-        let default_font_size = styles.styles.get("Normal")
-            .or_else(|| styles.styles.get("a"))
-            .and_then(|s| s.paragraph.default_run_style.as_ref())
+        // parse_section_properties uses 10.5pt placeholder; correct with the
+        // document's actual default font size.
+        //
+        // S340 (2026-05-27): rPrDefault is PRIORITIZED over Normal style.
+        // Per S339 minimal repro (`tools/metrics/_s339_repro_default_fs.py`):
+        // built 2 docx variants with identical docGrid (linesAndChars,
+        // charSpace=-2714) + DIFFERENT Normal style sz (24 vs 21). Word's
+        // per-char Information(5) measurements were IDENTICAL (avg 8.325pt
+        // both). Word uses rPrDefault as the docGrid reference, IGNORING
+        // Normal style overrides. Prior priority (Normal first) was wrong:
+        // for b35123 (Normal sz=24=12pt, rPrDefault sz=21=10.5pt) it produced
+        // pitch=11.337 / default_fs=12.0 when Word actually computes the
+        // grid with default_fs=10.5. The negative-branch formula
+        // `cw = font_size + char_space_pt` is default_fs-independent so the
+        // cw output is unchanged for b35123; this fix preserves the
+        // SectionProperties invariants required by future L2 (per-run fs
+        // inheritance) and L3 (formula recalibration) work.
+        let default_font_size = styles.doc_default_run_style.as_ref()
             .and_then(|rs| rs.font_size)
-            .or_else(|| styles.doc_default_run_style.as_ref().and_then(|rs| rs.font_size))
+            .or_else(|| {
+                styles.styles.get("Normal")
+                    .or_else(|| styles.styles.get("a"))
+                    .and_then(|s| s.paragraph.default_run_style.as_ref())
+                    .and_then(|rs| rs.font_size)
+            })
             .unwrap_or(10.5);
         for page in &mut pages {
             if let Some(pitch) = page.grid_char_pitch {
@@ -243,8 +262,12 @@ impl OoxmlParser {
                 }
                 // 2026-04-19: Compute per-fontsize char-width ratio.
                 // Word formula: cw(fs) = fs * pitch / default_font_size.
-                // Applies for all default_font_size (including 10.5).
-                // COM-verified on minimal repro (default=10.5) and b35 (default=12).
+                // Applies for all default_font_size.
+                //
+                // 2026-04-19 historical claim "COM-verified b35 (default=12)"
+                // was retracted by S339 (2026-05-27): minimal repro showed
+                // Word uses rPrDefault sz=21 (10.5pt) for b35123's docGrid
+                // reference, NOT Normal style sz=24 (12pt). See S340 fix above.
                 if let Some(p) = page.grid_char_pitch {
                     if default_font_size > 0.0 {
                         page.grid_char_cw_ratio = Some(p / default_font_size);
