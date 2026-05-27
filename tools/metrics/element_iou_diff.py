@@ -124,7 +124,17 @@ def derive_word_heights(paragraphs: list[dict]) -> list[dict]:
     S221 (2026-05-23): only multi-char paragraphs (len >= MIN_MATCH_LEN)
     are used as next-y reference points. Single-char markers are NOT
     excluded from the output (they still appear with derived h) but they
-    don't act as h boundaries for OTHER paragraphs."""
+    don't act as h boundaries for OTHER paragraphs.
+
+    S352 (2026-05-27, FALSIFIED): tried switching to Y-sorted iteration
+    to match derive_oxi_heights. Hypothesis: asymmetric index-order
+    (Word) vs Y-order (Oxi) inflates word_h by skipping adjacent-column
+    content. Empirically WRONG: 14 docs regress, 0 improve, net -0.0018
+    mean_iou. Reason: official iou_yrange_adj already corrects for
+    systematic dy via median offset; Word's INDEX order is naturally
+    column-aware (same-column-next-paragraph) which is the intended
+    paragraph-extent semantic. Y-sort breaks column-aware pairing and
+    introduces noise. Keeping INDEX order (current behavior)."""
     out = []
     for i, p in enumerate(paragraphs):
         if p.get("y") is None or p.get("page") is None:
