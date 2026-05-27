@@ -8166,7 +8166,21 @@ impl LayoutEngine {
                                 _ => {
                                     // Single/auto grid-snapped: center within lh using natural lh.
                                     let raw = (lh - cell_centering_height).max(0.0) / 2.0;
-                                    (raw * 2.0 + 0.5).floor() / 2.0
+                                    // S360 (2026-05-27): cell centering uses same CEIL-half-up
+                                    // rounding as body (S328). The +1.0pt table dy cluster
+                                    // (S357: 400 paragraphs / 16 docs) may stem from this CEIL
+                                    // over-application. Env-gated FLOOR / ROUND variants to test.
+                                    let use_floor = std::env::var("OXI_S360_CELL_FLOOR")
+                                        .map(|v| v != "0" && v != "false").unwrap_or(false);
+                                    let use_round = std::env::var("OXI_S360_CELL_ROUND")
+                                        .map(|v| v != "0" && v != "false").unwrap_or(false);
+                                    if use_floor {
+                                        (raw * 2.0).floor() / 2.0
+                                    } else if use_round {
+                                        (raw * 2.0).round() / 2.0
+                                    } else {
+                                        (raw * 2.0 + 0.5).floor() / 2.0
+                                    }
                                 }
                             };
                             let mut rx = 0.0_f32;
