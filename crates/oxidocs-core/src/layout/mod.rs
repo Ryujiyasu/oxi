@@ -7253,10 +7253,24 @@ impl LayoutEngine {
                 cell_content_h += pad_b;
                 cell_content_h_visual += pad_b;
                 // COM-confirmed (2026-04-13, gen2_052): Word does NOT include
-                // inside-H border width in the row height calculation. The border
+                // FULL inside-H border width in the row height calculation. The border
                 // is drawn at the boundary between rows (overlapping). Including
-                // border_overhead caused 0.5pt/row cumulative drift (6 rows = 3pt).
+                // full border_overhead caused 0.5pt/row cumulative drift (6 rows = 3pt).
                 // cell_content_h += border_overhead;  // removed
+                //
+                // S375 (2026-05-27, FALSIFIED): S374 minimal repro showed Oxi rows
+                // ~0.25pt SHORTER than Word per row; hypothesized half the shared
+                // insideH border (0.25pt) per non-last row. Env-gated corpus test
+                // CATASTROPHIC: Phase 2 0.9603→0.9270 (-0.0333), Phase 1 53→50.
+                // Even HALF the border over-counts corpus-wide (gen2_052 found full
+                // 0.5pt too much; half is still too much). The S374 -0.25pt is real
+                // but repro-specific (that repro had no insideH so this gate didn't
+                // even fire there) — NOT a corpus-wide pattern. Row overhead stays
+                // at 0 (current behavior is corpus-correct). Gate kept OFF.
+                if std::env::var("OXI_S375_HALF_INSIDEH").is_ok() && !is_last && table.style.has_inside_h {
+                    cell_content_h += _border_overhead * 0.5;
+                    cell_content_h_visual += _border_overhead * 0.5;
+                }
 
                 row_height = row_height.max(cell_content_h);
                 visual_row_h = visual_row_h.max(cell_content_h_visual);
