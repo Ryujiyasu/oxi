@@ -4081,7 +4081,10 @@ impl LayoutEngine {
         //
         // S344 (2026-05-27): also pass-through to break_into_lines for per-char
         // fs<default_fs filtering (the actual Word behavior discriminator).
-        let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
+        // S342 SHIP (2026-05-27): default ON. Drops snap_to_grid gate from
+        // char-grid (horizontal compression) per OOXML §17.3.1.32. Env-var
+        // preserved as opt-OUT.
+        let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(true);
         let s344_fs_gate = std::env::var("OXI_S344_FS_LT_DEFAULT").map(|v| v != "0" && v != "false").unwrap_or(false);
         let snap_pass_through = s342_no_snap_gate || s344_fs_gate;
         let snap_gate_active = !snap_pass_through && !para.style.snap_to_grid;
@@ -7814,7 +7817,10 @@ impl LayoutEngine {
                                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
                                 // S344 (2026-05-27): refine S342 to require fs < default_fs
                                 // when snap_to_grid=false. See count_cell_lines comment.
-                                let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
+                                // S342 SHIP (2026-05-27): default ON. Drops snap_to_grid gate from
+        // char-grid (horizontal compression) per OOXML §17.3.1.32. Env-var
+        // preserved as opt-OUT.
+        let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(true);
                                 let s344_fs_gate = std::env::var("OXI_S344_FS_LT_DEFAULT").map(|v| v != "0" && v != "false").unwrap_or(false);
                                 let snap_ok = s342_no_snap_gate || s344_fs_gate || para.style.snap_to_grid;
                                 if run.style.fit_text.is_none() && snap_ok {
@@ -9343,7 +9349,10 @@ impl LayoutEngine {
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
-                let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
+                // S342 SHIP (2026-05-27): default ON. Drops snap_to_grid gate from
+        // char-grid (horizontal compression) per OOXML §17.3.1.32. Env-var
+        // preserved as opt-OUT.
+        let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(true);
                 // S344 (2026-05-27): refine S342 — when snap_to_grid=false,
                 // only apply char-grid compression for fs < default_fs.
                 // S343 per-element diff (b35123) showed S342 over-applied
@@ -9773,7 +9782,30 @@ impl LayoutEngine {
                 } else {
                     (effective_width - first_indent).max(0.0)
                 };
-                self.count_cell_lines(para, effective_width, first_line_wrap_w, grid_char_pitch, grid_char_cw_ratio)
+                // S348 (2026-05-27): decouple cell-paragraph HEIGHT from
+                // visible WRAP. Per S347 analysis: Word uses natural (uncompressed)
+                // line count for cell height allocation, but compressed line count
+                // for visible char positions. Oxi current (with S342) uses compressed
+                // for both → cell shorter than Word → cascade regression on b35123.
+                //
+                // OXI_S348_NATURAL_HEIGHT=1: force natural line count for height
+                // by passing None grid params. The visible wrap (cell renderer at
+                // mod.rs:7800+) continues to use grid params via its own call path,
+                // unaffected by this gate.
+                //
+                // Only meaningful when paired with S342 (otherwise grid params are
+                // already None when snap_to_grid=false at line 4073 effective_char_pitch).
+                // S348 SHIP (2026-05-27): default ON. Decouples cell-paragraph
+                // height from visible wrap. Word uses natural (uncompressed) line
+                // count for height even when grid compresses visible wrap. Env-var
+                // preserved as opt-OUT.
+                let s348_natural_height = std::env::var("OXI_S348_NATURAL_HEIGHT").map(|v| v != "0" && v != "false").unwrap_or(true);
+                let (gcp_for_count, gcr_for_count) = if s348_natural_height && !para.style.snap_to_grid {
+                    (None, None)
+                } else {
+                    (grid_char_pitch, grid_char_cw_ratio)
+                };
+                self.count_cell_lines(para, effective_width, first_line_wrap_w, gcp_for_count, gcr_for_count)
             } else {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
