@@ -185,21 +185,27 @@ def derive_oxi_heights(pages: dict[str, list[dict]]) -> list[dict]:
         # sharing a paragraph key to the min-y record (= the paragraph's start
         # line, matching Word's single-record convention).
         if collapse_para:
-            # S363: collapse BODY-only (para_idx is a globally-unique paragraph
-            # index). Table-cell records are NOT collapsed: pagination_oxi has
-            # no table identifier, so (cell_row_idx, cell_col_idx, cell_para_idx)
-            # collides across MULTIPLE tables on the same page (b5f706 page 1
-            # has 5 tables, each with row0/col1/para0 → cross-table merge →
-            # catastrophic -0.346). Body collapse fixes wrapped multi-record
-            # paragraphs (0e7af1 para_idx=173) safely.
+            # S364: collapse multi-record paragraphs to their min-y record
+            # (Word COM = 1 record per w:p; Oxi dump emits 1 per wrapped
+            # segment). The key INCLUDES para_idx (= block index), which is
+            # distinct per table — this fixes the S363 cross-table collision
+            # (b5f706 page 1 has 5 tables that all reused (row0,col1,para0);
+            # para_idx values [6,9,12,15] disambiguate them). Verified: with
+            # para_idx in the key, b5f706 has 0 spurious multi-record keys.
+            #   Body:  ("b", para_idx)
+            #   Table: ("c", para_idx, cell_row_idx, cell_col_idx, cell_para_idx)
             groups = {}
             for r in recs:
-                if r.get("cell_row_idx") is None and r.get("para_idx") is not None:
-                    k = ("b", r["para_idx"])
-                    if k not in groups or r["y"] < groups[k]["y"]:
-                        groups[k] = r
+                pidx = r.get("para_idx")
+                if pidx is None:
+                    groups[id(r)] = r  # no paragraph id → keep as-is
+                    continue
+                if r.get("cell_row_idx") is not None:
+                    k = ("c", pidx, r.get("cell_row_idx"), r.get("cell_col_idx"), r.get("cell_para_idx"))
                 else:
-                    groups[id(r)] = r  # table or no-para_idx → keep as-is
+                    k = ("b", pidx)
+                if k not in groups or r["y"] < groups[k]["y"]:
+                    groups[k] = r
             recs = list(groups.values())
         # Sort by y (already LINE BOX TOP after Phase D)
         sorted_recs = sorted(recs, key=lambda r: r["y"])
