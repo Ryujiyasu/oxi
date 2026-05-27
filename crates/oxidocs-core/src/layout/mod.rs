@@ -4078,8 +4078,13 @@ impl LayoutEngine {
         // charSpace=-2714 + Word still compresses chars per the grid (S342
         // direct measurement: avg 8.4375pt/char vs nominal sz=18=9.0pt).
         // Default OFF preserves Round 29 behavior; turn ON to test.
+        //
+        // S344 (2026-05-27): also pass-through to break_into_lines for per-char
+        // fs<default_fs filtering (the actual Word behavior discriminator).
         let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
-        let snap_gate_active = !s342_no_snap_gate && !para.style.snap_to_grid;
+        let s344_fs_gate = std::env::var("OXI_S344_FS_LT_DEFAULT").map(|v| v != "0" && v != "false").unwrap_or(false);
+        let snap_pass_through = s342_no_snap_gate || s344_fs_gate;
+        let snap_gate_active = !snap_pass_through && !para.style.snap_to_grid;
         let effective_char_pitch = if in_textbox || snap_gate_active { None } else { page.grid_char_pitch };
         // 2026-05-05 Track A (Session 55+): COM-measured 8 paragraphs in b837
         // confirmed Word's wrap rule: available = content_w - indent_l - indent_r
@@ -5844,7 +5849,15 @@ impl LayoutEngine {
                         let h8_trigger = char_space_pt > 0.0;
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
-                        if h6_trigger || h7_trigger || h8_trigger {
+                        // S344 (2026-05-27): when S344 fed grid values through despite
+                        // snap_to_grid=false, gate compression to fs < default_fs only.
+                        // (Effective only when paired with S342/S344 pass-through at
+                        // mod.rs:4073/4246.)
+                        let s344_fs_gate = std::env::var("OXI_S344_FS_LT_DEFAULT").map(|v| v != "0" && v != "false").unwrap_or(false);
+                        let s344_skip = s344_fs_gate
+                            && !para_style.snap_to_grid
+                            && font_size >= default_fs;
+                        if h6_trigger || h7_trigger || h8_trigger || s344_skip {
                             0.0
                         } else {
                             let expected_w = if char_space_pt >= 0.0 {
@@ -7799,8 +7812,11 @@ impl LayoutEngine {
                                 // charSpace_pt = pitch − default_fs (negative for compressPunc).
                                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
                                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
+                                // S344 (2026-05-27): refine S342 to require fs < default_fs
+                                // when snap_to_grid=false. See count_cell_lines comment.
                                 let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
-                                let snap_ok = s342_no_snap_gate || para.style.snap_to_grid;
+                                let s344_fs_gate = std::env::var("OXI_S344_FS_LT_DEFAULT").map(|v| v != "0" && v != "false").unwrap_or(false);
+                                let snap_ok = s342_no_snap_gate || s344_fs_gate || para.style.snap_to_grid;
                                 if run.style.fit_text.is_none() && snap_ok {
                                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
@@ -7817,7 +7833,12 @@ impl LayoutEngine {
                                             // S151 H8 default ON: skip positive char_grid_extra
                                             // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
                                             let h8_skip = char_space_pt > 0.0;
-                                            if !(h6_skip || h7_skip || h8_skip) {
+                                            // S344: when snap_to_grid=false and S344 enabled,
+                                            // skip compression unless fs < default_fs.
+                                            let s344_skip = s344_fs_gate
+                                                && !para.style.snap_to_grid
+                                                && font_size >= default_fs;
+                                            if !(h6_skip || h7_skip || h8_skip || s344_skip) {
                                                 cw = if char_space_pt >= 0.0 {
                                                     font_size * pitch / default_fs
                                                 } else {
@@ -9323,7 +9344,15 @@ impl LayoutEngine {
                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
                 let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
-                let snap_ok = s342_no_snap_gate || para.style.snap_to_grid;
+                // S344 (2026-05-27): refine S342 — when snap_to_grid=false,
+                // only apply char-grid compression for fs < default_fs.
+                // S343 per-element diff (b35123) showed S342 over-applied
+                // compression to fs == default_fs paragraphs (i=9, i=12 etc.),
+                // causing -0.0126 cascade. Real Word behavior:
+                //   - fs <  default_fs + snap_to_grid=false → compress (i=89)
+                //   - fs == default_fs + snap_to_grid=false → no compress (i=9)
+                let s344_fs_gate = std::env::var("OXI_S344_FS_LT_DEFAULT").map(|v| v != "0" && v != "false").unwrap_or(false);
+                let snap_ok = s342_no_snap_gate || s344_fs_gate || para.style.snap_to_grid;
                 if run.style.fit_text.is_none() && snap_ok {
                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
@@ -9342,7 +9371,12 @@ impl LayoutEngine {
                             // traced a1d6 +14pt residual drift to this code path.
                             // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
                             let h8_skip = char_space_pt > 0.0;
-                            if !(h6_skip || h7_skip || h8_skip) {
+                            // S344: when snap_to_grid=false and S344 enabled,
+                            // skip compression unless fs < default_fs.
+                            let s344_skip = s344_fs_gate
+                                && !para.style.snap_to_grid
+                                && font_size >= default_fs;
+                            if !(h6_skip || h7_skip || h8_skip || s344_skip) {
                                 cw = if char_space_pt >= 0.0 {
                                     font_size * pitch / default_fs
                                 } else {
