@@ -175,6 +175,27 @@ def main() -> None:
     write_docx(os.path.join(OUT_DIR, "v1_sect_docgrid_lines_pitch.docx"),
                _doc_with_sectpr(sectpr))
 
+    # v1_sect_docgrid_linesAndChars_neg_charspace (S339, 2026-05-27):
+    # docGrid type="linesAndChars" + negative charSpace = compression
+    # mode. Parser populates THREE fields: grid_line_pitch (linePitch/20),
+    # grid_char_pitch (default_fs + charSpace/4096), grid_char_space_raw
+    # (preserves raw charSpace for layout post-process). Without this
+    # fixture, the linesAndChars + charSpace branch at parser/ooxml.rs:
+    # 5697-5722 has NO integration coverage — would silently regress.
+    #
+    # b35123-realistic values: linePitch=350 (17.5pt), charSpace=-2714
+    # (~-0.663pt char compression). Per S339 corpus survey, only 2/55
+    # baseline docs use charSpace<0 with linesAndChars (b35123, 191cb5);
+    # 6 use charSpace>0 (29dc6e family at +1453).
+    sectpr = (
+        PGSZ +
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
+        'w:header="851" w:footer="992" w:gutter="0"/>'
+        '<w:docGrid w:type="linesAndChars" w:linePitch="350" w:charSpace="-2714"/>'
+    )
+    write_docx(os.path.join(OUT_DIR, "v1_sect_docgrid_linesAndChars_neg_charspace.docx"),
+               _doc_with_sectpr(sectpr))
+
     # v1_sect_docgrid_no_type: docGrid with linePitch but NO type
     # attribute. parser/ooxml.rs:5695-5698: `grid_type.is_empty() &&
     # line_pitch > 0` → doc_grid_no_type=true, grid_line_pitch stays

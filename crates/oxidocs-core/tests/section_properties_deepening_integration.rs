@@ -195,6 +195,101 @@ fn v1_sect_docgrid_lines_pitch_populates_grid_line_pitch() {
 }
 
 #[test]
+fn v1_sect_docgrid_lines_and_chars_neg_charspace_populates_all_three_fields() {
+    // S339 (2026-05-27): pins docGrid type="linesAndChars" + negative
+    // charSpace parsing. Three OOXML §17.6.5 fields populate:
+    //   - grid_line_pitch: linePitch / 20 (twips → points)
+    //   - grid_char_space_raw: raw charSpace value (1/4096 pt units)
+    //     preserved verbatim so layout post-process can recompute
+    //     grid_char_pitch with the correct default_font_size
+    //   - grid_char_pitch: derived as default_fs + charSpace/4096
+    //     using the parser-resolved default_fs (Normal style fallback
+    //     to rPrDefault)
+    //   - doc_grid_no_type: FALSE (type IS set)
+    //
+    // b35123-realistic values: linePitch=350 (17.5pt), charSpace=-2714
+    // (compression). Only 2/55 baseline docs use this combo (b35123,
+    // 191cb5) — S339 corpus survey identified it as the rare-but-real
+    // compression-grid mode driving b35123's IoU=0.8655 swamp.
+    //
+    // Per S339 minimal repro: Word's actual char-width formula for
+    // negative charSpace is `font_size + char_space_pt` (= font_size +
+    // charSpace/4096). Sub-grid position snapping (0.75pt) creates the
+    // observed 8.25/9.00 alternation, but the AVERAGE stride matches
+    // this formula. This test only pins PARSER output (grid_char_pitch
+    // populated, raw preserved); the layout-side formula and the
+    // suspected default_fs derivation bug (b35123 specific) are
+    // tracked separately in `[[session339_docgrid_minimal_repro]]`.
+    let Some(doc) = load("v1_sect_docgrid_linesAndChars_neg_charspace.docx") else { return };
+    let page = &doc.pages[0];
+
+    assert_eq!(
+        page.grid_char_space_raw,
+        Some(-2714),
+        "grid_char_space_raw stores raw charSpace verbatim (sign + magnitude)"
+    );
+
+    let line_pitch = page
+        .grid_line_pitch
+        .expect("linesAndChars + linePitch=350 populates grid_line_pitch");
+    assert!(
+        (line_pitch - 17.5).abs() < 0.001,
+        "linePitch=350tw → 17.5pt (val/20), got {}",
+        line_pitch
+    );
+
+    let char_pitch = page
+        .grid_char_pitch
+        .expect("linesAndChars + charSpace populates grid_char_pitch");
+    // Computed as default_fs + charSpace/4096. Shared fixture uses
+    // rPrDefault sz=22 (11pt) and no Normal style override, so default_fs
+    // resolves to 11pt → pitch = 11 + (-2714/4096) = 11 - 0.6626 ≈ 10.337pt.
+    // The post-process refines to (content_w / floor(content_w / raw_pitch))
+    // so a slight rounding-up to grid_char_pitch is possible; assert on
+    // the range matching the OOXML formula within 0.05pt tolerance.
+    assert!(
+        char_pitch > 0.0 && char_pitch < 11.0,
+        "grid_char_pitch for default_fs=11 + charSpace=-2714 should be ~10.337pt (< 11pt), got {}",
+        char_pitch
+    );
+    assert!(
+        char_pitch > 10.0,
+        "grid_char_pitch should be > 10pt (= 11 - 1pt floor margin), got {}",
+        char_pitch
+    );
+
+    assert!(
+        !page.doc_grid_no_type,
+        "type=linesAndChars is set → doc_grid_no_type stays false"
+    );
+}
+
+#[test]
+fn v1_sect_docgrid_lines_and_chars_grid_char_cw_ratio_matches_pitch_div_default_fs() {
+    // S339: grid_char_cw_ratio = grid_char_pitch / default_font_size.
+    // Layout uses this ratio at break_into_lines and count_cell_lines
+    // (mod.rs:5793, 9309) to compute per-char width as
+    // `font_size × pitch / default_fs` (positive branch) or
+    // `font_size + char_space_pt` (negative branch).
+    //
+    // For shared fixture (rPrDefault sz=22 = 11pt, no Normal override),
+    // default_fs = 11pt → ratio = pitch / 11 ≈ 0.94. The exact value
+    // depends on post-process rounding (parser/ooxml.rs:230-244), so
+    // we assert a range rather than exact equality.
+    let Some(doc) = load("v1_sect_docgrid_linesAndChars_neg_charspace.docx") else { return };
+    let page = &doc.pages[0];
+
+    let ratio = page
+        .grid_char_cw_ratio
+        .expect("grid_char_cw_ratio populated when grid_char_pitch is");
+    assert!(
+        ratio > 0.9 && ratio < 1.0,
+        "ratio = pitch/default_fs ≈ 10.337/11 ≈ 0.94, got {}",
+        ratio
+    );
+}
+
+#[test]
 fn v1_sect_docgrid_no_type_flips_flag_without_setting_pitch() {
     // NON-OBVIOUS branch at parser/ooxml.rs:5695-5698:
     //   `grid_type.is_empty() && line_pitch > 0` → doc_grid_no_type=true.
