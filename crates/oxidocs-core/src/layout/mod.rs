@@ -4070,7 +4070,17 @@ impl LayoutEngine {
         // with pStyle "footnote text" / a8), DISABLE charGrid for line wrap
         // even if the page has linesAndChars docGrid. Otherwise the chars get
         // padded to the body's grid pitch and the line wraps ~5 chars early.
-        let effective_char_pitch = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_pitch };
+        //
+        // S342 (2026-05-27) env-gated `OXI_S342_NO_SNAP_GATE=1`: drop the
+        // snap_to_grid gate for char-grid (horizontal compression). Per OOXML
+        // §17.3.1.32 `snap_to_grid` controls LINE SPACING (vertical), not
+        // char pitch. b35123 i=89 has snap_to_grid=false + linesAndChars
+        // charSpace=-2714 + Word still compresses chars per the grid (S342
+        // direct measurement: avg 8.4375pt/char vs nominal sz=18=9.0pt).
+        // Default OFF preserves Round 29 behavior; turn ON to test.
+        let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
+        let snap_gate_active = !s342_no_snap_gate && !para.style.snap_to_grid;
+        let effective_char_pitch = if in_textbox || snap_gate_active { None } else { page.grid_char_pitch };
         // 2026-05-05 Track A (Session 55+): COM-measured 8 paragraphs in b837
         // confirmed Word's wrap rule: available = content_w - indent_l - indent_r
         // for both charGrid and non-charGrid (full indent applied, no cell-based
@@ -4233,7 +4243,8 @@ impl LayoutEngine {
         // env-var fallback during hardening pass. S168 Phase B-2 bundle
         // is the canonical path.
         let effective_first_indent = first_line_indent;
-        let effective_cw_ratio = if in_textbox || !para.style.snap_to_grid { None } else { page.grid_char_cw_ratio };
+        // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
+        let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
 
@@ -7786,7 +7797,11 @@ impl LayoutEngine {
                                 // Previous formula (fs × pitch/default_fs) over-compressed
                                 // when fs<default_fs. Correct: cw = fs + charSpace_pt where
                                 // charSpace_pt = pitch − default_fs (negative for compressPunc).
-                                if run.style.fit_text.is_none() && para.style.snap_to_grid {
+                                // S342 (2026-05-27): see effective_char_pitch at line 4073 for
+                                // OXI_S342_NO_SNAP_GATE gate-drop rationale.
+                                let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
+                                let snap_ok = s342_no_snap_gate || para.style.snap_to_grid;
+                                if run.style.fit_text.is_none() && snap_ok {
                                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                                             && crate::font::is_fullwidth(ch)
@@ -9305,7 +9320,11 @@ impl LayoutEngine {
                 }
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
-                if run.style.fit_text.is_none() && para.style.snap_to_grid {
+                // S342 (2026-05-27): see effective_char_pitch at line 4073 for
+                // OXI_S342_NO_SNAP_GATE gate-drop rationale.
+                let s342_no_snap_gate = std::env::var("OXI_S342_NO_SNAP_GATE").map(|v| v != "0" && v != "false").unwrap_or(false);
+                let snap_ok = s342_no_snap_gate || para.style.snap_to_grid;
+                if run.style.fit_text.is_none() && snap_ok {
                     if let (Some(ratio), Some(pitch)) = (grid_char_cw_ratio, grid_char_pitch) {
                         if ratio > 0.0 && pitch > 0.0 && cw > 0.0
                             && crate::font::is_fullwidth(ch)
