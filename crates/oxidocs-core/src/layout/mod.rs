@@ -7134,6 +7134,8 @@ impl LayoutEngine {
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
                 // Round 30: implicit border padding (matches second pass)
+                // S359 (2026-05-27): test confirmed Round 30 is load-bearing
+                // (OXI_S359_NO_ROUND30=1 caused -0.0186 corpus regression).
                 if pad_t == 0.0 && table.style.border {
                     pad_t = table.style.border_width.unwrap_or(0.4);
                 }
@@ -7439,6 +7441,8 @@ impl LayoutEngine {
                 // Word positions text below the top border line, not at the border.
                 // COM-confirmed minimal repro: Table Grid with tcMar=0 all sides,
                 // MS Mincho 12pt → text_y = topMargin + 0.5pt (= border width).
+                // S359 (2026-05-27): test confirmed Round 30 is load-bearing
+                // (OXI_S359_NO_ROUND30=1 caused -0.0186 corpus regression).
                 if pad_t == 0.0 && table.style.border {
                     let bw = table.style.border_width.unwrap_or(0.4);
                     pad_t = bw;
