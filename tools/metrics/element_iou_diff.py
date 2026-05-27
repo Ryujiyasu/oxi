@@ -170,13 +170,39 @@ def derive_oxi_heights(pages: dict[str, list[dict]]) -> list[dict]:
     S221 (2026-05-23): only multi-char paragraphs (len >= MIN_MATCH_LEN)
     are used as next-y reference points (symmetric with derive_word_heights).
     """
+    import os as _os
+    collapse_para = _os.environ.get("OXI_S363_COLLAPSE_PARA") not in (None, "0", "false")
     out = []
     for page_str in sorted(pages.keys(), key=int):
         page = int(page_str)
-        recs = pages[page_str]
+        recs = [r for r in pages[page_str] if r.get("y") is not None]
+        # S363 (2026-05-27): Oxi's layout dump emits MULTIPLE records for a
+        # single wrapped paragraph (e.g. 0e7af1 para_idx=173 → 3 records at
+        # y=278.5/348.5/418.5, hanging-indent continuations). Word COM yields
+        # ONE record per w:p. derive_oxi_heights then mis-derived h as the gap
+        # to the NEXT SEGMENT of the SAME paragraph (70pt) instead of the next
+        # DIFFERENT paragraph (151.5pt) → spurious low IoU. Collapse records
+        # sharing a paragraph key to the min-y record (= the paragraph's start
+        # line, matching Word's single-record convention).
+        if collapse_para:
+            # S363: collapse BODY-only (para_idx is a globally-unique paragraph
+            # index). Table-cell records are NOT collapsed: pagination_oxi has
+            # no table identifier, so (cell_row_idx, cell_col_idx, cell_para_idx)
+            # collides across MULTIPLE tables on the same page (b5f706 page 1
+            # has 5 tables, each with row0/col1/para0 → cross-table merge →
+            # catastrophic -0.346). Body collapse fixes wrapped multi-record
+            # paragraphs (0e7af1 para_idx=173) safely.
+            groups = {}
+            for r in recs:
+                if r.get("cell_row_idx") is None and r.get("para_idx") is not None:
+                    k = ("b", r["para_idx"])
+                    if k not in groups or r["y"] < groups[k]["y"]:
+                        groups[k] = r
+                else:
+                    groups[id(r)] = r  # table or no-para_idx → keep as-is
+            recs = list(groups.values())
         # Sort by y (already LINE BOX TOP after Phase D)
-        sorted_recs = sorted([r for r in recs if r.get("y") is not None],
-                             key=lambda r: r["y"])
+        sorted_recs = sorted(recs, key=lambda r: r["y"])
         for i, r in enumerate(sorted_recs):
             h = None
             for j in range(i + 1, len(sorted_recs)):
