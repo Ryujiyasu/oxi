@@ -7112,6 +7112,22 @@ impl LayoutEngine {
             let mut visual_row_h: f32 = 0.0;
             let row_entry_cursor_y = cursor.cursor_y;
 
+            // S361 (2026-05-27, FALSIFIED): hypothesized that trHeight rows
+            // should NOT grid-snap the cell line (b5f706e9 row 1 Word cellH=17pt
+            // for a 9pt header looked un-snapped). Env-gated test FALSIFIED:
+            // OXI_S361_TRHEIGHT_NO_LINE_SNAP=1 → Phase 2 0.9603→0.9205 (-0.0398)
+            // AND Phase 1 53/55→51/55. Same S349 trap: Word Cell.Height reports
+            // the LOGICAL trHeight (17pt), NOT the visual rendered extent — Word
+            // DOES snap the line to 18pt; the row visually is 18pt. So the
+            // +1.0pt cluster is NOT from line grid-snap. Most trHeight rows need
+            // the snap (it's correct). Gate kept OFF; default unchanged.
+            let row_line_pitch: Option<f32> = if row.height.is_some()
+                && std::env::var("OXI_S361_TRHEIGHT_NO_LINE_SNAP").is_ok() {
+                None
+            } else {
+                table_grid_pitch
+            };
+
             // First pass: calculate row height
             let mut grid_idx = row.grid_before as usize;
             for cell in row.cells.iter() {
@@ -7173,8 +7189,8 @@ impl LayoutEngine {
                                 let h = self.vert_para_height(para);
                                 (h, h)
                             } else {
-                                let p1 = self.estimate_para_height(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
-                                let p2 = self.estimate_para_height_emit(para, inner_w, table_grid_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                                let p1 = self.estimate_para_height(para, inner_w, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                                let p2 = self.estimate_para_height_emit(para, inner_w, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
                                 (p1, p2)
                             };
                             // Day 33 part 17 (2026-05-10): subtract space_before for first
@@ -8005,10 +8021,10 @@ impl LayoutEngine {
                             if let Some(empty_fs) = pprrpr_fs {
                                 let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                 let empty_metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
-                                content_h += self.line_height_inner(empty_fs, effective_line_spacing, effective_line_rule, empty_metrics, para.style.snap_to_grid, table_grid_pitch, true);
+                                content_h += self.line_height_inner(empty_fs, effective_line_spacing, effective_line_rule, empty_metrics, para.style.snap_to_grid, row_line_pitch, true);
                             } else {
                                 let metrics = self.doc_default_metrics();
-                                content_h += self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, table_grid_pitch, true);
+                                content_h += self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true);
                             }
                         }
 
@@ -8024,7 +8040,7 @@ impl LayoutEngine {
                                     Some(ff) => self.registry.get(ff),
                                     None => self.registry.default_metrics(),
                                 };
-                                self.line_height_inner(*fs, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, table_grid_pitch, true)
+                                self.line_height_inner(*fs, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true)
                             }).fold(0.0_f32, f32::max);
 
                             // Paragraph indentation: first line uses indent_left + first_line_indent
