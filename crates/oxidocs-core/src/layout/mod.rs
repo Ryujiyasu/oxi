@@ -8128,14 +8128,28 @@ impl LayoutEngine {
                             // is NOT the source of ed025 Phase 1 -1 delta. Diagnostic
                             // (OXI_S403_DUMP_CELL) confirmed Oxi uses lh=18.0 for
                             // every cell paragraph (matches Word's per-gap median
-                            // 18.0pt across 33 gaps; Word distribution 18.0×19 +
-                            // 17.5×7 + 18.5×5 + 16.5×1 + 36.5×1 outlier). The
-                            // real ed025 bug is upstream of layout: Oxi's IR
-                            // contains 19 visible × × × cell paragraphs on p13
-                            // cell-3 vs Word's 18 — an EXTRA paragraph at Oxi
-                            // y=253.5 with no Word counterpart. Likely parser
-                            // path divergence (vMerge / cellMerge / spurious
-                            // paragraph emission), not a layout-height issue.
+                            // 18.0pt across 33 gaps).
+                            //
+                            // S404 (2026-05-28) verified PARSER is also CORRECT.
+                            // Oxi IR for T16 row1 cell 2 has exactly 98 paragraphs
+                            // (60 TEXT + 38 EMPTY) — matches XML count and matches
+                            // Word's 98 per-cell distribution (Word p13: 18 TEXT/
+                            // 16 EMPTY = 34; p14: 34/5 = 39; p15: 8/17 = 25).
+                            // Per-page TOTAL paragraph count also matches (34/39/25
+                            // in both). Only the TEXT placement differs by ONE:
+                            //   Word: p13 18T/16E, p14 34T/5E
+                            //   Oxi:  p13 19T/15E, p14 33T/6E
+                            // → 1 TEXT that Word puts on p14 is on Oxi p13, swapped
+                            //   with 1 EMPTY going the other direction.
+                            //
+                            // The actual root cause is sub-pt height-accumulation
+                            // drift across 34 cell paragraphs that lands one
+                            // boundary paragraph on the wrong side of page_bottom.
+                            // Both per-paragraph height (18.0pt) and total paragraph
+                            // count (98) match Word; the layout sums must differ by
+                            // <0.5pt per paragraph and accumulate to >18pt at the
+                            // boundary. Needs per-paragraph y-trace COM measurement
+                            // vs Oxi to locate the drift source.
                             let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
                             if let Some(empty_fs) = pprrpr_fs {
                                 let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
