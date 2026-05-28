@@ -4479,6 +4479,19 @@ impl LayoutEngine {
             //   3a4f      0.7916 -> 0.7919  (+0.0003)  ← threshold filtered
             //   corpus: 0.9603 -> 0.9641 (+0.0038), Phase 1 53/55 PRESERVED.
             //
+            // S397 (2026-05-28) FALSIFIED: "skip per-line LRPB when LRPB-bearing
+            // run text is short" hypothesis. Aimed at b837 page 7 +18.50pt
+            // step (pi=89 LRPB on 1-char "の" particle, suspected stale/artifact
+            // vs pi=71 LRPB on full sentence run, clean). At OXI_S397_LRPB_MIN_LEN=4:
+            // b837 IoU 0.9535 -> 0.9776 (+0.0241, page 7 step fixed) BUT
+            // b837 transitions Phase 1 PASS -> FAIL (53/55 -> 52/55 sentinel
+            // regression). All L in {4,5,6,8} hit identical Phase 1 52/55.
+            // No safe L. The pagination depends on per-line LRPB firing for
+            // ALL b837 LRPBs (including short-run ones) — partial-firing
+            // breaks Phase 1 alignment. Per CLAUDE.md no-EXCEPTION-stacking,
+            // the spec needs re-derivation from richer input space (not a
+            // per-run text-length filter).
+            //
             // Opt-out:
             //   OXI_S391_PER_LINE_LRPB=0  -> disable per-line LRPB respect
             //   OXI_S394_LRPB_MAX=<N>     -> override threshold (default 30)
