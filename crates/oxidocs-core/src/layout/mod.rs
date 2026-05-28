@@ -7846,7 +7846,7 @@ impl LayoutEngine {
                         // ed025 needs (1) AND (2) together to render 2 lines
                         // matching Word's 5-char + 2-char split.
                         //
-                        // S411 (2026-05-28) — narrower S405 gate hypothesis from
+                        // S411 (2026-05-28) — narrower S405 gate hypothesis v3 from
                         // XML attribute comparison across ed025 / 3a4f / 04b88e:
                         // Candidate gate: `has_tblCellMar AND cells_in_row >= 3
                         //                  AND tblLayout != "fixed"`.
@@ -7854,20 +7854,50 @@ impl LayoutEngine {
                         //   ed025  : 262/381 (fires on T16 target + similar tables)
                         //   3a4f   :   2/177 (down from 192 unrestricted)
                         //   04b88e :   0/47  (FULLY protected)
-                        // Discriminator interpretation: Word subtracts cellMar
-                        // from wrap budget when the table author EXPLICITLY
-                        // declared tblCellMar AND the row is multi-column
-                        // AND layout is auto. layout=fixed cells use
-                        // cell_w as-is (Word respects the fixed column).
-                        // Single-cell rows fall through to S172's cell_hang_inner
-                        // (different code path), so excluding cells_in_row==1
-                        // here avoids double-application.
-                        // Status: HYPOTHESIS (not implemented). Needs COM
-                        // measurement on 3a4f's 2 remaining fire cells before
-                        // S412+ ship attempt. ed025 also needs (b) kinsoku
-                        // rebalance before any improvement materializes.
-                        // 3a4f 26 with-tblCellMar 1-cell cells use cellmar=99dxa
-                        // same as ed025 — value alone is not the discriminator.
+                        // The 2 residual 3a4f cells are in a nested table with
+                        // firstLine=5twip (0.25pt — negligible) and NO
+                        // firstLineChars attribute (raw twip indent, not
+                        // char-based).
+                        //
+                        // S412 (2026-05-28) — STRENGTHENED gate v4: add
+                        // `firstLineChars is not None` constraint. Discriminator
+                        // interpretation: Word subtracts cellMar ONLY when
+                        // (a) author explicitly declared tblCellMar in tblPr,
+                        // (b) row is multi-column, (c) layout is auto, AND
+                        // (d) indent is CHAR-BASED (firstLineChars set,
+                        //     signalling CJK-aware authoring intent).
+                        // Raw-twip firstLine without firstLineChars uses cell_w
+                        // as-is (3a4f nested table pattern).
+                        //
+                        // Corpus-wide v4 fire counts (54/55 baseline docs walked):
+                        //   ed025 : 262 cells (target tables; T16 + similar)
+                        //   1ec1  :   1 cell  (NEW; 6-cell row + cellmar=99/99
+                        //                      + firstLineChars=200 — structurally
+                        //                      identical to ed025 rule)
+                        //   3a4f  :   0 cells (FULLY PROTECTED — both v3 residuals
+                        //                     lacked firstLineChars)
+                        //   04b88e:   0 cells (FULLY PROTECTED — no tblCellMar)
+                        //   51 other docs: 0 fires
+                        // Total: 263 cells across 2 docs only.
+                        //
+                        // Status: HYPOTHESIS (not implemented). 1ec1 is currently
+                        // Phase 1 PASS (score 1.0) IoU 0.9853 — applying the gate
+                        // may improve or regress it. Pre-ship validation needed:
+                        // (1) COM-measure 1ec1's tbl[0] tr[2] tc[3] p[0] cell to
+                        //     verify Word's wrap budget there. Same for one ed025
+                        //     T16 cell. Both should show cell_w - cellMar usage.
+                        // (2) Implement gate behind OXI_S412_DISABLE env var,
+                        //     A/B test on baseline. ed025 corpus score will
+                        //     likely stay flat without kinsoku rebalance
+                        //     (S409 blocker); 1ec1 is the leading validator.
+                        // (3) ed025 full improvement requires BOTH S412 gate
+                        //     AND kinsoku rebalance per S409.
+                        //
+                        // Both ed025 and 3a4f's with-tblCellMar tables use
+                        // identical cellmar=99/99 dxa — value alone is not the
+                        // discriminator (rejected). The PRESENCE of
+                        // firstLineChars + tblCellMar + multi-column +
+                        // auto-layout is the discriminator.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
