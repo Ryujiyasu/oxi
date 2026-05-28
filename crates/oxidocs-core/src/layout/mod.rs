@@ -7835,6 +7835,35 @@ impl LayoutEngine {
                         // ed025 + 1ec1 without baseline risk. See full
                         // discriminator rationale at S411/S412 comment
                         // block below.
+                        //
+                        // S413 A/B VALIDATION RESULT (full renderer rebuild,
+                        // ed025+1ec1 caches cleared, OFF vs ON):
+                        //   Phase 1 (pagination): 53/55 UNCHANGED. No page-break
+                        //     movement; ed025 per-page para counts identical
+                        //     (kinsoku force-fit blocks the 2-line rewrap per S409).
+                        //   Phase 2 (element IoU): UNCHANGED. ed025 0.9179,
+                        //     1ec1 0.9853 — ZERO per-element IoU delta on both.
+                        //     Element IoU measures cell/line bbox, NOT text-start
+                        //     x, so the intra-cell text shift is invisible to it.
+                        //   Gate firing confirmed: text-start x shifts exactly
+                        //     -9.9pt (= cellMar 99+99 dxa) on every fire cell.
+                        //   Direct Word comparison (text-matched cells):
+                        //     1ec1 i=37 "　　　　○": Word x=316.0,
+                        //       Oxi OFF=356.45 (Δ40.5), ON=346.55 (Δ30.6)
+                        //     ed025 × col: Word x=364.0,
+                        //       Oxi OFF=401.75 (Δ37.8), ON=391.85 (Δ27.9)
+                        //     → ON moves Oxi +9.9pt TOWARD Word on BOTH docs
+                        //       (cellMar subtraction is DIRECTIONALLY CORRECT),
+                        //       but a ~28-31pt residual cell-x offset remains
+                        //       (pre-existing, larger than cellMar, NOT addressed
+                        //       by this gate — likely cell column x-origin).
+                        // DECISION: KEEP default OFF. Gate is directionally
+                        // validated but yields no Phase 1/Phase 2 gain (does not
+                        // meet "IoU strictly increases" merge gate). Scaffold
+                        // retained for combined future work: (a) Phase 3 SSIM
+                        // gate where intra-cell text-x becomes visible,
+                        // (b) the ~28pt residual cell-x fix, (c) S409 kinsoku
+                        // rebalance to actually rewrap ed025.
                         let s412_cellmar_subtract = std::env::var("OXI_S412_ENABLE").is_ok()
                             && p_first_line_indent_raw > 0.0
                             && para.style.indent_first_line_chars.is_some()
