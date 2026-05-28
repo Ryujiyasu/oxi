@@ -4472,12 +4472,24 @@ impl LayoutEngine {
             let s391_lrpb_break = if line_idx > 0 && !in_textbox
                 && std::env::var("OXI_S391_PER_LINE_LRPB").is_ok()
             {
-                line.fragments.iter().any(|f| {
+                let has_lrpb_here = line.fragments.iter().any(|f| {
                     f.char_offset == 0
                         && para.runs.get(f.run_index)
                             .map(|r| r.has_last_rendered_page_break)
                             .unwrap_or(false)
-                })
+                });
+                // S393 discriminator: only honor when the paragraph has
+                // exactly ONE LRPB (multiple LRPBs suggest re-render
+                // artifacts; single = clean Word-current break signal).
+                let s393_single_lrpb = std::env::var("OXI_S393_SINGLE_LRPB").is_ok();
+                if has_lrpb_here && s393_single_lrpb {
+                    let lrpb_count = para.runs.iter()
+                        .filter(|r| r.has_last_rendered_page_break)
+                        .count();
+                    lrpb_count == 1
+                } else {
+                    has_lrpb_here
+                }
             } else {
                 false
             };
