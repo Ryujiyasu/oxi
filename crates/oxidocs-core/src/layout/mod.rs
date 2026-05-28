@@ -4671,7 +4671,20 @@ impl LayoutEngine {
                 let rule = para.style.line_spacing_rule.as_deref();
                 let skip_half_leading = matches!(rule, Some("exact") | Some("atLeast"));
                 // S388 (2026-05-27): blanket-disable FALSIFIED (see widow site).
-                if line_idx > 0
+                // S396 (2026-05-28): LRPB-triggered breaks skip continuation
+                // half-leading. Discriminator: when Word inserts
+                // <w:lastRenderedPageBreak/> mid-paragraph, that LRPB position
+                // IS the line top — no half-leading added on top. When break
+                // comes from natural overflow, Session 107's hl still applies
+                // (d77a et al). Localized via b837 dump (pages 2-6 uniformly
+                // +1.5pt step traced to this advance), validated by
+                // OXI_S396_NO_CONT_HL=1 b837 IoU 0.9407 -> 0.9535 (+0.0128).
+                let s396_default = std::env::var("OXI_S396_LRPB_SKIPS_HL")
+                    .map(|v| v != "0" && v != "false")
+                    .unwrap_or(true);
+                let s396_skip_cont_hl = (s396_default && s391_lrpb_break)
+                    || std::env::var("OXI_S396_NO_CONT_HL").is_ok();
+                if !s396_skip_cont_hl && line_idx > 0
                     && !skip_half_leading
                     && grid_pitch.map_or(false, |p| p > 0.0)
                     && para.style.snap_to_grid
