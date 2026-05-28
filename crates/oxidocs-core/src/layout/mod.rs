@@ -4460,16 +4460,15 @@ impl LayoutEngine {
             // natural per-line break sees room remaining). More surgical than
             // the R7.45-rejected "force whole paragraph". Env-gated.
             // S391 (2026-05-27): per-LINE LRPB respect, env-gated experiment.
-            // EVIDENCE: blanket-enable gives b837808d +0.2009 (huge, the
-            // S387-ceiling +0.26 doc) and d77a58 +0.0127, but 3a4f9fbe
-            // CATASTROPHIC -0.6265 (3a4f has 38 non-first-run LRPBs, most
-            // STALE — Word's current render doesn't break there → forcing
-            // breaks cascades). Adding `consumed > half_page` safety
-            // (mirroring R7.45 first-run rule) DIDN'T help — 3a4f's LRPBs
-            // are at high cursor too. Net corpus -0.0076. FALSIFIED as
-            // blanket. The mechanism is REAL (b837 evidence) but needs a
-            // discriminator (which LRPB instances are current vs stale).
-            // Kept env-gated for next-iteration discriminator hunt.
+            // EVIDENCE: blanket-enable gives b837808d +0.2009 (the biggest
+            // single-doc Phase-2 gain identified) and d77a58 +0.0127, but
+            // 3a4f9fbe CATASTROPHIC -0.6265 (3a4f has 38 non-first-run LRPBs,
+            // most stale). Two discriminators TESTED and FALSIFIED in S391/392:
+            //   1. `consumed > half_page` (R7.45 mirror) — didn't filter 3a4f.
+            //   2. `remaining_para_h <= page_remaining` (Word's break is forced) —
+            //      filtered b837 to +0.0445 only, and 3a4f still -0.6441.
+            // The mechanism is REAL but the current/stale LRPB discriminator
+            // requires deeper COM analysis — kept env-gated for S393+ work.
             let s391_lrpb_break = if line_idx > 0 && !in_textbox
                 && std::env::var("OXI_S391_PER_LINE_LRPB").is_ok()
             {
