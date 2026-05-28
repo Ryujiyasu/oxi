@@ -7864,6 +7864,22 @@ impl LayoutEngine {
                         // gate where intra-cell text-x becomes visible,
                         // (b) the ~28pt residual cell-x fix, (c) S409 kinsoku
                         // rebalance to actually rewrap ed025.
+                        //
+                        // S414 (2026-05-29) CAVEAT — the model below is on
+                        // SHAKY GROUND. The fire cells are predominantly
+                        // jc=RIGHT-ALIGNED (ed025 226/262, 1ec1 i=37), not
+                        // left-edge-wrapped. For right-aligned text Word anchors
+                        // at content_right and position is set by TEXT WIDTH, not
+                        // a left-edge wrap budget. The S413 -9.9pt shift toward
+                        // Word was coincidence of magnitude (~cellMar), not the
+                        // correct mechanism. The real ~40pt residual (1ec1 col3
+                        // "　　　　税": Word x=316.0 vs Oxi 356.45; neighbors
+                        // col0/col2/col4 all match Word) is specific to
+                        // right-aligned + firstLine-indent cells and needs COM
+                        // glyph measurement before any fix. This gate may be
+                        // RETIRED in S415+ rather than promoted. Do NOT enable
+                        // by default without re-deriving from right-aligned
+                        // positioning data.
                         let s412_cellmar_subtract = std::env::var("OXI_S412_ENABLE").is_ok()
                             && p_first_line_indent_raw > 0.0
                             && para.style.indent_first_line_chars.is_some()
