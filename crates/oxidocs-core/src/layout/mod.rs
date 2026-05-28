@@ -7828,23 +7828,27 @@ impl LayoutEngine {
                             && row.cells.len() == 2
                             && cell_w <= content_width
                             && !para.style.word_wrap;  // tight discriminator: wordWrap=0 only
-                        // S405-S406 (2026-05-28): root cause for ed025 misplaced
-                        // × × × cell found = × U+00D7 width treatment + cell wrap
-                        // calc differences vs Word. COM measured: Word treats × as
-                        // FULLWIDTH 10.5pt in MS Mincho (line 1 of pi=1374 has 5
-                        // chars at x=364.5/375/385.5/396/406.5 = 10.5pt advance
-                        // each, total 52.5pt; wraps to line 2). Oxi previously
-                        // treated × as halfwidth (5.25pt). Added × U+00D7 to
-                        // MS Mincho/Gothic widths.json (S406). Also tested
-                        // S405 OXI_S405_INNER_INDENT subtract-padding-from-
-                        // wrap_base when p_first_line_indent>0. NEITHER nor BOTH
-                        // changed ed025 score (0.9986 unchanged). Tracing
-                        // showed neither layout_table cell-content loop
-                        // (mod.rs:7950) nor count_cell_lines (mod.rs:9484)
-                        // process T16 cell-2 pi=4 chars — text rendered via
-                        // unknown path. S407+ needs trace from element emission
-                        // back to wrap decision. Reverted both fixes; only
-                        // commit is this 18-line documentation.
+                        // S405-S407 (2026-05-28): COMPLETE mechanism for ed025
+                        // misplaced × × × cell:
+                        //   1. Word treats × U+00D7 as FULLWIDTH 10.5pt in MS
+                        //      Mincho (S406 COM-confirmed)
+                        //   2. Word uses (cell_w - padding - first_line_indent)
+                        //      = 70pt budget for first line (S405)
+                        //   3. Text 73.5pt > 70pt → wraps to 2 lines
+                        // S407 trace verified the cell content path IS this code
+                        // (cell_idx=2 cpi=4 row=1 reached). Earlier S406 traces
+                        // missed because conditions were wrong, not the path.
+                        // With BOTH fixes enabled: trace shows overflow=true at
+                        // 7th char `）` (sum=73.5 > 70.0 budget) — wrap correctly
+                        // fires for pi=4. **But corpus impact CATASTROPHIC**:
+                        // Phase 2 0.9647 → 0.9459 (-0.0188), Phase 1 53→52,
+                        // pass 18→17. × as fullwidth breaks docs using × as
+                        // math operator (10×20 type usage); S405 padding-subtract
+                        // breaks many cell wrap calcs. Both fixes need MUCH
+                        // narrower discriminators. S408+ needs CJK-context-aware
+                        // × treatment (× fullwidth only when adjacent to fullwidth
+                        // chars or in a CJK-dominant run) AND per-table-style
+                        // padding-subtract gate. Multi-session work.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
