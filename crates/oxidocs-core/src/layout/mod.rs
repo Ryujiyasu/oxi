@@ -8195,6 +8195,13 @@ impl LayoutEngine {
                                 }
                                 _ => {
                                     // Single/auto grid-snapped: center within lh using natural lh.
+                                    // S383 (2026-05-27, FALSIFIED): hypothesized the +1.0pt cluster
+                                    // was over-centering (center in row_height not grid-snapped lh).
+                                    // Env-gated test: net -0.0013, 0 improve / 9 regress, and
+                                    // b5f706 (the target) did NOT improve — so the +1.0 is NOT in
+                                    // the cell centering window. Re-localized to the body→table
+                                    // transition cursor advance (the +0.5 extra is in the
+                                    // body→table GAP: Word 19.0pt vs Oxi 19.5pt), not cell internals.
                                     let raw = (lh - cell_centering_height).max(0.0) / 2.0;
                                     // S360 (2026-05-27): cell centering uses same CEIL-half-up
                                     // rounding as body (S328). The +1.0pt table dy cluster
