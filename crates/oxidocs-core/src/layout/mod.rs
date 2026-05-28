@@ -7880,12 +7880,20 @@ impl LayoutEngine {
                         // RETIRED in S415+ rather than promoted. Do NOT enable
                         // by default without re-deriving from right-aligned
                         // positioning data.
+                        // S418: discriminator now uses has_explicit_cellmar
+                        // (author-declared <w:tblCellMar> in this table's
+                        // tblPr) instead of the default_cell_margins.is_some()
+                        // PROXY. S417e caught the proxy over-firing on 04b88e
+                        // (which has default margins but no explicit tblCellMar)
+                        // and regressing its x-fidelity 0.7309 -> 0.7000. The
+                        // explicit-only condition matches the S412 v4 analysis
+                        // (262 ed025 + 1 1ec1, 0 in 04b88e/3a4f/51 others).
                         let s412_cellmar_subtract = std::env::var("OXI_S412_ENABLE").is_ok()
                             && p_first_line_indent_raw > 0.0
                             && para.style.indent_first_line_chars.is_some()
                             && row.cells.len() >= 3
                             && table.style.layout.as_deref() != Some("fixed")
-                            && table.style.default_cell_margins.is_some()
+                            && table.style.has_explicit_cellmar
                             && cell_w <= content_width;
                         // S405-S411 ed025 chain (2026-05-28):
                         // S408 shipped × U+00D7 fullwidth correctness fix (safe).

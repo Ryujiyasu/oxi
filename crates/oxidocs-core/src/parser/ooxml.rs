@@ -4922,6 +4922,11 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         }
                     }
                     style.default_cell_margins = Some(margins);
+                    // S418: this tblCellMar is directly in THIS table's tblPr
+                    // (author-declared), not inherited from a tblStyle — the
+                    // precise S412 cellMar wrap-budget discriminator. Mirrors
+                    // explicit_borders above.
+                    style.has_explicit_cellmar = true;
                     // Don't increment depth — we consumed the End event
                     continue;
                 }

@@ -1161,6 +1161,15 @@ pub struct TableStyle {
     /// Default cell margins in points (w:tblCellMar)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_cell_margins: Option<CellMargins>,
+    /// True iff `<w:tblCellMar>` was directly in this table's `<w:tblPr>`,
+    /// not inherited from a `<w:tblStyle>` or defaulted. Mirrors
+    /// `explicit_borders`. Distinguishes author-declared cell margins
+    /// (the S412 cellMar wrap-budget discriminator) from style-inherited
+    /// or OOXML-default margins. `default_cell_margins.is_some()` is too
+    /// broad for that gate (S417e: it fired on 04b88e — which has default
+    /// margins but no explicit tblCellMar — and regressed it).
+    #[serde(default)]
+    pub has_explicit_cellmar: bool,
     /// Paragraph properties from table style (pPr) — applied to cell paragraphs as fallback
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub para_style: Option<ParagraphStyle>,
