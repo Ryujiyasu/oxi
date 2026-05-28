@@ -7828,27 +7828,23 @@ impl LayoutEngine {
                             && row.cells.len() == 2
                             && cell_w <= content_width
                             && !para.style.word_wrap;  // tight discriminator: wordWrap=0 only
-                        // S405-S407 (2026-05-28): COMPLETE mechanism for ed025
-                        // misplaced × × × cell:
-                        //   1. Word treats × U+00D7 as FULLWIDTH 10.5pt in MS
-                        //      Mincho (S406 COM-confirmed)
-                        //   2. Word uses (cell_w - padding - first_line_indent)
-                        //      = 70pt budget for first line (S405)
-                        //   3. Text 73.5pt > 70pt → wraps to 2 lines
-                        // S407 trace verified the cell content path IS this code
-                        // (cell_idx=2 cpi=4 row=1 reached). Earlier S406 traces
-                        // missed because conditions were wrong, not the path.
-                        // With BOTH fixes enabled: trace shows overflow=true at
-                        // 7th char `）` (sum=73.5 > 70.0 budget) — wrap correctly
-                        // fires for pi=4. **But corpus impact CATASTROPHIC**:
-                        // Phase 2 0.9647 → 0.9459 (-0.0188), Phase 1 53→52,
-                        // pass 18→17. × as fullwidth breaks docs using × as
-                        // math operator (10×20 type usage); S405 padding-subtract
-                        // breaks many cell wrap calcs. Both fixes need MUCH
-                        // narrower discriminators. S408+ needs CJK-context-aware
-                        // × treatment (× fullwidth only when adjacent to fullwidth
-                        // chars or in a CJK-dominant run) AND per-table-style
-                        // padding-subtract gate. Multi-session work.
+                        // S405-S409 ed025 chain (2026-05-28):
+                        // S408 shipped × U+00D7 fullwidth correctness fix (safe).
+                        // S409 isolated S405 padding-subtract impact:
+                        //   - Only 2 docs regress: 3a4f (-0.6415), 04b88e (-0.3905)
+                        //   - 53 other docs unchanged
+                        //   - ed025 score UNCHANGED even with S405 because Oxi's
+                        //     kinsoku force-fit puts `）` on same line (line-start
+                        //     prohibited → forced onto current line, no actual
+                        //     wrap to 2 lines)
+                        // → S405 alone doesn't even fix ed025. Need BOTH:
+                        //   1. narrower S405 gate (avoid 3a4f/04b88e regression)
+                        //   2. kinsoku REBALANCE algorithm (look BACKWARD when
+                        //      prohibited char would be alone on next line —
+                        //      pull preceding char too so prohibited char has
+                        //      companion). Current Oxi force-fits in this case.
+                        // ed025 needs (1) AND (2) together to render 2 lines
+                        // matching Word's 5-char + 2-char split.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
