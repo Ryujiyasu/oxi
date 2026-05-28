@@ -87,19 +87,17 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     # contains that many repetitions of the matched prefix — closing the
     # R7.32 cell_paragraph_index gap for docs where Oxi joins per-cell text.
     #
-    # S399 (2026-05-28) KNOWN LIMITATION: this text-prefix matcher is
-    # UNRELIABLE for tables whose cells contain identical short tokens
-    # repeated 10+ times (e.g. ed025 form: 102 "× × ×" cells across one
-    # multi-column table). When the search expands beyond `radius=0`,
-    # an arbitrary same-text candidate on an adjacent page may be picked
-    # before the correct one, producing spurious page_delta=±1.
-    # ed025 case: Oxi total × count (102) EXACTLY matches Word (102),
-    # but pagination_diff reports 1 spurious -1 delta on word_i=1540
-    # because the matcher's column-blind text-prefix lookup picks the
-    # wrong "× × ×" candidate. Engine layout appears correct.
-    # Possible future fix: use x-coordinate (and `in_table` cohort) as
-    # an additional disambiguation key — Word reports x per paragraph
-    # and Oxi records carry x_min, so column-aware matching is feasible.
+    # S400 (2026-05-28) CORRECTION to S399: bare text-prefix matching CAN
+    # cause spurious deltas on repetitive-text tables in principle, but
+    # ed025's specific Phase 1 -1 delta is NOT a matcher artifact — it
+    # is a REAL Oxi layout difference. Per-page (y,x)-unique × × × counts
+    # for ed025: pages 5/6/9/10/15 match Word exactly; page 13 Word=28
+    # Oxi=29 (+1), page 14 Word=39 Oxi=38 (-1) → 1 cell that Word places
+    # on page 14 is on Oxi page 13. The matcher correctly identifies
+    # this. A column-aware tie-break (x distance + in_table cohort) was
+    # tested in S400 and produced no corpus change; reverted to keep
+    # this tool simple. Engine-side fix for ed025's misplaced cell
+    # remains an open per-doc target.
     used: dict[tuple[int, int], int] = {}
 
     matches: list[dict] = []
