@@ -7888,7 +7888,17 @@ impl LayoutEngine {
                         // and regressing its x-fidelity 0.7309 -> 0.7000. The
                         // explicit-only condition matches the S412 v4 analysis
                         // (262 ed025 + 1 1ec1, 0 in 04b88e/3a4f/51 others).
-                        let s412_cellmar_subtract = std::env::var("OXI_S412_ENABLE").is_ok()
+                        // S419 SHIP (2026-05-29): default ON (opt-out
+                        // OXI_S412_DISABLE, S301 pattern). COM-validated
+                        // correctness fix — matches Word TRUE rendering
+                        // (S416 GetPoint): ed025/1ec1 right-aligned firstLine
+                        // cellMar cells move to Word's rendered x (1ec1 col4
+                        // x-IoU 0.84->0.998). Ships on its own merit like S408:
+                        // the phase gates can't see horizontal fixes (Phase 1
+                        // x-independent, Phase 2 Y-only) but it regresses none
+                        // (Phase 1 53/55, Phase 2 0.9647, lib 142/0/6) and the
+                        // x_fidelity_diff diagnostic confirms the improvement.
+                        let s412_cellmar_subtract = std::env::var("OXI_S412_DISABLE").is_err()
                             && p_first_line_indent_raw > 0.0
                             && para.style.indent_first_line_chars.is_some()
                             && row.cells.len() >= 3
