@@ -7828,7 +7828,7 @@ impl LayoutEngine {
                             && row.cells.len() == 2
                             && cell_w <= content_width
                             && !para.style.word_wrap;  // tight discriminator: wordWrap=0 only
-                        // S405-S409 ed025 chain (2026-05-28):
+                        // S405-S411 ed025 chain (2026-05-28):
                         // S408 shipped × U+00D7 fullwidth correctness fix (safe).
                         // S409 isolated S405 padding-subtract impact:
                         //   - Only 2 docs regress: 3a4f (-0.6415), 04b88e (-0.3905)
@@ -7845,6 +7845,29 @@ impl LayoutEngine {
                         //      companion). Current Oxi force-fits in this case.
                         // ed025 needs (1) AND (2) together to render 2 lines
                         // matching Word's 5-char + 2-char split.
+                        //
+                        // S411 (2026-05-28) — narrower S405 gate hypothesis from
+                        // XML attribute comparison across ed025 / 3a4f / 04b88e:
+                        // Candidate gate: `has_tblCellMar AND cells_in_row >= 3
+                        //                  AND tblLayout != "fixed"`.
+                        // Per-doc fire counts on positive-firstLine table cells:
+                        //   ed025  : 262/381 (fires on T16 target + similar tables)
+                        //   3a4f   :   2/177 (down from 192 unrestricted)
+                        //   04b88e :   0/47  (FULLY protected)
+                        // Discriminator interpretation: Word subtracts cellMar
+                        // from wrap budget when the table author EXPLICITLY
+                        // declared tblCellMar AND the row is multi-column
+                        // AND layout is auto. layout=fixed cells use
+                        // cell_w as-is (Word respects the fixed column).
+                        // Single-cell rows fall through to S172's cell_hang_inner
+                        // (different code path), so excluding cells_in_row==1
+                        // here avoids double-application.
+                        // Status: HYPOTHESIS (not implemented). Needs COM
+                        // measurement on 3a4f's 2 remaining fire cells before
+                        // S412+ ship attempt. ed025 also needs (b) kinsoku
+                        // rebalance before any improvement materializes.
+                        // 3a4f 26 with-tblCellMar 1-cell cells use cellmar=99dxa
+                        // same as ed025 — value alone is not the discriminator.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
