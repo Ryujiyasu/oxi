@@ -7828,6 +7828,20 @@ impl LayoutEngine {
                             && row.cells.len() == 2
                             && cell_w <= content_width
                             && !para.style.word_wrap;  // tight discriminator: wordWrap=0 only
+                        // S413 (2026-05-29) — gate v4 implementation behind
+                        // OXI_S412_ENABLE (default OFF / opt-in). Default
+                        // behavior unchanged — gate only fires when the env
+                        // var is set, allowing local A/B validation against
+                        // ed025 + 1ec1 without baseline risk. See full
+                        // discriminator rationale at S411/S412 comment
+                        // block below.
+                        let s412_cellmar_subtract = std::env::var("OXI_S412_ENABLE").is_ok()
+                            && p_first_line_indent_raw > 0.0
+                            && para.style.indent_first_line_chars.is_some()
+                            && row.cells.len() >= 3
+                            && table.style.layout.as_deref() != Some("fixed")
+                            && table.style.default_cell_margins.is_some()
+                            && cell_w <= content_width;
                         // S405-S411 ed025 chain (2026-05-28):
                         // S408 shipped × U+00D7 fullwidth correctness fix (safe).
                         // S409 isolated S405 padding-subtract impact:
@@ -7898,7 +7912,7 @@ impl LayoutEngine {
                         // discriminator (rejected). The PRESENCE of
                         // firstLineChars + tblCellMar + multi-column +
                         // auto-layout is the discriminator.
-                        let wrap_base = if cell_hang_inner || s301_layout_fixed {
+                        let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
