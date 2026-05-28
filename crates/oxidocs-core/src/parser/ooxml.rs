@@ -159,6 +159,30 @@ impl OoxmlParser {
             // Continuous section: merge into previous page instead of creating a new one
             if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty() {
                 let last: &mut Page = pages.last_mut().unwrap();
+                // S394: also update LRPB count when extending existing section
+                fn count_lrpbs_in_blocks_local(blocks: &[crate::ir::Block]) -> usize {
+                    use crate::ir::Block;
+                    let mut n = 0;
+                    for b in blocks {
+                        match b {
+                            Block::Paragraph(p) => {
+                                n += p.runs.iter()
+                                    .filter(|r| r.has_last_rendered_page_break)
+                                    .count();
+                            }
+                            Block::Table(t) => {
+                                for row in &t.rows {
+                                    for cell in &row.cells {
+                                        n += count_lrpbs_in_blocks_local(&cell.blocks);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    n
+                }
+                last.total_lrpb_count += count_lrpbs_in_blocks_local(&section.blocks);
                 last.blocks.extend(section.blocks);
                 last.floating_images.extend(section.floating_images);
                 last.text_boxes.extend(section.text_boxes);
@@ -169,6 +193,31 @@ impl OoxmlParser {
                     last.columns = section.properties.columns;
                 }
             } else {
+                // S394 (2026-05-27): count total LRPBs in section blocks
+                // (body + nested tables). Used by S391 per-line LRPB gate.
+                fn count_lrpbs_in_blocks(blocks: &[crate::ir::Block]) -> usize {
+                    use crate::ir::Block;
+                    let mut n = 0;
+                    for b in blocks {
+                        match b {
+                            Block::Paragraph(p) => {
+                                n += p.runs.iter()
+                                    .filter(|r| r.has_last_rendered_page_break)
+                                    .count();
+                            }
+                            Block::Table(t) => {
+                                for row in &t.rows {
+                                    for cell in &row.cells {
+                                        n += count_lrpbs_in_blocks(&cell.blocks);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    n
+                }
+                let total_lrpb = count_lrpbs_in_blocks(&section.blocks);
                 pages.push(Page {
                     blocks: section.blocks,
                     size: section.properties.page_size,
@@ -191,6 +240,7 @@ impl OoxmlParser {
                     page_number_format: section.properties.page_number_format,
                     page_number_start: section.properties.page_number_start,
                     page_borders: section.properties.page_borders,
+                    total_lrpb_count: total_lrpb,
                 });
             }
             // Update previous refs for inheritance

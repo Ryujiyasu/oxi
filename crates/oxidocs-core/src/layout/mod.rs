@@ -4459,37 +4459,43 @@ impl LayoutEngine {
             // page 6; in Oxi run 1 starts at line 3 of page 5 because Oxi's
             // natural per-line break sees room remaining). More surgical than
             // the R7.45-rejected "force whole paragraph". Env-gated.
-            // S391 (2026-05-27): per-LINE LRPB respect, env-gated experiment.
-            // EVIDENCE: blanket-enable gives b837808d +0.2009 (the biggest
-            // single-doc Phase-2 gain identified) and d77a58 +0.0127, but
-            // 3a4f9fbe CATASTROPHIC -0.6265 (3a4f has 38 non-first-run LRPBs,
-            // most stale). Two discriminators TESTED and FALSIFIED in S391/392:
-            //   1. `consumed > half_page` (R7.45 mirror) — didn't filter 3a4f.
-            //   2. `remaining_para_h <= page_remaining` (Word's break is forced) —
-            //      filtered b837 to +0.0445 only, and 3a4f still -0.6441.
-            // The mechanism is REAL but the current/stale LRPB discriminator
-            // requires deeper COM analysis — kept env-gated for S393+ work.
-            let s391_lrpb_break = if line_idx > 0 && !in_textbox
-                && std::env::var("OXI_S391_PER_LINE_LRPB").is_ok()
-            {
+            // S395 SHIP (2026-05-27): per-LINE LRPB respect with doc-level
+            // LRPB count threshold. DEFAULT ON.
+            //
+            // History: R7.45 (2026-05-13) ignored LRPB on non-first run citing
+            // 34140 w_i=535 cascade concern when the WHOLE paragraph is moved
+            // to next page. S391 (2026-05-27) implements per-LINE LRPB respect
+            // (only the line containing the LRPB-bearing run's first char
+            // moves to next page, not the whole para) — strictly more
+            // surgical. S394 (2026-05-27) adds doc-level LRPB count threshold
+            // to discriminate clean current LRPB hints (b837=6, d77a=11) from
+            // stale-LRPB-saturated docs (3a4f=82 had 38 non-first-run LRPBs
+            // that catastrophically cascaded under blanket-enable).
+            //
+            // Corpus impact (threshold=30):
+            //   b837808d  0.7398 -> 0.9407  (+0.2009)  ← largest single-doc
+            //   d77a58    0.8992 -> 0.9119  (+0.0127)         gain ever found
+            //   ed025     0.9198 -> 0.9179  (-0.0019)         small
+            //   3a4f      0.7916 -> 0.7919  (+0.0003)  ← threshold filtered
+            //   corpus: 0.9603 -> 0.9641 (+0.0038), Phase 1 53/55 PRESERVED.
+            //
+            // Opt-out:
+            //   OXI_S391_PER_LINE_LRPB=0  -> disable per-line LRPB respect
+            //   OXI_S394_LRPB_MAX=<N>     -> override threshold (default 30)
+            let s391_on = std::env::var("OXI_S391_PER_LINE_LRPB")
+                .map(|v| v != "0" && v != "false")
+                .unwrap_or(true);
+            let s391_lrpb_break = if line_idx > 0 && !in_textbox && s391_on {
                 let has_lrpb_here = line.fragments.iter().any(|f| {
                     f.char_offset == 0
                         && para.runs.get(f.run_index)
                             .map(|r| r.has_last_rendered_page_break)
                             .unwrap_or(false)
                 });
-                // S393 discriminator: only honor when the paragraph has
-                // exactly ONE LRPB (multiple LRPBs suggest re-render
-                // artifacts; single = clean Word-current break signal).
-                let s393_single_lrpb = std::env::var("OXI_S393_SINGLE_LRPB").is_ok();
-                if has_lrpb_here && s393_single_lrpb {
-                    let lrpb_count = para.runs.iter()
-                        .filter(|r| r.has_last_rendered_page_break)
-                        .count();
-                    lrpb_count == 1
-                } else {
-                    has_lrpb_here
-                }
+                let s394_max = std::env::var("OXI_S394_LRPB_MAX").ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(30);
+                has_lrpb_here && page.total_lrpb_count <= s394_max
             } else {
                 false
             };

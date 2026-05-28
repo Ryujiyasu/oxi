@@ -115,6 +115,14 @@ pub struct Page {
     /// Page borders
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_borders: Option<PageBorders>,
+    /// S394 (2026-05-27): total count of <w:lastRenderedPageBreak/>
+    /// occurrences across all runs (body + nested tables/cells) in this
+    /// section. Used to discriminate "low-LRPB docs" (clean Word-current
+    /// break hints, e.g. b837=6, d77a=11) from "high-LRPB docs" (stale
+    /// re-render artifacts, e.g. 3a4f=82). Gates per-LINE LRPB respect
+    /// (S391/OXI_S391_PER_LINE_LRPB) when env OXI_S394_LRPB_MAX is set.
+    #[serde(default)]
+    pub total_lrpb_count: usize,
 }
 
 /// Page border definitions
