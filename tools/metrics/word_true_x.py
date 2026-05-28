@@ -32,18 +32,22 @@ wdVerticalPositionRelativeToPage = 6
 wdActiveEndPageNumber = 3
 
 
-def _fit(anchors):
-    """anchors: list of (px, pt). Return (slope, intercept_px0_pt)."""
-    if len(anchors) >= 2:
-        (px1, pt1) = anchors[0]
-        (px2, pt2) = anchors[-1]
-        if px2 != px1:
-            slope = (pt2 - pt1) / (px2 - px1)
-            return slope, pt1 - slope * px1
-    if len(anchors) == 1:
-        px1, pt1 = anchors[0]
-        return GLOBAL_SLOPE, pt1 - GLOBAL_SLOPE * px1
-    return None
+def _median(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
+def _fit_intercept(anchors, slope):
+    """anchors: list of (px, pt). slope is FIXED (known from zoom).
+    Per-page only the intercept (scroll offset) varies; estimate it as the
+    MEDIAN of (pt - slope*px) over anchors — robust to outlier anchors
+    (e.g. paras whose rendered char0 != Information(5))."""
+    if not anchors:
+        return None
+    return _median([pt - slope * px for (px, pt) in anchors])
 
 
 def measure_true_x(docx_path: str, max_paras: int | None = None) -> list[dict]:
@@ -56,6 +60,23 @@ def measure_true_x(docx_path: str, max_paras: int | None = None) -> list[dict]:
     win = doc.ActiveWindow
     recs = []
     try:
+        # Stabilize GetPoint px frame: maximize window + fit page width so
+        # there is NO horizontal scroll (h-scroll would shift px between
+        # cells on the same page and corrupt calibration — S417 page-3 bug).
+        try:
+            win.WindowState = 1  # wdWindowStateMaximize
+        except Exception:
+            pass
+        try:
+            win.View.Zoom.PageFit = 2  # wdPageFitBestFit (fit page in window)
+        except Exception:
+            pass
+        # slope is exactly (72/96) * (100/zoom) pt per screen px
+        try:
+            zoom = float(win.View.Zoom.Percentage)
+        except Exception:
+            zoom = 100.0
+        slope = GLOBAL_SLOPE * (100.0 / zoom) if zoom else GLOBAL_SLOPE
         n = doc.Paragraphs.Count
         if max_paras:
             n = min(n, max_paras)
@@ -93,24 +114,22 @@ def measure_true_x(docx_path: str, max_paras: int | None = None) -> list[dict]:
         for r in raw:
             if r['px'] is not None and r['align'] in (0, 3):
                 anchors_by_page[r['page']].append((r['px'], r['x_info5']))
-        fits = {}
+        intercepts = {}
         for pg, anch in anchors_by_page.items():
-            anch_sorted = sorted(anch)
-            f = _fit(anch_sorted)
-            if f:
-                fits[pg] = f
+            ic = _fit_intercept(anch, slope)
+            if ic is not None:
+                intercepts[pg] = ic
 
         for r in raw:
             x_true = None
             if r['px'] is not None:
-                f = fits.get(r['page'])
-                if f is None and r['align'] in (0, 3):
+                ic = intercepts.get(r['page'])
+                if ic is not None:
+                    x_true = round(slope * r['px'] + ic, 2)
+                elif r['align'] in (0, 3):
                     # this para is itself a left/justify; rendered == info5
                     x_true = r['x_info5']
-                elif f is not None:
-                    slope, inter = f
-                    x_true = round(slope * r['px'] + inter, 2)
-            recs.append({**r, 'x_true': x_true})
+            recs.append({**r, 'x_true': x_true, '_slope': slope})
     finally:
         doc.Close(SaveChanges=0)
         word.Quit()
