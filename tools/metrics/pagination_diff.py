@@ -86,6 +86,20 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     # multiple Word paragraphs to the same Oxi entry when the entry literally
     # contains that many repetitions of the matched prefix — closing the
     # R7.32 cell_paragraph_index gap for docs where Oxi joins per-cell text.
+    #
+    # S399 (2026-05-28) KNOWN LIMITATION: this text-prefix matcher is
+    # UNRELIABLE for tables whose cells contain identical short tokens
+    # repeated 10+ times (e.g. ed025 form: 102 "× × ×" cells across one
+    # multi-column table). When the search expands beyond `radius=0`,
+    # an arbitrary same-text candidate on an adjacent page may be picked
+    # before the correct one, producing spurious page_delta=±1.
+    # ed025 case: Oxi total × count (102) EXACTLY matches Word (102),
+    # but pagination_diff reports 1 spurious -1 delta on word_i=1540
+    # because the matcher's column-blind text-prefix lookup picks the
+    # wrong "× × ×" candidate. Engine layout appears correct.
+    # Possible future fix: use x-coordinate (and `in_table` cohort) as
+    # an additional disambiguation key — Word reports x per paragraph
+    # and Oxi records carry x_min, so column-aware matching is feasible.
     used: dict[tuple[int, int], int] = {}
 
     matches: list[dict] = []
