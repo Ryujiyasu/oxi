@@ -4539,6 +4539,13 @@ impl LayoutEngine {
                 // note for full rationale).
                 let rule_w = para.style.line_spacing_rule.as_deref();
                 let skip_hl_w = matches!(rule_w, Some("exact") | Some("atLeast"));
+                // S388 (2026-05-27): tested disabling continuation half-leading
+                // (OXI_S388_NO_CONT_HALFLEADING). FALSIFIED as blanket change:
+                // b837808d improves +0.021 but d77a58 catastrophically regresses
+                // -0.147 (Phase 1 UNCHANGED 53/55, so the half-leading's current
+                // role is Phase-2 VISUAL position, not pagination). Word applies
+                // it to d77a but apparently not b837 despite both being CJK
+                // small-leading grid docs — discriminator unknown, needs COM.
                 if line_idx > 0
                     && !skip_hl_w
                     && grid_pitch.map_or(false, |p| p > 0.0)
@@ -4613,6 +4620,7 @@ impl LayoutEngine {
                 //   db9ca18 / Mincho-heavy docs without page-break benefit)
                 let rule = para.style.line_spacing_rule.as_deref();
                 let skip_half_leading = matches!(rule, Some("exact") | Some("atLeast"));
+                // S388 (2026-05-27): blanket-disable FALSIFIED (see widow site).
                 if line_idx > 0
                     && !skip_half_leading
                     && grid_pitch.map_or(false, |p| p > 0.0)
