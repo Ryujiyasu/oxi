@@ -98,6 +98,25 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     # tested in S400 and produced no corpus change; reverted to keep
     # this tool simple. Engine-side fix for ed025's misplaced cell
     # remains an open per-doc target.
+    #
+    # S401 (2026-05-28) FULL LOCALIZATION of the ed025 bug for future
+    # engine work. The misplaced × × × cell is in Word's cell 3
+    # (x=364.0) of the form table T16 (4-cell row, trHeight=1920 min):
+    #   - Word last cell-3 paragraph on page 13: pi=1403 y=741.5 "× × ×"
+    #   - Word first cell-3 paragraph on page 14: pi=1404 y=59.0 "× × ×"
+    #   - Oxi last cell-3 paragraph on page 13:  y=739.5 "× × ×"
+    #     (this should be Word's pi=1404 — Oxi pushed it onto page 13)
+    # Mechanism: Oxi's cell-3 cursor on page 13 is ~2pt HIGHER (less down
+    # the page) than Word's at the boundary, so the next paragraph at
+    # y=739.5+18=757.5 fits in Oxi but Word's at y=741.5+18=759.5 doesn't
+    # fit under the same page-bottom limit. The ~2pt cursor gap is the
+    # accumulated effect across 17 cell-3 paragraphs of empty-paragraph
+    # treatment differences (Word renders cell-3 page 13 = 34 total paras
+    # incl. 17 empty; Oxi GDI dump only has 19 unique-y paras at cell_col=2
+    # page 13 → Oxi compresses or skips many empty cell paragraphs).
+    # Engine fix candidates: (1) match Word's per-empty-paragraph 18pt
+    # advance in table cells, (2) tighten cell-content page-bottom check.
+    # Phase 1 gain if fixed: 53/55 → 54/55.
     used: dict[tuple[int, int], int] = {}
 
     matches: list[dict] = []
