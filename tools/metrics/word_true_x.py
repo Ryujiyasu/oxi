@@ -98,15 +98,22 @@ def measure_true_x(docx_path: str, max_paras: int | None = None) -> list[dict]:
                 continue
             align = p.Format.Alignment  # 0 left 1 center 2 right 3 justify
             in_table = rng.Tables.Count > 0
-            # GetPoint (true rendered) for the first char
+            # GetPoint on the FULL paragraph range returns the rendered
+            # text rectangle: [left_px, top, width_px, height]. left_px is
+            # the true (alignment-aware) first-glyph x; width_px is the
+            # rendered text width. One call gives both (faster than per-char
+            # and supplies width for the x-range IoU diagnostic).
+            px = None
+            wpx = None
             try:
-                r0 = doc.Range(s, s + 1)
-                win.ScrollIntoView(r0, True)
-                px = win.GetPoint(0, 0, 0, 0, r0)[0]
+                win.ScrollIntoView(rng, True)
+                gp = win.GetPoint(0, 0, 0, 0, rng)
+                px = gp[0]
+                wpx = gp[2]
             except Exception:
-                px = None
+                pass
             raw.append({'page': page, 'align': align, 'x_info5': info5,
-                        'y': y, 'px': px, 'text': txt[:40], 'in_table': in_table})
+                        'y': y, 'px': px, 'wpx': wpx, 'text': txt[:40], 'in_table': in_table})
 
         # Pass 2: per-page calibration from align in {0,3} (rendered==info5)
         from collections import defaultdict
@@ -122,6 +129,7 @@ def measure_true_x(docx_path: str, max_paras: int | None = None) -> list[dict]:
 
         for r in raw:
             x_true = None
+            w_true = round(slope * r['wpx'], 2) if r.get('wpx') is not None else None
             if r['px'] is not None:
                 ic = intercepts.get(r['page'])
                 if ic is not None:
@@ -129,7 +137,10 @@ def measure_true_x(docx_path: str, max_paras: int | None = None) -> list[dict]:
                 elif r['align'] in (0, 3):
                     # this para is itself a left/justify; rendered == info5
                     x_true = r['x_info5']
-            recs.append({**r, 'x_true': x_true, '_slope': slope})
+            rec = {**r, 'x_true': x_true, 'w_true': w_true, '_slope': slope}
+            rec.pop('px', None)
+            rec.pop('wpx', None)
+            recs.append(rec)
     finally:
         doc.Close(SaveChanges=0)
         word.Quit()
