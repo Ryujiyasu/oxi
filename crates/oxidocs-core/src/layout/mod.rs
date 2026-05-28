@@ -7828,6 +7828,22 @@ impl LayoutEngine {
                             && row.cells.len() == 2
                             && cell_w <= content_width
                             && !para.style.word_wrap;  // tight discriminator: wordWrap=0 only
+                        // S405 (2026-05-28) tested OXI_S405_INNER_INDENT
+                        // (subtract padding from wrap_base when p_first_line_indent>0)
+                        // for ed025 T16 cell 2 pi=4 "(× × ×)" wrap. Env-gate fires
+                        // correctly (cell_w=90.40, pad=4.95+4.95, p_fli=10.5pt;
+                        // wrap_base went 90.40→80.50, first_line_wrap_w 79.9→70pt)
+                        // but pi=4 STILL renders as 1 line h=18 (ed025 score
+                        // unchanged 0.9986). Root cause is character-width: Oxi
+                        // treats × (U+00D7) as HALFWIDTH (5.25pt at 10.5pt MS
+                        // Mincho) since 0x00D7 is in Latin-1 Supplement range,
+                        // NOT in is_fullwidth()'s 0x2200-0x22FF (Math Operators).
+                        // Oxi text width: （(10.5)+×(5.25)+　(10.5)+×(5.25)+　(10.5)
+                        // +×(5.25)+）(10.5) = 57.75pt → fits even in 70pt wrap.
+                        // Word likely treats × as FULLWIDTH in CJK font context
+                        // (text=73.5pt → wraps). Global change to is_fullwidth()
+                        // would affect many docs that use × as math operator.
+                        // Reverted; needs S406+ careful per-font/per-context handling.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
