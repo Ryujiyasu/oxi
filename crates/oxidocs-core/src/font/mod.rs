@@ -911,6 +911,12 @@ pub fn is_fullwidth(ch: char) -> bool {
         // COM-confirmed (2026-04-07): not all 0x2010-0x205F are fullwidth.
         // Fullwidth: ‐ ‐ ' " † ‡ … ‰ ′ ″ ※ etc.
         // NOT fullwidth: — ' ' " " • ⁂ ⁄
+        0x00D7 |  // × MULTIPLICATION SIGN — S408: COM-confirmed fullwidth
+                  //   in MS Mincho/Gothic CJK fonts (10.5pt at 10.5pt font);
+                  //   only matters when font_metrics_compact lacks the char
+                  //   (CJK fonts don't list × in Latin-1 Supplement), so this
+                  //   affects only CJK font lookup paths — Latin fonts use
+                  //   their measured table value.
         0x2010 |  // ‐ HYPHEN
         0x2015 |  // ― HORIZONTAL BAR
         0x2018 |  // ' LEFT SINGLE QUOTATION MARK
