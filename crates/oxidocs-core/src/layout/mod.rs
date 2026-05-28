@@ -8909,6 +8909,15 @@ impl LayoutEngine {
                             // bottom directly, no recovery needed. Replaces the
                             // R7.69 text_y_off_recovered workaround.
                             let elem_bottom = elem.y + elem.height;
+                            // S402 (2026-05-28): tested OXI_S402_TIGHTEN to make
+                            // ed025 cell-3 page 13 spill 1 × × × to p14. Even
+                            // 3pt of tightening CATASTROPHICALLY regressed ed025
+                            // from 0.9986 (1 misplaced) to 0.8025 (140 misplaced)
+                            // because this split decision fires across ALL rows;
+                            // many correctly-fitting cells got pushed down a page.
+                            // The bug needs per-cell positioning correction
+                            // upstream (Oxi cell cursor 4pt above Word at p13
+                            // continuation start), not split-threshold tweaking.
                             if elem_bottom <= split_y + 0.1 {
                                 current_page_elems.push(elem);
                             } else {
