@@ -8123,6 +8123,19 @@ impl LayoutEngine {
                             // = Class A FAIL root cause). Narrow fix: only override when
                             // ppr_rpr.font_size is Some, leaving the default-fallback path
                             // (664c38001b40 form-cells) unchanged.
+                            //
+                            // S403 (2026-05-28) verified empty-cell-paragraph height
+                            // is NOT the source of ed025 Phase 1 -1 delta. Diagnostic
+                            // (OXI_S403_DUMP_CELL) confirmed Oxi uses lh=18.0 for
+                            // every cell paragraph (matches Word's per-gap median
+                            // 18.0pt across 33 gaps; Word distribution 18.0×19 +
+                            // 17.5×7 + 18.5×5 + 16.5×1 + 36.5×1 outlier). The
+                            // real ed025 bug is upstream of layout: Oxi's IR
+                            // contains 19 visible × × × cell paragraphs on p13
+                            // cell-3 vs Word's 18 — an EXTRA paragraph at Oxi
+                            // y=253.5 with no Word counterpart. Likely parser
+                            // path divergence (vMerge / cellMerge / spurious
+                            // paragraph emission), not a layout-height issue.
                             let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
                             if let Some(empty_fs) = pprrpr_fs {
                                 let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
