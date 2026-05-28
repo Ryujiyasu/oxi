@@ -7828,22 +7828,23 @@ impl LayoutEngine {
                             && row.cells.len() == 2
                             && cell_w <= content_width
                             && !para.style.word_wrap;  // tight discriminator: wordWrap=0 only
-                        // S405 (2026-05-28) tested OXI_S405_INNER_INDENT
-                        // (subtract padding from wrap_base when p_first_line_indent>0)
-                        // for ed025 T16 cell 2 pi=4 "(× × ×)" wrap. Env-gate fires
-                        // correctly (cell_w=90.40, pad=4.95+4.95, p_fli=10.5pt;
-                        // wrap_base went 90.40→80.50, first_line_wrap_w 79.9→70pt)
-                        // but pi=4 STILL renders as 1 line h=18 (ed025 score
-                        // unchanged 0.9986). Root cause is character-width: Oxi
-                        // treats × (U+00D7) as HALFWIDTH (5.25pt at 10.5pt MS
-                        // Mincho) since 0x00D7 is in Latin-1 Supplement range,
-                        // NOT in is_fullwidth()'s 0x2200-0x22FF (Math Operators).
-                        // Oxi text width: （(10.5)+×(5.25)+　(10.5)+×(5.25)+　(10.5)
-                        // +×(5.25)+）(10.5) = 57.75pt → fits even in 70pt wrap.
-                        // Word likely treats × as FULLWIDTH in CJK font context
-                        // (text=73.5pt → wraps). Global change to is_fullwidth()
-                        // would affect many docs that use × as math operator.
-                        // Reverted; needs S406+ careful per-font/per-context handling.
+                        // S405-S406 (2026-05-28): root cause for ed025 misplaced
+                        // × × × cell found = × U+00D7 width treatment + cell wrap
+                        // calc differences vs Word. COM measured: Word treats × as
+                        // FULLWIDTH 10.5pt in MS Mincho (line 1 of pi=1374 has 5
+                        // chars at x=364.5/375/385.5/396/406.5 = 10.5pt advance
+                        // each, total 52.5pt; wraps to line 2). Oxi previously
+                        // treated × as halfwidth (5.25pt). Added × U+00D7 to
+                        // MS Mincho/Gothic widths.json (S406). Also tested
+                        // S405 OXI_S405_INNER_INDENT subtract-padding-from-
+                        // wrap_base when p_first_line_indent>0. NEITHER nor BOTH
+                        // changed ed025 score (0.9986 unchanged). Tracing
+                        // showed neither layout_table cell-content loop
+                        // (mod.rs:7950) nor count_cell_lines (mod.rs:9484)
+                        // process T16 cell-2 pi=4 chars — text rendered via
+                        // unknown path. S407+ needs trace from element emission
+                        // back to wrap decision. Reverted both fixes; only
+                        // commit is this 18-line documentation.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
