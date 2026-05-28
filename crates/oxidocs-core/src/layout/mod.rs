@@ -7152,6 +7152,12 @@ impl LayoutEngine {
                 // Round 30: implicit border padding (matches second pass)
                 // S359 (2026-05-27): test confirmed Round 30 is load-bearing
                 // (OXI_S359_NO_ROUND30=1 caused -0.0186 corpus regression).
+                // S386 (2026-05-27): hypothesis "bug_a + Round30 double-count the
+                // top border on row 0" FALSIFIED. OXI_S386_NO_DOUBLE_BORDER=1
+                // (suppress Round30 on row 0 when bug_a fired) → corpus 0.9603
+                // → 0.9521 (-0.0082, pass 18→17), and b5f706 barely moved
+                // (0.9715→0.9707) because the iou_yrange_adj median absorbs
+                // uniform per-table shifts. Round30 on row 0 is load-bearing.
                 if pad_t == 0.0 && table.style.border {
                     pad_t = table.style.border_width.unwrap_or(0.4);
                 }
@@ -7473,6 +7479,8 @@ impl LayoutEngine {
                 // MS Mincho 12pt → text_y = topMargin + 0.5pt (= border width).
                 // S359 (2026-05-27): test confirmed Round 30 is load-bearing
                 // (OXI_S359_NO_ROUND30=1 caused -0.0186 corpus regression).
+                // S386 (2026-05-27): double-border-count hypothesis FALSIFIED
+                // (see height-calc site above; -0.0082 corpus regression).
                 if pad_t == 0.0 && table.style.border {
                     let bw = table.style.border_width.unwrap_or(0.4);
                     pad_t = bw;
