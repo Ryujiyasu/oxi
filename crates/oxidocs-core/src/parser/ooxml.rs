@@ -273,6 +273,15 @@ impl OoxmlParser {
                         page.grid_char_cw_ratio = Some(p / default_font_size);
                     }
                 }
+                // S390 (2026-05-27): temporary instrumentation — print
+                // per-section grid_char_pitch / default_font_size /
+                // grid_char_space_raw. Env-gated.
+                if std::env::var("OXI_S390_DUMP_PITCH").is_ok() {
+                    eprintln!("[S390] default_fs={} grid_char_pitch={:?} grid_char_space_raw={:?} cw_ratio={:?} content_w={}",
+                        default_font_size, page.grid_char_pitch, page.grid_char_space_raw,
+                        page.grid_char_cw_ratio,
+                        page.size.width - page.margin.left - page.margin.right);
+                }
             }
         }
 

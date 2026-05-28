@@ -4447,9 +4447,42 @@ impl LayoutEngine {
                 0.0
             };
             let effective_break_bottom = page_top + content_height + line_lenient_extra;
-            let needs_page_break = if in_textbox { false } else {
+            let natural_needs_page_break = if in_textbox { false } else {
                 cursor.cursor_y + break_threshold > effective_break_bottom
             };
+            // S391 (2026-05-27): per-LINE LRPB respect. When THIS line is the
+            // first to contain a run R that has has_last_rendered_page_break
+            // (char_offset==0 for run R's fragment on this line), AND this is
+            // not the paragraph's first line, force a mid-paragraph page break
+            // before this line. Word honors the LRPB position even mid-paragraph
+            // (b837 pi=71: run 1 has LRPB; in Word run 1 starts at top of
+            // page 6; in Oxi run 1 starts at line 3 of page 5 because Oxi's
+            // natural per-line break sees room remaining). More surgical than
+            // the R7.45-rejected "force whole paragraph". Env-gated.
+            // S391 (2026-05-27): per-LINE LRPB respect, env-gated experiment.
+            // EVIDENCE: blanket-enable gives b837808d +0.2009 (huge, the
+            // S387-ceiling +0.26 doc) and d77a58 +0.0127, but 3a4f9fbe
+            // CATASTROPHIC -0.6265 (3a4f has 38 non-first-run LRPBs, most
+            // STALE — Word's current render doesn't break there → forcing
+            // breaks cascades). Adding `consumed > half_page` safety
+            // (mirroring R7.45 first-run rule) DIDN'T help — 3a4f's LRPBs
+            // are at high cursor too. Net corpus -0.0076. FALSIFIED as
+            // blanket. The mechanism is REAL (b837 evidence) but needs a
+            // discriminator (which LRPB instances are current vs stale).
+            // Kept env-gated for next-iteration discriminator hunt.
+            let s391_lrpb_break = if line_idx > 0 && !in_textbox
+                && std::env::var("OXI_S391_PER_LINE_LRPB").is_ok()
+            {
+                line.fragments.iter().any(|f| {
+                    f.char_offset == 0
+                        && para.runs.get(f.run_index)
+                            .map(|r| r.has_last_rendered_page_break)
+                            .unwrap_or(false)
+                })
+            } else {
+                false
+            };
+            let needs_page_break = natural_needs_page_break || s391_lrpb_break;
             if std::env::var("OXI_DUMP_BREAK").is_ok() && line_idx == 0 {
                 let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
                 let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
