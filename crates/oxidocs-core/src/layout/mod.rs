@@ -7387,6 +7387,24 @@ impl LayoutEngine {
                 grid_idx += span;
             }
 
+            // S430 (2026-05-29, FALSIFIED — no code shipped): hypothesized that
+            // row_height should contain the GRID-SNAPPED rendered content height
+            // (visual_row_h, p2) instead of the natural estimate (p1), since the
+            // render path already snaps cell lines when adjustLineHeightInTable
+            // is set (mod.rs:6576) so a natural-sized row cannot contain its own
+            // snapped content (b5f706: content_h=18 overflows row_h=17). Tested
+            // env-gated `row_height = row_height.max(visual_row_h)` on the full
+            // corpus: per-doc isolation showed ONLY b35123 moved — and it
+            // CRATERED 0.9225→0.4453 (its cells already over-snap, +2pt each ×28,
+            // so taller rows compound the over-height); b5f706 itself was FLAT
+            // (its -9pt element_iou debt is per-LINE render height + matcher noise
+            // per S417e, NOT row-container height); Phase 1 54→53. Confirms the
+            // systemic finding's "inconsistent direction" (b35 cells too tall vs
+            // b5f706 too short) — a single blanket grid-snap row rule cannot fix
+            // both. adjustLineHeightInTable is near-universal (49/49 real docs)
+            // so it is NOT a usable discriminator. Reverted; left as a tombstone
+            // so this exact one-liner is not re-attempted.
+
             // Bug B Day 26 (Phase β step 1): row height snap removal.
             // COM-confirmed via R1-R6 ground truth (ffbd166): Word does NOT
             // grid-snap table row heights. All R1-R6 = natural sum/max.
