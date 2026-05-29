@@ -43,9 +43,12 @@ def measure_doc(word, docx_path: str) -> dict:
     # S432: some baseline docs (3a4f) fail/hang on Documents.Open of the
     # original (protected-view / lock); a %TEMP% copy opens cleanly (per
     # memory session424). Always open a temp copy — cheap and robust.
+    # Use a UNIQUE temp filename (mkstemp) + cleanup: a fixed name collided
+    # with a still-open/locked copy from a prior run (Permission denied),
+    # silently failing every doc.
     import shutil, tempfile
-    tmp_copy = os.path.join(tempfile.gettempdir(),
-                            "ppw_" + os.path.basename(docx_path))
+    fd, tmp_copy = tempfile.mkstemp(suffix=".docx", prefix="ppw_")
+    os.close(fd)
     shutil.copy(docx_path, tmp_copy)
     doc = word.Documents.Open(tmp_copy, ReadOnly=True)
     time.sleep(0.3)
@@ -151,6 +154,10 @@ def measure_doc(word, docx_path: str) -> dict:
         }
     finally:
         doc.Close(SaveChanges=False)
+        try:
+            os.remove(tmp_copy)
+        except Exception:
+            pass
 
 
 def main() -> int:
