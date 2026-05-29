@@ -112,6 +112,20 @@ def extract(doc_id, match_text, probe=None):
     if not span:
         raise SystemExit("no enclosing table")
     tbl = x[span[0]:span[1]]
+    # FAITHFULNESS FIX (S441): a `tblW w:type="auto"` table autofits to the
+    # standalone page's full content width, coming out ~6pt WIDER than its real
+    # rendered width (real width is constrained by tblInd + surrounding context).
+    # For a boundary-wrap paragraph (d77a J) that 6pt flips Word from 2 lines to
+    # 1, un-reproducing the bug. Pin the table to its tblGrid width + fixed
+    # layout so the standalone repro renders at the real cell width.
+    grid = re.search(r'<w:tblGrid>(.*?)</w:tblGrid>', tbl, re.S)
+    if grid:
+        cols = [int(c) for c in re.findall(r'<w:gridCol w:w="(\d+)"', grid.group(1))]
+        if cols and '<w:tblW w:w="0" w:type="auto"/>' in tbl:
+            total = sum(cols)
+            tbl = tbl.replace(
+                '<w:tblW w:w="0" w:type="auto"/>',
+                f'<w:tblW w:w="{total}" w:type="dxa"/><w:tblLayout w:type="fixed"/>', 1)
     sect = re.search(r'<w:sectPr>.*?</w:sectPr>', x, re.S)
     sectxml = sect.group(0) if sect else (
         '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
