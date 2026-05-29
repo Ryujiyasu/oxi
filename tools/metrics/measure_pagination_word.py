@@ -94,6 +94,36 @@ def measure_doc(word, docx_path: str) -> dict:
             except Exception:
                 in_table = False
 
+            # S432 (2026-05-29): structural cell coordinates for cell-aware
+            # diagnostics (cell_iou_diff.py). The element_iou next-y height
+            # derivation breaks inside tables because COM enumerates cells
+            # row-major but Information(6) y is non-monotonic across a row
+            # (S431 tokumei -81.6 artifact). With (table_start, row, col) we
+            # can derive per-column-monotonic heights instead. Additive
+            # fields only — existing pagination_diff / element_iou ignore them.
+            cell_row = None      # 0-based row within outermost table
+            cell_col = None      # 0-based column within outermost table
+            table_start = None   # outermost-table Range.Start = stable table id
+            if in_table:
+                try:
+                    cell = rng.Cells(1)            # innermost cell
+                    cell_row = cell.RowIndex - 1
+                    cell_col = cell.ColumnIndex - 1
+                    # Outermost table = the one with the smallest Start among
+                    # the tables overlapping this range (encloses the rest).
+                    tcount = rng.Tables.Count
+                    starts = []
+                    for ti in range(1, tcount + 1):
+                        try:
+                            starts.append(rng.Tables(ti).Range.Start)
+                        except Exception:
+                            pass
+                    if starts:
+                        table_start = min(starts)
+                except Exception:
+                    # Empty end-of-cell / boundary paragraphs raise; leave None.
+                    pass
+
             rows.append({
                 "i": pi,
                 "page": page,
@@ -101,6 +131,9 @@ def measure_doc(word, docx_path: str) -> dict:
                 "x": round(x, 2) if x is not None else None,
                 "text": text,
                 "in_table": in_table,
+                "cell_row": cell_row,
+                "cell_col": cell_col,
+                "table_start": table_start,
             })
 
         return {
