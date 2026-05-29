@@ -8154,6 +8154,41 @@ impl LayoutEngine {
                                     prev_char_emitted = None;
                                     continue;
                                 }
+                                // S443 (2026-05-30, env-gated): TAB-STOP advancement in the
+                                // CELL wrap path. The body path (mod.rs:5986-6014) advances a
+                                // '\t' to the next tab stop, but the cell path historically
+                                // treated '\t' as a ~0-width char (S442 root cause: d77a item J
+                                // — marker カ + tab + body — wrapped 1 line in Oxi vs 2 in Word
+                                // because the missing ~12pt tab advance left room to fit the
+                                // trailing す。). Mirror the body formula: tab stops are measured
+                                // in absolute coords from the cell content-left; line_x+buf_w is
+                                // relative to the line's wrap start, so add the line-start indent
+                                // offset to convert. Default ON would be high-blast-radius (every
+                                // CJK cell with a tab) — gated for A/B validation first.
+                                if ch == '\t' && std::env::var("OXI_S443_CELL_TAB").is_ok() {
+                                    let indent_off = if is_first_line {
+                                        (p_indent_left + p_first_line_indent).max(0.0)
+                                    } else {
+                                        p_indent_left
+                                    };
+                                    let abs_pos = line_x + buf_w + indent_off;
+                                    let next_pos = if !para.style.tab_stops.is_empty() {
+                                        para.style.tab_stops.iter()
+                                            .find(|ts| ts.position > abs_pos + 0.01)
+                                            .map(|ts| ts.position)
+                                            .unwrap_or_else(|| ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop)
+                                    } else {
+                                        ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop
+                                    };
+                                    let tab_w = (next_pos - abs_pos).max(0.0);
+                                    buf.push(ch);
+                                    buf_w += tab_w;
+                                    buf_chars.push(crate::layout::jc_both_compress::CharContext {
+                                        ch, natural_advance: tab_w, font_size,
+                                    });
+                                    prev_char_emitted = Some(ch);
+                                    continue;
+                                }
                                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                                 // 2026-04-19: Apply charSpace as ABSOLUTE delta (not fs-scaled).
@@ -9808,6 +9843,11 @@ impl LayoutEngine {
         para: &Paragraph,
         wrap_w: f32,
         first_line_wrap_w: f32,
+        // S443: raw indents (pt) so the tab-stop estimate matches the render
+        // path; the line-count drives row height / element Y placement, so the
+        // estimate MUST account for tab advancement too or the cascade won't move.
+        indent_l_pt: f32,
+        first_indent_pt: f32,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
     ) -> usize {
@@ -9865,6 +9905,35 @@ impl LayoutEngine {
                     prev_char_emitted = None;
                     current_line_chars.clear();
                     buf_chars.clear();
+                    continue;
+                }
+                // S443 (2026-05-30, env-gated): TAB-STOP advancement in the cell
+                // line-count estimate (mirrors the render-loop fix). Must match the
+                // render so estimate==render (Fix C invariant). See render path.
+                if ch == '\t' && std::env::var("OXI_S443_CELL_TAB").is_ok() {
+                    let indent_off = if is_first_line {
+                        (indent_l_pt + first_indent_pt).max(0.0)
+                    } else {
+                        indent_l_pt
+                    };
+                    let abs_pos = line_x + buf_w + indent_off;
+                    let next_pos = if !para.style.tab_stops.is_empty() {
+                        para.style.tab_stops.iter()
+                            .find(|ts| ts.position > abs_pos + 0.01)
+                            .map(|ts| ts.position)
+                            .unwrap_or_else(|| ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop)
+                    } else {
+                        ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop
+                    };
+                    let tabw = (next_pos - abs_pos).max(0.0);
+                    if std::env::var("OXI_DUMP_CELLX").is_ok() {
+                        eprintln!("[CELLX_TAB] dts={:.1} abs={:.2} next={:.2} tab_w={:.2} buf_w_pre={:.2} flw={:.2} indent_off={:.2}",
+                            self.default_tab_stop, abs_pos, next_pos, tabw, buf_w, first_line_wrap_w, indent_off);
+                    }
+                    buf_w += tabw;
+                    buf_nonempty = true;
+                    line_nonempty = true;
+                    prev_char_emitted = Some(ch);
                     continue;
                 }
                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
@@ -10340,7 +10409,7 @@ impl LayoutEngine {
                 } else {
                     (grid_char_pitch, grid_char_cw_ratio)
                 };
-                self.count_cell_lines(para, effective_width, first_line_wrap_w, gcp_for_count, gcr_for_count)
+                self.count_cell_lines(para, effective_width, first_line_wrap_w, indent_l, first_indent, gcp_for_count, gcr_for_count)
             } else {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))

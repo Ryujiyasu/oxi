@@ -64,13 +64,15 @@ CT = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
       '<Default Extension="xml" ContentType="application/xml"/>'
       '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
       '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+      '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
       '</Types>')
 RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
 DOCRELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-           '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+           '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+           '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>')
 
 
 def doc_id_to_path(doc_id):
@@ -99,6 +101,15 @@ def extract(doc_id, match_text, probe=None):
     z = zipfile.ZipFile(doc_id_to_path(doc_id))
     x = z.read('word/document.xml').decode('utf-8')
     styles = z.read('word/styles.xml').decode('utf-8')
+    # S443: include settings.xml verbatim — it carries defaultTabStop,
+    # adjustLineHeightInTable, compat flags etc. that affect cell wrap. Omitting
+    # it (S440/S441) left defaultTabStop at Word's 36pt default instead of the
+    # doc's real value, breaking tab-stop fidelity.
+    try:
+        settings = z.read('word/settings.xml').decode('utf-8')
+    except KeyError:
+        settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                    '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
     # locate match: a position whose stripped context contains match_text
     pos = None
     needle = match_text[:4]
@@ -141,6 +152,7 @@ def extract(doc_id, match_text, probe=None):
         zo.writestr('_rels/.rels', RELS)
         zo.writestr('word/_rels/document.xml.rels', DOCRELS)
         zo.writestr('word/styles.xml', styles)
+        zo.writestr('word/settings.xml', settings)
         zo.writestr('word/document.xml', doc)
     # validate well-formed
     import xml.etree.ElementTree as ET
