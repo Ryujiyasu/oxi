@@ -40,7 +40,14 @@ def doc_id_from_filename(fname: str) -> str:
 
 
 def measure_doc(word, docx_path: str) -> dict:
-    doc = word.Documents.Open(docx_path, ReadOnly=True)
+    # S432: some baseline docs (3a4f) fail/hang on Documents.Open of the
+    # original (protected-view / lock); a %TEMP% copy opens cleanly (per
+    # memory session424). Always open a temp copy — cheap and robust.
+    import shutil, tempfile
+    tmp_copy = os.path.join(tempfile.gettempdir(),
+                            "ppw_" + os.path.basename(docx_path))
+    shutil.copy(docx_path, tmp_copy)
+    doc = word.Documents.Open(tmp_copy, ReadOnly=True)
     time.sleep(0.3)
     try:
         try:
@@ -151,9 +158,15 @@ def main() -> int:
 
     prefix = None
     limit = None
+    resume = False
     for arg in sys.argv[1:]:
         if arg.startswith("--limit="):
             limit = int(arg.split("=", 1)[1])
+        elif arg == "--resume":
+            # S432: skip docs whose json already carries S432 cell coords
+            # (any paragraph with a `cell_row` key). Lets a killed full run
+            # resume without redoing completed docs.
+            resume = True
         elif not arg.startswith("--"):
             prefix = arg
 
@@ -163,6 +176,18 @@ def main() -> int:
     )
     if prefix:
         all_docx = [f for f in all_docx if f.startswith(prefix) or doc_id_from_filename(f).startswith(prefix)]
+    if resume:
+        def _has_coords(fn):
+            p = os.path.join(OUT_DIR, f"{doc_id_from_filename(fn)}.json")
+            if not os.path.exists(p):
+                return False
+            try:
+                with open(p, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                return any("cell_row" in r for r in d.get("paragraphs", []))
+            except Exception:
+                return False
+        all_docx = [f for f in all_docx if not _has_coords(f)]
     if limit:
         all_docx = all_docx[:limit]
     if not all_docx:
