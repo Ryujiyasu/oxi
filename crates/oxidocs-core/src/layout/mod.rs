@@ -7427,6 +7427,26 @@ impl LayoutEngine {
                 match row.height_rule.as_deref() {
                     Some("exact") => { row_height = h; }
                     // Default (None) or explicit "atLeast": atLeast semantics.
+                    // S445 (2026-05-30, FALSIFIED — tombstone): 7ead52 has
+                    // 860tw(43.0pt) atLeast rows whose VISUAL text-to-text pitch
+                    // is 44.25pt (+1.25/row, accumulating -1.9 -> -11.65 over 8
+                    // rows; cell_iou 0.79). Hypothesized Word renders binding
+                    // atLeast+insideH rows taller than the logical trHeight
+                    // (the prior 0e7a "renders at exactly val" note used
+                    // Cell.Height = LOGICAL value, the S349/S361 trap) and that
+                    // this was a universal systematic underestimate. Env-gated
+                    // OXI_S445_ATLEAST_BUMP=1.25 (matches 7ead52 exactly) over
+                    // the full corpus: CATASTROPHIC — net IoU 0.9692->0.9552,
+                    // 19 docs DOWN / 5 up (31420af -0.3766, bd90b -0.176),
+                    // Phase 1 54->52. The bump is DOC-SPECIFIC not universal:
+                    // most docs render atLeast rows at ~the logical value; the
+                    // +1.25 7ead52 needs overshoots them. Same wall as gen2_052
+                    // / S374 / S375 (any per-row border/bump add regresses the
+                    // corpus). 7ead52 is a trHeight-BINDING outlier; note its
+                    // negative-drift neighbors (6514f2/d4d126/de6e32) are a
+                    // DIFFERENT class (content-line-height, pitch 21>trH, b35
+                    // class) — the "convergent negative-drift" assumption was
+                    // false. Do NOT re-attempt a global atLeast bump.
                     _ => { row_height = row_height.max(h); }
                 }
             }
