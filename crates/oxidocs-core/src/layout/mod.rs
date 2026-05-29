@@ -8214,7 +8214,73 @@ impl LayoutEngine {
                                 if !is_space && would_overflow && !(current_line.is_empty() && buf.is_empty()) {
                                     // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
                                     if kinsoku::is_line_start_prohibited(ch) {
-                                        // Add to buffer and break AFTER this char
+                                        // S421 (2026-05-29): kinsoku OIKOMI (押し下げ).
+                                        // The old behavior force-fit the prohibited char
+                                        // onto the current line (S409 bug) → ed025's cell
+                                        // （× × ×） rendered 1 line instead of Word's 2-line
+                                        // 5+2. Word pulls the preceding char down so the
+                                        // prohibited char is not alone at line start
+                                        // (COM-confirmed S420 on ）。、」). Mirrors the body
+                                        // path oikomi at mod.rs:6231-6254. Only pops from
+                                        // `buf` (current run's pending chars); falls back to
+                                        // the old force-fit when buf cannot supply the
+                                        // companion (empty / would empty the line).
+                                        // S421 SHIP: default ON (opt-out OXI_S421_DISABLE).
+                                        // Phase 1 53/55→54/55 (ed025 PASS 709/709),
+                                        // Phase 2 0.9647→0.9651, 3a4f unchanged 0.9757.
+                                        // S421b: restrict oikomi to S412 cells. Blanket
+                                        // oikomi catastrophically regressed 3a4f (score
+                                        // 0.79→0.20, 909 paras +1) and 34140b — those
+                                        // docs rely on the legacy force-fit / margin
+                                        // extension. Tying oikomi to the same
+                                        // discriminator as the S412 budget narrowing
+                                        // fires it ONLY on the 263 ed025+1ec1 cells where
+                                        // Word's narrowed budget forces the wrap.
+                                        if std::env::var("OXI_S421_DISABLE").is_err()
+                                            && s412_cellmar_subtract {
+                                            let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
+                                            let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
+                                            loop {
+                                                let head = carry[0].ch;
+                                                let tail = buf.chars().last();
+                                                let need = kinsoku::is_line_start_prohibited(head)
+                                                    || tail.map_or(false, kinsoku::is_line_end_prohibited);
+                                                let remaining_on_line = buf.chars().count()
+                                                    + current_line.iter().map(|f| f.0.chars().count()).sum::<usize>();
+                                                if !need || remaining_on_line <= 1 { break; }
+                                                if buf.pop().is_some() {
+                                                    if let Some(pc) = buf_chars.pop() {
+                                                        buf_w -= pc.natural_advance;
+                                                        carry.insert(0, pc);
+                                                    }
+                                                } else {
+                                                    break; // can't pop across run boundary here
+                                                }
+                                            }
+                                            if carry.len() >= 2 {
+                                                // Oikomi succeeded: flush remaining buf as
+                                                // line1 tail, push line1, seed line2 with carry.
+                                                if !buf.is_empty() {
+                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
+                                                    buf.clear();
+                                                    buf_w = 0.0;
+                                                    current_line_chars.extend(buf_chars.drain(..));
+                                                }
+                                                lines.push(std::mem::take(&mut current_line));
+                                                line_x = 0.0;
+                                                current_line_chars.clear();
+                                                is_first_line = false;
+                                                for c in &carry {
+                                                    buf.push(c.ch);
+                                                    buf_w += c.natural_advance;
+                                                }
+                                                buf_chars.extend(carry);
+                                                continue;
+                                            }
+                                            // else: fall through to force-fit below
+                                        }
+                                        // Force-fit (old behavior; also oikomi fallback):
+                                        // add to buffer and break AFTER this char.
                                         buf.push(ch);
                                         buf_w += cw;
                                         buf_chars.push(crate::layout::jc_both_compress::CharContext {
