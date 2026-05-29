@@ -7266,6 +7266,14 @@ impl LayoutEngine {
                 let mut cell_content_h = pad_t;
                 // Session 79c: parallel emit-equivalent content_h for visual_row_h
                 let mut cell_content_h_visual = pad_t;
+                // S427 (2026-05-29): adjacent-paragraph spacing collapse inside a
+                // cell. Word collapses sa(prev)+sb(cur) to max(sa,sb) — COM-confirmed
+                // on 29dc6e tbl1 r2c2 (two empty paras, sa=sb=4.35pt exact-12:
+                // para gap = 16.5pt = 12.0 + max, NOT 20.7 = 12.0 + sum). Mirrors the
+                // body path collapse (mod.rs:3965). prev_sa carries the previous
+                // paragraph's space_after; the credit min(prev_sa, cur_sb) is removed.
+                let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
+                let mut prev_sa: Option<f32> = None;
 
                 // Session 131 (2026-05-20): vertical writing — cell height
                 // along the page-y axis equals the sum of vertical-text lengths
@@ -7298,8 +7306,20 @@ impl LayoutEngine {
                             // never executed). S151 default ON since 2026-05-21.
                             cell_content_h += para_h;
                             cell_content_h_visual += para_h_visual;
+                            // S427: collapse this paragraph's space_before against
+                            // the previous paragraph's space_after.
+                            let (cur_sb, cur_sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), row_line_pitch);
+                            if s427_collapse {
+                                if let Some(psa) = prev_sa {
+                                    let credit = psa.min(cur_sb);
+                                    cell_content_h -= credit;
+                                    cell_content_h_visual -= credit;
+                                }
+                            }
+                            prev_sa = Some(cur_sa);
                         }
                         Block::Table(nested) => {
+                            prev_sa = None;
                             // Estimate nested table height from rows
                             // COM-confirmed: nested table width = cell width - 2 × padding
                             let nested_w = (inner_w).max(0.0);
@@ -7608,6 +7628,10 @@ impl LayoutEngine {
                 // carried a `<w:lastRenderedPageBreak/>` on a non-run-0 run.
                 // Reset to false at each cell start.
                 let mut prev_cell_para_had_mid_lrpb: bool = false;
+                // S427 (2026-05-29): track previous cell paragraph's space_after
+                // for adjacent-paragraph spacing collapse (see pre-pass comment).
+                let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
+                let mut prev_cell_sa: Option<f32> = None;
                 if !is_vmerge_continue {
                 for block in &cell.blocks {
                 // Clip content that overflows exact row height
@@ -7634,6 +7658,7 @@ impl LayoutEngine {
                         cell_elements.push(elem);
                     }
                     content_h = nested_y.cursor_y;
+                    prev_cell_sa = None; // S427: nested table breaks paragraph adjacency
                 }
                 Block::Paragraph(para) => {
                 let para = para;
@@ -7763,6 +7788,13 @@ impl LayoutEngine {
                         para.style.space_after
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after))
                     };
+                    // S427: collapse this paragraph's space_before against the
+                    // previous cell paragraph's space_after (max(sa,sb), not sum).
+                    if s427_collapse {
+                        if let Some(psa) = prev_cell_sa {
+                            content_h -= psa.min(effective_space_before);
+                        }
+                    }
                     content_h += effective_space_before;
                     let para_content_start_h = content_h;
                     {
@@ -8677,6 +8709,9 @@ impl LayoutEngine {
                             content_h += lh;
                         }
                         content_h += effective_space_after.unwrap_or(0.0);
+                        // S427: record this paragraph's space_after so the next
+                        // cell paragraph can collapse its space_before against it.
+                        prev_cell_sa = Some(effective_space_after.unwrap_or(0.0));
                         // R7.32: increment after each Paragraph block in the cell
                         cell_para_counter += 1;
                         // R7.73: track if THIS paragraph had LRPB on a non-run-0
@@ -10002,6 +10037,11 @@ impl LayoutEngine {
             let inner_w = cell_w.max(0.0);
             let mut cell_content_h = pad_t;
             let vert_writing_active = self.is_vert_writing_active(cell);
+            // S427 (2026-05-29): adjacent-paragraph spacing collapse (see pre-pass
+            // comment at the cell_content_h loop). Keeps this row-fit estimate
+            // consistent with the row-height pre-pass and content placement.
+            let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
+            let mut prev_sa: Option<f32> = None;
             for block in &cell.blocks {
                 match block {
                     Block::Paragraph(para) => {
@@ -10016,8 +10056,16 @@ impl LayoutEngine {
                         // OXI_SB_NO_SUPPRESS legacy env-var fallbacks (dead code
                         // since LEGACY var default false). S151 default ON.
                         cell_content_h += para_h;
+                        let (cur_sb, cur_sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), table_grid_pitch);
+                        if s427_collapse {
+                            if let Some(psa) = prev_sa {
+                                cell_content_h -= psa.min(cur_sb);
+                            }
+                        }
+                        prev_sa = Some(cur_sa);
                     }
                     Block::Table(nested) => {
+                        prev_sa = None;
                         let nested_w = inner_w.max(0.0);
                         for nr in &nested.rows {
                             let mut nr_h = 0.0_f32;
@@ -10274,6 +10322,42 @@ impl LayoutEngine {
                 .unwrap_or(0.0);
         }
         height
+    }
+
+    /// S427 (2026-05-29): effective (space_before, space_after) for a table-cell
+    /// paragraph, mirroring the layout-pass logic at mod.rs:7736-7765. Used to
+    /// compute the adjacent-paragraph spacing-collapse credit. When Word resets
+    /// inherited Normal-style spacing in a cell (`should_reset`), both are 0.
+    /// before_lines/after_lines convert via the cell grid pitch (hundredths of a
+    /// line); otherwise the twip space_before/space_after applies.
+    fn cell_para_spacing(
+        &self,
+        para: &Paragraph,
+        table_para_style: Option<&ParagraphStyle>,
+        grid_pitch: Option<f32>,
+    ) -> (f32, f32) {
+        let raw_lr = para.style.line_spacing_rule.as_deref()
+            .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
+        let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
+        let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
+        if should_reset {
+            return (0.0, 0.0);
+        }
+        let sb = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+            bl / 100.0 * pitch
+        } else {
+            para.style.space_before
+                .or_else(|| table_para_style.and_then(|ps| ps.space_before))
+                .unwrap_or(0.0)
+        };
+        let sa = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
+            al / 100.0 * pitch
+        } else {
+            para.style.space_after
+                .or_else(|| table_para_style.and_then(|ps| ps.space_after))
+                .unwrap_or(0.0)
+        };
+        (sb, sa)
     }
 }
 
