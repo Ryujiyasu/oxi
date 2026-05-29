@@ -8051,6 +8051,17 @@ impl LayoutEngine {
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
+                        if std::env::var("OXI_DUMP_CELLX").is_ok() {
+                            let preview: String = para.runs.iter().flat_map(|r| r.text.chars()).take(8).collect();
+                            eprintln!(
+                                "[CELLX] cell_x={:.2} cell_w={:.2} pad_l={:.2} pad_r={:.2} \
+                                 ind_l={:.2} ind_r={:.2} first_ind={:.2} wrap_base={:.2} \
+                                 wrap_w={:.2} first_line_wrap_w={:.2} hang_inner={} s301={} text={:?}",
+                                cell_x, cell_w, pad_l, pad_r, p_indent_left, p_indent_right,
+                                p_first_line_indent, wrap_base, wrap_w, first_line_wrap_w,
+                                cell_hang_inner, s301_layout_fixed, preview
+                            );
+                        }
 
                         // 2026-04-19: Render list marker (numPr) for cells too.
                         // Body renders at mod.rs:1939; cells previously skipped it.
