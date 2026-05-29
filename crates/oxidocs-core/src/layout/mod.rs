@@ -8102,6 +8102,13 @@ impl LayoutEngine {
                         // path historically did not, causing d77a58 w_i=47 wrap mismatch
                         // (5 lines Oxi vs 6 lines Word).
                         let mut prev_char_emitted: Option<char> = None;
+                        // S443: the widened oikomi must fire ONLY on tab-bearing
+                        // (list-marker) paragraphs. 3a4f has hanging-indent paras
+                        // but ZERO hanging+tab paras; gating oikomi on hanging
+                        // alone made it fire on 3a4f's tab-less hanging cells and
+                        // cratered it (909 paras +1). Restricting to para_has_tab
+                        // excludes 3a4f entirely while keeping d77a's カ/タ list items.
+                        let para_has_tab = para.runs.iter().any(|r| r.text.contains('\t'));
 
                         for run in &para.runs {
                             let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -8154,18 +8161,22 @@ impl LayoutEngine {
                                     prev_char_emitted = None;
                                     continue;
                                 }
-                                // S443 (2026-05-30, env-gated): TAB-STOP advancement in the
-                                // CELL wrap path. The body path (mod.rs:5986-6014) advances a
-                                // '\t' to the next tab stop, but the cell path historically
-                                // treated '\t' as a ~0-width char (S442 root cause: d77a item J
-                                // — marker カ + tab + body — wrapped 1 line in Oxi vs 2 in Word
-                                // because the missing ~12pt tab advance left room to fit the
-                                // trailing す。). Mirror the body formula: tab stops are measured
+                                // S443 (2026-05-30, SHIP, default ON, opt-out OXI_S443_DISABLE):
+                                // TAB-STOP advancement in the CELL wrap path. The body path
+                                // (mod.rs:5986-6014) advances a '\t' to the next tab stop, but the
+                                // cell path historically treated '\t' as a ~0-width char (S442 root
+                                // cause: d77a item J — marker カ + tab + body — wrapped 1 line in
+                                // Oxi vs 2 in Word because the missing ~12pt tab advance left room
+                                // to fit the trailing す。). Mirror the body formula: tab stops are
                                 // in absolute coords from the cell content-left; line_x+buf_w is
                                 // relative to the line's wrap start, so add the line-start indent
-                                // offset to convert. Default ON would be high-blast-radius (every
-                                // CJK cell with a tab) — gated for A/B validation first.
-                                if ch == '\t' && std::env::var("OXI_S443_CELL_TAB").is_ok() {
+                                // offset to convert. Gated to hanging-indent paragraphs
+                                // (first_line_indent<0 = the list-marker pattern) to bound the
+                                // blast radius; combined with the para_has_tab oikomi gate below
+                                // this is perfectly isolated (only d77a moves: +0.0306; 3a4f and
+                                // all other 54 docs EXACTLY unchanged; Phase 1 54/55).
+                                if ch == '\t' && std::env::var("OXI_S443_DISABLE").is_err()
+                                    && p_first_line_indent < 0.0 {
                                     let indent_off = if is_first_line {
                                         (p_indent_left + p_first_line_indent).max(0.0)
                                     } else {
@@ -8348,7 +8359,10 @@ impl LayoutEngine {
                                         // fires it ONLY on the 263 ed025+1ec1 cells where
                                         // Word's narrowed budget forces the wrap.
                                         if std::env::var("OXI_S421_DISABLE").is_err()
-                                            && s412_cellmar_subtract {
+                                            && (s412_cellmar_subtract
+                                                || (std::env::var("OXI_S443_DISABLE").is_err()
+                                                    && p_first_line_indent < 0.0
+                                                    && para_has_tab)) {
                                             let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
                                             let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
                                             loop {
@@ -8363,6 +8377,28 @@ impl LayoutEngine {
                                                     if let Some(pc) = buf_chars.pop() {
                                                         buf_w -= pc.natural_advance;
                                                         carry.insert(0, pc);
+                                                    }
+                                                } else if std::env::var("OXI_S443_DISABLE").is_err() {
+                                                    // S443: when buf is empty, pop the companion
+                                                    // from current_line (already-flushed chars).
+                                                    // d77a J's overflowing 「。」 has its companion
+                                                    // 「す」 in current_line, not buf — the S421
+                                                    // buf-only oikomi could not reach it and
+                                                    // force-fit instead. Pop from current_line_chars
+                                                    // (per-char ctx) + trim the matching glyph off
+                                                    // the last fragment's text/width.
+                                                    if let Some(pc) = current_line_chars.pop() {
+                                                        if let Some(frag) = current_line.last_mut() {
+                                                            if frag.0.pop().is_some() {
+                                                                frag.2 -= pc.natural_advance;
+                                                                if frag.0.is_empty() {
+                                                                    current_line.pop();
+                                                                }
+                                                            }
+                                                        }
+                                                        carry.insert(0, pc);
+                                                    } else {
+                                                        break;
                                                     }
                                                 } else {
                                                     break; // can't pop across run boundary here
@@ -9910,7 +9946,8 @@ impl LayoutEngine {
                 // S443 (2026-05-30, env-gated): TAB-STOP advancement in the cell
                 // line-count estimate (mirrors the render-loop fix). Must match the
                 // render so estimate==render (Fix C invariant). See render path.
-                if ch == '\t' && std::env::var("OXI_S443_CELL_TAB").is_ok() {
+                if ch == '\t' && std::env::var("OXI_S443_DISABLE").is_err()
+                    && first_indent_pt < 0.0 {
                     let indent_off = if is_first_line {
                         (indent_l_pt + first_indent_pt).max(0.0)
                     } else {
@@ -9925,12 +9962,7 @@ impl LayoutEngine {
                     } else {
                         ((abs_pos / self.default_tab_stop).floor() + 1.0) * self.default_tab_stop
                     };
-                    let tabw = (next_pos - abs_pos).max(0.0);
-                    if std::env::var("OXI_DUMP_CELLX").is_ok() {
-                        eprintln!("[CELLX_TAB] dts={:.1} abs={:.2} next={:.2} tab_w={:.2} buf_w_pre={:.2} flw={:.2} indent_off={:.2}",
-                            self.default_tab_stop, abs_pos, next_pos, tabw, buf_w, first_line_wrap_w, indent_off);
-                    }
-                    buf_w += tabw;
+                    buf_w += (next_pos - abs_pos).max(0.0);
                     buf_nonempty = true;
                     line_nonempty = true;
                     prev_char_emitted = Some(ch);
