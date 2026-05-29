@@ -7633,7 +7633,22 @@ impl LayoutEngine {
                 let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
                 let mut prev_cell_sa: Option<f32> = None;
                 if !is_vmerge_continue {
-                for block in &cell.blocks {
+                // S428 (2026-05-29): index of the last cell block that carries
+                // real content (a non-empty paragraph or a nested table). Used to
+                // gate the empty-paragraph zero-glyph element emission below to
+                // only INTERIOR empty paragraphs (those followed by content). A
+                // trailing empty paragraph must NOT get an element, else it would
+                // overflow a mid-cell page split alone and spawn a near-blank
+                // continuation page (e3c545: a lone trailing empty cell paragraph
+                // created a blank page 5, cascading every later page +1).
+                let last_content_block_pos: Option<usize> = cell.blocks.iter().enumerate()
+                    .filter(|(_, b)| match b {
+                        Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.is_empty()),
+                        _ => true,
+                    })
+                    .map(|(i, _)| i)
+                    .last();
+                for (block_pos, block) in cell.blocks.iter().enumerate() {
                 // Clip content that overflows exact row height
                 if is_exact && content_h + pad_t >= row_height {
                     break;
@@ -8396,14 +8411,61 @@ impl LayoutEngine {
                             // boundary. Needs per-paragraph y-trace COM measurement
                             // vs Oxi to locate the drift source.
                             let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
-                            if let Some(empty_fs) = pprrpr_fs {
+                            let empty_lh = if let Some(empty_fs) = pprrpr_fs {
                                 let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                 let empty_metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
-                                content_h += self.line_height_inner(empty_fs, effective_line_spacing, effective_line_rule, empty_metrics, para.style.snap_to_grid, row_line_pitch, true);
+                                self.line_height_inner(empty_fs, effective_line_spacing, effective_line_rule, empty_metrics, para.style.snap_to_grid, row_line_pitch, true)
                             } else {
                                 let metrics = self.doc_default_metrics();
-                                content_h += self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true);
+                                self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true)
+                            };
+                            // S428 (2026-05-29): emit a zero-glyph Text element for the
+                            // empty cell paragraph so the row-split / re-anchor logic
+                            // (mod.rs ~9215) treats it as a real line box. Without an
+                            // element, an empty paragraph that falls at a mid-cell page
+                            // boundary is invisible to the split: the re-anchor snaps the
+                            // first VISIBLE overflow text to page_top, dropping the empty
+                            // line's height and shifting the whole continuation up ~1 line
+                            // (e3c545 page 4: cell_para 10 empty between cpi 9/11 → all of
+                            // page 4 rendered ~12pt too high). Both renderers skip empty
+                            // text (GDI TextOutW of "" draws nothing; DWrite early-returns),
+                            // and both phase gates exclude empty paragraphs (pagination_diff
+                            // MIN_MATCH_LEN, dml_diff `if not text`), so this only affects
+                            // the split's positioning of NON-empty content. Opt-out:
+                            // OXI_S428_DISABLE.
+                            let is_interior_empty = last_content_block_pos
+                                .map_or(false, |last| block_pos < last);
+                            if is_interior_empty && std::env::var("OXI_S428_DISABLE").is_err() {
+                                let mut empty_el = LayoutElement::new(
+                                    cell_x + pad_l,
+                                    content_h,
+                                    0.0,
+                                    empty_lh,
+                                    LayoutContent::Text {
+                                        text: String::new(),
+                                        font_size: pprrpr_fs.unwrap_or(self.default_font_size),
+                                        font_family: None,
+                                        bold: false,
+                                        italic: false,
+                                        underline: false,
+                                        underline_style: None,
+                                        strikethrough: false,
+                                        double_strikethrough: false,
+                                        color: None,
+                                        highlight: None,
+                                        character_spacing: 0.0,
+                                        field_type: None,
+                                        text_scale: 100.0,
+                                        is_vertical: false,
+                                    },
+                                );
+                                empty_el.paragraph_index = block_idx;
+                                empty_el.cell_paragraph_index = Some(cell_para_counter);
+                                empty_el.cell_row_index = Some(row_idx);
+                                empty_el.cell_col_index = Some(cell_idx);
+                                cell_elements.push(empty_el);
                             }
+                            content_h += empty_lh;
                         }
 
                         let total_lines = lines.len();
