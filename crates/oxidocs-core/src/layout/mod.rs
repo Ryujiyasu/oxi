@@ -7063,13 +7063,45 @@ impl LayoutEngine {
                     let use_round = std::env::var("OXI_S329_ROUND_CENTER")
                         .map(|v| v != "0" && v != "false")
                         .unwrap_or(false);
-                    if use_floor {
+                    let base = if use_floor {
                         (raw * 2.0).floor() / 2.0
                     } else if use_round {
                         (raw * 2.0).round() / 2.0
                     } else {
                         (raw * 2.0 + 0.5).floor() / 2.0
-                    }
+                    };
+                    // S454 (2026-05-30) [finding — env-gated OFF, default 0.0]
+                    // — the LM0 (no-docGrid) body glyph is ~1.75pt too HIGH for
+                    // the CONTRACT FAMILY (0e7af/683f, MS Mincho 9pt, pure
+                    // single-column body) — the LM0 analogue of the S453
+                    // cell-glyph offset. CORRECTS the 43-day-old
+                    // project_0e7a_p2_drift memory: it is NOT a pagination drift
+                    // — pagination AND line-box tops are CORRECT (COM: 第1条
+                    // 69.5/69.75, para#61 93.0/93.0; element.y byte-identical
+                    // across δ). Only the glyph-in-box vertical offset differs.
+                    // SSIM δ-sweep (DWrite gate renderer) peaks ≈1.5 (0e7af) to
+                    // 2.0 (683f); pixel best-shift +1.6..1.84pt; +0.13/page on
+                    // 0e7af's 6 bottom pages.
+                    //
+                    // WHY NOT SHIPPED as a flat constant: the correction is the
+                    // WRONG SHAPE. The default-font (10.5pt) test fixtures
+                    // (test_widow/keepnext/line_height) peak SHARPLY at δ=0
+                    // (already correctly placed) — any δ>0 regresses them
+                    // (test_widow −0.12 at +1.5, −0.089 even at +1.0). Full
+                    // 235-doc recompute at δ=1.5: mean 0.8862→0.8949 (+0.0086),
+                    // bottom-5 +0.36, REAL-hex corpus clean (+22/−1) BUT 50
+                    // SYNTHETIC fixtures regress. A flat constant is known-wrong
+                    // for the default-font class → violates fidelity + CLAUDE.md
+                    // anti-exception-stacking. The real fix is a per-font
+                    // centering re-derivation (word_line_height_table_cell
+                    // calibration for CJK-Mincho 9pt undershoots the half-
+                    // leading) — deferred, multi-step COM work. Knob retained
+                    // for that investigation. Render-only → Phase-1-safe.
+                    let s454_dy = std::env::var("OXI_S454_LM0_GLYPH_DY")
+                        .ok()
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    base + s454_dy
                 }
             }
         }
