@@ -7101,7 +7101,57 @@ impl LayoutEngine {
                         .ok()
                         .and_then(|v| v.parse::<f32>().ok())
                         .unwrap_or(0.0);
-                    base + s454_dy
+                    // S455 (2026-05-30) ★ SHIP — LM0 body-glyph vertical
+                    // correction scoped to CJK 83/64 fonts (MS Mincho/Gothic/
+                    // Meiryo), default +1.5pt, opt-out/override via
+                    // OXI_S455_CJK_GLYPH_DY (set 0 to disable). Roots the
+                    // corpus #1 bottom doc 0e7af (contract, MS Mincho 9pt) and
+                    // sister 683f: Oxi drew the LM0 body glyph ~1.75pt too HIGH
+                    // within the (correctly-positioned, element.y byte-identical)
+                    // line box — the LM0 analogue of the S453 cell-glyph offset.
+                    //
+                    // WHY CJK-SCOPED (the discriminator that made it shippable):
+                    // the 83/64 multiplier inflates CJK line_height by
+                    // ~0.297·tmHeight and Word places that extra leading ABOVE
+                    // the glyph, but the centering formula above does not.
+                    // Non-CJK fonts (Calibri/Cambria — the test_widow/keepnext/
+                    // line_height fixtures) use a different line-height path and
+                    // are ALREADY correct (peak SHARPLY at δ=0); an unscoped flat
+                    // δ regressed all 50 of them (S454). Gating on the line's
+                    // dominant font being CJK 83/64 is principled (tied to the
+                    // 83/64 mechanism, NOT a per-font carve-out) and excludes
+                    // them exactly (verified: test_* FLAT across δ).
+                    //
+                    // GATE (full 235-doc recompute, DWrite, δ=1.5): mean
+                    // 0.8862→0.8953 (+0.0090), bottom-5 page sum +0.364,
+                    // <0.70 bucket 25→18, ≥0.90 205→230, ≥0.99 42→45;
+                    // 90 improved (22 real-hex: 0e7af +0.092, 683f +0.081,
+                    // 9a8e8d +0.009, b837 +0.005, 1ec1 +0.003, …), 5 regress
+                    // (all tiny CJK over-correction, worst −0.0059 gen_jp_report;
+                    // 6295 order_09 −0.0029). Passes the Phase-3 gate (mean↑ AND
+                    // bottom-N↑). Render-only (el.text_y_off) → element.y /
+                    // pagination unchanged → Phase-1 sentinel provably preserved.
+                    // TODO: 683f optimum ≈2.0; a leading-proportional δ
+                    // (∝ the 83/64 excess) would fit larger-leading docs and
+                    // shave the 5 small over-corrections.
+                    let line_is_cjk_8364 = if !line.fragments.is_empty() {
+                        line.fragments.iter().any(|f| {
+                            self.metrics_for_text(&f.text, &f.style, para_style)
+                                .is_cjk_83_64_font()
+                        })
+                    } else {
+                        let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        self.metrics_for_para_mark(&rpr_ref, para_style).is_cjk_83_64_font()
+                    };
+                    let s455_dy = if line_is_cjk_8364 {
+                        std::env::var("OXI_S455_CJK_GLYPH_DY")
+                            .ok()
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .unwrap_or(1.5)
+                    } else {
+                        0.0
+                    };
+                    base + s454_dy + s455_dy
                 }
             }
         }
