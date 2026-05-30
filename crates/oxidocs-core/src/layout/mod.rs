@@ -8766,6 +8766,26 @@ impl LayoutEngine {
                                     }
                                 }
                             };
+                            // S453 (2026-05-30, Phase 3) ★ SSIM-validated cell-glyph vertical
+                            // correction. Oxi's table-cell first-line glyph renders ~1.5pt too
+                            // HIGH vs Word (Word reserves more leading above the first line than
+                            // Oxi's centering gives). Resolves the S451b glyph-vs-box-top
+                            // question via pixels: of the v2 box-top offset (~−3pt), ~1.5pt is a
+                            // REAL glyph error and ~1.5pt is box-top measurement convention.
+                            // EVIDENCE (DWrite SSIM): b5f706 δ-sweep peaks at +1.5 (0.7949→0.8024);
+                            // full 51-doc corpus d0 0.8456→d15 0.8495 (+0.0039), bottom-5 sum
+                            // +0.0396, 33 up / 3 down (b35/e8caed regress — opposite-direction
+                            // charGrid-compression family, S430; not in bottom-N). text_y_off is a
+                            // RENDER-time glyph offset, so element.y / layout / pagination are
+                            // UNCHANGED → Phase-1 (54/55) & Phase-2 (IoU 0.9692) sentinels exactly
+                            // preserved. Override/disable via OXI_S453_CELL_GLYPH_DY (set 0 to off).
+                            // TODO refine: magnitude is doc-dependent (d77a/04b88e want ~2pt) —
+                            // a leading-proportional δ would recover b35 and over-correct d77a.
+                            let cell_glyph_dy = std::env::var("OXI_S453_CELL_GLYPH_DY")
+                                .ok()
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or(1.5);
+                            let cell_text_y_off = cell_text_y_off + cell_glyph_dy;
                             let mut rx = 0.0_f32;
                             // Emit list marker on the first line of the paragraph.
                             if line_idx == 0 {
