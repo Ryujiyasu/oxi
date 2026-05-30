@@ -7143,11 +7143,22 @@ impl LayoutEngine {
                         let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                         self.metrics_for_para_mark(&rpr_ref, para_style).is_cjk_83_64_font()
                     };
+                    // S456 (2026-05-30) — magnitude refined 1.5 -> 1.75.
+                    // 1.75 is the COM/pixel-measured offset (0e7af best-shift
+                    // 1.6-1.84pt) AND 0e7af's own SSIM peak; per-doc optima
+                    // (683f/9a8e8d/1ec1 want 2.0-2.25+, 0e7af 1.75) cluster
+                    // above 1.5. Full 235-doc recompute 1.5 -> 1.75: mean
+                    // 0.8953 -> 0.8967 (+0.0014), bottom-10 +0.0248, 63 up /
+                    // 16 down. 2.0 was marginally higher mean (+0.0017) but
+                    // doubled regressions (28) and lost bottom-10, so 1.75 is
+                    // the principled peak. Per-doc optima don't fit a clean
+                    // size-proportional law (683f and gen_jp_report both 10.5pt
+                    // want 2.25 vs 1.0), so a constant is the right model.
                     let s455_dy = if line_is_cjk_8364 {
                         std::env::var("OXI_S455_CJK_GLYPH_DY")
                             .ok()
                             .and_then(|v| v.parse::<f32>().ok())
-                            .unwrap_or(1.5)
+                            .unwrap_or(1.75)
                     } else {
                         0.0
                     };
