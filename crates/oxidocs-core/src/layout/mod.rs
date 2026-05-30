@@ -7028,13 +7028,51 @@ impl LayoutEngine {
                         let use_round = std::env::var("OXI_S329_ROUND_CENTER")
                             .map(|v| v != "0" && v != "false")
                             .unwrap_or(false);
-                        if use_floor {
+                        let grid_base = if use_floor {
                             (raw * 2.0).floor() / 2.0
                         } else if use_round {
                             (raw * 2.0).round() / 2.0
                         } else {
                             (raw * 2.0 + 0.5).floor() / 2.0
-                        }
+                        };
+                        // S457 (2026-05-30) ★ SHIP — CJK 83/64 glyph correction
+                        // for the GRID branch (LM1/LM2 docGrid), default +2.5pt,
+                        // opt-out/override OXI_S457_GRID_CJK_DY (set 0 to disable).
+                        // Mirrors the S455/S456 LM0 fix: docGrid CJK body glyphs
+                        // sit too high within the grid cell because the centering
+                        // formula does not account for where Word places the
+                        // 83/64 excess leading. d77a/b837/c7b923 (the #2/#3 bottom
+                        // docs) show a uniform ~5px down-shift recovers corr
+                        // 0.9-0.99 (d77a p1 corr 0.992). δ-sweep peaks at 2.5 for
+                        // all three (larger than LM0's 1.75 because the grid cell/
+                        // line_height is larger → more 83/64 excess to place).
+                        //
+                        // GATE (full 235-doc recompute, DWrite, δ=2.5): mean
+                        // 0.8967→0.9058 (+0.0091), bottom-5 +0.158, bottom-10
+                        // +0.233, <0.70 bucket 17→8 (halved!), ≥0.95 162→174;
+                        // 79 improved (ALL hex: d77a p2 +0.20/p6 +0.18/p1 +0.14,
+                        // b837 p6 +0.17/p2 +0.12, c7b923 p2 +0.13, …), only 2
+                        // regress (ed025 p6 −0.018 — known Phase-1-sensitive
+                        // cascade S305; 2ea81 p2 −0.001). b35 (the S430 opposite-
+                        // direction CELL family) does NOT regress here (+0.003) —
+                        // its −1.5 was the CELL glyph path, not this grid body
+                        // path. Render-only → element.y/pagination unchanged →
+                        // Phase-1 sentinel preserved. TODO: LM0 1.75 vs grid 2.5
+                        // suggests a single line-height-proportional δ (the
+                        // S455/S456 leading-proportional idea, now with two
+                        // regimes to fit).
+                        let s457_dy = if line.fragments.iter().any(|f| {
+                            self.metrics_for_text(&f.text, &f.style, para_style)
+                                .is_cjk_83_64_font()
+                        }) {
+                            std::env::var("OXI_S457_GRID_CJK_DY")
+                                .ok()
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or(2.5)
+                        } else {
+                            0.0
+                        };
+                        grid_base + s457_dy
                     } else {
                         0.0
                     }
