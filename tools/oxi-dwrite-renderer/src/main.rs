@@ -166,6 +166,47 @@ fn render_pages_dwrite(
             rt.BeginDraw();
             rt.Clear(Some(&D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }));
 
+            // S460 (2026-05-31) ★ SHIP — the default WIC bitmap text rendering
+            // produced a coarse GDI-compatible 4-bit (17-level) grayscale alpha
+            // with SHARP edges, while Word's EMF output is smooth 255-level AA
+            // (measured: Oxi 17 unique gray values vs Word 255 on 0e7af p2). On
+            // dense small CJK body pages this edge mismatch capped SSIM ~0.7.
+            // The prior CLAUDE.md premise "Direct2D produces grayscale ClearType-
+            // equivalent AA so 1x supersample matches Word" was never pixel-
+            // verified and is FALSE. Fix: set GRAYSCALE antialias + an OUTLINE
+            // custom rendering params (unhinted pure-coverage AA) → smooth
+            // 256-level AA at NATIVE resolution (no supersample perf cost).
+            // outline beat natural (9 lvl, hinted, no gain) and natural_sym
+            // (17 lvl, +0.044 on 0e7af) on 0e7af; gamma has no effect on outline.
+            // GATE (full 410-page recompute): mean 0.9067→0.9079 (+0.0011),
+            // bottom-3 sum +0.0019 / bottom-10 +0.0239, <0.70 8→7, ≥0.95
+            // 174→176; 0e7af doc-mean 0.821→0.876 (p6 +0.119, p2 +0.087), only
+            // 4 pages regress >0.005 (worst LOD p11 −0.0099, MS Gothic code).
+            // Rendering-only (no layout change) → element.y / pagination / Phase-1
+            // unaffected. Opt out / override via OXI_S460_RMODE ("off"/"legacy"
+            // disables; "natural"/"natural_sym"/"aliased" alternatives);
+            // OXI_S460_GAMMA overrides gamma (no-op for outline).
+            let s460_mode = std::env::var("OXI_S460_RMODE")
+                .unwrap_or_else(|_| "outline".to_string());
+            if s460_mode != "off" && s460_mode != "legacy" {
+                rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                let gamma: f32 = std::env::var("OXI_S460_GAMMA").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(1.8);
+                let rmode = match s460_mode.as_str() {
+                    "natural" => DWRITE_RENDERING_MODE_NATURAL,
+                    "natural_sym" => DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+                    "aliased" => DWRITE_RENDERING_MODE_ALIASED,
+                    _ => DWRITE_RENDERING_MODE_OUTLINE,
+                };
+                if let Ok(params) = dwrite_factory.CreateCustomRenderingParams(
+                    gamma, 0.0, 0.0,
+                    DWRITE_PIXEL_GEOMETRY_FLAT,
+                    rmode,
+                ) {
+                    rt.SetTextRenderingParams(&params);
+                }
+            }
+
             // TODO: render page elements (text, shapes, borders, images, clipping)
             // Step 3+ in the porting plan. For now scaffold only renders white.
             render_page_elements(&rt, &dwrite_factory, &d2d_factory, page, exclude)?;
