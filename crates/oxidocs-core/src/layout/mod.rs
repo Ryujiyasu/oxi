@@ -7555,6 +7555,33 @@ impl LayoutEngine {
                     cell_content_h += _border_overhead * 0.5;
                     cell_content_h_visual += _border_overhead * 0.5;
                 }
+                // S463 (2026-05-31, env-gated experiment): the S375/2026-04-13
+                // border-overhead dead-end was BLANKET (all cells) — it regressed
+                // because CJK cells already over-snap (b35123 +2pt/cell) so adding
+                // border height compounds. But a border-sweep minimal repro
+                // (tools/golden-test/repros/gen2_lineheight, b0/b4/b8) shows Word
+                // DOES scale row pitch with inside-H border: Cambria 11pt single-line
+                // cell pitch = 15.0(no border) / 15.375(sz4=0.5pt) / 15.75(sz8=1pt)
+                // => +0.75*border_width per non-last row. This drives the gen2
+                // English-template vertical drift (-0.94pt per 5-row table, the
+                // dominant cause of their 0.81 SSIM vs OO/Libra 0.96). The untried
+                // discriminator (à la S455 is_cjk scoping): apply ONLY to Latin
+                // (non-CJK) cells, which do NOT over-snap. CJK cells keep overhead 0.
+                if std::env::var("OXI_S463_LATIN_BORDER").is_ok() && table.style.has_inside_h {
+                    let cell_is_latin = !cell.blocks.iter().any(|b| {
+                        if let Block::Paragraph(p) = b {
+                            p.runs.iter().any(|r| r.text.chars().any(kinsoku::is_cjk))
+                        } else { false }
+                    });
+                    // Oxi OFF already adds ~+0.16/row above the bare line (15.16 vs
+                    // 15.0); Word wants 15.375 => remaining deficit ~0.19/row =
+                    // 0.375*border_width (block-calibrated on tbl_b4_sz22: OFF 91.31,
+                    // Word 92.25 => +0.94 over 5 rows).
+                    if cell_is_latin {
+                        cell_content_h += _border_overhead * 0.375;
+                        cell_content_h_visual += _border_overhead * 0.375;
+                    }
+                }
 
                 row_height = row_height.max(cell_content_h);
                 visual_row_h = visual_row_h.max(cell_content_h_visual);
@@ -8911,7 +8938,38 @@ impl LayoutEngine {
                                     // context bottom-aligns but cells are never shape.
                                     // Session 78 Mech A v2 refinement: cell offset =
                                     // 0.25pt (5 twips) per Session 70 B5/B6 repros.
-                                    0.25
+                                    //
+                                    // S462 (2026-05-31) ★ SHIP — BOTTOM-align cell text
+                                    // for exact/atLeast line spacing. The flat 0.25 top-
+                                    // align is correct only when the exact line value ≈
+                                    // natural glyph height (slack≈0, the B5/B6 repros).
+                                    // When the exact line is MUCH larger than the glyph
+                                    // (large slack), Word places the glyph at the BOTTOM
+                                    // of the line box — its documented exact-spacing rule
+                                    // "extra space goes ABOVE the glyph". Pixel-measured
+                                    // de6e32 p7 (12pt CJK list in line=480=24pt exact in a
+                                    // 1-cell table): Word offset ≈10pt = (lh − natural) vs
+                                    // Oxi's old ~0 → the whole list rendered ~8pt too HIGH.
+                                    // (Misdiagnosed as charGrid under-wrap S461; the wrap
+                                    // is IDENTICAL.) (lh − cell_centering_height) self-
+                                    // adjusts: ≈0 at slack≈0 (B5/B6 unaffected), ~10pt at
+                                    // large slack. GATE (full 410-pg): mean 0.9079→0.9098
+                                    // (+0.0020), bottom-3 +0.0115 / bottom-5 +0.0547 /
+                                    // bottom-10 +0.1732, <0.70 7→3, ≥0.99 47→64; 29 up
+                                    // (tokumei -1/-2/-3/-4 p7 all +0.112, p4 +0.03-0.04;
+                                    // 459f +0.039, 34140b +0.020), only 3 tiny regress
+                                    // (b35/a47e/1ec1 p1 ≈−0.003, opposite-direction
+                                    // charGrid/textbox). Render-only (cell text_y_off) →
+                                    // element.y / pagination / Phase-1 54/55 / Phase-2
+                                    // 0.9692 preserved. Override OXI_S462_CELL_EXACT
+                                    // (center / top).
+                                    let mode = std::env::var("OXI_S462_CELL_EXACT")
+                                        .unwrap_or_else(|_| "bottom".to_string());
+                                    match mode.as_str() {
+                                        "center" => ((lh - cell_centering_height).max(0.0) / 2.0 * 2.0 + 0.5).floor() / 2.0,
+                                        "top" => 0.25,
+                                        _ => (lh - cell_centering_height).max(0.0),
+                                    }
                                 }
                                 _ => {
                                     // Single/auto grid-snapped: center within lh using natural lh.
