@@ -1517,6 +1517,24 @@ pub struct LayoutEngine {
     /// - `Final`: post-edit view — `<w:del>` and `<w:moveFrom>` runs are
     ///   removed; `<w:ins>` and `<w:moveTo>` render as normal text.
     show_revisions: ShowRevisions,
+    /// S463 (2026-05-31): true when ANY body text in the document contains a
+    /// CJK character. The Latin-table border-overhead correction
+    /// (OXI_S463_LATIN_BORDER) is scoped to Latin-context documents: in CJK
+    /// documents the table-row deficit is masked by a separate compensating
+    /// error below the table, so applying the (otherwise-correct) overhead
+    /// there regresses SSIM (gen2 Japanese-template family −0.01..−0.035).
+    doc_body_has_cjk: bool,
+}
+
+/// S463: recursive CJK scan over a block (paragraph runs + nested table cells).
+fn block_has_cjk(block: &Block) -> bool {
+    match block {
+        Block::Paragraph(p) => p.runs.iter().any(|r| r.text.chars().any(kinsoku::is_cjk)),
+        Block::Table(t) => t.rows.iter().any(|row| {
+            row.cells.iter().any(|c| c.blocks.iter().any(block_has_cjk))
+        }),
+        _ => false,
+    }
 }
 
 /// Word's default heading font sizes (in points)
@@ -1567,6 +1585,7 @@ impl LayoutEngine {
             balloon_column_width: 0.0,
             show_comments: true,
             show_revisions: ShowRevisions::All,
+            doc_body_has_cjk: false,
         }
     }
 
@@ -1614,6 +1633,7 @@ impl LayoutEngine {
             balloon_column_width: if doc.comments.is_empty() { 0.0 } else { 293.8 + 24.0 },
             show_comments: true,
             show_revisions: ShowRevisions::All,
+            doc_body_has_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_cjk)),
         }
     }
 
@@ -7360,6 +7380,21 @@ impl LayoutEngine {
 
         let num_rows = table.rows.len();
         let dump_table = std::env::var("OXI_DUMP_TABLE").is_ok();
+        // S463 (2026-05-31): whole-table CJK check for the Latin-border-overhead
+        // gate below. Cell-level "no CJK" mis-fired on numeric/Latin cells inside
+        // CJK forms (459f05/34140b −0.12) — a row's height is the max over its
+        // cells, so inflating one Latin cell in a mixed table over-grows the row.
+        // Scope to tables that are ENTIRELY Latin (the gen2 English template
+        // family) so mixed CJK tables are untouched.
+        let table_is_latin = !table.rows.iter().any(|r| {
+            r.cells.iter().any(|c| {
+                c.blocks.iter().any(|b| {
+                    if let Block::Paragraph(p) = b {
+                        p.runs.iter().any(|run| run.text.chars().any(kinsoku::is_cjk))
+                    } else { false }
+                })
+            })
+        });
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
             // Session 79c: visual_row_h = max cell content_h with emit-equivalent
@@ -7555,32 +7590,34 @@ impl LayoutEngine {
                     cell_content_h += _border_overhead * 0.5;
                     cell_content_h_visual += _border_overhead * 0.5;
                 }
-                // S463 (2026-05-31, env-gated experiment): the S375/2026-04-13
-                // border-overhead dead-end was BLANKET (all cells) — it regressed
-                // because CJK cells already over-snap (b35123 +2pt/cell) so adding
-                // border height compounds. But a border-sweep minimal repro
-                // (tools/golden-test/repros/gen2_lineheight, b0/b4/b8) shows Word
-                // DOES scale row pitch with inside-H border: Cambria 11pt single-line
-                // cell pitch = 15.0(no border) / 15.375(sz4=0.5pt) / 15.75(sz8=1pt)
-                // => +0.75*border_width per non-last row. This drives the gen2
-                // English-template vertical drift (-0.94pt per 5-row table, the
-                // dominant cause of their 0.81 SSIM vs OO/Libra 0.96). The untried
-                // discriminator (à la S455 is_cjk scoping): apply ONLY to Latin
-                // (non-CJK) cells, which do NOT over-snap. CJK cells keep overhead 0.
-                if std::env::var("OXI_S463_LATIN_BORDER").is_ok() && table.style.has_inside_h {
-                    let cell_is_latin = !cell.blocks.iter().any(|b| {
-                        if let Block::Paragraph(p) = b {
-                            p.runs.iter().any(|r| r.text.chars().any(kinsoku::is_cjk))
-                        } else { false }
-                    });
-                    // Oxi OFF already adds ~+0.16/row above the bare line (15.16 vs
-                    // 15.0); Word wants 15.375 => remaining deficit ~0.19/row =
-                    // 0.375*border_width (block-calibrated on tbl_b4_sz22: OFF 91.31,
-                    // Word 92.25 => +0.94 over 5 rows).
-                    if cell_is_latin {
-                        cell_content_h += _border_overhead * 0.375;
-                        cell_content_h_visual += _border_overhead * 0.375;
-                    }
+                // S463 (2026-05-31, SHIPPED default-ON, opt-out OXI_S463_DISABLE):
+                // the S375/2026-04-13 border-overhead dead-end was BLANKET (all
+                // cells) — it regressed because CJK cells already over-snap
+                // (b35123 +2pt/cell) so adding border height compounds. A
+                // border-sweep minimal repro (tools/golden-test/repros/
+                // gen2_lineheight, b0/b4/b8) shows Word DOES scale row pitch with
+                // the inside-H border: Cambria 11pt single-line cell pitch =
+                // 15.0(no border)/15.375(sz4=0.5pt)/15.75(sz8=1pt). Oxi already
+                // adds ~0.16/row above the bare line, so the remaining deficit is
+                // ~0.19/row = 0.375*border_width (block-calibrated: tbl_b4_sz22
+                // OFF 91.31 -> Word 92.25 over 5 rows). This drives the gen2
+                // English-template vertical drift (the dominant cause of their
+                // ~0.81 SSIM vs OO/Libra 0.96). Discriminator (à la S455 is_cjk
+                // scoping): apply ONLY to all-Latin tables in all-Latin documents.
+                // CJK docs are excluded because there the (correct) overhead is
+                // masked by a separate compensating error below the table, so
+                // applying it regresses SSIM (gen2 JP family). Clean gate:
+                // OFF 0.9098 -> ON 0.9119 (+0.0020), 30 improved / 0 regressed,
+                // bottom-N flat, Phase-1 pagination unchanged.
+                // Oxi OFF already adds ~+0.16/row above the bare line (15.16 vs
+                // 15.0); Word wants 15.375 => remaining deficit ~0.19/row =
+                // 0.375*border_width (block-calibrated on tbl_b4_sz22: OFF 91.31,
+                // Word 92.25 => +0.94 over 5 rows). Scoped to all-Latin tables.
+                if std::env::var("OXI_S463_DISABLE").is_err()
+                    && table.style.has_inside_h && table_is_latin
+                    && !self.doc_body_has_cjk {
+                    cell_content_h += _border_overhead * 0.375;
+                    cell_content_h_visual += _border_overhead * 0.375;
                 }
 
                 row_height = row_height.max(cell_content_h);
