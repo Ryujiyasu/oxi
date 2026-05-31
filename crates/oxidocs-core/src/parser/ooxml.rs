@@ -305,7 +305,7 @@ impl OoxmlParser {
                         let raw_pitch = default_font_size + char_space_pt;
                         if raw_pitch > 0.0 {
                             // S466: un-stretched raw_pitch (see section-parse comment).
-                            if std::env::var("OXI_S466_GRID_EXPAND").is_ok() {
+                            if std::env::var("OXI_S466_DISABLE").is_err() {
                                 page.grid_char_pitch = Some(raw_pitch);
                             } else {
                                 let chars_line = (content_w / raw_pitch).floor().max(1.0);
@@ -5834,7 +5834,7 @@ fn parse_section_properties(
                                 // remainder), causing over-wrap (b837 7->9 pages). Only the
                                 // small-remainder cases (10/9pt) made stretch≈raw, which is
                                 // why the 2026-04-03 stretch "COM-confirmation" held there.
-                                if std::env::var("OXI_S466_GRID_EXPAND").is_ok() {
+                                if std::env::var("OXI_S466_DISABLE").is_err() {
                                     grid_char_pitch = Some(raw_pitch);
                                 } else {
                                     let chars_line = (content_w / raw_pitch).floor().max(1.0);

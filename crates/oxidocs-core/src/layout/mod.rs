@@ -5675,10 +5675,14 @@ impl LayoutEngine {
         }
 
         let n_fragments = fragments.len();
-        // S466 (2026-05-31): hoisted once — see h8_trigger comment below. When set,
-        // (a) compute positive grid expansion for fs>=default, AND (b) apply it to
-        // char_width so the WRAP (chars/line) matches Word, not just positioning.
-        let s466_grid_expand = std::env::var("OXI_S466_GRID_EXPAND").is_ok();
+        // S466 (2026-05-31, SHIPPED default-ON, opt-out OXI_S466_DISABLE):
+        // hoisted once — see h8_trigger comment below. (a) compute positive grid
+        // expansion for fs>=default, AND (b) apply it to char_width so the WRAP
+        // (chars/line) matches Word, not just positioning. Pairs with the parser
+        // raw_pitch change (ooxml.rs). Gate (drift-free OFF-vs-ON same binary):
+        // charGrid family +0.0019, bottom-N floor up (tokumei p4/p5), only
+        // tokumei p7 ×4 regress (above the floor); Phase-1 54/55 preserved.
+        let s466_grid_expand = std::env::var("OXI_S466_DISABLE").is_err();
         for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
