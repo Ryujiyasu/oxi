@@ -304,8 +304,13 @@ impl OoxmlParser {
                             .unwrap_or(0.0);
                         let raw_pitch = default_font_size + char_space_pt;
                         if raw_pitch > 0.0 {
-                            let chars_line = (content_w / raw_pitch).floor().max(1.0);
-                            page.grid_char_pitch = Some(content_w / chars_line);
+                            // S466: un-stretched raw_pitch (see section-parse comment).
+                            if std::env::var("OXI_S466_GRID_EXPAND").is_ok() {
+                                page.grid_char_pitch = Some(raw_pitch);
+                            } else {
+                                let chars_line = (content_w / raw_pitch).floor().max(1.0);
+                                page.grid_char_pitch = Some(content_w / chars_line);
+                            }
                         }
                         let _ = pitch;
                     }
@@ -5820,8 +5825,21 @@ fn parse_section_properties(
                             let raw_pitch = default_font_size + char_space_pt;
                             let content_w = page_size.width - margin.left - margin.right;
                             if raw_pitch > 0.0 && content_w > 0.0 {
-                                let chars_line = (content_w / raw_pitch).floor().max(1.0);
-                                grid_char_pitch = Some(content_w / chars_line);
+                                // S466 (2026-05-31): Word uses the UN-stretched raw_pitch
+                                // as the char advance and leaves the line-end remainder as
+                                // trailing space; COM (cg_mincho_10.5 charSpace=1453) shows
+                                // rendered advance 10.875 ≈ raw 10.855, NOT the stretched
+                                // content_w/chars_line=11.075. The stretch over-expands when
+                                // the remainder is large (default=10.5, charSpace=1453: 9.7pt
+                                // remainder), causing over-wrap (b837 7->9 pages). Only the
+                                // small-remainder cases (10/9pt) made stretch≈raw, which is
+                                // why the 2026-04-03 stretch "COM-confirmation" held there.
+                                if std::env::var("OXI_S466_GRID_EXPAND").is_ok() {
+                                    grid_char_pitch = Some(raw_pitch);
+                                } else {
+                                    let chars_line = (content_w / raw_pitch).floor().max(1.0);
+                                    grid_char_pitch = Some(content_w / chars_line);
+                                }
                             }
                             // Save raw charSpace so the caller's post-process can recompute
                             // with the correct default_font_size while preserving charSpace.

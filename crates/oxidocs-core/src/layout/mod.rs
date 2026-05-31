@@ -5675,6 +5675,10 @@ impl LayoutEngine {
         }
 
         let n_fragments = fragments.len();
+        // S466 (2026-05-31): hoisted once — see h8_trigger comment below. When set,
+        // (a) compute positive grid expansion for fs>=default, AND (b) apply it to
+        // char_width so the WRAP (chars/line) matches Word, not just positioning.
+        let s466_grid_expand = std::env::var("OXI_S466_GRID_EXPAND").is_ok();
         for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
@@ -5953,7 +5957,19 @@ impl LayoutEngine {
                         // b35 charSpace=-2714 → chars narrower than natural).
                         // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN
                         // legacy env-var fallback during hardening pass.
-                        let h8_trigger = char_space_pt > 0.0;
+                        // S466 (2026-05-31, env-gated test): the H8 "Word never
+                        // applies grid char-pitch for horizontal text" came from
+                        // reading LibreOffice source (ww8par/itrform2). Direct Word
+                        // COM on a charSpace=1453 (tokumei grid) BODY repro
+                        // CONTRADICTS it: MS Mincho 10.5pt(=default) fits 44 chars/
+                        // line in Word but Oxi (H8 skip => natural advance) fits 46.
+                        // i.e. Word DOES expand fullwidth chars to the grid pitch
+                        // when fs >= default_fs (S141 already COM-confirmed Word does
+                        // NOT expand when fs < default, the cell case). So the correct
+                        // skip is fs < default, not unconditional. Gated so the corpus
+                        // (charGrid family tokumei/b35/b837) can be A/B re-gated;
+                        // Phase-1-sensitive (re-wrap moves pagination).
+                        let h8_trigger = char_space_pt > 0.0 && (!s466_grid_expand || font_size < default_fs);
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
                         // S344 (2026-05-27): when S344 fed grid values through despite
@@ -5983,6 +5999,11 @@ impl LayoutEngine {
                 // widths (positioning) reflect the shrink. For positive extras,
                 // keep the existing separate-accumulator model (padding for positioning).
                 if char_grid_extra < 0.0 {
+                    char_width += char_grid_extra;
+                } else if s466_grid_expand && char_grid_extra > 0.0 {
+                    // S466: fold POSITIVE grid expansion into char_width so the wrap
+                    // (chars/line) reflects Word's grid-pitch advance. Default-OFF
+                    // keeps the legacy separate-accumulator positioning behavior.
                     char_width += char_grid_extra;
                 }
 
