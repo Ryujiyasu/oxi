@@ -3968,6 +3968,16 @@ impl LayoutEngine {
             if v.is_empty() { v.push(Vec::new()); }
         }
         let mut elements = Vec::new();
+        // S467 (2026-05-31, env-gated OFF, OXI_S467_VSNAP): match Word's vertical
+        // layout model on the VISUAL track — advance visual_y by the EXACT (un-rounded)
+        // raw line height and snap each emitted line's top to the 0.75pt (96-DPI pixel)
+        // grid. cursor_y (page-break) keeps the current rounded model → Phase-1 safe by
+        // construction (LayoutCursor decoupling, mod.rs:1439). COM (S467, 5 repros):
+        // Word snaps line tops to the absolute 0.75pt grid using the exact cumulative
+        // (line+spacing) position; Oxi's 10tw line-round + exact-spacing model is the
+        // wrong granularity/phase, causing the gen2 list-boundary drift.
+        let s467_vsnap = std::env::var("OXI_S467_VSNAP").is_ok();
+        let snap075 = |y: f32| -> f32 { (y / 0.75).round() * 0.75 };
 
         // Apply paragraph spacing (space_before).
         // Word uses max(prev_space_after, space_before) — spacing collapse.
@@ -4175,7 +4185,8 @@ impl LayoutEngine {
                 .map(|s| s.to_string());
             let marker_bold = self.resolve_bold(marker_style, &para.style);
             let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
-            elements.push(LayoutElement::new(marker_x, cursor.visual_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
+            let marker_base_y = if s467_vsnap { snap075(cursor.visual_y) } else { cursor.visual_y };
+            elements.push(LayoutElement::new(marker_x, marker_base_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
                     text: marker_text,
                     font_size: marker_font_size,
                     font_family: marker_font_family,
@@ -5094,7 +5105,9 @@ impl LayoutEngine {
                 // Session 75 Phase D (2026-05-17): y is LINE BOX TOP, renderer adds
                 // text_y_off + baseline_adjust + vert_offset at draw time. See
                 // memory/session71_y_convention_refactor_design.md.
-                let mut el = LayoutElement::new(x, cursor.visual_y, adjusted_width, line_height, LayoutContent::Text {
+                // S467: snap the emitted line top to the 0.75pt grid (Word's model).
+                let emit_y = if s467_vsnap { snap075(cursor.visual_y) } else { cursor.visual_y };
+                let mut el = LayoutElement::new(x, emit_y, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -5448,6 +5461,16 @@ impl LayoutEngine {
                     // COM-confirmed (2026-04-14, mixed font repro): Multiple spacing
                     // uses cumulative raw position model with ROUND. Each paragraph
                     // adds its raw_tw to a shared running total.
+                    // S467 NOTE: the cumulative LINE position is rounded to 10tw (0.5pt)
+                    // here, while spacing is advanced exact (line 4006). Word instead
+                    // snaps the COMBINED (line+spacing) cumulative position to 15tw
+                    // (0.75pt = 96-DPI pixel). A granularity-only experiment (round to
+                    // 15tw here) was FALSIFIED on the Cambria repro (mean|drift| 0.188->
+                    // 0.229, worse) — matching Word needs the spacing folded into the
+                    // snapped cumulative, not just a coarser line-round. Pure-body Cambria
+                    // is already within +/-0.5 of Word (this 10tw model is fine); the gen2
+                    // drift is the title pBdr (-0.75, see mod.rs:5539) + list-style-boundary
+                    // rounding-phase mismatches that only the combined-snap model resolves.
                     let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
                     let new_pos = old_pos + raw_spaced_tw;
                     let cn = (new_pos / 10.0).round() as i32 * 10;
@@ -5458,7 +5481,13 @@ impl LayoutEngine {
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
                 };
-                cursor.advance((cn - cc) as f32 / 20.0);
+                if s467_vsnap && is_multiple_spacing {
+                    // visual_y advances by the EXACT raw line height; cursor_y by the
+                    // current rounded amount (page-break unchanged). Emit snaps visual_y.
+                    cursor.advance_split((cn - cc) as f32 / 20.0, raw_spaced_tw / 20.0);
+                } else {
+                    cursor.advance((cn - cc) as f32 / 20.0);
+                }
                 // Update cumulative raw position for Multiple spacing AND LM0 single.
                 if is_multiple_spacing || (grid_pitch.is_none() && is_single_lm0) {
                     if let Some(ref mut cr) = mult_cumul_raw {
@@ -5536,9 +5565,27 @@ impl LayoutEngine {
                 elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
                 }));
-                // Advance cursor to border midpoint (COM-confirmed: space + bw/2).
-                // gen2_036 Title 26pt: lineH=34 + space(4) + bw/2(0.5) = 38.5 = Word.
-                cursor.set(border_y + bw / 2.0);
+                // S467 (2026-05-31, env-gated OFF default; opt-in OXI_S467_PBDR_ENABLE):
+                // the FULL border width (space + bw) is the CORRECT advance, not the
+                // midpoint (space + bw/2). The old "bw/2" comment cited a gen2_036
+                // measurement that was a non-collapsed-start (R30) artifact; re-measured
+                // collapsed-start, gen2_036 title gap = 54.0 (not 38.5), gen2_055/056/067
+                // = 51.75. A minimal repro (Calibri 26pt single sa=15 + bottom border
+                // sz=8=1.0pt space=4) confirms Word reserves the FULL border width below
+                // the text before space-after: with-border gap 51.75 = lineBox(31.5)+
+                // space(4)+bw(1.0)+sa(15)+grid-snap(0.25). COM-confirmed the fix makes the
+                // title gap EXACT/closer for BOTH EN (gen2_055 -0.75->-0.25) and JP
+                // (gen2_001 -0.50->+0.00) titles. NOT SHIPPED default-ON: the fix is
+                // correct but propagates a +0.5 shift to ALL p1 content below the title,
+                // which HELPS docs whose body drifted too-high (EN gen2: +0.02..+0.05) but
+                // HURTS docs whose body was already aligned via a compensating CJK/per-doc
+                // line-height error (gen2 OFF-vs-ON: 55 up / 26 down, incl. gen2_054 EN
+                // -0.054, gen2_001 JP -0.046 — NOT separable by language). Body alignment
+                // is per-doc inconsistent (the gen2 drift is fragmented), so the title fix
+                // can only ship together with the body line-height fix. Kept gated for
+                // when that lands. Default OFF = byte-identical baseline.
+                let pbdr_full = std::env::var("OXI_S467_PBDR_ENABLE").is_ok();
+                cursor.set(border_y + if pbdr_full { bw } else { bw / 2.0 });
             }
             if let Some(ref top) = borders.top {
                 let bw = top.width;
