@@ -6920,6 +6920,49 @@ impl LayoutEngine {
                 if matches!(para_style.text_alignment.as_deref(), Some("baseline") | Some("top"))
                     && para_style.text_alignment_from_pprdefault
                 {
+                    // S459 (2026-05-31) ★ SHIP — the baseline/top textAlignment
+                    // early-return places the glyph at line-box top (0 line-
+                    // centering), which is correct for LINE positioning, but it
+                    // ALSO skipped the S455-457 CJK 83/64 glyph-in-box correction.
+                    // Pixel-measured on e3c545_LOD_Handbook p2 (Meiryo 10.5pt,
+                    // pPrDefault textAlignment=baseline — the ONLY corpus doc on
+                    // this path): Word glyphs sit ~3.2-3.4pt LOWER than Oxi's
+                    // 0-offset placement, UNIFORMLY on every line (band-corr
+                    // 0.94-0.99, ink-center +3.1..3.8pt). Same family as S454-457
+                    // but in the baseline-alignment path. The magnitude (3.2 vs
+                    // the LM0 1.75 constant) is larger because Meiryo's leading is
+                    // much larger than MS Mincho 9pt — the leading-proportional
+                    // dependence S458 noted but could not fit as a clean global
+                    // law. Returning the LM0 centering `base` instead was tested
+                    // and is a NO-OP (word_line_height_table_cell ≈ line_height
+                    // for Meiryo → base≈0), so a constant is the model here.
+                    // Gated to CJK 83/64 lines (non-CJK baseline lines stay at 0,
+                    // unchanged). δ-sweep (DWrite gate renderer) peaks at 3.2:
+                    // LOD mean 0.7901→0.8233 (+0.033), all 12 pages improve or
+                    // hold (p1 +0.12, p2 +0.15, p3 +0.05), ZERO regress. ONLY LOD
+                    // hits this branch corpus-wide (verified: it is the sole doc
+                    // with pPrDefault textAlignment=baseline) → no other doc can
+                    // regress. Render-only (text_y_off) → element.y / pagination
+                    // unchanged → Phase-1 sentinel preserved by construction.
+                    // Opt-out / override via OXI_S459_BASELINE_CJK_DY (0 disables).
+                    let s459 = std::env::var("OXI_S459_BASELINE_CJK_DY")
+                        .ok()
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .unwrap_or(3.2);
+                    if s459 != 0.0 {
+                        let line_is_cjk_8364 = if !line.fragments.is_empty() {
+                            line.fragments.iter().any(|f| {
+                                self.metrics_for_text(&f.text, &f.style, para_style)
+                                    .is_cjk_83_64_font()
+                            })
+                        } else {
+                            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            self.metrics_for_para_mark(&rpr_ref, para_style).is_cjk_83_64_font()
+                        };
+                        if line_is_cjk_8364 {
+                            return s459;
+                        }
+                    }
                     return 0.0;
                 }
                 // Grid-snapped lines: text is vertically centered within the grid cell.
