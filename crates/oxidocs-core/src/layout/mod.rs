@@ -5972,6 +5972,13 @@ impl LayoutEngine {
                         let h8_trigger = char_space_pt > 0.0 && (!s466_grid_expand || font_size < default_fs);
                         let h7_trigger = h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger = h6_gate_enabled && char_space_pt > 0.0 && font_size < default_fs;
+                        // S466: when the docGrid has NO charSpace (char_space_pt≈0), the
+                        // grid is line-pitch-only and Word does NOT horizontally expand
+                        // chars. Under raw_pitch (S466) such a doc yields char_space_pt=0
+                        // (b837: charSpace absent, default 12pt), which would otherwise
+                        // fall through to expected_w=fs and widen natural<fs chars,
+                        // over-wrapping (7->9). Skip expansion for the no-charSpace case.
+                        let s466_no_grid = s466_grid_expand && char_space_pt < 0.01;
                         // S344 (2026-05-27): when S344 fed grid values through despite
                         // snap_to_grid=false, gate compression to fs < default_fs only.
                         // (Effective only when paired with S342/S344 pass-through at
@@ -5980,7 +5987,7 @@ impl LayoutEngine {
                         let s344_skip = s344_fs_gate
                             && !para_style.snap_to_grid
                             && font_size >= default_fs;
-                        if h6_trigger || h7_trigger || h8_trigger || s344_skip {
+                        if h6_trigger || h7_trigger || h8_trigger || s344_skip || s466_no_grid {
                             0.0
                         } else {
                             let expected_w = if char_space_pt >= 0.0 {
