@@ -1,0 +1,98 @@
+=== M_105_single.docx  (MS Mincho 10.5pt mult=1.00 sa=0) ===
+  Word advances: [13.5, 13.5, 13.5, 14.25, 13.5, 13.5]  mean=13.636
+  Oxi  advances: [14.0, 13.5, 13.5, 13.5, 14.0, 13.5]  mean=13.636
+  per-line drift (oxi_adv - word_adv) mean = +0.000  => over 12 lines = +0.00
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 85.5, 99.0, 112.5, 126.75]
+  Oxi  ys[:5]=[72.0, 86.0, 99.5, 113.0, 126.5]
+
+=== M_9_single.docx  (MS Mincho 9.0pt mult=1.00 sa=0) ===
+  Word advances: [12.0, 11.25, 12.0, 11.25, 12.0, 11.25]  mean=11.659
+  Oxi  advances: [12.0, 11.5, 12.0, 11.5, 11.5, 12.0]  mean=11.682
+  per-line drift (oxi_adv - word_adv) mean = +0.023  => over 12 lines = +0.28
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 84.0, 95.25, 107.25, 118.5]
+  Oxi  ys[:5]=[72.0, 84.0, 95.5, 107.5, 119.0]
+
+=== M_12_single.docx  (MS Mincho 12.0pt mult=1.00 sa=0) ===
+  Word advances: [15.75, 15.75, 15.0, 15.75, 15.75, 15.75]  mean=15.545
+  Oxi  advances: [16.0, 15.5, 15.5, 15.5, 15.5, 15.5]  mean=15.591
+  per-line drift (oxi_adv - word_adv) mean = +0.046  => over 12 lines = +0.55
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 87.75, 103.5, 118.5, 134.25]
+  Oxi  ys[:5]=[72.0, 88.0, 103.5, 119.0, 134.5]
+
+=== G_105_single.docx  (MS Gothic 10.5pt mult=1.00 sa=0) ===
+  Word advances: [13.5, 13.5, 13.5, 14.25, 13.5, 13.5]  mean=13.636
+  Oxi  advances: [14.0, 13.5, 13.5, 13.5, 14.0, 13.5]  mean=13.636
+  per-line drift (oxi_adv - word_adv) mean = +0.000  => over 12 lines = +0.00
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 85.5, 99.0, 112.5, 126.75]
+  Oxi  ys[:5]=[72.0, 86.0, 99.5, 113.0, 126.5]
+
+=== Meiryo_105_single.docx  (Meiryo 10.5pt mult=1.00 sa=0) ===
+  Word advances: [20.25, 21.0, 20.25, 20.25, 21.0, 20.25]  mean=20.455
+  Oxi  advances: [20.5, 20.5, 20.5, 20.5, 20.5, 20.5]  mean=20.500
+  per-line drift (oxi_adv - word_adv) mean = +0.045  => over 12 lines = +0.54
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 92.25, 113.25, 133.5, 153.75]
+  Oxi  ys[:5]=[72.0, 92.5, 113.0, 133.5, 154.0]
+
+=== M_105_m115.docx  (MS Mincho 10.5pt mult=1.15 sa=0) ===
+  Word advances: [15.75, 15.75, 15.75, 15.75, 15.0, 15.75]  mean=15.682
+  Oxi  advances: [15.5, 15.5, 15.5, 15.5, 15.5, 15.5]  mean=15.545
+  per-line drift (oxi_adv - word_adv) mean = -0.137  => over 12 lines = -1.64
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 87.75, 103.5, 119.25, 135.0]
+  Oxi  ys[:5]=[72.0, 87.5, 103.0, 118.5, 134.0]
+
+=== M_105_sa10.docx  (MS Mincho 10.5pt mult=1.00 sa=10) ===
+  Word advances: [23.25, 24.0, 23.25, 24.0, 23.25, 24.0]  mean=23.591
+  Oxi  advances: [24.0, 23.5, 23.5, 23.5, 24.0, 23.5]  mean=23.636
+  per-line drift (oxi_adv - word_adv) mean = +0.045  => over 12 lines = +0.54
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.0, 95.25, 119.25, 142.5, 166.5]
+  Oxi  ys[:5]=[72.0, 96.0, 119.5, 143.0, 166.5]
+
+=== M_105_dg360.docx  (MS Mincho 10.5pt mult=1.00 sa=0) ===
+  Word advances: [18.0, 18.0, 18.0, 18.0, 18.0, 18.0]  mean=18.000
+  Oxi  advances: [18.0, 18.0, 18.0, 18.0, 18.0, 18.0]  mean=18.000
+  per-line drift (oxi_adv - word_adv) mean = +0.000  => over 12 lines = +0.00
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.000
+  Word ys[:5]=[74.25, 92.25, 110.25, 128.25, 146.25]
+  Oxi  ys[:5]=[72.0, 90.0, 108.0, 126.0, 144.0]
+
+=== M_105_dg360_cs.docx  (MS Mincho 10.5pt mult=1.00 sa=0) ===
+  Word advances: [18.0, 18.0, 18.0, 18.0, 18.0, 18.0]  mean=18.000
+  Oxi  advances: [18.0, 18.0, 18.0, 18.0, 18.0, 18.0]  mean=18.000
+  per-line drift (oxi_adv - word_adv) mean = +0.000  => over 12 lines = +0.00
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.000
+  Word ys[:5]=[74.25, 92.25, 110.25, 128.25, 146.25]
+  Oxi  ys[:5]=[72.0, 90.0, 108.0, 126.0, 144.0]
+
+=== M_105_dg312.docx  (MS Mincho 10.5pt mult=1.00 sa=0) ===
+  Word advances: [15.75, 15.75, 15.0, 15.75, 15.75, 15.75]  mean=15.614
+  Oxi  advances: [16.0, 15.5, 15.5, 15.5, 15.5, 16.0]  mean=15.636
+  per-line drift (oxi_adv - word_adv) mean = +0.022  => over 12 lines = +0.26
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[72.75, 88.5, 104.25, 119.25, 135.0]
+  Oxi  ys[:5]=[72.0, 88.0, 103.5, 119.0, 134.5]
+
+=== G_9_dg312.docx  (MS Gothic 9.0pt mult=1.00 sa=0) ===
+  Word advances: [15.75, 15.75, 15.0, 15.75, 15.75, 15.75]  mean=15.614
+  Oxi  advances: [16.0, 15.5, 15.5, 15.5, 15.5, 16.0]  mean=15.636
+  per-line drift (oxi_adv - word_adv) mean = +0.022  => over 12 lines = +0.26
+  Word top 0.75-grid residual: max=0.000  ON-GRID
+  Oxi  top 0.75-grid residual: max=0.250
+  Word ys[:5]=[74.25, 90.0, 105.75, 120.75, 136.5]
+  Oxi  ys[:5]=[72.0, 88.0, 103.5, 119.0, 134.5]
