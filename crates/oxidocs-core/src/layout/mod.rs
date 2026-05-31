@@ -8519,6 +8519,15 @@ impl LayoutEngine {
                                                 && char_space_pt > 0.0 && font_size <= default_fs;
                                             // S151 H8 default ON: skip positive char_grid_extra
                                             // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
+                                            // S466 NOTE (2026-05-31): the CELL visible-wrap mirror of
+                                            // the break_into_lines h8 change (make cells grid-fit 36
+                                            // like Word instead of natural 37) was TRIED here and
+                                            // REVERTED — it traded the p7 partial-fix (-0.0138→-0.0065)
+                                            // for NEW p5/p6 cascade regressions (a1d6 p5 -0.020, 6514
+                                            // p5 -0.020, d4d126 p6 -0.014), netting 8 regressions vs 4
+                                            // at the same family mean (+0.0017 vs +0.0019). The
+                                            // b35123-class cell-wrap re-flow cascade (memory) fired.
+                                            // Cell visible-wrap stays h8-natural; S466 is body-only.
                                             let h8_skip = char_space_pt > 0.0;
                                             // S344: when snap_to_grid=false and S344 enabled,
                                             // skip compression unless fs < default_fs.
