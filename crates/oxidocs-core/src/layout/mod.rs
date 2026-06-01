@@ -6395,10 +6395,17 @@ impl LayoutEngine {
                         let is_para_last_char = frag_outer_idx + 1 == n_fragments
                             && char_index + 1 == chars_vec.len();
                         let is_sentence_terminator = matches!(ch, '。' | '．');
+                        // S472h: the S228 hang-block fires when a line already "cheated"
+                        // (compress_used). Under the S472 demand model, a line legitimately
+                        // compresses 、 by a small justify-demand amount (compress_used=true)
+                        // yet should STILL let a trailing 。 hang (b837 para13 L4: る fits via
+                        // 、-absorb, then 。 must hang to keep 38/line = Word). So exempt the
+                        // S472 path from the S228 hang-block.
                         let s228_block_hang = !legacy_s228
                             && compress_used
                             && is_para_last_char
-                            && is_sentence_terminator;
+                            && is_sentence_terminator
+                            && !s472_demand;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
                             && !s228_block_hang;
 
