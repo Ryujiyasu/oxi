@@ -4919,14 +4919,18 @@ impl LayoutEngine {
                     for fi in 0..nfr {
                         let f = &line.fragments[fi];
                         let fs = f.style.font_size.unwrap_or(para_font_size);
-                        let is_std_yak = matches!(f.text.as_str(), "、" | "，" | "。" | "．")
-                            && f.width > fs * 0.6
-                            && !(fi > 0 && line.fragments[fi - 1].text.chars().last()
-                                .map_or(false, kinsoku::is_yakumono_trigger))
-                            && !(fi + 1 < nfr && line.fragments[fi + 1].text.chars().next()
-                                .map_or(false, kinsoku::is_yakumono_trigger));
-                        if is_std_yak {
-                            let cap = if matches!(f.text.as_str(), "。" | "．") { fs / 2.0 } else { fs / 3.0 };
+                        let c0 = f.text.chars().next().unwrap_or(' ');
+                        let single = f.text.chars().count() == 1;
+                        // cap per char type: 、,，→fs/3 (8.0); 。．& closing brackets→fs/2
+                        // (6.0). Opening brackets never compress. width>fs*0.6 excludes
+                        // already-pair-compressed (6.0) fragments.
+                        let cap = if !single { 0.0 } else { match c0 {
+                            '、' | '，' => fs / 3.0,
+                            '。' | '．' => fs / 2.0,
+                            '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）' => fs / 2.0,
+                            _ => 0.0,
+                        }};
+                        if cap > 0.0 && f.width > fs * 0.6 {
                             comps.push((fi, fs, cap));
                             nat_total += fs;
                         } else {
@@ -6387,29 +6391,52 @@ impl LayoutEngine {
                     if s472_demand && overflow_tw > 0
                         && self.compress_punctuation && self.compat_mode >= 15
                     {
-                        let nat = font_size; // ~fullwidth advance for 、。 at this size
-                        let comp_idxs: Vec<usize> = current_line.fragments.iter().enumerate()
-                            .filter(|(_, f)| matches!(f.text.as_str(), "、" | "，" | "。" | "．")
-                                && f.width >= nat * 0.95)
-                            .map(|(i, _)| i)
-                            .collect();
-                        let comp_count = comp_idxs.len();
-                        if comp_count > 0 {
-                            let max_save_per = font_size / 3.0; // ≈4pt at 12pt (floor ×2/3)
-                            let budget_tw = pt_to_tw((comp_count as f32) * max_save_per);
-                            if overflow_tw <= budget_tw {
-                                let need_pt = (overflow_tw as f32) / 20.0; // 1pt = 20tw
-                                let per = (need_pt / comp_count as f32).min(max_save_per);
-                                let mut saved = 0.0f32;
-                                for &i in &comp_idxs {
-                                    current_line.fragments[i].width -= per;
-                                    saved += per;
+                        let nat = font_size;
+                        // Cap-aware compressibles for the whole-line FIT budget:
+                        // 、,，→fs/3 (8.0pt floor); 。．and CLOSING brackets→fs/2 (6.0pt
+                        // floor; opening brackets never compress). Including closing
+                        // brackets fixes bracket-heavy lines (d77a p1 「…規約」) that Word
+                        // packs by compressing 」 but Oxi's 、-only budget under-packed.
+                        let mut comps: Vec<(usize, f32)> = Vec::new(); // (fi, cap)
+                        for (i, f) in current_line.fragments.iter().enumerate() {
+                            if f.width < nat * 0.95 || f.text.chars().count() != 1 { continue; }
+                            let c = f.text.chars().next().unwrap_or(' ');
+                            let cap = match c {
+                                '、' | '，' => font_size / 3.0,
+                                '。' | '．' => font_size / 2.0,
+                                '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）' => font_size / 2.0,
+                                _ => continue,
+                            };
+                            comps.push((i, cap));
+                        }
+                        let budget_tw = pt_to_tw(comps.iter().map(|(_, c)| *c).sum());
+                        if !comps.is_empty() && overflow_tw <= budget_tw {
+                            // water-fill the overflow across comps (cap-aware), reducing
+                            // current_width so accumulation stays coherent.
+                            let mut needed = (overflow_tw as f32) / 20.0;
+                            let mut active = comps.clone();
+                            let mut amt = vec![0.0f32; current_line.fragments.len()];
+                            loop {
+                                if active.is_empty() || needed <= 0.001 { break; }
+                                let share = needed / active.len() as f32;
+                                let capped: Vec<(usize, f32)> = active.iter().cloned()
+                                    .filter(|(_, c)| *c <= share).collect();
+                                if capped.is_empty() {
+                                    for (fi, _) in &active { amt[*fi] = share; }
+                                    break;
                                 }
-                                current_width -= saved;
-                                current_width_tw = current_width_tw
-                                    .saturating_sub(pt_to_tw(saved));
-                                s472_absorb = true;
+                                for (fi, c) in &capped { amt[*fi] = *c; needed -= c; }
+                                active.retain(|(_, c)| *c > share);
                             }
+                            let mut saved = 0.0f32;
+                            for (i, _) in &comps {
+                                current_line.fragments[*i].width -= amt[*i];
+                                saved += amt[*i];
+                            }
+                            current_width -= saved;
+                            current_width_tw = current_width_tw
+                                .saturating_sub(pt_to_tw(saved));
+                            s472_absorb = true;
                         }
                     }
                     let absorb = if s472_absorb { true }
