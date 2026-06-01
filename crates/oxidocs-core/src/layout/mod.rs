@@ -4888,6 +4888,12 @@ impl LayoutEngine {
                 && ((para.alignment == Alignment::Justify && !is_last_line)
                     || para.alignment == Alignment::Distribute);
             if should_justify && line.fragments.len() > 1 {
+                // S472 (break-agnostic render): when on, the yakumono compression for
+                // RENDER is computed here purely from natural widths vs available
+                // (Word's demand model), independent of whatever the break decided —
+                // replacing the legacy Phase 1 (×0.5) + Stage 2b (restore) dance which
+                // was tuned to the old break-time 、=8.0 pre-compression.
+                let s472_render = std::env::var("OXI_S472_DEMAND").is_ok();
                 // charGrid: subtract grid extra from slack. Grid extra widens chars
                 // for positioning but is NOT distributable justify space.
                 let grid_extra_on_line = if let Some(pitch) = effective_char_pitch {
@@ -4899,13 +4905,65 @@ impl LayoutEngine {
                 } else { 0.0 };
                 let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
 
+                // S472 break-agnostic demand compression (replaces Phase 1 + Stage 2b
+                // below when on). Reset standalone 、。 to natural, compute the line's
+                // overflow vs available, and distribute that compression across them
+                // cap-aware (、,，→fontSize/3 floor=8.0pt; 。．→fontSize/2 floor=6.0pt)
+                // via even water-filling. This lands each 、。 on Word's demand-driven
+                // advance regardless of the break-time width. Under-full lines reset 、
+                // to natural and let Phase 2 distribute.
+                if s472_render {
+                    let nfr = line.fragments.len();
+                    let mut comps: Vec<(usize, f32, f32)> = Vec::new(); // (fi, fs, cap)
+                    let mut nat_total = 0.0f32;
+                    for fi in 0..nfr {
+                        let f = &line.fragments[fi];
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        let is_std_yak = matches!(f.text.as_str(), "、" | "，" | "。" | "．")
+                            && f.width > fs * 0.6
+                            && !(fi > 0 && line.fragments[fi - 1].text.chars().last()
+                                .map_or(false, kinsoku::is_yakumono_trigger))
+                            && !(fi + 1 < nfr && line.fragments[fi + 1].text.chars().next()
+                                .map_or(false, kinsoku::is_yakumono_trigger));
+                        if is_std_yak {
+                            let cap = if matches!(f.text.as_str(), "。" | "．") { fs / 2.0 } else { fs / 3.0 };
+                            comps.push((fi, fs, cap));
+                            nat_total += fs;
+                        } else {
+                            nat_total += f.width;
+                        }
+                    }
+                    let nat_slack = render_width - extra_indent - nat_total - grid_extra_on_line;
+                    let mut comp_amt = vec![0.0f32; nfr];
+                    if nat_slack < 0.0 && !comps.is_empty() {
+                        let mut needed = -nat_slack;
+                        let mut active: Vec<(usize, f32)> = comps.iter().map(|(fi, _, cap)| (*fi, *cap)).collect();
+                        loop {
+                            if active.is_empty() || needed <= 0.001 { break; }
+                            let share = needed / active.len() as f32;
+                            let capped: Vec<(usize, f32)> = active.iter().cloned()
+                                .filter(|(_, cap)| *cap <= share).collect();
+                            if capped.is_empty() {
+                                for (fi, _) in &active { comp_amt[*fi] = share; }
+                                break;
+                            }
+                            for (fi, cap) in &capped { comp_amt[*fi] = *cap; needed -= cap; }
+                            active.retain(|(_, cap)| *cap > share);
+                        }
+                    }
+                    // Set adjustments so each standalone 、。 renders at (natural − comp).
+                    for (fi, fs, _) in &comps {
+                        frag_width_adjustments[*fi] = (fs - comp_amt[*fi]) - line.fragments[*fi].width;
+                    }
+                }
+
                 // Phase 1: CJK punctuation compression (full-width -> half-width)
                 // Only compress when the line overflows (slack < 0).
                 // Matches Word output: TextBox content does NOT use punctuation compression.
                 // 2026-04-20 fix: Skip chars whose fragment.width is ALREADY smaller than
                 // natural (indicates break_into_lines already compressed them — applying
                 // Phase 1 again would DOUBLE-compress, crushing 「」 to w=0pt).
-                if slack < 0.0 && !in_textbox {
+                if slack < 0.0 && !in_textbox && !s472_render {
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {
                             if kinsoku::is_cjk_compressible(ch) {
@@ -4961,7 +5019,7 @@ impl LayoutEngine {
                 // but at render Word restores 、 toward natural when slack allows.
                 // Safe because: only fires when slack > 0, only de-compresses
                 // (never over-extends).
-                if slack > 0.5 && !in_textbox {
+                if slack > 0.5 && !in_textbox && !s472_render {
                     let mut compressed: Vec<(usize, f32, f32)> = Vec::new();
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {
