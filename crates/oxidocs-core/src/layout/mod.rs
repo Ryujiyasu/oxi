@@ -2326,6 +2326,23 @@ impl LayoutEngine {
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
         let mut block_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
         let mut current_page_idx: usize = 0;
+        // S469 (2026-06-01): wrap-below floating tables (vertAnchor="text",
+        // tblpX=0, full-width — see R7.75/R7.76) advance the FLOW cursor below
+        // the table so body TEXT wraps under it (Word-confirmed, session 60).
+        // BUT floating objects (textboxes/images) anchored to a paragraph that
+        // follows such a table use that paragraph's NATURAL (pre-wrap) flow
+        // position, NOT the wrapped cursor. 1ec1 root cause: its bottom note
+        // box + 国税庁 logo + badge are all anchored to the (text-less) para
+        // after a wrap-below floating table; Oxi recorded their anchor Y as the
+        // wrapped cursor (~749pt) → anchor_y + posOffset overflowed the page →
+        // clamp → objects ~46pt too low (note/logo overlap). Word anchors them
+        // at the natural Y (~571pt). Fix: accumulate the wrap-below advance and
+        // subtract it when recording block_y_positions (used ONLY for anchor
+        // resolution); the flow cursor / pagination are untouched (Phase-1
+        // safe). Reset per page. Default ON, opt-out OXI_S469_DISABLE.
+        let s469_enabled = std::env::var("OXI_S469_DISABLE").is_err();
+        let mut anchor_flow_offset: f32 = 0.0;
+        let mut anchor_offset_page: usize = 0;
         // Round 29: dynamic per-page footnote reservation. Tracks the sum of
         // estimated heights for footnotes whose references appear on the current
         // layout page. Resets to 0 each time a new page is pushed. Subtracts from
@@ -2355,6 +2372,12 @@ impl LayoutEngine {
         let mut floating_tables_per_page: Vec<Vec<(f32, f32)>> = vec![Vec::new()];
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            // S469: the wrap-below anchor offset is page-local. Reset it when the
+            // flow has advanced to a new page since the previous block.
+            if current_page_idx != anchor_offset_page {
+                anchor_flow_offset = 0.0;
+                anchor_offset_page = current_page_idx;
+            }
             // wrapTopAndBottom: for inline TABLE blocks, push below overlapping TextBoxes
             // Skip for floating tables (tblpPr) as they have explicit positioning
             let is_floating_table = matches!(block, Block::Table(t) if t.style.position.is_some());
@@ -2381,7 +2404,9 @@ impl LayoutEngine {
                     }
                 }
             }
-            block_y_positions.push(cursor.cursor_y);
+            // S469: record the NATURAL (pre-wrap) Y for anchor resolution by
+            // subtracting any accumulated wrap-below advance on this page.
+            block_y_positions.push(cursor.cursor_y - anchor_flow_offset);
             block_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
@@ -2980,6 +3005,13 @@ impl LayoutEngine {
                             cursor.set(candidate_y_bottom + 1.5);
                             *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         } else if needs_wrap_below {
+                            // S469: the cursor advances below the table so body
+                            // TEXT wraps under it, but objects anchored to the
+                            // following paragraph keep the natural (pre-wrap) Y.
+                            // Record the advance so block_y_positions can undo it.
+                            if s469_enabled {
+                                anchor_flow_offset += (candidate_y_bottom + 1.5) - saved_cursor_y;
+                            }
                             cursor.set(candidate_y_bottom + 1.5);
                         } else {
                             // Original behavior: floating tables don't advance text flow
@@ -3656,13 +3688,13 @@ impl LayoutEngine {
         };
 
         // Clamp to page boundaries (floating images can extend into margins)
-        let abs_y = if abs_y + img.height > page.size.height {
+        let abs_y_clamped = if abs_y + img.height > page.size.height {
             (page.size.height - img.height).max(0.0)
         } else {
             abs_y
         };
 
-        (abs_x, abs_y)
+        (abs_x, abs_y_clamped)
     }
 
     /// Layout a single text box: background, borders, and inner content.
