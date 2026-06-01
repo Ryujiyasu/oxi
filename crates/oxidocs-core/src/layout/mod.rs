@@ -4894,7 +4894,8 @@ impl LayoutEngine {
                 // replacing the legacy Phase 1 (×0.5) + Stage 2b (restore) dance which
                 // was tuned to the old break-time 、=8.0 pre-compression.
                 let s472_render = std::env::var("OXI_S472_DEMAND").is_ok()
-                    || std::env::var("OXI_S473_LOCOMP").is_ok();
+                    || std::env::var("OXI_S473_LOCOMP").is_ok()
+                    || std::env::var("OXI_S475_BREAKBUDGET").is_ok();
                 // charGrid: subtract grid extra from slack. Grid extra widens chars
                 // for positioning but is NOT distributable justify space.
                 let grid_extra_on_line = if let Some(pitch) = effective_char_pitch {
@@ -5762,6 +5763,13 @@ impl LayoutEngine {
         // Integer twips accumulator for line break decisions.
         // Avoids f32 rounding drift that causes ±0.1pt error over 40+ characters.
         let mut current_width_tw: i32 = pt_to_tw(first_line_indent);
+        // S475 (2026-06-01): capacity-adjusted break width = Σ(natural_adv −
+        // max_yakumono_compress). Runs parallel to current_width_tw; only CONSULTED
+        // when s475_break is ON (else default byte-identical). The break accepts a
+        // char iff this accumulator (incl the char) ≤ available_tw — greedy first-fit
+        // with punct-only demand compression folded into the fit width. See
+        // session471 finding + workflow wtvi6fvix.
+        let mut current_capw_tw: i32 = pt_to_tw(first_line_indent);
         let mut compress_used = false; // true after compression-based overflow absorption
         // S243 (2026-05-24): removed dead variable `current_grid_extra`
         // (assigned/incremented in 8 sites but never read).
@@ -5795,7 +5803,7 @@ impl LayoutEngine {
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
@@ -5810,6 +5818,7 @@ impl LayoutEngine {
                     });
                     current_width += word_width;
                     current_width_tw += word_width_tw;
+                    current_capw_tw += word_width_tw; // S475: words have no punct capacity
                     word_width = 0.0;
                     word_natural_width = 0.0;
                 }
@@ -5919,6 +5928,17 @@ impl LayoutEngine {
             // "Word breaks at natural, punct compression is render-only" and to
             // derive the fullness-gate rule (Ng vs Word count). Default OFF.
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok();
+            // S475 capacity-budget break (env-gated, default OFF = byte-identical).
+            // Greedy first-fit where each punct contributes break-compression CAPACITY
+            // (pair-first 6.0 / solo 1.5, env-tunable; flat-K = equal). Bypasses the
+            // ×0.6667 standalone pre-compress + the S472/S473 absorb, and routes render
+            // through the s472_render water-fill so glyphs justify correctly.
+            let s475_break = std::env::var("OXI_S475_BREAKBUDGET").is_ok()
+                && self.compress_punctuation && self.compat_mode >= 15;
+            let s475_pair: f32 = std::env::var("OXI_S475_PAIR").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(6.0);
+            let s475_solo: f32 = std::env::var("OXI_S475_SOLO").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(1.5);
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
@@ -6044,7 +6064,7 @@ impl LayoutEngine {
                                 // standalone = near-full, only compressed on line-slack).
                                 // The demand-absorb below compresses any of them as a
                                 // line's overflow requires.
-                                if (s472_demand || s474_natural) && matches!(ch, '、' | '，' | '。' | '．') {
+                                if (s472_demand || s474_natural || s475_break) && matches!(ch, '、' | '，' | '。' | '．') {
                                     // no compression at break; demand-absorb handles fit
                                     // (s474_natural: leave natural, no absorb either =
                                     // pure natural-greedy diagnostic)
@@ -6233,7 +6253,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -6283,6 +6303,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             current_width += char_width; current_width_tw += pt_to_tw(char_width);
+                            current_capw_tw += pt_to_tw(char_width); // S475: space, no punct capacity
                         }
                     }
                 } else if is_break_after(ch) {
@@ -6340,9 +6361,19 @@ impl LayoutEngine {
                         }
                         current_width += extra;
                         current_width_tw += pt_to_tw(extra);
+                        current_capw_tw += pt_to_tw(extra); // S475: autoSpace, no punct capacity
                     }
 
-                    let overflow_tw = current_width_tw + pt_to_tw(char_width) - available_tw;
+                    let s475_capinc = if s475_break {
+                        pt_to_tw(pre_yakumono_width
+                            - kinsoku::s475_max_compress(ch, chars_vec.get(char_index + 1).copied(),
+                                s475_pair, s475_solo, font_size))
+                    } else { 0 };
+                    let overflow_tw = if s475_break {
+                        current_capw_tw + s475_capinc - available_tw
+                    } else {
+                        current_width_tw + pt_to_tw(char_width) - available_tw
+                    };
                     // 82de3fa REVERTED 2026-05-03 (independently confirmed by
                     // Session 52 + Session 51 oxi-3 branch). The trailing-U+3000
                     // immune-from-wrap rule (originally added for ed025 p.1 +0.042)
@@ -6504,7 +6535,7 @@ impl LayoutEngine {
                         }
                     }
                     let absorb = if s472_absorb { true }
-                        else if !s474_natural && overflow_tw > 0 && overflow_tw <= 50
+                        else if !s474_natural && !s475_break && overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
                         && (has_pair || has_linestart_narrow_yakumono)
                     { true } else { false };
@@ -6571,7 +6602,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
                             continue;
                         }
 
@@ -6596,10 +6627,20 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
+                            // S475: re-added oikomi frag. Approximate its break capacity
+                            // from its first char's natural − max_compress (edge path).
+                            if s475_break {
+                                let fc = f.text.chars().next().unwrap_or(' ');
+                                let fnext = f.text.chars().nth(1);
+                                current_capw_tw += pt_to_tw(f.natural_width
+                                    - kinsoku::s475_max_compress(fc, fnext, s475_pair, s475_solo, font_size));
+                            } else {
+                                current_capw_tw += pt_to_tw(f.width);
+                            }
                             current_line.fragments.push(f);
                         }
                     }
@@ -6617,6 +6658,7 @@ impl LayoutEngine {
                     });
                     current_width += char_width;
                     current_width_tw += pt_to_tw(char_width);
+                    current_capw_tw += if s475_break { s475_capinc } else { pt_to_tw(char_width) };
                 } else {
                     // Regular word character — accumulate
                     // autoSpaceDE: add 2.5pt gap when transitioning from CJK ideograph/kana to Latin.
@@ -6642,6 +6684,7 @@ impl LayoutEngine {
                             }
                             current_width += extra;
                             current_width_tw += pt_to_tw(extra);
+                            current_capw_tw += pt_to_tw(extra); // S475: autoSpace, no punct capacity
                         }
                     }
                     if word_style.is_none() {
@@ -6669,7 +6712,7 @@ impl LayoutEngine {
             if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty()
                 && !para_all_whitespace {
                 lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; compress_used = false;
+                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
             }
             current_line.fragments.push(LineFragment {
                 text: word,

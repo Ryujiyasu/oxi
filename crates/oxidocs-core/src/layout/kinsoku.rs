@@ -142,6 +142,31 @@ pub fn is_s473_compressible(ch: char) -> bool {
     YAKUMONO_CLOSING.contains(&ch) || YAKUMONO_OPENING.contains(&ch)
 }
 
+/// S475 (2026-06-01) — break-time max yakumono compression capacity for char `c`
+/// given its right neighbour `next`. MEASURED (workflow wtvi6fvix, Word per-char
+/// COM): a punct immediately FOLLOWED by a bracket (the first of an adjacent pair)
+/// collapses a full half-em (PAIR ≈ 6.0pt @ 12pt); any other compressible punct
+/// trims lightly (SOLO ≈ 1.5pt, demand-variable 0–2.25 at render). The greedy
+/// break accepts a char iff (Σ natural − Σ this capacity) ≤ avail. Returns pt,
+/// scaled by fs/12. `pair_pt`/`solo_pt` are env-tunable (flat-K = pass equal).
+pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32, fs: f32) -> f32 {
+    let scale = fs / 12.0;
+    // trailing-space punct = comma/period + CLOSING brackets (their right half-em
+    // collapses when meeting an adjacent bracket).
+    let is_trailing_space = matches!(c, '、' | '。' | '，' | '．') || YAKUMONO_CLOSING.contains(&c);
+    let next_is_bracket = next.map_or(false, |n| {
+        YAKUMONO_OPENING.contains(&n) || YAKUMONO_CLOSING.contains(&n)
+    });
+    if is_trailing_space && next_is_bracket {
+        return pair_pt * scale;
+    }
+    // solo light trim: any compressible punct/bracket + nakaguro.
+    if is_s473_compressible(c) || c == '・' {
+        return solo_pt * scale;
+    }
+    0.0
+}
+
 /// Check if a character is CJK (Chinese, Japanese, Korean)
 /// These characters can have line breaks between any two adjacent characters
 /// (subject to kinsoku rules)
