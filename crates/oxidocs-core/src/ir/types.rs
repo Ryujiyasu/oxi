@@ -76,6 +76,12 @@ pub struct Page {
     /// CJK 83/64 multiplier is NOT applied; COM-measured Single heights used instead.
     #[serde(default)]
     pub doc_grid_no_type: bool,
+    /// True when docGrid type == "linesAndChars" (a CHARACTER grid: Word fixes the
+    /// char count per line). Distinguishes it from type=="lines" (line grid only,
+    /// width-determined break). S475 yakumono capacity break applies ONLY to the
+    /// non-char-grid case; linesAndChars is grid-determined (charGrid mechanism).
+    #[serde(default)]
+    pub doc_grid_lines_and_chars: bool,
     /// Header content (paragraphs from header part)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header: Vec<Block>,

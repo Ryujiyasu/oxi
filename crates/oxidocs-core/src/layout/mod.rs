@@ -1983,7 +1983,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -4317,7 +4317,7 @@ impl LayoutEngine {
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
         let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars);
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
@@ -4895,7 +4895,14 @@ impl LayoutEngine {
                 // was tuned to the old break-time 、=8.0 pre-compression.
                 let s472_render = std::env::var("OXI_S472_DEMAND").is_ok()
                     || std::env::var("OXI_S473_LOCOMP").is_ok()
-                    || std::env::var("OXI_S475_BREAKBUDGET").is_ok();
+                    // S475 routes render through the demand water-fill ONLY for the
+                    // no-char-grid (type=lines) docs it actually re-breaks; on
+                    // linesAndChars (b837) S475's break is off, so leave render
+                    // untouched (else it cascades b837 pagination 7→8). Default-ON
+                    // (opt-out OXI_S475_DISABLE) to match the break gate.
+                    || (std::env::var("OXI_S475_DISABLE").is_err()
+                        && self.compress_punctuation && self.compat_mode >= 15
+                        && !page.doc_grid_lines_and_chars);
                 // charGrid: subtract grid extra from slack. Grid extra widens chars
                 // for positioning but is NOT distributable justify space.
                 let grid_extra_on_line = if let Some(pitch) = effective_char_pitch {
@@ -5736,6 +5743,7 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
+        lines_and_chars: bool,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -5933,12 +5941,23 @@ impl LayoutEngine {
             // (pair-first 6.0 / solo 1.5, env-tunable; flat-K = equal). Bypasses the
             // ×0.6667 standalone pre-compress + the S472/S473 absorb, and routes render
             // through the s472_render water-fill so glyphs justify correctly.
-            let s475_break = std::env::var("OXI_S475_BREAKBUDGET").is_ok()
-                && self.compress_punctuation && self.compat_mode >= 15;
+            // SCOPED to NO-char-grid sections only (docGrid type=lines / none →
+            // grid_char_pitch is None). docGrid type=linesAndChars (grid_char_pitch
+            // Some, e.g. b837) is GRID-determined (fixed char count/line) — a
+            // SEPARATE mechanism (charGrid charsLine); S475 yakumono capacity must
+            // NOT apply there (it cascaded b837 7→9 pages). See session471 finding.
+            // S475 SHIPPED default-ON (2026-06-01, opt-out OXI_S475_DISABLE). flatK
+            // params (PAIR=SOLO=2.5) — the break-decision capacity; reproduces d77a
+            // [39,38,40,41,…]-class packing on type=lines docs. Gate: Phase-1 54/55
+            // (no PASS→FAIL, b837 7pg), SSIM net +0.0398, bottom-5 +0.0109 (d77a
+            // +0.062, ed025c +0.097). c7b923 −0.036 = latin-mixed residual (lever B).
+            let s475_break = std::env::var("OXI_S475_DISABLE").is_err()
+                && self.compress_punctuation && self.compat_mode >= 15
+                && !lines_and_chars;
             let s475_pair: f32 = std::env::var("OXI_S475_PAIR").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(6.0);
+                .and_then(|v| v.parse().ok()).unwrap_or(2.5);
             let s475_solo: f32 = std::env::var("OXI_S475_SOLO").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(1.5);
+                .and_then(|v| v.parse().ok()).unwrap_or(2.5);
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
@@ -11134,7 +11153,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None);
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true);
                 lines.len().max(1)
             };
 

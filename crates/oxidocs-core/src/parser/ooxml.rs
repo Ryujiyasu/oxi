@@ -227,6 +227,7 @@ impl OoxmlParser {
                     grid_char_space_raw: section.properties.grid_char_space_raw,
                     grid_char_cw_ratio: None,
                     doc_grid_no_type: section.properties.doc_grid_no_type,
+                    doc_grid_lines_and_chars: section.properties.doc_grid_lines_and_chars,
                     header,
                     footer,
                     footnotes: footnotes_list,
@@ -1030,6 +1031,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         grid_char_pitch: None,
         grid_char_space_raw: None,
         doc_grid_no_type: false,
+        doc_grid_lines_and_chars: false,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
         columns: None,
@@ -5542,6 +5544,8 @@ struct SectionProperties {
     grid_char_space_raw: Option<i32>,
     /// docGrid exists but has no type attribute
     doc_grid_no_type: bool,
+    /// docGrid type == "linesAndChars" (character grid)
+    doc_grid_lines_and_chars: bool,
     /// Reference IDs for header parts (with type)
     header_refs: Vec<HdrFtrRef>,
     /// Reference IDs for footer parts (with type)
@@ -5574,6 +5578,7 @@ fn parse_section_properties(
     let mut grid_char_pitch: Option<f32> = None;
     let mut char_space_section: Option<i32> = None;
     let mut doc_grid_no_type = false;
+    let mut doc_grid_lines_and_chars = false;
     let mut header_refs: Vec<HdrFtrRef> = Vec::new();
     let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
     let mut columns: Option<ColumnLayout> = None;
@@ -5817,6 +5822,7 @@ fn parse_section_properties(
                         //          actual_pitch = contentWidth / charsLine
                         // charSpace unit: 1/4096 of a point (ECMA-376 §17.6.5)
                         if grid_type == "linesAndChars" {
+                            doc_grid_lines_and_chars = true;
                             // charGrid raw_pitch uses the document's default font size.
                             // This comes from Normal style's sz, or rPrDefault sz, or 10.5pt fallback.
                             // Stored in SectionProperties and resolved by the caller post-parse.
@@ -5945,6 +5951,7 @@ fn parse_section_properties(
         grid_char_pitch,
         grid_char_space_raw: char_space_section,
         doc_grid_no_type,
+        doc_grid_lines_and_chars,
         header_refs,
         footer_refs,
         columns,
