@@ -4933,6 +4933,13 @@ impl LayoutEngine {
                         // cap per char type: 、,，→fs/3 (8.0); 。．& closing brackets→fs/2
                         // (6.0). Opening brackets never compress. width>fs*0.6 excludes
                         // already-pair-compressed (6.0) fragments.
+                        // [S475 render-distribution lever B TRIED + REVERTED: a uniform
+                        // measured-model cap (openers/、/closing → 1.5→10.5, pair → 6.0)
+                        // matched d77a L1 punct exactly (10.5) but REGRESSED the other
+                        // d77a pages net −0.0329 — Word's render is per-line-VARIABLE,
+                        // not uniform ~10.5; the uniform cap shifts kanji positions and
+                        // misaligns (S468 lesson). The break is correct; the render
+                        // residual is not cleanly fixable by uniform caps.]
                         let cap = if !single { 0.0 } else { match c0 {
                             '、' | '，' => fs / 3.0,
                             '。' | '．' => fs / 2.0,
