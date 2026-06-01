@@ -5829,6 +5829,20 @@ impl LayoutEngine {
                 .unwrap_or(false);
             let yakumono_pair_enabled = self.compress_punctuation || cjk_font_has_hwid;
             let yakumono_enabled = self.compress_punctuation;
+            // S472 (2026-06-01) DEMAND-DRIVEN yakumono refactor (user chose the big
+            // refactor path). Word does NOT pre-compress standalone 、 at wrap time:
+            // it uses NATURAL fullwidth (12pt) for the break decision, then compresses
+            // 、 trailing space ONLY as much as a line's justify-slack demands
+            // (COM: b837 p1 、 = 8.0-12.0pt variable per line; d77a divergent line
+            // 、 = 11.2 = LIGHT compression, not the flat ×0.6667=8.0 Oxi pre-applies).
+            // Oxi's flat pre-compression over-packs (fits 1 extra char/、-heavy line).
+            // When enabled: (1) standalone 、，use natural width at break, (2) the
+            // overflow-absorb budget becomes (count of standalone 、 on line)×(fs/3)
+            // [max 4pt each at 12pt], (3) on absorb the line's 、 are retroactively
+            // compressed by the absorbed overflow so the line fits exactly = matches
+            // Word's demand-driven per-line compression. Default OFF (byte-identical)
+            // for the canary. See session470 finding.
+            let s472_demand = std::env::var("OXI_S472_DEMAND").is_ok();
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
             // Rule 1 (close+open ×0.5) is gated by yakumono_pair_enabled
@@ -5929,7 +5943,14 @@ impl LayoutEngine {
                             let next_non_tr = char_index + 1 >= chars_vec.len()
                                 || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
                             if prev_non_tr && next_non_tr {
-                                char_width *= 0.6667;
+                                // S472: standalone 、，use NATURAL width at break time
+                                // (Word defers compression to justify-demand). 。．keep
+                                // the legacy ×0.6667 (rarer; not the over-pack driver).
+                                if s472_demand && matches!(ch, '、' | '，') {
+                                    // no compression at break; demand-absorb handles fit
+                                } else {
+                                    char_width *= 0.6667;
+                                }
                             }
                         }
                     }
@@ -6295,7 +6316,44 @@ impl LayoutEngine {
                     // 18 over-wraps cluster in 10-50tw and are gated by
                     // has_pair so d77a over-wraps (has_pair=false) remain
                     // unaffected.
-                    let absorb = if overflow_tw > 0 && overflow_tw <= 50
+                    // S472 demand-driven absorb: a line carrying standalone 、，(left
+                    // at NATURAL width upstream when S472 is on) can absorb overflow up
+                    // to (count of such 、)×(fontSize/3 ≈4pt each at 12pt) by compressing
+                    // them — Word's per-line justify-demand compression. On absorb the
+                    // 、 fragments already on the line are retroactively shrunk by the
+                    // absorbed overflow so the line fits exactly (break count AND render
+                    // both match Word). This replaces the over-eager flat pre-compress.
+                    let mut s472_absorb = false;
+                    if s472_demand && overflow_tw > 0
+                        && self.compress_punctuation && self.compat_mode >= 15
+                    {
+                        let nat = font_size; // ~fullwidth advance for 、 at this size
+                        let comp_idxs: Vec<usize> = current_line.fragments.iter().enumerate()
+                            .filter(|(_, f)| matches!(f.text.as_str(), "、" | "，")
+                                && f.width >= nat * 0.95)
+                            .map(|(i, _)| i)
+                            .collect();
+                        let comp_count = comp_idxs.len();
+                        if comp_count > 0 {
+                            let max_save_per = font_size / 3.0; // ≈4pt at 12pt (floor ×2/3)
+                            let budget_tw = pt_to_tw((comp_count as f32) * max_save_per);
+                            if overflow_tw <= budget_tw {
+                                let need_pt = (overflow_tw as f32) / 20.0; // 1pt = 20tw
+                                let per = (need_pt / comp_count as f32).min(max_save_per);
+                                let mut saved = 0.0f32;
+                                for &i in &comp_idxs {
+                                    current_line.fragments[i].width -= per;
+                                    saved += per;
+                                }
+                                current_width -= saved;
+                                current_width_tw = current_width_tw
+                                    .saturating_sub(pt_to_tw(saved));
+                                s472_absorb = true;
+                            }
+                        }
+                    }
+                    let absorb = if s472_absorb { true }
+                        else if overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
                         && (has_pair || has_linestart_narrow_yakumono)
                     { true } else { false };
