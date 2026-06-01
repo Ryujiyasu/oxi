@@ -5911,6 +5911,14 @@ impl LayoutEngine {
             // s473_locomp implies the s472 upstream (leave 、 natural) + the s472
             // render water-fill, and additionally swaps the break budget to the
             // cap-based, no-0.95-exclusion model. Default OFF (byte-identical).
+            // S474 (2026-06-01): pure-natural break diagnostic. Disables ALL
+            // break-time standalone-punct compression (the ×0.6667 AND the
+            // line-start narrow-yakumono reduction) and the demand-absorb, keeping
+            // only the always-on pair compression. Renders the natural-greedy line
+            // counts (Ng) = the count if Word broke at natural widths. Used to test
+            // "Word breaks at natural, punct compression is render-only" and to
+            // derive the fullness-gate rule (Ng vs Word count). Default OFF.
+            let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok();
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
@@ -6036,8 +6044,10 @@ impl LayoutEngine {
                                 // standalone = near-full, only compressed on line-slack).
                                 // The demand-absorb below compresses any of them as a
                                 // line's overflow requires.
-                                if s472_demand && matches!(ch, '、' | '，' | '。' | '．') {
+                                if (s472_demand || s474_natural) && matches!(ch, '、' | '，' | '。' | '．') {
                                     // no compression at break; demand-absorb handles fit
+                                    // (s474_natural: leave natural, no absorb either =
+                                    // pure natural-greedy diagnostic)
                                 } else {
                                     char_width *= 0.6667;
                                 }
@@ -6055,6 +6065,7 @@ impl LayoutEngine {
                 // Gated on compress_punctuation + compat_mode>=15 to match Word 2016+.
                 if yakumono_enabled
                     && self.compat_mode >= 15
+                    && !s474_natural
                     && matches!(ch, '・' | '、' | '。' | '，' | '．')
                     && current_line.fragments.is_empty()
                     && word.is_empty()
@@ -6493,7 +6504,7 @@ impl LayoutEngine {
                         }
                     }
                     let absorb = if s472_absorb { true }
-                        else if overflow_tw > 0 && overflow_tw <= 50
+                        else if !s474_natural && overflow_tw > 0 && overflow_tw <= 50
                         && self.compress_punctuation && self.compat_mode >= 15
                         && (has_pair || has_linestart_narrow_yakumono)
                     { true } else { false };
