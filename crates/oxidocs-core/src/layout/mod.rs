@@ -5943,10 +5943,12 @@ impl LayoutEngine {
                             let next_non_tr = char_index + 1 >= chars_vec.len()
                                 || !kinsoku::is_yakumono_trigger(chars_vec[char_index + 1]);
                             if prev_non_tr && next_non_tr {
-                                // S472: standalone 、，use NATURAL width at break time
-                                // (Word defers compression to justify-demand). 。．keep
-                                // the legacy ×0.6667 (rarer; not the over-pack driver).
-                                if s472_demand && matches!(ch, '、' | '，') {
+                                // S472: ALL standalone 、，。．use NATURAL width at break
+                                // (Word defers compression to justify-demand; COM: 、/。
+                                // standalone = near-full, only compressed on line-slack).
+                                // The demand-absorb below compresses any of them as a
+                                // line's overflow requires.
+                                if s472_demand && matches!(ch, '、' | '，' | '。' | '．') {
                                     // no compression at break; demand-absorb handles fit
                                 } else {
                                     char_width *= 0.6667;
@@ -6327,9 +6329,9 @@ impl LayoutEngine {
                     if s472_demand && overflow_tw > 0
                         && self.compress_punctuation && self.compat_mode >= 15
                     {
-                        let nat = font_size; // ~fullwidth advance for 、 at this size
+                        let nat = font_size; // ~fullwidth advance for 、。 at this size
                         let comp_idxs: Vec<usize> = current_line.fragments.iter().enumerate()
-                            .filter(|(_, f)| matches!(f.text.as_str(), "、" | "，")
+                            .filter(|(_, f)| matches!(f.text.as_str(), "、" | "，" | "。" | "．")
                                 && f.width >= nat * 0.95)
                             .map(|(i, _)| i)
                             .collect();
