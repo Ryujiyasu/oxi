@@ -4893,7 +4893,8 @@ impl LayoutEngine {
                 // (Word's demand model), independent of whatever the break decided —
                 // replacing the legacy Phase 1 (×0.5) + Stage 2b (restore) dance which
                 // was tuned to the old break-time 、=8.0 pre-compression.
-                let s472_render = std::env::var("OXI_S472_DEMAND").is_ok();
+                let s472_render = std::env::var("OXI_S472_DEMAND").is_ok()
+                    || std::env::var("OXI_S473_LOCOMP").is_ok();
                 // charGrid: subtract grid extra from slack. Grid extra widens chars
                 // for positioning but is NOT distributable justify space.
                 let grid_extra_on_line = if let Some(pitch) = effective_char_pitch {
@@ -5904,7 +5905,32 @@ impl LayoutEngine {
             // compressed by the absorbed overflow so the line fits exactly = matches
             // Word's demand-driven per-line compression. Default OFF (byte-identical)
             // for the canary. See session470 finding.
-            let s472_demand = std::env::var("OXI_S472_DEMAND").is_ok();
+            // S473 (2026-06-01): break-flip-derived budget. Word's break-time punct
+            // compression is DEMAND-driven up to a CAP of ~3.25pt/compressible
+            // (fs×0.27, NOT fs/3=4.0), measured via repros/breakflip + d77a p1/p9.
+            // s473_locomp implies the s472 upstream (leave 、 natural) + the s472
+            // render water-fill, and additionally swaps the break budget to the
+            // cap-based, no-0.95-exclusion model. Default OFF (byte-identical).
+            let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
+            let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(3.25);
+            // S473b (2026-06-01): per-type break caps. Render-advance COM showed
+            // Word compresses brackets/。 ~4× more than 、 (）=remove 6.0 vs 、=remove
+            // 1.5). A UNIFORM cap could not reconcile d77a (bracket-heavy lines, want
+            // heavy) with b837 pi30 (、-only line, wants light). Per-type caps (env-
+            // tunable for the sweep): comma/opening-bracket = light, period/closing-
+            // bracket = heavy. Defaults from render data (1.5 / 6.0). Used only when
+            // OXI_S473_ASYM is set (else the uniform s473_cap path runs).
+            let s473_asym = std::env::var("OXI_S473_ASYM").is_ok();
+            let s473_cc: f32 = std::env::var("OXI_S473_CC").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(1.5);   // 、，
+            let s473_cp: f32 = std::env::var("OXI_S473_CP").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(6.0);   // 。．
+            let s473_ccl: f32 = std::env::var("OXI_S473_CCL").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(6.0);   // closing brackets
+            let s473_cop: f32 = std::env::var("OXI_S473_COP").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(1.5);   // opening brackets
+            let s472_demand = std::env::var("OXI_S472_DEMAND").is_ok() || s473_locomp;
             let chars_vec: Vec<char> = text.chars().collect();
             // Yakumono pair compression for line break width calculation.
             // Rule 1 (close+open ×0.5) is gated by yakumono_pair_enabled
@@ -6397,17 +6423,44 @@ impl LayoutEngine {
                         // floor; opening brackets never compress). Including closing
                         // brackets fixes bracket-heavy lines (d77a p1 「…規約」) that Word
                         // packs by compressing 」 but Oxi's 、-only budget under-packed.
-                        let mut comps: Vec<(usize, f32)> = Vec::new(); // (fi, cap)
+                        let mut comps: Vec<(usize, f32)> = Vec::new(); // (fi, removable)
                         for (i, f) in current_line.fragments.iter().enumerate() {
-                            if f.width < nat * 0.95 || f.text.chars().count() != 1 { continue; }
+                            if f.text.chars().count() != 1 { continue; }
                             let c = f.text.chars().next().unwrap_or(' ');
-                            let cap = match c {
-                                '、' | '，' => font_size / 3.0,
-                                '。' | '．' => font_size / 2.0,
-                                '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）' => font_size / 2.0,
-                                _ => continue,
-                            };
-                            comps.push((i, cap));
+                            if s473_locomp {
+                                // S473: break budget = Σ cap over ALL compressibles
+                                // (、。，．+ closing AND opening brackets — break-flip
+                                // showed opening （ compresses at break too), cap =
+                                // s473_cap (≈3.25pt = fs×0.27). NO 0.95 exclusion:
+                                // removable = how much THIS fragment can still lose down
+                                // to its floor (font_size − cap); = cap when at natural,
+                                // tapering for already-compressed fragments. This is the
+                                // remaining-capacity model that fixes d77a p1 under-pack
+                                // (37→38) and b837 p5 (40→39 rows) without over-packing
+                                // p9 (39 needs 3.6pt/、 > cap → still wraps).
+                                if !kinsoku::is_s473_compressible(c) { continue; }
+                                let cap_pt = if s473_asym {
+                                    match c {
+                                        '、' | '，' => s473_cc,
+                                        '。' | '．' => s473_cp,
+                                        _ if kinsoku::is_yakumono_opening(c) => s473_cop,
+                                        _ => s473_ccl, // closing brackets
+                                    }
+                                } else { s473_cap };
+                                let cap = cap_pt * (font_size / 12.0);
+                                let floor = font_size - cap;
+                                let rem = (f.width - floor).max(0.0);
+                                if rem > 0.001 { comps.push((i, rem)); }
+                            } else {
+                                if f.width < nat * 0.95 { continue; }
+                                let cap = match c {
+                                    '、' | '，' => font_size / 3.0,
+                                    '。' | '．' => font_size / 2.0,
+                                    '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）' => font_size / 2.0,
+                                    _ => continue,
+                                };
+                                comps.push((i, cap));
+                            }
                         }
                         let budget_tw = pt_to_tw(comps.iter().map(|(_, c)| *c).sum());
                         if !comps.is_empty() && overflow_tw <= budget_tw {

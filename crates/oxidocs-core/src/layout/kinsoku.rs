@@ -133,6 +133,15 @@ pub fn is_yakumono_trigger(ch: char) -> bool {
     YAKUMONO_TRIGGER.contains(&ch)
 }
 
+/// S473 (2026-06-01): a char that contributes break-time compression budget.
+/// = commas/periods + closing brackets + opening brackets. Break-flip
+/// measurement (repros/breakflip) showed Word compresses ALL of these at
+/// break time (incl. opening （ which gave +2 chars/line), each up to a CAP
+/// of ~3.25pt (fs×0.27), demand-driven. Used by the S473 break-budget model.
+pub fn is_s473_compressible(ch: char) -> bool {
+    YAKUMONO_CLOSING.contains(&ch) || YAKUMONO_OPENING.contains(&ch)
+}
+
 /// Check if a character is CJK (Chinese, Japanese, Korean)
 /// These characters can have line breaks between any two adjacent characters
 /// (subject to kinsoku rules)
