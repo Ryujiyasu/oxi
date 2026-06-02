@@ -577,6 +577,19 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                 SelectObject(mem_dc, old_pen);
                                 let _ = DeleteObject(pen);
                             }
+                            // S490: OOXML prstGeom prst="ellipse" (or VML oval) —
+                            // outline ring, e.g. ○ circling an option marker.
+                            // Was unhandled (Word drew the ring, Oxi nothing).
+                            // Stroke-only (NULL_BRUSH); fits the shape bbox.
+                            "ellipse" | "oval" => {
+                                let pen = CreatePen(PS_SOLID, sw_px, color_ref);
+                                let old_pen = SelectObject(mem_dc, pen);
+                                let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                let _ = Ellipse(mem_dc, x, y, x + ew, y + eh);
+                                SelectObject(mem_dc, old_brush);
+                                SelectObject(mem_dc, old_pen);
+                                let _ = DeleteObject(pen);
+                            }
                             // OOXML prstGeom prst="leftBracket" | "rightBracket":
                             // single "[" or "]" shape, outline-only (no fill),
                             // drawn as rounded-corner path along one side of the bbox.

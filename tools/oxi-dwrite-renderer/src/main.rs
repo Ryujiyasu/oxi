@@ -393,6 +393,11 @@ unsafe fn render_preset_shape(
     let h = h_pt * PT_TO_DIP;
 
     match shape_type {
+        // S490: straightConnector1 was TRIED here (same geometry as "line") but
+        // REGRESSED 3a4f by ~−0.9 (26 connectors drawn as bbox diagonals — the
+        // real connector geometry uses flipH/flipV + endpoints, not a diagonal;
+        // and 3a4f is Phase-1-broken so any ink-add scrambles its mis-paginated
+        // pages). Left UNHANDLED until the connector endpoint model is derived.
         "line" => {
             // Diagonal line top-left to bottom-right
             rt.DrawLine(
@@ -400,6 +405,18 @@ unsafe fn render_preset_shape(
                 D2D_POINT_2F { x: x + w, y: y + h },
                 &brush, sw_dip, None,
             );
+        }
+        // S490: ellipse/oval outline (e.g. ○ option markers circling a choice).
+        // Was unhandled → Word drew the ring, Oxi drew nothing. Stroke-only
+        // (render_preset_shape has no fill; these markers are noFill rings).
+        "ellipse" | "oval" => {
+            use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+            let ellipse = D2D1_ELLIPSE {
+                point: D2D_POINT_2F { x: x + w * 0.5, y: y + h * 0.5 },
+                radiusX: w * 0.5,
+                radiusY: h * 0.5,
+            };
+            rt.DrawEllipse(&ellipse, &brush, sw_dip, None);
         }
         // bracketPair, leftBracket, rightBracket: bezier-curved brackets.
         // For first cut, approximate with simple lines (3% radius).
