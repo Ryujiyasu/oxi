@@ -450,6 +450,15 @@ pub struct TableCell {
     /// Text direction within cell (w:textDirection): "btLr" (bottom-to-top LR), "tbRl" (top-bottom RL), etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_direction: Option<String>,
+    /// S486: floating text boxes anchored to a paragraph INSIDE this cell.
+    /// parse_table_cell historically discarded these (only `blocks` survived),
+    /// so in-cell callouts/annotations (e.g. 1636d28, 664c38, 9a8e8d) never
+    /// rendered. Preserved here for the in-cell anchor-resolution layout step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_text_boxes: Vec<TextBox>,
+    /// S486: floating shapes anchored inside this cell (same drop as above).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_shapes: Vec<Shape>,
 }
 
 /// Cell border definitions

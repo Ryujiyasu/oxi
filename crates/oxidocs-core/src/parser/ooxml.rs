@@ -5309,6 +5309,11 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
 fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<TableCell, ParseError> {
     let mut blocks = Vec::new();
     let mut cell_props = CellProperties::default();
+    // S486: collect floating text boxes/shapes anchored inside the cell (was
+    // dropped — see TableCell::cell_text_boxes). Foundational data-preservation;
+    // the in-cell anchor-resolution render is the deferred follow-up step.
+    let mut cell_text_boxes: Vec<TextBox> = Vec::new();
+    let mut cell_shapes: Vec<Shape> = Vec::new();
     let mut depth = 0;
 
     loop {
@@ -5318,6 +5323,11 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 match local.as_str() {
                     "p" if depth == 0 => {
                         let pr = parse_paragraph(reader, ctx, styles)?;
+                        // S486: preserve in-cell floating text boxes/shapes
+                        // (previously discarded). anchor_block_index is set
+                        // relative to this cell's block list by the layout step.
+                        cell_text_boxes.extend(pr.text_boxes);
+                        cell_shapes.extend(pr.shapes);
                         blocks.push(Block::Paragraph(pr.paragraph));
                         // S331 (2026-05-26): forward inline images from cell
                         // paragraphs so cell height includes drawing. Body-level
@@ -5378,6 +5388,8 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
         borders: cell_props.borders,
         margins: cell_props.margins,
         text_direction: cell_props.text_direction,
+        cell_text_boxes,
+        cell_shapes,
     })
 }
 
