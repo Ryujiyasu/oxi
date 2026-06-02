@@ -213,10 +213,15 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
-  x-axis ["03-28", "04-06", "04-10", "04-14", "04-18", "04-21", "04-28", "05-08", "05-12", "05-12b", "05-12c"]
+  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8430, 0.8520, 0.8584, 0.8597, 0.8625, 0.8699, 0.8855, 0.8893, 0.8892, 0.8895]
+  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126]
 ```
+
+> The small step at **05-30** is not a regression: Phase 3 recomputed a clean
+> SSIM baseline from scratch, so points before and after that date sit on
+> slightly different measurement bases. **06-03** is the current per-page mean
+> over scored pages.
 
 | Date | avg SSIM | gate / Phase | Key Changes |
 |------|----------|--------------|-------------|
@@ -233,8 +238,12 @@ xychart-beta
 | 2026-05-12 | **0.8892** | **Phase 1 43/55** | Day 33 part 65 (R7.18): body page-break check now uses natural line height (ascent+descent, no grid leading) instead of full grid line height — Word allows the leading portion of a grid-snapped line to extend into the bottom margin. COM-verified via db9ca18 paragraph 37: Word fits a line at y=758 whose grid bottom is 776 (5.25pt past pgBot 771). Companion fix: widow_control inheritance now propagates the explicit flag through the style chain, so widowControl=0 set on Normal correctly disables the orphan check for descendants. db9ca18 FAIL→PASS (3 pages matching Word). 0 PASS→FAIL transitions |
 | 2026-05-12 | **0.8895** | **Phase 1 44/55** | Day 33 part 69 (R7.24): preserve fixed-layout (`<w:tblLayout w:type="fixed"/>`) table column widths — previously Oxi shrank the last column when grid_columns sum exceeded content_width (correct for autofit, wrong for fixed). 7-session a47e6 investigation: 21.1pt wrap-width loss caused "fullwidth+年月日" paragraph to overflow by 0.55pt → wrap to 2 lines, +25pt row 0 over-pump, +1.4pt at pi=2 → +1 page. 1-line fix tipped a47e6 to PASS (0.5 → 1.0) and improved d4d126 (0.8 → 0.857). Methodology lesson: estimate-vs-render diagnostic ≠ real cause; render-vs-render is the correct layer |
 | 2026-05-12 | **0.8932** | **Phase 1 46/55** | Day 33 part 71 (R7.28): vMerge=restart cells excluded from row height (both estimate and render-side max). Word distributes a vMerge=restart cell's content across the entire vMerge span; the restart row's own height is set by non-merged cells. COM-verified on de6e t5 row 13 (Word 33pt, Oxi was 238pt → now 32.35pt). Previously vMerge=continue was already excluded; this commit extends the same rule to "restart". Phase 1: 31420af FAIL→PASS (0.8→1.0), 6514 FAIL→PASS (0.529→1.0); a1d6 0.556→0.875 (still FAIL, 1 outlier from PASS). 0 PASS→FAIL. Mean SSIM net +0.0037 across 410 pages. Two-line fix at mod.rs:5707 + 6404 |
+| 2026-05-29 | — | **Phase 1 54/55** | Continued pagination fixes (cell-paragraph spacing collapse S427, etc.) lift Phase 1 to 54/55. The only remaining FAIL is `3a4f9f`, a split-table document Oxi paginates to 94 pages vs Word's 8 |
+| 2026-05-29 | — | **Phase 2** (element IoU) | Gate moves to per-element bounding-box IoU; plateaus at mean IoU ≈ **0.9692**. Phase 2's median-dy subtraction absorbs uniform per-table offsets, so the IoU ≥ 0.99 entry bar proved structurally unreachable — which is precisely why the real remaining error (a uniform table-top offset, visible only in pixels) was invisible to it. See [CLAUDE.md](CLAUDE.md) |
+| 2026-05-30 | per-page **0.8862** · per-doc **0.9235** | **Phase 3** (SSIM) | Primary gate switches back to pixel SSIM (mean ≥ 0.99 + bottom-N floor) on a freshly recomputed baseline. SSIM is the only metric that sees the uniform table-top offset Phase 2 hid. Phase 1 (54/55) and Phase 2 (0.9692) are kept as regression sentinels |
+| 2026-06-03 | per-page **0.9126** | **Phase 3** · Phase 1 54/55 | R35 yakumono capacity-budget line breaking (S475/S476, docGrid `lines`+`linesAndChars`), then a 36-doc correctness sweep shipping localized coverage fixes: floating-textbox z-order (S478), 144 pt footnote separator (S479), dash-dot art borders (S480), explicit nil-cell-border suppression (S482), Word "final" revision view (S483), **upright CJK vertical writing** (S489), ellipse ○ option-markers (S490) |
 
-**Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 1 — pagination correctness** (per-paragraph page match between Word and Oxi). Bottom-5 SSIM sum is tracked but no longer the primary gate; SSIM regression > 0.005 still requires review. Phase 2 (element IoU ≥ 0.99) and Phase 3 (SSIM mean ≥ 0.99 + bottom-5 floor) activate as Phase 1 transitions to ≥ 95% pass rate. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
+**Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 3 — pixel SSIM** (mean ≥ 0.99 + bottom-N floor), active since 2026-05-30. Earlier phases are kept as regression sentinels: **Phase 1** pagination correctness (per-paragraph page match, 54/55) and **Phase 2** element IoU (mean 0.9692). Phases 1 and 2 each plateaued below their entry bars for structural reasons — pagination on one split-table outlier, IoU because its median-dy subtraction hides uniform table offsets — so the gate advanced to the metric that can see the remaining pixel error. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
 
 For detailed daily progress, COM-confirmed specifications, and DML structural comparison results, see [docs/layout_accuracy.md](docs/layout_accuracy.md) and [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
