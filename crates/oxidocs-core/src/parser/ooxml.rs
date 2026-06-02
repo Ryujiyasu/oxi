@@ -3052,6 +3052,11 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut depth = 0;
     // Floating image info
     let mut is_anchor = false;
+    // S478: wp:anchor z-order. Word draws floating objects in ascending
+    // relativeHeight (highest = on top). behindDoc=1 places the object
+    // behind body text. Default 0 (in front, ordered by relativeHeight).
+    let mut relative_height: u32 = 0;
+    let mut behind_doc: bool = false;
     let mut pos_x: f32 = 0.0;
     let mut pos_y: f32 = 0.0;
     let mut h_relative: Option<String> = None;
@@ -3091,6 +3096,15 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                 match local.as_str() {
                     "anchor" => {
                         is_anchor = true;
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "relativeHeight" => { relative_height = val.parse::<u32>().unwrap_or(0); }
+                                "behindDoc" => { behind_doc = val == "1" || val == "true"; }
+                                _ => {}
+                            }
+                        }
                     }
                     "docPr" => {
                         for attr in e.attributes().flatten() {
@@ -3789,6 +3803,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             inset_bottom: text_inset_bottom,
             wrap_type,
             v_text_anchor: text_body_anchor,
+            relative_height,
+            behind_doc,
         })
     } else {
         None

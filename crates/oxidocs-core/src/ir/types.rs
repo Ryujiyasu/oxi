@@ -597,6 +597,13 @@ pub struct TextBox {
     /// From VML v-text-anchor or DrawingML bodyPr anchor attribute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v_text_anchor: Option<String>,
+    /// S478: wp:anchor relativeHeight — Word draws floating objects in
+    /// ascending relativeHeight order (highest on top). Default 0.
+    #[serde(default)]
+    pub relative_height: u32,
+    /// S478: wp:anchor behindDoc — true = behind body text.
+    #[serde(default)]
+    pub behind_doc: bool,
 }
 
 /// A geometric shape (DrawingML or VML)

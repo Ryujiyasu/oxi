@@ -3130,7 +3130,28 @@ impl LayoutEngine {
 
         // Layout text boxes and add to the correct layout page
         // The current_page_idx tracking tells us which layout page each anchor block ended up on
-        for text_box in &page.text_boxes {
+        //
+        // S478: Word draws floating objects in ascending wp:anchor relativeHeight
+        // order (highest = drawn last = on top). Oxi previously emitted text boxes
+        // in parse order, so an opaque (white-filled) callout with a HIGH
+        // relativeHeight that should hide an overlapping lower-relativeHeight box's
+        // content was drawn FIRST → the other box's text painted over it (bled
+        // through). 2ea81a p2: callout 予納する納税者名義 (relHeight 251801088, white
+        // fill) overlaps the 留意事項 box content (relHeight 251694592); Word draws
+        // the callout on top (opaque), Oxi drew it under. Fix: emit text boxes in
+        // ascending relativeHeight (stable for ties = parse order). Anchor Y /
+        // pagination untouched (render order only) = Phase-1 safe.
+        // Default ON, opt-out OXI_S478_DISABLE.
+        let s478_zorder = std::env::var("OXI_S478_DISABLE").is_err();
+        let tb_order: Vec<usize> = {
+            let mut idx: Vec<usize> = (0..page.text_boxes.len()).collect();
+            if s478_zorder {
+                idx.sort_by_key(|&i| page.text_boxes[i].relative_height);
+            }
+            idx
+        };
+        for &tbi in &tb_order {
+            let text_box = &page.text_boxes[tbi];
             let target_page = block_page_indices
                 .get(text_box.anchor_block_index)
                 .copied()
