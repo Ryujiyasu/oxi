@@ -10533,6 +10533,16 @@ impl LayoutEngine {
                 // S236 (2026-05-23) removed OXI_LEGACY_NO_TBL_ROW_PLUS_HALF
                 // legacy env-var fallback during hardening pass; the gate
                 // has been stable since S200 (~35 sessions).
+                // S477 (2026-06-02) PROBED + REVERTED: hypothesized the S200 gate
+                // misses d4d126's drift because trHeight inflates row_height above
+                // linePitch on sparse rows. FALSIFIED by instrumentation — d4d126's
+                // DOMINANT 14 rows are CONTENT-driven (row_h≈visual_row_h≈21.26,
+                // insideH=true), NOT trHeight-sparse (only 6 trHeight=20.25 rows, and
+                // those have insideH=FALSE). So the drift is the content-row CJK
+                // line-height (21.26pt, the S467/S468 over-snap / killed-VSNAP regime),
+                // NOT the trHeight insideH-border. The trHeight+border rule IS real
+                // (repro rowh_border) but does not apply to d4d126's structure. d4d126
+                // = confirmed killed-VSNAP/multi-cell dead-end. Gate kept as-is.
                 let apply_plus_half = table_grid_pitch
                     .map(|p| (row_height - p).abs() < 0.5)
                     .unwrap_or(false);
