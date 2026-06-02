@@ -182,8 +182,16 @@ fn map_symbol_bullets(text: &str) -> String {
     // is to render 0xF0B7 in the SYMBOL FONT at the level's rPr size (parse the
     // numbering level <w:rPr><w:rFonts> into NumberingLevel/ResolvedMarker +
     // a marker-glyph metric), NOT a Unicode glyph swap. Deferred. Kept U+2022.
+    // S491 (default ON, opt-out OXI_S491_DISABLE): keep the raw Symbol PUA bullet
+    // U+F0B7 so the layout/renderer draws it in the SYMBOL font at the level size
+    // (the correct fix per the S484 note — pixel-confirmed on gen2_077/059 that
+    // the Symbol-font bullet matches Word's filled mark, vs the old U+2022 which
+    // rendered as a small high dot). The S484 glyph-swap to U+25CF in the BODY
+    // font over-sized; rendering U+F0B7 in the SYMBOL font is the right layer.
+    let keep_f0b7 = std::env::var("OXI_S491_DISABLE").is_err();
     text.chars().map(|ch| {
         match ch {
+            '\u{F0B7}' if keep_f0b7 => '\u{F0B7}', // rendered in Symbol font (S491)
             '\u{F0B7}' => '\u{2022}', // Symbol bullet → • (closest small Unicode; see S484 note)
             '\u{F06F}' => '\u{25CB}', // Symbol circle → ○
             '\u{F0A7}' => '\u{25AA}', // Symbol square → ▪

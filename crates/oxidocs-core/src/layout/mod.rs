@@ -4282,9 +4282,15 @@ impl LayoutEngine {
             // falls back to its default font and halfwidth markers like "(1)"
             // render narrower than Word (user-reported on e3c545 p.1 "(1)
             // 公開するデータの設計" — Word 14px vs Oxi 10px marker width).
-            let marker_font_family = self
-                .resolve_font_family_for_text(&marker_text, marker_style, &para.style)
-                .map(|s| s.to_string());
+            let marker_font_family = if marker_text.contains('\u{F0B7}') {
+                // S491: a raw Symbol PUA bullet (kept by map_symbol_bullets under
+                // OXI_S491_SYMBOL_BULLET) must render in the Symbol font — the
+                // numbering level's rFonts is Symbol, not the paragraph's CJK font.
+                Some("Symbol".to_string())
+            } else {
+                self.resolve_font_family_for_text(&marker_text, marker_style, &para.style)
+                    .map(|s| s.to_string())
+            };
             let marker_bold = self.resolve_bold(marker_style, &para.style);
             let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
             let marker_base_y = if s467_vsnap { snap075(cursor.visual_y) } else { cursor.visual_y };
