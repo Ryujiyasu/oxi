@@ -3142,6 +3142,21 @@ impl LayoutEngine {
         // ascending relativeHeight (stable for ties = parse order). Anchor Y /
         // pagination untouched (render order only) = Phase-1 safe.
         // Default ON, opt-out OXI_S478_DISABLE.
+        //
+        // KNOWN UNTESTED EDGES (zero instances in the current corpus, so not
+        // handled here — confirmed by the S478 13-doc structural audit):
+        //   (a) behind_doc=1 text boxes: a true behindDoc object should render
+        //       BEHIND the body-text layer; this sort only orders floats among
+        //       themselves (all text boxes are emitted after body text here).
+        //       If a behindDoc watermark with a high relativeHeight ever appears,
+        //       stratify (emit behind_doc=1 first, then behind_doc=0, each
+        //       relHeight-sorted) — or emit it before the body loop for true
+        //       behind-text. No such object exists in the corpus to verify against.
+        //   (b) standalone text-bearing VML (relativeHeight=0): all corpus VML is
+        //       an mc:Fallback alternate (never rendered — Oxi takes mc:Choice
+        //       DrawingML, which always carries a relativeHeight). A future
+        //       standalone VML text box would parse relHeight=0 and be forced to
+        //       the bottom of every overlap; give it a doc-order-derived key then.
         let s478_zorder = std::env::var("OXI_S478_DISABLE").is_err();
         let tb_order: Vec<usize> = {
             let mut idx: Vec<usize> = (0..page.text_boxes.len()).collect();
