@@ -670,7 +670,38 @@ unsafe fn render_text(
     // placement at default origin. Full-corpus canary swept -0.25 .. -1.25pt
     // (5 values) and -1.0pt produced peak NET +2.2198 (110 wins / 41 regs)
     // on 177-doc p.1 baseline. See pipeline_data/dwrite_origin_shift_2026-05-03.md.
-    // Session 133 (2026-05-20): vertical writing rotation.
+    // Session 489 (2026-06-02): Japanese vertical writing (tategaki) draws CJK
+    // glyphs UPRIGHT, stacked top-to-bottom. S133 (below) rotated the WHOLE run
+    // 90° CW, which rotates the GLYPHS sideways too — correct only for Latin,
+    // WRONG for CJK. Word keeps kanji/kana upright (pixel-confirmed on
+    // 7ead52 申請者/連絡担当窓口, 2ea81a 予納する理由, 459f05, ed025c — all
+    // pure-CJK vertical cell labels). Draw each char upright at its stacked y;
+    // per-char vertical advance = one em (font_size), matching
+    // layout::vert_para_height (Σ n_chars·font_size). Whitespace advances but
+    // is not drawn. Legacy rotation kept behind OXI_S489_ROTATE_LEGACY.
+    if is_vertical && std::env::var("OXI_S489_ROTATE_LEGACY").is_err() {
+        let adv_dip = font_size_pt * PT_TO_DIP;
+        // Centre each full-width glyph (advance ≈ one em) horizontally within
+        // the cell content column [x_pt, x_pt+w_pt] — Word centres tategaki
+        // labels in their column. w_pt is the cell content width.
+        let cx_dip = (x_pt + ((w_pt - font_size_pt) * 0.5).max(0.0)) * PT_TO_DIP;
+        let mut yy = (y_pt - 1.0) * PT_TO_DIP;
+        for ch in text.chars() {
+            if !ch.is_whitespace() {
+                let cw: Vec<u16> = ch.to_string().encode_utf16().collect();
+                if let Ok(clayout) = dwrite_factory.CreateTextLayout(
+                    &cw, &format, layout_w_dip, layout_h_dip,
+                ) {
+                    let corigin = D2D_POINT_2F { x: cx_dip, y: yy };
+                    rt.DrawTextLayout(
+                        corigin, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                }
+            }
+            yy += adv_dip;
+        }
+        return Ok(());
+    }
+    // Session 133 (2026-05-20): vertical writing rotation (LEGACY — see S489).
     // For tbRlV cells: apply a 90° CW rotation around the pivot point
     // (x_pt + font_size_pt, y_pt). Pre-rotation, text would extend
     // rightward from this pivot; post-rotation, it extends downward

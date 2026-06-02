@@ -210,7 +210,14 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let weight = if *bold { 700i32 } else { 400i32 };
                         let ital = if *italic { 1u32 } else { 0u32 };
                         let family_wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
-                        let (escapement, orientation) = if *is_vertical {
+                        // S489 (2026-06-02): Japanese vertical writing draws CJK
+                        // glyphs UPRIGHT (stacked), NOT rotated 90° (S132 rotated
+                        // the glyphs sideways — wrong for CJK; Word keeps them
+                        // upright). Upright font (no escapement) + per-char
+                        // TextOutW below. Legacy rotation via OXI_S489_ROTATE_LEGACY.
+                        let s489_upright = *is_vertical
+                            && std::env::var("OXI_S489_ROTATE_LEGACY").is_err();
+                        let (escapement, orientation) = if *is_vertical && !s489_upright {
                             (-900i32, -900i32)
                         } else {
                             (0i32, 0i32)
@@ -234,20 +241,31 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                         // Draw text
                         let text_wide: Vec<u16> = text.encode_utf16().collect();
-                        // For vertical text, anchor the rotated glyphs along
-                        // the right edge of the cell. The TextOutW origin in
-                        // rotated mode is at the BASELINE start of the first
-                        // glyph (= top-right of unrotated char). Shifting
-                        // x_draw rightward by fs places the rotated chars
-                        // starting at the cell's right side. This matches
-                        // Word's tbRlV reading direction (text flows down-
-                        // right).
-                        let (x_draw, y_draw) = if *is_vertical {
-                            (x + fs, glyph_y)
+                        if s489_upright {
+                            // S489: upright CJK vertical writing — each full-width
+                            // glyph centred in the cell column [x, x+ew], stacked
+                            // downward by one em (fs). Matches the DWrite renderer.
+                            let cx = x + ((ew - fs) / 2).max(0);
+                            let mut cy = glyph_y;
+                            for ch in text.chars() {
+                                if !ch.is_whitespace() {
+                                    let cw: Vec<u16> = ch.to_string()
+                                        .encode_utf16().collect();
+                                    TextOutW(mem_dc, cx, cy, &cw);
+                                }
+                                cy += fs;
+                            }
                         } else {
-                            (x, glyph_y)
-                        };
-                        TextOutW(mem_dc, x_draw, y_draw, &text_wide);
+                            // For LEGACY vertical text, anchor the rotated glyphs
+                            // along the right edge of the cell (origin shifted by
+                            // fs); horizontal text draws at (x, glyph_y).
+                            let (x_draw, y_draw) = if *is_vertical {
+                                (x + fs, glyph_y)
+                            } else {
+                                (x, glyph_y)
+                            };
+                            TextOutW(mem_dc, x_draw, y_draw, &text_wide);
+                        }
 
                         // Reset character extra
                         if cs_px != 0 {
