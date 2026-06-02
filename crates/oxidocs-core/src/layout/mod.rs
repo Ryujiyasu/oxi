@@ -3452,10 +3452,17 @@ impl LayoutEngine {
                         let separator_pad: f32 = 4.0;
                         let area_top = footnote_bottom - total_h - separator_pad - separator_h + last_line_adjust;
 
-                        // Draw the footnote separator line: ~1/3 of content width
-                        // (Word default), 1pt thick, black, anchored at the left margin.
-                        // Word renders this as a 1px line at the top of the footnote area.
-                        let sep_w = hdr_width * 0.33;
+                        // Draw the footnote separator line. Word's default for a
+                        // bare <w:separator/> is a fixed 2-inch (144pt) line at the
+                        // left margin — NOT a fraction of content width (S479,
+                        // pixel-confirmed on b837 p1: 144.0pt at x0=71pt). Cap at
+                        // content width for narrow columns. 1pt thick, black.
+                        // Default ON, opt-out OXI_S479_DISABLE.
+                        let sep_w = if std::env::var("OXI_S479_DISABLE").is_ok() {
+                            hdr_width * 0.33
+                        } else {
+                            144.0_f32.min(hdr_width)
+                        };
                         lp.elements.push(LayoutElement::new(
                             hdr_x,
                             area_top,
