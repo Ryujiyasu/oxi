@@ -2934,6 +2934,7 @@ impl LayoutEngine {
                         &mut pages,
                         &mut elements,
                         Some(block_idx),
+                        page,
                     );
                     let candidate_y_bottom = cursor.cursor_y;
 
@@ -3746,10 +3747,25 @@ impl LayoutEngine {
 
     /// Layout a single text box: background, borders, and inner content.
     fn layout_text_box(&self, text_box: &TextBox, page: &Page, block_y_positions: &[f32]) -> Vec<LayoutElement> {
+        self.layout_text_box_at(text_box, page, block_y_positions, None)
+    }
+
+    /// S487 (CLASS E step 2): layout a text box, optionally with an explicit
+    /// origin override for IN-CELL text boxes. A cell text box's posOffset is
+    /// relative to the cell content origin, NOT the body block_y_positions
+    /// (which has no cell-internal entry). When `cell_origin` is Some((ox, oy)),
+    /// the absolute position is the cell origin + the text box's posOffset.
+    fn layout_text_box_at(&self, text_box: &TextBox, page: &Page, block_y_positions: &[f32], cell_origin: Option<(f32, f32)>) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
         // 1. Calculate absolute position
-        let (abs_x, abs_y) = self.resolve_textbox_position(text_box, page, block_y_positions);
+        let (abs_x, abs_y) = match cell_origin {
+            Some((ox, oy)) => match &text_box.position {
+                Some(p) => (ox + p.x, oy + p.y),
+                None => (ox, oy),
+            },
+            None => self.resolve_textbox_position(text_box, page, block_y_positions),
+        };
 
         // 2. Background fill + border as a single BoxRect (supports corner radius)
         let has_fill = text_box.fill.is_some();
@@ -3942,6 +3958,7 @@ impl LayoutEngine {
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut tb_pages, &mut tb_elems,
                         None,
+                        page,
                     );
                     elements.extend(tb_elems);
                     elements.extend(table_elements);
@@ -7754,6 +7771,7 @@ impl LayoutEngine {
         pages: &mut Vec<LayoutPage>,
         current_elements: &mut Vec<LayoutElement>,
         block_idx: Option<usize>,
+        page: &Page,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
@@ -8413,6 +8431,7 @@ impl LayoutEngine {
                         0.0, 99999.0, 0.0, 99999.0,
                         &mut dummy_pages, &mut dummy_elems,
                         block_idx,
+                        page,
                     );
                     for elem in nested_elements {
                         cell_elements.push(elem);
@@ -9982,6 +10001,20 @@ impl LayoutEngine {
                                 x1: bx + cell_w, y1: by, x2: bx + cell_w, y2: by + row_height,
                                 color: right_color, width: right_width, style: right_style,
                         }));
+                    }
+                }
+
+                // S487 (CLASS E step 2): emit in-cell floating text boxes anchored
+                // at the cell origin + posOffset (parse_table_cell now preserves
+                // them — S486). Opt-IN OXI_S487_ENABLE (default OFF — the in-cell
+                // anchor Y is an F-class position risk until gate-validated).
+                if !cell.cell_text_boxes.is_empty()
+                    && std::env::var("OXI_S487_ENABLE").is_ok()
+                {
+                    let cell_origin = (cell_x, cursor.visual_y);
+                    for tb in &cell.cell_text_boxes {
+                        let tb_elems = self.layout_text_box_at(tb, page, &[], Some(cell_origin));
+                        elements.extend(tb_elems);
                     }
                 }
 
