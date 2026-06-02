@@ -3787,6 +3787,12 @@ impl LayoutEngine {
         let inner_x = abs_x + inset_l + corner_inset;
         let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
         let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
+        // S481 (REVERTED, finding only): rendering vertOverflow="overflow" lines
+        // (e.g. 2ea81a "＜＜記載例＞＞", dropped via avail=0) REGRESSED p2 −0.0009 —
+        // the box's anchor Y is itself mis-positioned (S478/S469 float-anchor
+        // family), so rendering the text lands it in the wrong place. The
+        // overflow render needs the box POSITION fixed first. vert_overflow IS
+        // parsed into the IR (correct data) for that future fix; not acted on here.
         // v-text-anchor: middle/bottom shifts content within textbox.
         // Initial cursor at top; for middle/bottom, compute content height first,
         // then offset all elements after layout.

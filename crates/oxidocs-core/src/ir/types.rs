@@ -604,6 +604,10 @@ pub struct TextBox {
     /// S478: wp:anchor behindDoc — true = behind body text.
     #[serde(default)]
     pub behind_doc: bool,
+    /// S481: bodyPr@vertOverflow — "overflow" (ECMA default, do not clip
+    /// vertically), "clip", or "ellipsis". None = overflow (default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vert_overflow: Option<String>,
 }
 
 /// A geometric shape (DrawingML or VML)

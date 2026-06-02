@@ -3087,6 +3087,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut text_inset_top: Option<f32> = None;
     let mut text_inset_bottom: Option<f32> = None;
     let mut text_body_anchor: Option<String> = None;
+    // S481: bodyPr@vertOverflow ("overflow" default / "clip" / "ellipsis").
+    let mut text_vert_overflow: Option<String> = None;
 
     loop {
         match reader.read_event()? {
@@ -3365,6 +3367,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "tIns" => { text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "anchor" => { text_body_anchor = Some(val.to_string()); }
+                                "vertOverflow" => { text_vert_overflow = Some(val.to_string()); }
                                 _ => {}
                             }
                         }
@@ -3679,6 +3682,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "tIns" => { text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "anchor" => { text_body_anchor = Some(val.to_string()); }
+                                "vertOverflow" => { text_vert_overflow = Some(val.to_string()); }
                                 _ => {}
                             }
                         }
@@ -3805,6 +3809,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             v_text_anchor: text_body_anchor,
             relative_height,
             behind_doc,
+            vert_overflow: text_vert_overflow,
         })
     } else {
         None
