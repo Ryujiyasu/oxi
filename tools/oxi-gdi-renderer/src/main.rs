@@ -39,8 +39,14 @@ fn main() {
     let data = std::fs::read(docx_path).expect("Cannot read docx file");
     let doc = oxidocs_core::parser::parse_docx(&data).expect("Cannot parse docx");
 
-    // Layout
+    // Layout. S483: render in Word's "final" view (hide <w:del>, show <w:ins>)
+    // to match the final/clean-view Word ground-truth PNGs. Opt-out OXI_S483_DISABLE.
     let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc);
+    let engine = if std::env::var("OXI_S483_DISABLE").is_ok() {
+        engine
+    } else {
+        engine.with_show_revisions(oxidocs_core::ir::ShowRevisions::Final)
+    };
     let result = engine.layout(&doc);
 
     eprintln!("Parsed {} pages, DPI={} supersample={}x", result.pages.len(), dpi, supersample);

@@ -41,7 +41,16 @@ fn main() {
     let data = std::fs::read(docx_path).expect("Cannot read docx file");
     let doc = oxidocs_core::parser::parse_docx(&data).expect("Cannot parse docx");
 
+    // S483: render in Word's "final" view (accept revisions: hide <w:del>
+    // content, show <w:ins> as normal text) to match the Word ground-truth
+    // PNGs, which are captured in final/clean view. Oxi defaulted to
+    // ShowRevisions::All (deletion markup shown). Opt-out OXI_S483_DISABLE.
     let engine = oxidocs_core::layout::LayoutEngine::for_document(&doc);
+    let engine = if std::env::var("OXI_S483_DISABLE").is_ok() {
+        engine
+    } else {
+        engine.with_show_revisions(oxidocs_core::ir::ShowRevisions::Final)
+    };
     let result = engine.layout(&doc);
 
     eprintln!("Parsed {} pages, DPI={} supersample={}x (DirectWrite renderer)",
