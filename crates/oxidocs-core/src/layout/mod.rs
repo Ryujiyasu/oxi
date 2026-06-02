@@ -10338,6 +10338,21 @@ impl LayoutEngine {
 
                 // Handle multi-page overflow: if next_page_elems still overflow,
                 // keep splitting into additional pages.
+                //
+                // S485 (TRIED + REVERTED, finding only): Word repeats the box TOP
+                // border at each page's content top for a bordered table spanning
+                // 3+ pages; Oxi's continuation fragments render with an OPEN top
+                // (confirmed e3c545 p5/p8: content + side borders match Word, top
+                // missing). A synth_top closure added a top horizontal at page_top
+                // to this_page/remaining here — instrumented (OXI_S485_DEBUG) it
+                // DID fire & ADD (vt=true, has_top=false) but the render was
+                // byte-identical (delta 0.00000 all 12 pages): the overflow-loop
+                // fragments are NOT the final rendered pages — `elements`/`this_page`
+                // get further processed downstream and the synth'd border is
+                // dropped/repositioned. The correct synthesis point is the
+                // final-fragment render path, which needs flow-tracing through the
+                // post-loop `elements` handling (S269/Day34 multi-layer split).
+                // Deferred — multi-session. Reverted (byte-identical).
                 let mut remaining = next_page_elems;
                 loop {
                     // Find the maximum Y in remaining elements.
