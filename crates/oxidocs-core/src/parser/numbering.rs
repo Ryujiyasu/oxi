@@ -174,9 +174,17 @@ impl NumberingDefinitions {
 
 /// Map Symbol/Wingdings private use area characters to standard Unicode equivalents
 fn map_symbol_bullets(text: &str) -> String {
+    // S484 (REVERTED, finding only): mapping 0xF0B7 → U+25CF (BLACK CIRCLE) to
+    // match Word's filled bullet REGRESSED the full corpus −0.0515 (73 pages, all
+    // negative): U+25CF rendered in the body font is much LARGER than Word's
+    // Symbol-font bullet; the current U+2022 (small) is closer. The bullet IS
+    // mis-sized vs Word (gen2 sweep confirmed across 12 docs) but the correct fix
+    // is to render 0xF0B7 in the SYMBOL FONT at the level's rPr size (parse the
+    // numbering level <w:rPr><w:rFonts> into NumberingLevel/ResolvedMarker +
+    // a marker-glyph metric), NOT a Unicode glyph swap. Deferred. Kept U+2022.
     text.chars().map(|ch| {
         match ch {
-            '\u{F0B7}' => '\u{2022}', // Symbol bullet → • (bullet)
+            '\u{F0B7}' => '\u{2022}', // Symbol bullet → • (closest small Unicode; see S484 note)
             '\u{F06F}' => '\u{25CB}', // Symbol circle → ○
             '\u{F0A7}' => '\u{25AA}', // Symbol square → ▪
             '\u{F0FC}' => '\u{2713}', // Wingdings checkmark → ✓
