@@ -1354,6 +1354,10 @@ pub enum LayoutContent {
         y2: f32,
         color: Option<String>,
         width: f32,
+        /// S480: OOXML border art style (w:val) — "single"/"dashed"/"dotted"/
+        /// "dashDotStroked"/etc. None = solid. Renderers map this to a dash
+        /// pattern; unknown/None/single = solid stroke.
+        style: Option<String>,
     },
     CellShading {
         color: String,
@@ -9905,29 +9909,30 @@ impl LayoutEngine {
                     let bx = cell_x;
                     let by = cursor.visual_y;
 
-                    // Resolve border color and width from cell borders, falling back to table style
-                    let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32) {
+                    // Resolve border color, width and S480 style from cell borders,
+                    // falling back to table style.
+                    let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32, Option<String>) {
                         if let Some(b) = side {
                             let c = b.color.as_ref().map(|c| {
                                 if c.starts_with('#') { c.clone() } else { format!("#{}", c) }
                             });
-                            (c, b.width)
+                            (c, b.width, Some(b.style.clone()))
                         } else if table.style.border {
                             // Table-level borders: use table style color, default to black
                             let c = Some(table.style.border_color.as_ref()
                                 .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
                                 .unwrap_or_else(|| "#000000".to_string()));
-                            (c, table.style.border_width.unwrap_or(0.4))
+                            (c, table.style.border_width.unwrap_or(0.4), table.style.border_style.clone())
                         } else {
-                            (None, 0.4)
+                            (None, 0.4, None)
                         }
                     };
 
                     let cell_borders = cell.borders.as_ref();
-                    let (top_color, top_width) = resolve_border(cell_borders.and_then(|b| b.top.as_ref()));
-                    let (bot_color, bot_width) = resolve_border(cell_borders.and_then(|b| b.bottom.as_ref()));
-                    let (left_color, left_width) = resolve_border(cell_borders.and_then(|b| b.left.as_ref()));
-                    let (right_color, right_width) = resolve_border(cell_borders.and_then(|b| b.right.as_ref()));
+                    let (top_color, top_width, top_style) = resolve_border(cell_borders.and_then(|b| b.top.as_ref()));
+                    let (bot_color, bot_width, bot_style) = resolve_border(cell_borders.and_then(|b| b.bottom.as_ref()));
+                    let (left_color, left_width, left_style) = resolve_border(cell_borders.and_then(|b| b.left.as_ref()));
+                    let (right_color, right_width, right_style) = resolve_border(cell_borders.and_then(|b| b.right.as_ref()));
 
                     // When cells have their own borders (tcBorders), draw each side per cell.
                     // When using table-level borders, use collapsed model to avoid double-drawing.
@@ -9937,7 +9942,7 @@ impl LayoutEngine {
                     if !is_vmerge_continue && top_color.is_some() && (!use_collapsed || row_idx == 0) {
                         elements.push(LayoutElement::new(bx, by, cell_w, 0.0, LayoutContent::TableBorder {
                                 x1: bx, y1: by, x2: bx + cell_w, y2: by,
-                                color: top_color, width: top_width,
+                                color: top_color, width: top_width, style: top_style,
                         }));
                     }
                     // Bottom — skip for vMerge continue cells unless next row is not continue
@@ -9950,21 +9955,21 @@ impl LayoutEngine {
                     if bot_color.is_some() && !next_is_continue {
                         elements.push(LayoutElement::new(bx, by + row_height, cell_w, 0.0, LayoutContent::TableBorder {
                                 x1: bx, y1: by + row_height, x2: bx + cell_w, y2: by + row_height,
-                                color: bot_color, width: bot_width,
+                                color: bot_color, width: bot_width, style: bot_style,
                         }));
                     }
                     // Left
                     if left_color.is_some() && (!use_collapsed || cell_idx == 0) {
                         elements.push(LayoutElement::new(bx, by, 0.0, row_height, LayoutContent::TableBorder {
                                 x1: bx, y1: by, x2: bx, y2: by + row_height,
-                                color: left_color, width: left_width,
+                                color: left_color, width: left_width, style: left_style,
                         }));
                     }
                     // Right
                     if right_color.is_some() {
                         elements.push(LayoutElement::new(bx + cell_w, by, 0.0, row_height, LayoutContent::TableBorder {
                                 x1: bx + cell_w, y1: by, x2: bx + cell_w, y2: by + row_height,
-                                color: right_color, width: right_width,
+                                color: right_color, width: right_width, style: right_style,
                         }));
                     }
                 }
@@ -10042,7 +10047,7 @@ impl LayoutEngine {
                 for elem in row_elements {
                     let _elem_top = elem.y;
                     match &elem.content {
-                        LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width } => {
+                        LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width, ref style } => {
                             // Horizontal borders: keep on their respective page
                             if (y1 - y2).abs() < 0.1 {
                                 // Horizontal line
@@ -10069,7 +10074,7 @@ impl LayoutEngine {
                                         elem.x, elem.y, elem.width, split_y - vy_top,
                                         LayoutContent::TableBorder {
                                             x1: *x1, y1: vy_top, x2: *x2, y2: split_y,
-                                            color: color.clone(), width: *width,
+                                            color: color.clone(), width: *width, style: style.clone(),
                                         },
                                     ));
                                 }
@@ -10082,7 +10087,7 @@ impl LayoutEngine {
                                         elem.x, new_y1, elem.width, new_y2 - new_y1,
                                         LayoutContent::TableBorder {
                                             x1: *x1, y1: new_y1, x2: *x2, y2: new_y2,
-                                            color: color.clone(), width: *width,
+                                            color: color.clone(), width: *width, style: style.clone(),
                                         },
                                     ));
                                 }
@@ -10191,14 +10196,14 @@ impl LayoutEngine {
 
                     // Template for new top border (from any vertical border).
                     let vertical_template = next_page_elems.iter().find_map(|e| match &e.content {
-                        LayoutContent::TableBorder { y1, y2, x1, x2, color, width }
+                        LayoutContent::TableBorder { y1, y2, x1, x2, color, width, style }
                             if (*y1 - *y2).abs() >= 0.1 => {
-                            Some((*x1, *x2, color.clone(), *width))
+                            Some((*x1, *x2, color.clone(), *width, style.clone()))
                         }
                         _ => None,
                     });
 
-                    if let (Some(bi), Some((_, _, color, vw))) =
+                    if let (Some(bi), Some((_, _, color, vw, vstyle))) =
                         (bot_border_idx, vertical_template.clone()) {
                         if max_cont_text_bottom.is_finite() {
                             // Only apply when border is above content bottom
@@ -10242,7 +10247,7 @@ impl LayoutEngine {
                                         LayoutContent::TableBorder {
                                             x1: min_vx, y1: page_top,
                                             x2: max_vx, y2: page_top,
-                                            color, width: vw,
+                                            color, width: vw, style: vstyle,
                                         },
                                     ));
                                 }
@@ -10284,13 +10289,13 @@ impl LayoutEngine {
                         let close_y = last_text_y + max_nat;
                         if close_y <= split_y - 10.0 {
                             let template = next_page_elems.iter().find_map(|e| match &e.content {
-                                LayoutContent::TableBorder { y1, y2, x1, x2, color, width }
+                                LayoutContent::TableBorder { y1, y2, x1, x2, color, width, style }
                                     if (*y1 - *y2).abs() < 0.1 => {
-                                    Some((*x1, *x2, color.clone(), *width))
+                                    Some((*x1, *x2, color.clone(), *width, style.clone()))
                                 }
                                 _ => None,
                             });
-                            if let Some((bx1, bx2, color, bw)) = template {
+                            if let Some((bx1, bx2, color, bw, bstyle)) = template {
                                 for e in current_page_elems.iter_mut() {
                                     if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
                                         if (*y1 - *y2).abs() >= 0.1 {
@@ -10303,7 +10308,7 @@ impl LayoutEngine {
                                     bx1, close_y, bx2 - bx1, 0.0,
                                     LayoutContent::TableBorder {
                                         x1: bx1, y1: close_y, x2: bx2, y2: close_y,
-                                        color, width: bw,
+                                        color, width: bw, style: bstyle,
                                     },
                                 ));
                             }
@@ -10367,7 +10372,7 @@ impl LayoutEngine {
                     for elem in remaining {
                         let _elem_top = elem.y;
                         match &elem.content {
-                            LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width } => {
+                            LayoutContent::TableBorder { y1, y2, x1, x2, ref color, width, ref style } => {
                                 if (y1 - y2).abs() < 0.1 {
                                     if *y1 <= next_split + 0.5 {
                                         this_page.push(elem);
@@ -10389,7 +10394,7 @@ impl LayoutEngine {
                                             elem.x, elem.y, elem.width, next_split - vy_top,
                                             LayoutContent::TableBorder {
                                                 x1: *x1, y1: vy_top, x2: *x2, y2: next_split,
-                                                color: color.clone(), width: *width,
+                                                color: color.clone(), width: *width, style: style.clone(),
                                             },
                                         ));
                                     }
@@ -10401,7 +10406,7 @@ impl LayoutEngine {
                                             elem.x, new_y1, elem.width, new_y2 - new_y1,
                                             LayoutContent::TableBorder {
                                                 x1: *x1, y1: new_y1, x2: *x2, y2: new_y2,
-                                                color: color.clone(), width: *width,
+                                                color: color.clone(), width: *width, style: style.clone(),
                                             },
                                         ));
                                     }

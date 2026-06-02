@@ -768,6 +768,7 @@ fn emit_fraction(
                 y2: bar_y,
                 color: None,
                 width: rule_thick,
+                style: None,
             },
         ));
     }
@@ -900,6 +901,7 @@ fn emit_radical(
             y2: bar_y,
             color: None,
             width: rule_thick,
+            style: None,
         },
     ));
 
@@ -1312,6 +1314,7 @@ fn emit_bar(
             x2: x + base_bbox.advance, y2: bar_y,
             color: None,
             width: thick,
+            style: None,
         },
     ));
 

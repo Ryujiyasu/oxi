@@ -4977,6 +4977,10 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         let mut is_none = false;
                         let mut border_color_val = None;
                         let mut border_sz_val = None;
+                        // S480: capture the actual w:val (single/dashed/dotted/
+                        // dashDotStroked/...) instead of hardcoding "single", so
+                        // table-level decorative border styles reach the renderer.
+                        let mut border_style_val: Option<String> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -4984,6 +4988,8 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 "val" => {
                                     if val == "none" || val == "nil" {
                                         is_none = true;
+                                    } else {
+                                        border_style_val = Some(val.to_string());
                                     }
                                 }
                                 "color" => {
@@ -5008,7 +5014,15 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                             if style.border_width.is_none() {
                                 style.border_width = border_sz_val;
                             }
-                            style.border_style = Some("single".to_string());
+                            // Prefer a non-"single" decorative style if any edge
+                            // declares one (uniform-border tables — the common
+                            // case + a1d6e4 dashDotStroked); else keep "single".
+                            let v = border_style_val.unwrap_or_else(|| "single".to_string());
+                            if style.border_style.is_none()
+                                || style.border_style.as_deref() == Some("single")
+                            {
+                                style.border_style = Some(v);
+                            }
                         }
                     }
                     "tblW" => {

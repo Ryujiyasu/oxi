@@ -314,7 +314,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let _ = DeleteObject(font);
                     }
 
-                    oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width } => {
+                    oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, style } => {
                         let bw = (*width as f64 * scale).max(1.0) as i32;
                         let rgb = color.as_deref()
                             .and_then(|c| {
@@ -328,7 +328,27 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             })
                             .unwrap_or(COLORREF(0x00000000));
 
-                        let pen = CreatePen(PS_SOLID, bw, rgb);
+                        // S480: map OOXML border art style -> GDI cosmetic dash pen.
+                        // (Cosmetic PS_DASH/PS_DOT draw at 1px width; GDI is the
+                        // pagination/fallback path, not the SSIM gate, so the dash
+                        // appearance is approximate. OXI_S480_DISABLE -> solid.)
+                        let pen_style = if std::env::var("OXI_S480_DISABLE").is_ok() {
+                            PS_SOLID
+                        } else {
+                            // S480: only the heavy "Stroked" art borders (see DWrite
+                            // s480_dash_style); thin line-style borders stay solid.
+                            match style.as_deref() {
+                                Some("dashDotStroked") => PS_DASHDOT,
+                                Some("dashDotDotStroked") => PS_DASHDOTDOT,
+                                _ => PS_SOLID,
+                            }
+                        };
+                        // Cosmetic dashed pens require width 1; geometric solid keeps bw.
+                        let pen = if pen_style == PS_SOLID {
+                            CreatePen(PS_SOLID, bw, rgb)
+                        } else {
+                            CreatePen(pen_style, 1, rgb)
+                        };
                         let old_pen = SelectObject(mem_dc, pen);
                         let bx1 = (*x1 as f64 * scale) as i32;
                         let by1 = (*y1 as f64 * scale) as i32;

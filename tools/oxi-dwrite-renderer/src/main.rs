@@ -271,9 +271,9 @@ unsafe fn render_page_elements(
                 if exclude.iter().any(|e| e == "shading") { continue; }
                 render_filled_rect(rt, el.x, el.y, el.width, el.height, color)?;
             }
-            LayoutContent::TableBorder { x1, y1, x2, y2, color, width } => {
+            LayoutContent::TableBorder { x1, y1, x2, y2, color, width, style } => {
                 if exclude.iter().any(|e| e == "border") { continue; }
-                render_line(rt, *x1, *y1, *x2, *y2, color.as_deref(), *width)?;
+                render_line(rt, *x1, *y1, *x2, *y2, color.as_deref(), *width, style.as_deref())?;
             }
             LayoutContent::ClipStart => {
                 if exclude.iter().any(|e| e == "clip") { continue; }
@@ -496,22 +496,63 @@ unsafe fn render_box_rect(
     Ok(())
 }
 
+// S480: map an OOXML border art style (w:val) to a D2D1 dash style.
+// None = solid stroke. OXI_S480_DISABLE forces solid (pre-S480 behavior).
+#[cfg(windows)]
+fn s480_dash_style(style: Option<&str>)
+    -> Option<windows::Win32::Graphics::Direct2D::D2D1_DASH_STYLE>
+{
+    use windows::Win32::Graphics::Direct2D::*;
+    if std::env::var("OXI_S480_DISABLE").is_ok() { return None; }
+    // S480 ships only the HEAVY ornamental "Stroked" art borders, where any
+    // breaking of the thick solid bar clearly improves the match (gate-confirmed
+    // +0.0044 on the tokumei dashDotStroked box family). Thin line-style borders
+    // (dashed/dashSmallGap/dotted/dotDash) are left SOLID: Word renders their
+    // small gaps nearly-solid, and a coarse width-scaled dash matches WORSE than
+    // solid (459f05 −0.0078, 3a4f −0.0035). Those need a measured fine cadence
+    // (follow-up); see S480 memo.
+    match style? {
+        "dashDotStroked" => Some(D2D1_DASH_STYLE_DASH_DOT),
+        "dashDotDotStroked" => Some(D2D1_DASH_STYLE_DASH_DOT_DOT),
+        _ => None,
+    }
+}
+
 #[cfg(windows)]
 unsafe fn render_line(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     x1_pt: f32, y1_pt: f32, x2_pt: f32, y2_pt: f32,
     color: Option<&str>,
     width_pt: f32,
+    style: Option<&str>,
 ) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
     let (r, g, b) = color.map(parse_hex_rgb).unwrap_or((0, 0, 0));
     let brush = rt.CreateSolidColorBrush(&rgb_to_d2d_color(r, g, b), None)?;
+    // Build a dashed stroke style when the border declares a dash art style.
+    let stroke_style: Option<ID2D1StrokeStyle> = match s480_dash_style(style) {
+        Some(dash) => {
+            let factory: ID2D1Factory = rt.GetFactory()?;
+            let props = D2D1_STROKE_STYLE_PROPERTIES {
+                startCap: D2D1_CAP_STYLE_FLAT,
+                endCap: D2D1_CAP_STYLE_FLAT,
+                dashCap: if dash == D2D1_DASH_STYLE_DOT { D2D1_CAP_STYLE_ROUND } else { D2D1_CAP_STYLE_FLAT },
+                lineJoin: D2D1_LINE_JOIN_MITER,
+                miterLimit: 10.0,
+                dashStyle: dash,
+                dashOffset: 0.0,
+            };
+            factory.CreateStrokeStyle(&props, None).ok()
+        }
+        None => None,
+    };
     rt.DrawLine(
         D2D_POINT_2F { x: x1_pt * PT_TO_DIP, y: y1_pt * PT_TO_DIP },
         D2D_POINT_2F { x: x2_pt * PT_TO_DIP, y: y2_pt * PT_TO_DIP },
         &brush,
         width_pt * PT_TO_DIP,
-        None,
+        stroke_style.as_ref(),
     );
     Ok(())
 }
