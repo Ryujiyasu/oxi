@@ -5324,9 +5324,21 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                     "p" if depth == 0 => {
                         let pr = parse_paragraph(reader, ctx, styles)?;
                         // S486: preserve in-cell floating text boxes/shapes
-                        // (previously discarded). anchor_block_index is set
-                        // relative to this cell's block list by the layout step.
-                        cell_text_boxes.extend(pr.text_boxes);
+                        // (previously discarded). S488: stamp each preserved
+                        // text box with its anchor paragraph's index within THIS
+                        // cell's block list (= blocks.len() now, before the
+                        // paragraph is pushed below). The cell render loop uses
+                        // this to resolve relV="paragraph" against the specific
+                        // anchoring paragraph's top (COM-confirmed 1636d28: the
+                        // 3 cell text boxes anchor to paragraphs at y=431/710/737
+                        // inside one cell — a single cell-top origin mis-places
+                        // all three). pr.text_boxes carry a body-relative index
+                        // from parse_paragraph; overwrite with the cell-relative one.
+                        let cell_para_block_idx = blocks.len();
+                        for mut tb in pr.text_boxes {
+                            tb.anchor_block_index = cell_para_block_idx;
+                            cell_text_boxes.push(tb);
+                        }
                         cell_shapes.extend(pr.shapes);
                         blocks.push(Block::Paragraph(pr.paragraph));
                         // S331 (2026-05-26): forward inline images from cell

@@ -143,7 +143,7 @@ fn main() {
                     println!("  [{:2}] IMG  ({:6.1}, {:6.1}) w={:6.1} h={:5.1} {} bytes", 
                         ei, elem.x, elem.y, elem.width, elem.height, data.len());
                 }
-                layout::LayoutContent::TableBorder { x1, y1, x2, y2, ref color, width } => {
+                layout::LayoutContent::TableBorder { x1, y1, x2, y2, ref color, width, .. } => {
                     let col = color.as_deref().unwrap_or("#000");
                     println!("  [{:2}] BORDER ({:.1},{:.1})->({:.1},{:.1}) color={} w={:.1}", ei, x1, y1, x2, y2, col, width);
                 }

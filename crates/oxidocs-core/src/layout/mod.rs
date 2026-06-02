@@ -3750,20 +3750,20 @@ impl LayoutEngine {
         self.layout_text_box_at(text_box, page, block_y_positions, None)
     }
 
-    /// S487 (CLASS E step 2): layout a text box, optionally with an explicit
-    /// origin override for IN-CELL text boxes. A cell text box's posOffset is
-    /// relative to the cell content origin, NOT the body block_y_positions
-    /// (which has no cell-internal entry). When `cell_origin` is Some((ox, oy)),
-    /// the absolute position is the cell origin + the text box's posOffset.
-    fn layout_text_box_at(&self, text_box: &TextBox, page: &Page, block_y_positions: &[f32], cell_origin: Option<(f32, f32)>) -> Vec<LayoutElement> {
+    /// S487/S488 (CLASS E step 2/3): layout a text box, optionally with an
+    /// explicit ALREADY-RESOLVED absolute top-left for IN-CELL text boxes. A
+    /// cell text box's anchor references (relH="column" → cell content-left,
+    /// relV="paragraph" → the anchoring paragraph's top) cannot be resolved by
+    /// resolve_textbox_position (which only knows body geometry), so the cell
+    /// render loop resolves the absolute top-left itself (S488 anchor model) and
+    /// passes it as `resolved_origin`. When Some((ax, ay)), that IS the box
+    /// top-left; when None, fall back to the body resolver.
+    fn layout_text_box_at(&self, text_box: &TextBox, page: &Page, block_y_positions: &[f32], resolved_origin: Option<(f32, f32)>) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
         // 1. Calculate absolute position
-        let (abs_x, abs_y) = match cell_origin {
-            Some((ox, oy)) => match &text_box.position {
-                Some(p) => (ox + p.x, oy + p.y),
-                None => (ox, oy),
-            },
+        let (abs_x, abs_y) = match resolved_origin {
+            Some((ax, ay)) => (ax, ay),
             None => self.resolve_textbox_position(text_box, page, block_y_positions),
         };
 
@@ -8381,6 +8381,14 @@ impl LayoutEngine {
                 // ずれかを選択） / empty all report y=478 (row top).
                 let vert_cell_anchor_h: f32 = 0.0;
                 let mut content_h: f32 = 0.0;
+                // S488 (CLASS E step 3): record each cell block's content_h-relative
+                // top so in-cell floating text boxes with relV="paragraph" can be
+                // anchored to their SPECIFIC paragraph (not the cell top). Indexed
+                // by block_pos; absolute para top = cell_block_tops[idx] + dy (the
+                // dy applied to cell_elements below). Declared at cell-loop scope so
+                // it survives past the `if !is_vmerge_continue` block to the text-box
+                // emit site. Only consumed under OXI_S487_ENABLE.
+                let mut cell_block_tops: Vec<f32> = Vec::new();
 
                 // Layout blocks in document order (paragraphs and nested tables interleaved)
                 let is_exact = row.height_rule.as_deref() == Some("exact");
@@ -8412,6 +8420,11 @@ impl LayoutEngine {
                     .map(|(i, _)| i)
                     .last();
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
+                // S488: snapshot this block's content_h-relative top (aligns with
+                // block_pos via enumerate; pushed before the exact-clip break so
+                // blocks that fit are all recorded).
+                debug_assert_eq!(cell_block_tops.len(), block_pos);
+                cell_block_tops.push(content_h);
                 // Clip content that overflows exact row height
                 if is_exact && content_h + pad_t >= row_height {
                     break;
@@ -10004,16 +10017,51 @@ impl LayoutEngine {
                     }
                 }
 
-                // S487 (CLASS E step 2): emit in-cell floating text boxes anchored
-                // at the cell origin + posOffset (parse_table_cell now preserves
-                // them — S486). Opt-IN OXI_S487_ENABLE (default OFF — the in-cell
-                // anchor Y is an F-class position risk until gate-validated).
+                // S488 (CLASS E step 3): emit in-cell floating text boxes with the
+                // COM-derived anchor model (replaces S487's naive cell-origin +
+                // posOffset). Measured on 1636d28 (tools/metrics/_s488c_anchor_clean.py):
+                //   relH="column"/"character" → cell CONTENT-left (cell_x + pad_l) + posX
+                //   relH="margin"             → page left margin + posX
+                //   relH="page"               → posX
+                //   relV="paragraph"/"line"   → anchoring paragraph's absolute top + posY
+                //   relV="margin"             → page top margin + posY
+                //   relV="page"               → posY
+                // The paragraph top = cell_block_tops[anchor_block_index] + dy (dy
+                // is the cell-content absolute base computed above). S487's bug was
+                // using cell_x (border-left, not content-left) for X and
+                // cursor.visual_y (cell top, not the anchor paragraph) for Y.
+                // Opt-IN OXI_S487_ENABLE (default OFF until gate-validated).
                 if !cell.cell_text_boxes.is_empty()
                     && std::env::var("OXI_S487_ENABLE").is_ok()
                 {
-                    let cell_origin = (cell_x, cursor.visual_y);
+                    let cell_content_left = cell_x + pad_l;
                     for tb in &cell.cell_text_boxes {
-                        let tb_elems = self.layout_text_box_at(tb, page, &[], Some(cell_origin));
+                        let (px, py) = tb.position.as_ref()
+                            .map(|p| (p.x, p.y)).unwrap_or((0.0, 0.0));
+                        let h_rel = tb.position.as_ref()
+                            .and_then(|p| p.h_relative.as_deref());
+                        let v_rel = tb.position.as_ref()
+                            .and_then(|p| p.v_relative.as_deref());
+                        let abs_x = match h_rel {
+                            Some("page") => px,
+                            Some("margin") => page.margin.left + px,
+                            // column / character / default → cell content-left
+                            _ => cell_content_left + px,
+                        };
+                        let abs_y = match v_rel {
+                            Some("page") => py,
+                            Some("margin") => page.margin.top + py,
+                            // paragraph / line / default → anchor paragraph top
+                            _ => {
+                                let para_top_rel = cell_block_tops
+                                    .get(tb.anchor_block_index)
+                                    .copied()
+                                    .unwrap_or(0.0);
+                                para_top_rel + dy + py
+                            }
+                        };
+                        let tb_elems = self.layout_text_box_at(
+                            tb, page, &[], Some((abs_x, abs_y)));
                         elements.extend(tb_elems);
                     }
                 }
