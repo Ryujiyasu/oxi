@@ -5510,6 +5510,25 @@ fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseEr
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 let bdr = parse_border_attrs(&e);
+                // S482: a cell's EXPLICIT w:val="nil"/"none" edge SUPPRESSES the
+                // table-level border on that edge — it is NOT the same as an absent
+                // edge (which inherits the table border). parse_border_attrs returns
+                // None for both; preserve explicit-nil as a {style:"none"} sentinel
+                // (cell path ONLY — pBdr/pgBorders unaffected) so resolve_border can
+                // suppress instead of falling through to the table border (31420af:
+                // tcBorders with nil top/left over an all-single tblBorders drew
+                // spurious top/left rules). Opt-out OXI_S482_DISABLE.
+                let bdr = if bdr.is_none() && std::env::var("OXI_S482_DISABLE").is_err() {
+                    let explicit_none = e.attributes().flatten().any(|a| {
+                        local_name(a.key.as_ref()) == "val" && {
+                            let v = String::from_utf8_lossy(&a.value);
+                            v == "nil" || v == "none"
+                        }
+                    });
+                    if explicit_none {
+                        Some(BorderDef { style: "none".to_string(), width: 0.0, color: None, space: 0.0 })
+                    } else { None }
+                } else { bdr };
                 match local.as_str() {
                     "top" => borders.top = bdr,
                     "bottom" => borders.bottom = bdr,

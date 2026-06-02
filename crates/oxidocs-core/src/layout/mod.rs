@@ -9919,6 +9919,11 @@ impl LayoutEngine {
                     // falling back to table style.
                     let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32, Option<String>) {
                         if let Some(b) = side {
+                            // S482: explicit w:val="nil"/"none" cell edge SUPPRESSES
+                            // the border (do NOT fall through to the table border).
+                            if b.style == "none" {
+                                return (None, 0.0, None);
+                            }
                             let c = b.color.as_ref().map(|c| {
                                 if c.starts_with('#') { c.clone() } else { format!("#{}", c) }
                             });
