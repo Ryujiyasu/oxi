@@ -1987,7 +1987,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -4395,7 +4395,7 @@ impl LayoutEngine {
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
@@ -5831,6 +5831,7 @@ impl LayoutEngine {
         grid_char_cw_ratio: Option<f32>,
         lines_and_chars: bool,
         s476_body: bool,
+        is_justified: bool,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -6022,7 +6023,34 @@ impl LayoutEngine {
             // counts (Ng) = the count if Word broke at natural widths. Used to test
             // "Word breaks at natural, punct compression is render-only" and to
             // derive the fullness-gate rule (Ng vs Word count). Default OFF.
-            let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok();
+            // S492 (2026-06-03) — jc=left disentanglement (the R35 multi-session
+            // refactor, user option A). Word does NOT apply yakumono break-time
+            // compression to NON-justified paragraphs: jc=left/right/center break
+            // at NATURAL widths + kinsoku (punct compression is justify-specific).
+            // MEASURED decisively (tools/metrics/measure_jc_disentangle*.py):
+            //   - jc=left synthetic repro = punct 12.0 natural, zero compression,
+            //     at every punct density (10-50%); jc=both packs +1 via burasagari
+            //     (hangable punct hangs past margin; mid-line punct stays 12.0) or
+            //     light opener compression (「→11.25), NOT distributed K-compression.
+            //   - Real docs 683f/0e7af/d77a (docGrid type=lines) OVER-PACK +1 on
+            //     jc=left wrapping lines because Oxi's S475 capacity break is ungated
+            //     on alignment; b837 (linesAndChars, grid-determined) is unaffected.
+            // The render water-fill is ALREADY jc-gated (it lives inside the
+            // should_justify block). Only the BREAK side leaks. When set + the para
+            // is NOT justified, run the validated s474_natural pure-natural-greedy
+            // path (disables standalone compression + absorb) and disable the S475
+            // capacity break. Default OFF (byte-identical). Phase-1-sensitive (fewer
+            // chars/line on jc=left → more lines → pagination shift) → env-gated +
+            // full canary before ship.
+            let s492_jcnatural = std::env::var("OXI_S492_JCNATURAL").is_ok();
+            // SCOPE to docGrid type=lines only. For linesAndChars (b837-class) the
+            // char count per line is GRID-determined (geometric), NOT a justify-time
+            // yakumono effect — gating its grid break on alignment wrongly disabled
+            // s476_grid for b837's non-justified paras and cascaded its pagination
+            // (S492 first gate: b837 0.9997->0.5775). The S492 finding is about
+            // yakumono COMPRESSION (justify-specific); the grid is a separate axis.
+            let natural_break_jc = s492_jcnatural && !is_justified && !lines_and_chars;
+            let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
             // S475 capacity-budget break (env-gated, default OFF = byte-identical).
             // Greedy first-fit where each punct contributes break-compression CAPACITY
             // (pair-first 6.0 / solo 1.5, env-tunable; flat-K = equal). Bypasses the
@@ -6051,10 +6079,11 @@ impl LayoutEngine {
             let s476_grid = std::env::var("OXI_S476_DISABLE").is_err()
                 && lines_and_chars && s476_body
                 && self.compress_punctuation && self.compat_mode >= 15;
-            let s475_break = (std::env::var("OXI_S475_DISABLE").is_err()
+            let s475_break = ((std::env::var("OXI_S475_DISABLE").is_err()
                 && self.compress_punctuation && self.compat_mode >= 15
                 && !lines_and_chars)
-                || s476_grid;
+                || s476_grid)
+                && !natural_break_jc;  // S492: non-justified paras break at natural
             let s476_cap: f32 = std::env::var("OXI_S476_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.0);
             let s475_pair: f32 = if s476_grid { s476_cap } else {
@@ -6708,6 +6737,17 @@ impl LayoutEngine {
                             && is_para_last_char
                             && is_sentence_terminator
                             && !s472_demand;
+                        // S492: burasagari (ぶら下げ) is NOT cleanly justify-gated.
+                        // The synthetic jc=left repro (国、×30 = 36, oidashi) does NOT
+                        // hang, but e3c545 (doNotCompress, type=lines) DOES hang on
+                        // its jc=left lines — disabling the hang there cascaded its
+                        // pagination (0.9997->0.245, the sole S492 Phase-1 regression).
+                        // Burasagari is a doc-level HangingPunctuation behaviour, not a
+                        // justify effect; leave it ON for the non-justified path. (The
+                        // synthetic comma jc=left then over-hangs +2 vs Word, an
+                        // accepted edge case — real docs don't carry 50%-punct lines.
+                        // Re-deriving the exact jc/HangingPunctuation gate is next-session
+                        // work — see docs/spec/cjk_break_refactor_s492.md.)
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
                             && !s228_block_hang;
 
@@ -11351,7 +11391,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false);
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
                 lines.len().max(1)
             };
 
