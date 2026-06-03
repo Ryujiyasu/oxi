@@ -34,6 +34,8 @@ def parse(path):
             refx, refy = struct.unpack_from('<ii', data, off + 36)
             nchars = struct.unpack_from('<I', data, off + 44)[0]
             offString = struct.unpack_from('<I', data, off + 48)[0]
+            options = struct.unpack_from('<I', data, off + 52)[0]
+            offDx = struct.unpack_from('<I', data, off + 72)[0]
             try:
                 if itype == EMR_EXTTEXTOUTW:
                     s = data[off + offString: off + offString + nchars * 2].decode('utf-16-le', 'replace')
@@ -41,7 +43,17 @@ def parse(path):
                     s = data[off + offString: off + offString + nchars].decode('cp932', 'replace')
             except Exception:
                 s = ''
-            recs.append({'x': refx, 'y': refy, 'n': nchars, 'text': s})
+            # Dx array: inter-glyph advances (logical units). ETO_PDY (0x2000) => 2 LONGs/char.
+            dx = []
+            ETO_PDY = 0x2000
+            try:
+                if offDx and off + offDx + 4 <= n:
+                    stride = 2 if (options & ETO_PDY) else 1
+                    for k in range(nchars):
+                        dx.append(struct.unpack_from('<i', data, off + offDx + k * stride * 4)[0])
+            except Exception:
+                dx = []
+            recs.append({'x': refx, 'y': refy, 'n': nchars, 'text': s, 'dx': dx, 'options': options})
         off += nsize
     return rclFrame, szlDevice, szlMM, recs
 
