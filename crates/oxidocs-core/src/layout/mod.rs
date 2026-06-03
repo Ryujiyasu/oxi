@@ -7006,6 +7006,113 @@ impl LayoutEngine {
             }
         }
 
+        // S492 (2026-06-03) — paragraph-level DEMAND break optimizer (env OXI_S492_OPT,
+        // default OFF = byte-identical). Replaces the char-greedy break for JUSTIFIED
+        // linesAndChars paragraphs with a Knuth-Plass DP that minimizes per-line
+        // underfull² with free residual compression (= fill each line to ~avail with
+        // LIGHT compression, Word's demand behaviour). Validated 72% per-line match vs
+        // Word on b837 (vs 58-62% for any per-line greedy; greedy+maxcomp over-packs at
+        // 31%). Render unchanged (decides COUNTS only; render water-fill re-justifies).
+        // Scope: justified + linesAndChars + all-Normal-break + no tab/field fragments;
+        // re-derive scope before extending. See docs/spec/cjk_break_optimizer_design.md.
+        let s492_opt = std::env::var("OXI_S492_OPT").is_ok();
+        if s492_opt && is_justified && lines_and_chars && lines.len() > 1
+            && lines.iter().all(|l| l.break_type == LineBreakType::Normal
+                && l.fragments.iter().all(|f| f.tab_alignment.is_none() && f.field_type.is_none()))
+        {
+            let flat: Vec<LineFragment> =
+                lines.iter().flat_map(|l| l.fragments.iter().cloned()).collect();
+            let n = flat.len();
+            if n > 1 {
+                let avail_l0 = (available_width - first_line_indent).max(0.0);
+                let avail_cont = available_width;
+                let mut pn = vec![0.0f32; n + 1];
+                let mut pc = vec![0.0f32; n + 1];
+                for k in 0..n {
+                    let mc = if flat[k].text.chars().count() == 1 {
+                        let fs = self.resolve_font_size(&flat[k].style, para_style);
+                        kinsoku::s492_max_compress(flat[k].text.chars().next().unwrap(), fs)
+                    } else { 0.0 };
+                    pn[k + 1] = pn[k] + flat[k].natural_width;
+                    pc[k + 1] = pc[k] + mc;
+                }
+                // Cost weights (env-tunable during the canary). Defaults from the
+                // Python fit; w_line breaks ties toward packing (the Python's implicit
+                // tie order favoured packing; Rust needs it explicit, else lines
+                // under-pack once slack hits 0).
+                let w_slack: f32 = std::env::var("OXI_S492_WSLACK").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                let w_comp: f32 = std::env::var("OXI_S492_WCOMP").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                let w_line: f32 = std::env::var("OXI_S492_WLINE").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                let inf = f32::INFINITY;
+                let mut best = vec![inf; n + 1];
+                let mut prev = vec![0usize; n + 1];
+                best[0] = 0.0;
+                // Overflow tolerance (env-tunable): Word's linesAndChars grid fits a
+                // partial trailing cell / hangs a punct, so a line may exceed avail by
+                // up to ~half a cell even with little compression. Default 0.6; sweep.
+                let tol: f32 = std::env::var("OXI_S492_TOL").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(0.6);
+                for j in 1..=n {
+                    // kinsoku: break after frag j-1 is invalid if the next frag (j) would
+                    // start a line with a line-start-prohibited char, or frag j-1 ends
+                    // with a line-end-prohibited char.
+                    if j < n {
+                        if let Some(c0) = flat[j].text.chars().next() {
+                            if kinsoku::is_line_start_prohibited(c0) { continue; }
+                        }
+                    }
+                    if let Some(cl) = flat[j - 1].text.chars().last() {
+                        if kinsoku::is_line_end_prohibited(cl) { continue; }
+                    }
+                    for i in 0..j {
+                        if !best[i].is_finite() { continue; }
+                        let avail = if i == 0 { avail_l0 } else { avail_cont };
+                        let natural = pn[j] - pn[i];
+                        let comp = pc[j] - pc[i];
+                        if natural - comp > avail + tol { continue; } // infeasible even compressed
+                        let lc = if j == n {
+                            0.0 // last line: ragged-right, free
+                        } else {
+                            let slack = (avail - natural).max(0.0);
+                            let used = (natural - avail).max(0.0);
+                            w_slack * slack * slack + w_comp * used * used
+                        };
+                        let t = best[i] + lc + w_line;
+                        if t < best[j] { best[j] = t; prev[j] = i; }
+                    }
+                }
+                if best[n].is_finite() {
+                    let mut bounds = vec![n];
+                    let mut j = n;
+                    while j > 0 { j = prev[j]; bounds.push(j); }
+                    bounds.reverse();
+                    let mut new_lines: Vec<Line> = Vec::with_capacity(bounds.len());
+                    let mut flat_iter = flat.into_iter();
+                    let mut taken = 0usize;
+                    for w in bounds.windows(2) {
+                        let count = w[1] - w[0];
+                        let mut frags: Vec<LineFragment> = Vec::with_capacity(count);
+                        for _ in 0..count { frags.push(flat_iter.next().unwrap()); }
+                        let _ = taken; taken += count;
+                        let nat: f32 = frags.iter().map(|f| f.natural_width).sum();
+                        let comp: f32 = frags.iter().map(|f| f.width).sum();
+                        new_lines.push(Line {
+                            fragments: frags,
+                            break_type: LineBreakType::Normal,
+                            natural_total_width: nat,
+                            was_compressed: (nat - comp) > 0.5,
+                        });
+                    }
+                    if !new_lines.is_empty() {
+                        lines = new_lines;
+                    }
+                }
+            }
+        }
+
         lines
     }
 

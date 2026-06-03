@@ -167,6 +167,23 @@ pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32
     0.0
 }
 
+/// S492 (2026-06-03) — per-context MAX break compression (pt) for the paragraph-level
+/// demand break optimizer (OXI_S492_OPT). MEASURED render table (s474_break2 / S492g):
+/// closing punct + comma/period (YAKUMONO_CLOSING, incl. 、。，．) collapse up to a
+/// half-em (≈6.0pt @12pt); opening brackets trim lightly (≈1.5pt). The DP fills each
+/// line to ~avail using these as the max residual compression (validated 72% per-line
+/// match vs Word on b837, vs 58% for any per-line greedy). Scaled by fs/12.
+pub fn s492_max_compress(c: char, fs: f32) -> f32 {
+    let scale = fs / 12.0;
+    if YAKUMONO_CLOSING.contains(&c) {
+        6.0 * scale
+    } else if YAKUMONO_OPENING.contains(&c) {
+        1.5 * scale
+    } else {
+        0.0
+    }
+}
+
 /// Check if a character is CJK (Chinese, Japanese, Korean)
 /// These characters can have line breaks between any two adjacent characters
 /// (subject to kinsoku rules)
