@@ -240,7 +240,18 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                             }
                         }
                         if script == "Jpan" && !typeface.is_empty() {
-                            let suppress_major = suppress_jpan_when_empty_ea && ea_empty_major;
+                            // S492e (2026-06-03, Lever E) — for empty-ea MAJOR, USE the
+                            // Jpan font: Word renders 1ec1's title/headings in the Jpan
+                            // MS Gothic, NOT the rPrDefault Mincho (visually confirmed:
+                            // Word title=sans-Gothic, Oxi=serif-Mincho; the major-EA
+                            // theme token "+見出しのフォント" is in use). S323 derived its
+                            // blanket suppression from d1e8ac8's BODY (minor font) where
+                            // Word DID use Mincho — so the suppression is MINOR-scoped, not
+                            // major (re-derive from richer input, don't stack exceptions).
+                            // Env OXI_E_MAJOR_JPAN, default OFF (byte-identical) for the canary.
+                            let s492e_major_jpan = std::env::var("OXI_E_MAJOR_JPAN").is_ok();
+                            let suppress_major = suppress_jpan_when_empty_ea && ea_empty_major
+                                && !s492e_major_jpan;
                             let suppress_minor = suppress_jpan_when_empty_ea && ea_empty_minor;
                             if in_major_font && theme.major_font_ea.is_none() && !suppress_major {
                                 theme.major_font_ea = Some(typeface.clone());
