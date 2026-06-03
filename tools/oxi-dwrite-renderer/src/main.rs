@@ -21,10 +21,17 @@ fn main() {
     let dpi: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(150);
 
     let mut exclude: Vec<String> = Vec::new();
-    // Direct2D rendering already produces grayscale ClearType-equivalent AA at
-    // the target DPI, so default supersample is 1x (vs GDI's 2x). Override
-    // with --supersample=N if needed for explicit comparison.
-    let mut supersample: u32 = 1;
+    // S493d (2026-06-04) — default supersample 1->2. Even with the S460 OUTLINE
+    // grayscale AA, native-res (1x) leaves the dense-CJK glyph cores HARDER than
+    // Word's ClearType-screenshot grayscale (render-truth confirmed 0e7af positions
+    // are perfect, so the residual is weight/AA texture). 2x supersample softens the
+    // coverage AA toward Word: full-corpus ss1->ss2 canary (235 docs, RGB SSIM gate)
+    // bottom-10 sum +0.0375 (strictly up = Phase-3 primary), mean +0.0009, 10 docs
+    // improve >0.005, only d77a regresses (-0.008, non-bottom-10). 0e7af doc-mean
+    // 0.8758->0.8907 (+0.0149; p2 +0.028, p7 +0.033). Render-only (positions/pagination
+    // unchanged -> Phase-1 safe). 4x render cost (was deliberately avoided pre-S493 but
+    // the bottom-N gain is real). Override with --supersample=1 for the legacy fast path.
+    let mut supersample: u32 = 2;
     let mut dump_layout: Option<String> = None;
     for arg in &args[3..] {
         if let Some(list) = arg.strip_prefix("--exclude=") {
