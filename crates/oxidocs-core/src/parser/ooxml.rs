@@ -3076,6 +3076,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut stroke_width: Option<f32> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
     let mut rotation: Option<f32> = None;
+    let mut flip_h = false;
+    let mut flip_v = false;
     let mut has_no_fill = false;
     let mut has_no_stroke = false;
     let mut corner_radius_adj: Option<f32> = None; // avLst adj value (0-100000 scale)
@@ -3326,9 +3328,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     "xfrm" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "rot" {
-                                let val = String::from_utf8_lossy(&attr.value);
-                                rotation = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_str() {
+                                "rot" => { rotation = val.parse::<f32>().ok().map(|v| v / 60000.0); }
+                                // flipH/flipV: connector diagonal direction (S493h).
+                                "flipH" => { flip_h = val == "1" || val == "true"; }
+                                "flipV" => { flip_v = val == "1" || val == "true"; }
+                                _ => {}
                             }
                         }
                     }
@@ -3768,6 +3774,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             gradient_angle,
             anchor_block_index: 0,
             v_text_anchor: None,
+            flip_h,
+            flip_v,
         })
     } else {
         None
@@ -4009,6 +4017,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         gradient_angle: None,
         anchor_block_index: 0,
         v_text_anchor,
+        flip_h: false,
+        flip_v: false,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })

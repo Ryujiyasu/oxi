@@ -658,6 +658,12 @@ pub struct Shape {
     /// Vertical text anchor: "top" (default), "middle", "bottom"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v_text_anchor: Option<String>,
+    /// Horizontal flip (a:xfrm flipH) — sets the connector diagonal direction.
+    #[serde(default)]
+    pub flip_h: bool,
+    /// Vertical flip (a:xfrm flipV).
+    #[serde(default)]
+    pub flip_v: bool,
 }
 
 /// A gradient color stop

@@ -1020,7 +1020,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     }
                 }
 
-                oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width } => {
+                oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, .. } => {
                     let bc = color.as_deref()
                         .and_then(parse_hex_color)
                         .unwrap_or(Color::Gray(0.0));
@@ -1143,7 +1143,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                 oxidocs_core::layout::LayoutContent::ClipEnd => {
                     contents.push(ContentElement::RestoreState);
                 }
-                oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width } => {
+                oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, .. } => {
                     let sx = x;
                     let sy = y;
                     let sw = ew;

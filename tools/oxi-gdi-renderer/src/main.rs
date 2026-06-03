@@ -502,7 +502,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             }
                         }
                     }
-                    oxidocs_core::layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width } => {
+                    oxidocs_core::layout::LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, .. } => {
                         // Parse stroke color once — used by all shape branches.
                         let (sr, sg, sb) = if let Some(ref sc) = stroke_color {
                             let c = sc.strip_prefix('#').unwrap_or(sc);

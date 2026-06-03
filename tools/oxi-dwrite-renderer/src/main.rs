@@ -311,9 +311,9 @@ unsafe fn render_page_elements(
                     render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data)?;
                 }
             }
-            LayoutContent::PresetShape { shape_type, stroke_color, stroke_width } => {
+            LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v } => {
                 render_preset_shape(rt, el.x, el.y, el.width, el.height,
-                    shape_type, stroke_color.as_deref(), *stroke_width)?;
+                    shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v)?;
             }
             // TODO Step 7: Balloon, BalloonConnector (low priority for SSIM)
             _ => {}
@@ -387,6 +387,8 @@ unsafe fn render_preset_shape(
     shape_type: &str,
     stroke_color: Option<&str>,
     stroke_width: f32,
+    flip_h: bool,
+    flip_v: bool,
 ) -> windows::core::Result<()> {
     use windows::Win32::Graphics::Direct2D::Common::*;
 
@@ -400,18 +402,26 @@ unsafe fn render_preset_shape(
     let h = h_pt * PT_TO_DIP;
 
     match shape_type {
-        // S490: straightConnector1 was TRIED here (same geometry as "line") but
-        // REGRESSED 3a4f by ~−0.9 (26 connectors drawn as bbox diagonals — the
-        // real connector geometry uses flipH/flipV + endpoints, not a diagonal;
-        // and 3a4f is Phase-1-broken so any ink-add scrambles its mis-paginated
-        // pages). Left UNHANDLED until the connector endpoint model is derived.
-        "line" => {
-            // Diagonal line top-left to bottom-right
-            rt.DrawLine(
-                D2D_POINT_2F { x, y },
-                D2D_POINT_2F { x: x + w, y: y + h },
-                &brush, sw_dip, None,
-            );
+        // S493h: connector shapes — flipH/flipV-aware endpoints (the S490 attempt drew a
+        // fixed TL→BR diagonal, wrong when flipped → regressed 3a4f). The connector runs
+        // between two diagonal corners of its bbox; flipH/flipV pick which corners.
+        //   start = (flipH? x+w : x, flipV? y+h : y);  end = opposite corner.
+        // straightConnector1 = the diagonal; bentConnector3 = an H–V–H Z through the bend.
+        // (3a4f is Phase-1-broken — gate on 2ea81a/1636d28, not 3a4f.)
+        "line" | "straightConnector1" | "bentConnector3" | "bentConnector2" => {
+            let sx = if flip_h { x + w } else { x };
+            let sy = if flip_v { y + h } else { y };
+            let ex = if flip_h { x } else { x + w };
+            let ey = if flip_v { y } else { y + h };
+            if shape_type == "bentConnector3" || shape_type == "bentConnector2" {
+                // Z/L bend: horizontal to mid-x, vertical, horizontal to end.
+                let mx = (sx + ex) * 0.5;
+                rt.DrawLine(D2D_POINT_2F { x: sx, y: sy }, D2D_POINT_2F { x: mx, y: sy }, &brush, sw_dip, None);
+                rt.DrawLine(D2D_POINT_2F { x: mx, y: sy }, D2D_POINT_2F { x: mx, y: ey }, &brush, sw_dip, None);
+                rt.DrawLine(D2D_POINT_2F { x: mx, y: ey }, D2D_POINT_2F { x: ex, y: ey }, &brush, sw_dip, None);
+            } else {
+                rt.DrawLine(D2D_POINT_2F { x: sx, y: sy }, D2D_POINT_2F { x: ex, y: ey }, &brush, sw_dip, None);
+            }
         }
         // S490: ellipse/oval outline (e.g. ○ option markers circling a choice).
         // Was unhandled → Word drew the ring, Oxi drew nothing. Stroke-only
