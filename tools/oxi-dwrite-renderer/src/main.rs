@@ -864,9 +864,15 @@ unsafe fn render_text(
                 metrics[0].baseline
             } else { font_size_pt * PT_TO_DIP * 0.8 }
         } else { font_size_pt * PT_TO_DIP * 0.8 };
-        let thickness = (font_size_pt * PT_TO_DIP * 0.06).max(1.0);
+        // S493g (2026-06-04): the two underlines were touching ("looks like one line").
+        // Word's double underline (1ec1 20pt title, pixel-measured @150dpi): two ~2px lines,
+        // 5px center-to-center with a clear ~3px gap. Old gap 0.08·fs (center-to-center) ≈ the
+        // 0.06·fs thickness → edge-to-edge ~0 → merged. Match Word: gap 0.12·fs (center 5px),
+        // thinner lines 0.05·fs (~2px). Opt-out OXI_S493G_DISABLE restores the old 0.08/0.06.
+        let legacy_du = std::env::var("OXI_S493G_DISABLE").is_ok();
+        let thickness = (font_size_pt * PT_TO_DIP * if legacy_du { 0.06 } else { 0.05 }).max(1.0);
         let offset_dip = (font_size_pt * PT_TO_DIP * 0.15).max(1.0);
-        let gap_dip = (font_size_pt * PT_TO_DIP * 0.08).max(1.0);
+        let gap_dip = (font_size_pt * PT_TO_DIP * if legacy_du { 0.08 } else { 0.12 }).max(1.0);
         let y1_dip = y_pt * PT_TO_DIP + baseline_dip + offset_dip;
         let y2_dip = y1_dip + gap_dip;
         let x_start = x_pt * PT_TO_DIP;
