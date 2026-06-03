@@ -6043,13 +6043,18 @@ impl LayoutEngine {
             // chars/line on jc=left → more lines → pagination shift) → env-gated +
             // full canary before ship.
             let s492_jcnatural = std::env::var("OXI_S492_JCNATURAL").is_ok();
-            // SCOPE to docGrid type=lines only. For linesAndChars (b837-class) the
-            // char count per line is GRID-determined (geometric), NOT a justify-time
-            // yakumono effect — gating its grid break on alignment wrongly disabled
-            // s476_grid for b837's non-justified paras and cascaded its pagination
-            // (S492 first gate: b837 0.9997->0.5775). The S492 finding is about
-            // yakumono COMPRESSION (justify-specific); the grid is a separate axis.
-            let natural_break_jc = s492_jcnatural && !is_justified && !lines_and_chars;
+            // S492f: applies to BOTH docGrid types. For non-justified paras the
+            // yakumono COMPRESSION (justify-specific, S492) must be off; the GRID
+            // count still applies via char_grid_extra (each fullwidth char padded to
+            // pitch, break bounded by available_tw=content-indent) so disabling the
+            // s476 capacity does NOT lose the grid for linesAndChars — it just stops
+            // the punct-capacity from over-packing +1 char past the boundary on b837's
+            // jc=left lines (clean alignment idx 23/69/75: Word 36 / Oxi 37 overflow).
+            // The earlier b837 0.5775 cascade was with the burasagari-gate ON (since
+            // reverted); retest with it OFF. OXI_S492_LINESONLY re-scopes to type=lines.
+            let s492_lines_only = std::env::var("OXI_S492_LINESONLY").is_ok();
+            let natural_break_jc = s492_jcnatural && !is_justified
+                && (!lines_and_chars || !s492_lines_only);
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
             // S475 capacity-budget break (env-gated, default OFF = byte-identical).
             // Greedy first-fit where each punct contributes break-compression CAPACITY
