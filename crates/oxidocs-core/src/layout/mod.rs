@@ -1377,6 +1377,9 @@ pub enum LayoutContent {
         /// Connector diagonal direction (a:xfrm flipH/flipV). Default false.
         flip_h: bool,
         flip_v: bool,
+        /// Connector arrowheads (a:ln headEnd/tailEnd). Default false.
+        arrow_head: bool,
+        arrow_tail: bool,
     },
     /// Begin a clipping region. All subsequent elements until ClipEnd are clipped to this rect.
     ClipStart,
@@ -2869,7 +2872,7 @@ impl LayoutEngine {
                                 LayoutContent::PresetShape {
                                     shape_type: shape.shape_type.clone(),
                                     stroke_color: shape.stroke_color.clone(),
-                                    stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v,
+                                    stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
                                 },
                             ));
                         }
@@ -3591,7 +3594,7 @@ impl LayoutEngine {
                         lp.elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, LayoutContent::PresetShape {
                                 shape_type: shape.shape_type.clone(),
                                 stroke_color: shape.stroke_color.clone(),
-                                stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v,
+                                stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
                         }));
                     }
                 }
@@ -3870,7 +3873,7 @@ impl LayoutEngine {
                                 LayoutContent::PresetShape {
                                     shape_type: shape.shape_type.clone(),
                                     stroke_color: shape.stroke_color.clone(),
-                                    stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v,
+                                    stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
                                 },
                             ));
                         }
@@ -9885,7 +9888,7 @@ impl LayoutEngine {
                                         shape_type: shape.shape_type.clone(),
                                         stroke_color: shape.stroke_color.clone(),
                                         stroke_width: shape.stroke_width.unwrap_or(0.5),
-                                        flip_h: shape.flip_h, flip_v: shape.flip_v,
+                                        flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
                                 }));
                             }
                         }

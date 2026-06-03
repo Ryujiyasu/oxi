@@ -311,9 +311,9 @@ unsafe fn render_page_elements(
                     render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data)?;
                 }
             }
-            LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v } => {
+            LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail } => {
                 render_preset_shape(rt, el.x, el.y, el.width, el.height,
-                    shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v)?;
+                    shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v, *arrow_head, *arrow_tail)?;
             }
             // TODO Step 7: Balloon, BalloonConnector (low priority for SSIM)
             _ => {}
@@ -389,6 +389,8 @@ unsafe fn render_preset_shape(
     stroke_width: f32,
     flip_h: bool,
     flip_v: bool,
+    arrow_head: bool,
+    arrow_tail: bool,
 ) -> windows::core::Result<()> {
     use windows::Win32::Graphics::Direct2D::Common::*;
 
@@ -413,14 +415,25 @@ unsafe fn render_preset_shape(
             let sy = if flip_v { y + h } else { y };
             let ex = if flip_h { x } else { x + w };
             let ey = if flip_v { y } else { y + h };
+            // arrowhead anchors: (tip, point the segment comes FROM)
+            let (tail_from_x, tail_from_y, head_from_x, head_from_y);
             if shape_type == "bentConnector3" || shape_type == "bentConnector2" {
                 // Z/L bend: horizontal to mid-x, vertical, horizontal to end.
                 let mx = (sx + ex) * 0.5;
                 rt.DrawLine(D2D_POINT_2F { x: sx, y: sy }, D2D_POINT_2F { x: mx, y: sy }, &brush, sw_dip, None);
                 rt.DrawLine(D2D_POINT_2F { x: mx, y: sy }, D2D_POINT_2F { x: mx, y: ey }, &brush, sw_dip, None);
                 rt.DrawLine(D2D_POINT_2F { x: mx, y: ey }, D2D_POINT_2F { x: ex, y: ey }, &brush, sw_dip, None);
+                tail_from_x = mx; tail_from_y = ey; head_from_x = mx; head_from_y = sy;
             } else {
                 rt.DrawLine(D2D_POINT_2F { x: sx, y: sy }, D2D_POINT_2F { x: ex, y: ey }, &brush, sw_dip, None);
+                tail_from_x = sx; tail_from_y = sy; head_from_x = ex; head_from_y = ey;
+            }
+            // S493i: filled-triangle arrowheads (a:tailEnd at end, a:headEnd at start).
+            if arrow_tail {
+                draw_arrowhead(rt, ex, ey, ex - tail_from_x, ey - tail_from_y, sw_dip, &brush)?;
+            }
+            if arrow_head {
+                draw_arrowhead(rt, sx, sy, sx - head_from_x, sy - head_from_y, sw_dip, &brush)?;
             }
         }
         // S490: ellipse/oval outline (e.g. ○ option markers circling a choice).
@@ -459,6 +472,39 @@ unsafe fn render_preset_shape(
         }
         _ => {}
     }
+    Ok(())
+}
+
+/// S493i: draw a filled-triangle connector arrowhead. Tip at (tx,ty); (dx,dy) is the line
+/// direction INTO the tip. Size scales with the stroke width (Word's "med" triangle ≈ a few
+/// line-widths). DIP coordinates.
+#[cfg(windows)]
+unsafe fn draw_arrowhead(
+    rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
+    tx: f32, ty: f32, dx: f32, dy: f32, sw_dip: f32,
+    brush: &windows::Win32::Graphics::Direct2D::ID2D1SolidColorBrush,
+) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::Direct2D::*;
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 0.01 { return Ok(()); }
+    let (ux, uy) = (dx / len, dy / len);   // unit direction into the tip
+    let (px, py) = (-uy, ux);              // perpendicular
+    let alen = (sw_dip * 3.0).max(5.0);    // arrowhead length
+    let ahw = (sw_dip * 1.8).max(3.0);     // arrowhead half-width
+    let (bx, by) = (tx - ux * alen, ty - uy * alen); // base centre
+    let tip = D2D_POINT_2F { x: tx, y: ty };
+    let p1 = D2D_POINT_2F { x: bx + px * ahw, y: by + py * ahw };
+    let p2 = D2D_POINT_2F { x: bx - px * ahw, y: by - py * ahw };
+    let factory = rt.GetFactory()?;
+    let geom: ID2D1PathGeometry = factory.CreatePathGeometry()?;
+    let sink = geom.Open()?;
+    sink.BeginFigure(tip, D2D1_FIGURE_BEGIN_FILLED);
+    sink.AddLine(p1);
+    sink.AddLine(p2);
+    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink.Close()?;
+    rt.FillGeometry(&geom, brush, None);
     Ok(())
 }
 

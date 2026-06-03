@@ -664,6 +664,12 @@ pub struct Shape {
     /// Vertical flip (a:xfrm flipV).
     #[serde(default)]
     pub flip_v: bool,
+    /// Connector arrowhead at the start (a:ln/a:headEnd type≠none).
+    #[serde(default)]
+    pub arrow_head: bool,
+    /// Connector arrowhead at the end (a:ln/a:tailEnd type≠none).
+    #[serde(default)]
+    pub arrow_tail: bool,
 }
 
 /// A gradient color stop

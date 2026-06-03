@@ -3078,6 +3078,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut rotation: Option<f32> = None;
     let mut flip_h = false;
     let mut flip_v = false;
+    // S493i: connector arrowheads (a:ln/a:headEnd|a:tailEnd type≠"none"). head=start, tail=end.
+    let mut arrow_head = false;
+    let mut arrow_tail = false;
     let mut has_no_fill = false;
     let mut has_no_stroke = false;
     let mut corner_radius_adj: Option<f32> = None; // avLst adj value (0-100000 scale)
@@ -3197,6 +3200,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         }
                                     } else if sl == "noFill" {
                                         has_no_stroke = true;
+                                    } else if sl == "headEnd" || sl == "tailEnd" {
+                                        // S493i: connector arrowhead (type≠none). head=start, tail=end.
+                                        let mut has = false;
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "type" {
+                                                let v = String::from_utf8_lossy(&attr.value);
+                                                has = !v.is_empty() && v != "none";
+                                            }
+                                        }
+                                        if sl == "headEnd" { arrow_head = has; } else { arrow_tail = has; }
                                     }
                                 }
                                 Ok(Event::End(_se)) => {
@@ -3525,6 +3538,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    // S493i: connector arrowheads. a:headEnd (line start) / a:tailEnd (line end);
+                    // type attr e.g. "triangle"/"arrow"/"stealth"/"oval" → draw arrowhead; absent
+                    // or "none" → none.
+                    "headEnd" | "tailEnd" => {
+                        let mut has = false;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "type" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                has = !v.is_empty() && v != "none";
+                            }
+                        }
+                        if local == "headEnd" { arrow_head = has; } else { arrow_tail = has; }
+                    }
                     "wrapNone" => { wrap_type = Some(WrapType::None); }
                     "wrapSquare" => { wrap_type = Some(WrapType::Square); }
                     "wrapTight" => { wrap_type = Some(WrapType::Tight); }
@@ -3776,6 +3802,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             v_text_anchor: None,
             flip_h,
             flip_v,
+            arrow_head,
+            arrow_tail,
         })
     } else {
         None
@@ -4019,6 +4047,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         v_text_anchor,
         flip_h: false,
         flip_v: false,
+        arrow_head: false,
+        arrow_tail: false,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })
