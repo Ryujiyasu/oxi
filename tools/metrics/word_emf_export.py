@@ -33,8 +33,13 @@ def export_emf(docx_path, output_prefix):
             else:
                 rng.End = doc.Content.End
 
-            # CopyAsPicture
-            rng.CopyAsPicture()
+            # CopyAsPicture (select first — more robust for ranges spanning tables, e.g. b35,
+            # where CopyAsPicture on a bare Range raises "no selection")
+            try:
+                rng.CopyAsPicture()
+            except Exception:
+                rng.Select()
+                word.Selection.CopyAsPicture()
             time.sleep(0.5)
 
             # Get EMF from clipboard
