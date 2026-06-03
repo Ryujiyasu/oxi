@@ -7241,7 +7241,22 @@ impl LayoutEngine {
                 if snap_to_grid && is_single && cell_snap_allowed {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
-                            return (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
+                            let snapped = (((spaced + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
+                            // S492y SHIP (2026-06-03, default ON, opt-out OXI_S492Y_DISABLE):
+                            // snap the CELL line pitch to 96dpi device pixels (0.75pt). Word
+                            // renders the cell line pitch at 96dpi px (17.5pt -> 23px -> 17.25pt;
+                            // COM cell pitch measured 17.2-17.3, NOT the full grid 17.5); Oxi's
+                            // 17.5 over-allocated ~0.25pt/line -> accumulated ~10px too LOW by
+                            // page bottom (b35 p1 per-line vertical-align ceiling +0.157). GATE:
+                            // Phase-1 54/55 preserved (0 PASS->FAIL); 40-affected-doc canary net
+                            // +0.0456, bottom-3 sum +0.0361 (strictly up), b35 p1 +0.0357 /
+                            // 29dc6e p3 +0.0089; 4 tiny regress all <0.001 (de6e32/15076df/
+                            // 1636d28/a1d6e4 < the 0.005 threshold). Cell-only (non-table docs
+                            // byte-identical). Screenshot ground-truth (not COM-logical) drove it.
+                            if in_table_cell && std::env::var("OXI_S492Y_DISABLE").is_err() {
+                                return ((snapped / 0.75).round() * 0.75).max(1.0);
+                            }
+                            return snapped;
                         }
                     }
                 }
