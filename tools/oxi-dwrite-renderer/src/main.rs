@@ -638,6 +638,30 @@ unsafe fn render_text(
     let locale_wide: Vec<u16> = "ja-jp".encode_utf16()
         .chain(std::iter::once(0)).collect();
 
+    // S493f (env OXI_S493F_FAUXBOLD): faux-bold for fonts WITHOUT a real bold face.
+    // Word (GDI/DWrite) synthesizes bold for MS Mincho/Gothic (+~40% ink, measured
+    // bold/reg=1.40); DWrite's CreateTextFormat with BOLD weight silently falls back to
+    // the REGULAR face for these (no simulation) → Oxi rendered bold CJK at regular
+    // weight (bold/reg=1.00). Detect "no bold face" via the system collection; if so,
+    // OVERPRINT the layout at +dx (GDI's faux-bold mechanism). Latin fonts with a real
+    // bold face keep it (no overprint). OXI_FAUXBOLD_DX (pt) tunes the smear.
+    // DWrite's system collection reports a nominal bold FACE for MS Gothic/Mincho
+    // (GetFirstMatchingFont(BOLD) returns weight 700) yet DrawTextLayout renders it at
+    // REGULAR weight (clean per-line repro: bold/reg ink = 1.000 vs Word's 1.396). So the
+    // collection's bold-face report is NOT a reliable "real bold renders" signal. The
+    // legacy MS bitmap-era families (ＭＳ 明朝/ゴシック/Ｐ明朝/Ｐゴシック/UI Gothic) lack a
+    // real bold face and need faux-bold; Word (GDI) synthesizes it (+~40% ink). SCOPED to
+    // the "ＭＳ"/"MS " families only — modern CJK fonts (游ゴシック/メイリオ = Yu/Meiryo)
+    // DO have a real bold face DWrite renders, so faux-bolding them would DOUBLE-bold.
+    let is_ms_legacy = font_family.starts_with("ＭＳ")
+        || font_family.to_ascii_lowercase().starts_with("ms ");
+    // Default ON (opt-out OXI_S493F_DISABLE): faux-bold MS-legacy CJK bold to match Word.
+    let faux_bold: bool = bold && is_ms_legacy && std::env::var("OXI_S493F_DISABLE").is_err();
+    // dx=0.4pt overprint => bold-line ink ratio 1.41 ≈ Word's measured 1.396 (calibrated
+    // on the MS Gothic/Mincho repro: REG vs BOLD lines, Word bold/reg=1.396).
+    let faux_dx: f32 = std::env::var("OXI_FAUXBOLD_DX").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(0.4_f32) * PT_TO_DIP;
+
     let format: IDWriteTextFormat = dwrite_factory.CreateTextFormat(
         PCWSTR(family_wide.as_ptr()),
         None,
@@ -719,6 +743,10 @@ unsafe fn render_text(
                     let corigin = D2D_POINT_2F { x: cx_dip, y: yy };
                     rt.DrawTextLayout(
                         corigin, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    if faux_bold {
+                        let c2 = D2D_POINT_2F { x: cx_dip + faux_dx, y: yy };
+                        rt.DrawTextLayout(c2, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
                 }
             }
             yy += adv_dip;
@@ -769,6 +797,11 @@ unsafe fn render_text(
         &brush,
         D2D1_DRAW_TEXT_OPTIONS_NONE,
     );
+    // S493f: faux-bold overprint (no real bold face) — second pass +faux_dx right.
+    if faux_bold {
+        let o2 = D2D_POINT_2F { x: origin.x + faux_dx, y: origin.y };
+        rt.DrawTextLayout(o2, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
 
     // Restore prior transform if we changed it for rotation.
     if let Some(saved) = prior_transform {
