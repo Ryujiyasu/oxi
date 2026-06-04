@@ -9,6 +9,13 @@
 
 use std::path::Path;
 
+// S494: per-glyph dump buffer (thread-local to avoid threading through render_text's
+// many params). Each page: (width_pt, height_pt, Vec<(char, x_pt, top_pt, fs_pt, family)>).
+thread_local! {
+    static GLYPH_DUMP: std::cell::RefCell<Option<Vec<(f32, f32, Vec<(char, f32, f32, f32, String)>)>>>
+        = const { std::cell::RefCell::new(None) };
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
@@ -33,6 +40,11 @@ fn main() {
     // the bottom-N gain is real). Override with --supersample=1 for the legacy fast path.
     let mut supersample: u32 = 2;
     let mut dump_layout: Option<String> = None;
+    // S494: --dump-glyphs=PATH emits each glyph's EXACT per-char position from
+    // DirectWrite (IDWriteTextLayout::HitTestTextPosition), which includes DWrite's
+    // CJK<->half-width autoSpace AND charGrid stretch — the gate-render positions
+    // (dwrite ≈ Word). Faithful for ALL docs incl. tables (unlike GDI dump-glyphs).
+    let mut dump_glyphs: Option<String> = None;
     for arg in &args[3..] {
         if let Some(list) = arg.strip_prefix("--exclude=") {
             exclude = list.split(',').map(|s| s.trim().to_lowercase()).collect();
@@ -43,6 +55,12 @@ fn main() {
         if let Some(path) = arg.strip_prefix("--dump-layout=") {
             dump_layout = Some(path.to_string());
         }
+        if let Some(path) = arg.strip_prefix("--dump-glyphs=") {
+            dump_glyphs = Some(path.to_string());
+        }
+    }
+    if dump_glyphs.is_some() {
+        GLYPH_DUMP.with(|g| *g.borrow_mut() = Some(Vec::new()));
     }
 
     let data = std::fs::read(docx_path).expect("Cannot read docx file");
@@ -76,6 +94,15 @@ fn main() {
     {
         render_pages_dwrite(&result, output_prefix, dpi, supersample, &exclude)
             .expect("DirectWrite rendering failed");
+    }
+
+    if let Some(path) = dump_glyphs {
+        GLYPH_DUMP.with(|g| {
+            if let Some(pages) = g.borrow().as_ref() {
+                dump_glyphs_json(pages, &path);
+                eprintln!("Glyphs dumped to {}", path);
+            }
+        });
     }
 
     #[cfg(not(windows))]
@@ -148,6 +175,12 @@ fn render_pages_dwrite(
         let scale_dpi = render_dpi as f32;
 
         for (page_idx, page) in result.pages.iter().enumerate() {
+            // S494: open a new page entry in the glyph-dump buffer (if dumping).
+            GLYPH_DUMP.with(|g| {
+                if let Some(v) = g.borrow_mut().as_mut() {
+                    v.push((page.width, page.height, Vec::new()));
+                }
+            });
             let out_w = (page.width as f64 * dpi as f64 / 72.0).round() as u32;
             let out_h = (page.height as f64 * dpi as f64 / 72.0).round() as u32;
             let render_w = (page.width as f64 * render_dpi as f64 / 72.0).round() as u32;
@@ -766,6 +799,46 @@ unsafe fn render_text(
         }
     }
 
+    // S494: per-char EXACT positions for --dump-glyphs. HitTestTextPosition gives
+    // each char's x (DIP, relative to the layout origin), which includes DWrite's
+    // autoSpace + charGrid spacing — the gate-render positions. Horizontal text only.
+    if !is_vertical {
+        let dumping = GLYPH_DUMP.with(|g| g.borrow().is_some());
+        if dumping {
+            let mut u16i: u32 = 0;
+            let mut collected: Vec<(char, f32, f32, f32, String)> = Vec::new();
+            for ch in text.chars() {
+                let mut px: f32 = 0.0;
+                let mut py: f32 = 0.0;
+                let mut hm = DWRITE_HIT_TEST_METRICS::default();
+                let _ = layout.HitTestTextPosition(u16i, false, &mut px, &mut py, &mut hm);
+                if !ch.is_whitespace() {
+                    collected.push((
+                        ch,
+                        x_pt + px / PT_TO_DIP,  // absolute x in pt (HitTest = DWrite's
+                                                // actual autoSpace/charGrid positions)
+                        y_pt,                   // glyph-top y = el.y + el.text_y_off, the
+                                                // same convention as the GDI dump (GDI
+                                                // TextOutW draws from the cell top; the
+                                                // -1.0 render origin shift + DWrite leading
+                                                // ≈ cancels, so y_pt matches better than
+                                                // y_pt-1.0 empirically).
+                        font_size_pt,
+                        font_family.to_string(),
+                    ));
+                }
+                u16i += ch.len_utf16() as u32;
+            }
+            GLYPH_DUMP.with(|g| {
+                if let Some(v) = g.borrow_mut().as_mut() {
+                    if let Some(last) = v.last_mut() {
+                        last.2.extend(collected);
+                    }
+                }
+            });
+        }
+    }
+
     // DWrite glyph-top alignment fix (2026-05-03): shift origin UP 1.0pt to
     // align rendered glyph top with Oxi's IR element.y. DirectWrite's
     // DrawTextLayout places baseline at origin.y + font_ascent, with leading
@@ -1010,6 +1083,32 @@ unsafe fn save_wic_bitmap_as_png(
     encoder.Commit()?;
 
     Ok(())
+}
+
+/// S494: per-char EXACT glyph positions (pt) from DirectWrite. Same schema as the
+/// GDI --dump-glyphs so oxi_via_mupdf.py consumes either. dwrite positions include
+/// DWrite's autoSpace + charGrid (the gate render), so faithful for tables too.
+fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], path: &str) {
+    use std::fmt::Write;
+    let mut out = String::from("{\n  \"pages\": [\n");
+    for (pi, (pw, ph, glyphs)) in pages.iter().enumerate() {
+        if pi > 0 { out.push_str(",\n"); }
+        write!(&mut out, "    {{\"page\": {}, \"width\": {:.3}, \"height\": {:.3}, \"glyphs\": [\n",
+               pi + 1, pw, ph).unwrap();
+        let mut first = true;
+        for (ch, x, top, fs, fam) in glyphs {
+            let esc_ch = match *ch { '\\' => "\\\\".to_string(), '"' => "\\\"".to_string(), c => c.to_string() };
+            let esc_fam = fam.replace('\\', "\\\\").replace('"', "\\\"");
+            if !first { out.push_str(",\n"); }
+            first = false;
+            write!(&mut out,
+                "      {{\"char\": \"{}\", \"x\": {:.3}, \"top\": {:.3}, \"font_size\": {:.2}, \"font_family\": \"{}\"}}",
+                esc_ch, x, top, fs, esc_fam).unwrap();
+        }
+        out.push_str("\n    ]}");
+    }
+    out.push_str("\n  ]\n}\n");
+    std::fs::write(path, out).expect("Failed to write dump-glyphs JSON");
 }
 
 fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {

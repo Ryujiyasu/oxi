@@ -53,13 +53,12 @@ def docx_for(docid):
     return None
 
 def dump_glyphs(docx):
-    """Run --dump-glyphs: each rendered glyph's EXACT per-char (char,x,top) in pt,
-    via the GDI renderer (GetCharWidthW + char_spacing cumulative). Faithful to Oxi's
-    LAYOUT positions (note: the GDI render is tight — it does NOT add the DirectWrite/
-    Word CJK<->half-width-digit 1/4em autoSpace, so digit-boundary glyphs show Oxi's
-    layout-level tight positions)."""
+    """Run --dump-glyphs on the DWRITE renderer: each glyph's EXACT per-char (char,x,
+    top) in pt from IDWriteTextLayout::HitTestTextPosition — the gate-render positions
+    (DirectWrite, includes autoSpace + charGrid; ≈ Word). Faithful for ALL docs incl.
+    tables (the GDI dump-glyphs is also available but uses GetTextExtentExPointW)."""
     fd, jp = tempfile.mkstemp(suffix='.json'); os.close(fd)
-    subprocess.run([GDI, os.path.abspath(docx), tempfile.mktemp(), str(DPI),
+    subprocess.run([DW, os.path.abspath(docx), tempfile.mktemp(), str(DPI),
                     '--dump-glyphs=' + jp], capture_output=True, timeout=300)
     d = json.load(open(jp, encoding='utf-8')); os.unlink(jp)
     return d
