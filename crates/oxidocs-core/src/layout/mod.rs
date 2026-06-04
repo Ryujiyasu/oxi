@@ -9542,11 +9542,22 @@ impl LayoutEngine {
                             let should_justify = (para.alignment == Alignment::Justify && !is_last_line)
                                 || para.alignment == Alignment::Distribute;
 
-                            // Alignment within cell content area (cell_w - padding).
-                            // 2026-04-19: effective_wrap already = cell_w - pad_l - pad_r (v9).
-                            // Previous code subtracted padding AGAIN → center off by ~5pt.
-                            // Fix: use effective_wrap directly as content area.
-                            let align_avail = effective_wrap.max(0.0);
+                            // Alignment within the cell CONTENT area (cell_w - pad_l - pad_r).
+                            // S493j (2026-06-04): the common-case wrap_base = cell_w (NOT minus
+                            // padding — see ~8982), so right/center alignment within effective_wrap
+                            // overflowed by ~pad_l+pad_r. Right-aligned cell numbers then collided
+                            // with the next cell (2ea81a 相続税 row: right-aligned "2,000,000"
+                            // ended at the cell border, overlapping "被相続人" in the 備考 cell;
+                            // Word leaves the ~5.4pt cell right-margin). Subtract the padding for
+                            // ALIGNMENT only when wrap_base didn't already (wrapping unchanged →
+                            // Phase-1 safe). Opt-out OXI_S493J_DISABLE.
+                            let pad_adjust = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract
+                                || std::env::var("OXI_S493J_DISABLE").is_ok() {
+                                0.0
+                            } else {
+                                pad_l + pad_r
+                            };
+                            let align_avail = (effective_wrap - pad_adjust).max(0.0);
                             let align_offset = if should_justify {
                                 0.0
                             } else {
