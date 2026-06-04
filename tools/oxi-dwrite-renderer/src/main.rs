@@ -817,12 +817,12 @@ unsafe fn render_text(
                         ch,
                         x_pt + px / PT_TO_DIP,  // absolute x in pt (HitTest = DWrite's
                                                 // actual autoSpace/charGrid positions)
-                        y_pt,                   // glyph-top y = el.y + el.text_y_off, the
-                                                // same convention as the GDI dump (GDI
-                                                // TextOutW draws from the cell top; the
-                                                // -1.0 render origin shift + DWrite leading
-                                                // ≈ cancels, so y_pt matches better than
-                                                // y_pt-1.0 empirically).
+                        y_pt - 1.0,             // glyph top = the dwrite RENDER origin.y
+                                                // (the -1.0 glyph-top alignment fix), so the
+                                                // dump matches where dwrite ACTUALLY draws =
+                                                // word_png. (page-1-only bench hid this; the
+                                                // DENSE continuation pages need it — 0e7af
+                                                // p2 was 2px low without it.)
                         font_size_pt,
                         font_family.to_string(),
                     ));
