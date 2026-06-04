@@ -10,9 +10,14 @@
 use std::path::Path;
 
 // S494: per-glyph dump buffer (thread-local to avoid threading through render_text's
-// many params). Each page: (width_pt, height_pt, Vec<(char, x_pt, top_pt, fs_pt, family)>).
+// many params). Each page: (width_pt, height_pt, Vec<(char, x_pt, top_pt, baseline_pt, fs_pt, family)>).
+// baseline_pt (S494 gate fix) = the EXACT y where DWrite draws the glyph origin
+// (top + the font's DWrite ascent via GetLineMetrics). Emitting the baseline directly
+// lets the per-glyph gate place glyphs without guessing a per-font ascent K (the fixed
+// K=0.859 systematically mis-placed non-Mincho/Latin baselines, e.g. Calibri winAscent
+// 0.952 — the cause of the spurious Latin-doc "drops" in the first per-glyph baseline).
 thread_local! {
-    static GLYPH_DUMP: std::cell::RefCell<Option<Vec<(f32, f32, Vec<(char, f32, f32, f32, String)>)>>>
+    static GLYPH_DUMP: std::cell::RefCell<Option<Vec<(f32, f32, Vec<(char, f32, f32, f32, f32, String)>)>>>
         = const { std::cell::RefCell::new(None) };
 }
 
@@ -805,8 +810,27 @@ unsafe fn render_text(
     if !is_vertical {
         let dumping = GLYPH_DUMP.with(|g| g.borrow().is_some());
         if dumping {
+            // S494 gate fix: the EXACT baseline = render origin (y_pt - 1.0) + the font's
+            // DWrite ascent. GetLineMetrics[0].baseline is that ascent in DIP (what
+            // DrawTextLayout uses to place the baseline below the layout-rect top). This
+            // is the per-font ground truth (Calibri ~0.95em, Mincho ~0.86em), so the gate
+            // no longer needs a fixed K to reconstruct it.
+            let mut lcount: u32 = 0;
+            let _ = layout.GetLineMetrics(None, &mut lcount);
+            let asc_pt = if lcount > 0 {
+                let mut lm = vec![DWRITE_LINE_METRICS::default(); lcount as usize];
+                if layout.GetLineMetrics(Some(&mut lm), &mut lcount).is_ok() {
+                    lm[0].baseline / PT_TO_DIP
+                } else { font_size_pt * 0.8 }
+            } else { font_size_pt * 0.8 };
+            // NOTE: use the TRUE layout-rect top (y_pt), NOT the render-shifted
+            // (y_pt - 1.0). The -1.0 is a DWrite-rasterizer AA tweak that aligns visual
+            // glyph TOPS with word_png; the per-glyph gate rasterizes Oxi via the SAME
+            // MuPDF as word_png, so it wants the true geometric baseline = top + ascent.
+            // For gen2_045 26pt this gives 72.0 + 24.76 = 96.76 vs Word PDF 96.74.
+            let baseline_pt = y_pt + asc_pt;
             let mut u16i: u32 = 0;
-            let mut collected: Vec<(char, f32, f32, f32, String)> = Vec::new();
+            let mut collected: Vec<(char, f32, f32, f32, f32, String)> = Vec::new();
             for ch in text.chars() {
                 let mut px: f32 = 0.0;
                 let mut py: f32 = 0.0;
@@ -823,6 +847,7 @@ unsafe fn render_text(
                                                 // word_png. (page-1-only bench hid this; the
                                                 // DENSE continuation pages need it — 0e7af
                                                 // p2 was 2px low without it.)
+                        baseline_pt,            // S494: exact glyph-origin baseline y (pt)
                         font_size_pt,
                         font_family.to_string(),
                     ));
@@ -1088,7 +1113,7 @@ unsafe fn save_wic_bitmap_as_png(
 /// S494: per-char EXACT glyph positions (pt) from DirectWrite. Same schema as the
 /// GDI --dump-glyphs so oxi_via_mupdf.py consumes either. dwrite positions include
 /// DWrite's autoSpace + charGrid (the gate render), so faithful for tables too.
-fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], path: &str) {
+fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, f32, String)>)], path: &str) {
     use std::fmt::Write;
     let mut out = String::from("{\n  \"pages\": [\n");
     for (pi, (pw, ph, glyphs)) in pages.iter().enumerate() {
@@ -1096,14 +1121,14 @@ fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], pa
         write!(&mut out, "    {{\"page\": {}, \"width\": {:.3}, \"height\": {:.3}, \"glyphs\": [\n",
                pi + 1, pw, ph).unwrap();
         let mut first = true;
-        for (ch, x, top, fs, fam) in glyphs {
+        for (ch, x, top, baseline, fs, fam) in glyphs {
             let esc_ch = match *ch { '\\' => "\\\\".to_string(), '"' => "\\\"".to_string(), c => c.to_string() };
             let esc_fam = fam.replace('\\', "\\\\").replace('"', "\\\"");
             if !first { out.push_str(",\n"); }
             first = false;
             write!(&mut out,
-                "      {{\"char\": \"{}\", \"x\": {:.3}, \"top\": {:.3}, \"font_size\": {:.2}, \"font_family\": \"{}\"}}",
-                esc_ch, x, top, fs, esc_fam).unwrap();
+                "      {{\"char\": \"{}\", \"x\": {:.3}, \"top\": {:.3}, \"baseline\": {:.3}, \"font_size\": {:.2}, \"font_family\": \"{}\"}}",
+                esc_ch, x, top, baseline, fs, esc_fam).unwrap();
         }
         out.push_str("\n    ]}");
     }

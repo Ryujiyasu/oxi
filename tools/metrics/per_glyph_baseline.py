@@ -19,8 +19,29 @@ DW = os.path.join(ROOT, 'tools', 'oxi-dwrite-renderer', 'target', 'release', 'ox
 MINCHO = 'C:/Windows/Fonts/msmincho.ttc'; GOTHIC = 'C:/Windows/Fonts/msgothic.ttc'
 DOCXDIRS = [os.path.join(ROOT, 'pipeline_data', 'docx'), os.path.join(ROOT, 'tools', 'golden-test', 'documents', 'docx')]
 DPI = 150
+# S494 gate fix: render with the REAL font (so glyph SHAPES match word_png, which is the
+# Word PDF rasterized by the same MuPDF) and place each glyph at the dump's EXACT baseline
+# (no per-font K guess). FONT_FILES maps a font-family substring -> (fitz name, file).
+FONT_FILES = [
+    ('Gothic', ('g', GOTHIC)), ('ゴシック', ('g', GOTHIC)), ('Goth', ('g', GOTHIC)),
+    ('Calibri', ('cal', 'C:/Windows/Fonts/calibri.ttf')),
+    ('Cambria', ('cam', 'C:/Windows/Fonts/cambria.ttc')),
+    ('Times', ('tim', 'C:/Windows/Fonts/times.ttf')),
+    ('Arial', ('ari', 'C:/Windows/Fonts/arial.ttf')),
+    ('Meiryo', ('mei', 'C:/Windows/Fonts/meiryo.ttc')),
+    ('Yu Gothic', ('yg', 'C:/Windows/Fonts/YuGothM.ttc')),
+    ('Yu Mincho', ('ym', 'C:/Windows/Fonts/yumin.ttf')),
+]
+_FONTCACHE = {}
+def _fitz_font(name, path):
+    if name not in _FONTCACHE:
+        try:
+            _FONTCACHE[name] = fitz.Font(fontfile=path)
+        except Exception:
+            _FONTCACHE[name] = fitz.Font(fontfile=MINCHO)
+    return _FONTCACHE[name]
 _FMIN = fitz.Font(fontfile=MINCHO); _FGOT = fitz.Font(fontfile=GOTHIC)
-K = 0.859
+K = 0.859  # legacy fallback only (used if a dump lacks the 'baseline' field)
 OLD = json.load(open(os.path.join(ROOT, 'pipeline_data', 'ssim_baseline.json'), encoding='utf-8'))
 
 def docx_for(did):
@@ -34,10 +55,13 @@ def docx_for(did):
     return None
 
 def _font(fam):
+    """Return (fitz_name, fitz_font, file) for a font-family string. Real fonts so the
+    rendered glyph SHAPES match word_png (the Word PDF). Mincho is the CJK default."""
     fam = fam or ''
-    if 'Goth' in fam or 'ゴシック' in fam or 'Gothic' in fam:
-        return 'g', _FGOT
-    return 'm', _FMIN
+    for needle, (nm, path) in FONT_FILES:
+        if needle in fam:
+            return nm, _fitz_font(nm, path), path
+    return 'm', _FMIN, MINCHO
 
 def render_all_pages(docx, outdir):
     """Render every page of Oxi via dwrite dump-glyphs -> MuPDF. Returns {page_no: png}."""
@@ -59,11 +83,18 @@ def render_all_pages(docx, outdir):
     doc = fitz.open()
     for pi, page in enumerate(g['pages']):
         pg = doc.new_page(width=page['width'], height=page['height'])
-        pg.insert_font(fontname='m', fontfile=MINCHO); pg.insert_font(fontname='g', fontfile=GOTHIC)
+        loaded = set()
         for gl in page['glyphs']:
-            fn, fo = _font(gl.get('font_family')); fs = gl['font_size']
+            fn, fo, path = _font(gl.get('font_family')); fs = gl['font_size']
+            if fn not in loaded:
+                try:
+                    pg.insert_font(fontname=fn, fontfile=path); loaded.add(fn)
+                except Exception:
+                    pass
+            # S494: place at the dump's EXACT baseline; fall back to top+fs*K for old dumps.
+            by = gl.get('baseline', gl['top'] + fs * K)
             try:
-                pg.insert_text((gl['x'], gl['top'] + fs * K), gl['char'], fontname=fn, fontsize=fs, color=(0, 0, 0))
+                pg.insert_text((gl['x'], by), gl['char'], fontname=fn, fontsize=fs, color=(0, 0, 0))
             except Exception:
                 pass
         for el in borders.get(pi, []):
