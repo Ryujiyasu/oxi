@@ -823,12 +823,14 @@ unsafe fn render_text(
                     lm[0].baseline / PT_TO_DIP
                 } else { font_size_pt * 0.8 }
             } else { font_size_pt * 0.8 };
-            // NOTE: use the TRUE layout-rect top (y_pt), NOT the render-shifted
-            // (y_pt - 1.0). The -1.0 is a DWrite-rasterizer AA tweak that aligns visual
-            // glyph TOPS with word_png; the per-glyph gate rasterizes Oxi via the SAME
-            // MuPDF as word_png, so it wants the true geometric baseline = top + ascent.
-            // For gen2_045 26pt this gives 72.0 + 24.76 = 96.76 vs Word PDF 96.74.
-            let baseline_pt = y_pt + asc_pt;
+            // Use the RENDER origin (y_pt - 1.0) — the SAME -1.0 glyph-top shift the actual
+            // DrawTextLayout applies below — so the gate replicates where Oxi's product
+            // ACTUALLY draws the baseline, then compares that to word_png. A/B on 4 docs
+            // (0e7af/gen2_045 docGrid=none, b35/1ec1 table): including the -1.0 is decisively
+            // better for the body docs (0e7af 0.784->0.905 = matches/exceeds the dwrite gate
+            // = positions clean; gen2_045 0.931->0.950) and within ±0.02 (table vertical
+            // noise) for the grid docs. Consistent with the `top` field (also y_pt - 1.0).
+            let baseline_pt = (y_pt - 1.0) + asc_pt;
             let mut u16i: u32 = 0;
             let mut collected: Vec<(char, f32, f32, f32, f32, String)> = Vec::new();
             for ch in text.chars() {
