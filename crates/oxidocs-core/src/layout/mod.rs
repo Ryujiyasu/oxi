@@ -1450,11 +1450,20 @@ pub struct BalloonReply {
 pub struct LayoutCursor {
     pub cursor_y: f32,
     pub visual_y: f32,
+    /// S494 (2026-06-04): un-rounded "ideal" twip position for the current LM2
+    /// docGrid line run. Word advances grid lines by the EXACT grid pitch and
+    /// snaps the ABSOLUTE position to the 96dpi device pixel (0.75pt), tracking
+    /// a fractional pitch (357tw=17.85pt) instead of the integer-rounded 18.0pt.
+    /// Carries the un-rounded accumulation so the rounding error doesn't compound
+    /// across paragraphs. 0.0 = uninitialized → resync to cursor_y on next use.
+    /// Consulted on the empty-line device-snap path (opt-out OXI_S494_DISABLE);
+    /// otherwise inert.
+    pub lm2_ideal_y: f32,
 }
 
 impl LayoutCursor {
     pub fn new(y: f32) -> Self {
-        Self { cursor_y: y, visual_y: y }
+        Self { cursor_y: y, visual_y: y, lm2_ideal_y: 0.0 }
     }
 
     /// Advance both tracks by the same amount (Phase A default).
@@ -5555,6 +5564,52 @@ impl LayoutEngine {
                 let cur_tw = (cursor.cursor_y * 20.0).round() as i32;
                 let offset = (cur_tw - margin_tw).max(0);
                 let cell_remainder = offset % pitch_tw_i;
+                // S494 (2026-06-04, SHIP default-ON; opt-out OXI_S494_DISABLE):
+                // Word advances docGrid lines by the EXACT fractional grid pitch
+                // (357tw=17.85pt) and snaps the ABSOLUTE position to the 96dpi
+                // device pixel (15tw=0.75pt) — NOT the integer-rounded 18.0pt the
+                // mid-cell branch produces. The mid-cell cursor-relative branch
+                // rounds `cur+357` to 10tw, which (when cur is 10tw-aligned) ALWAYS
+                // yields +360 (18.0pt), over-allocating 0.15pt/line. After a non-LM2
+                // paragraph (e.g. `line=360 lineRule=exact`) pushes the cursor off
+                // the docGrid phase, EVERY following grid line takes mid-cell → the
+                // 0.15pt/line drift accumulates (1ec1: +2.5pt by the floating table,
+                // screenshot + COM + minimal-repro confirmed: Word empty-para pitch =
+                // grid pitch device-snapped to 17.25/18.00, Oxi = flat 18.00).
+                // Fix: carry an un-rounded ideal accumulator (cursor.lm2_ideal_y) and
+                // device-snap, matching Word for BOTH cell-aligned and mid-cell runs.
+                // SCOPE: EMPTY paragraph lines only (line.fragments empty). The minimal
+                // repro confirmed empty-para height = grid pitch device-snapped across
+                // grid320/357/360/400; CONTENT-para grid advance is a separate, unconfirmed
+                // spec (d1e8 grid292 content paras regress under the device-snap — Word
+                // does NOT advance them by the full snapped pitch the same way). Scoping
+                // to empty lines keeps 1ec1's empty-chain fix without disturbing the
+                // tuned content-para mid-cell path (S324-S327).
+                // GATE (235-doc RGB-SSIM refresh, empty-only): Phase-1 54/55 UNCHANGED;
+                // mean 0.9420->0.9422 (+0.0001); bottom-10 sum +0.0339 STRICTLY UP
+                // (1ec1, the WORST doc, 0.6511->0.6861 +0.0349); only d1e8 -0.0068
+                // (non-bottom; the device-snap is more correct than the old under-
+                // allocating mid-cell flat advance, but d1e8 had a pre-existing
+                // downstream too-low drift that the under-allocation compensated —
+                // separate follow-up). 1636d28 -0.0010 (noise).
+                if std::env::var("OXI_S494_DISABLE").is_err() && line.fragments.is_empty() {
+                    let pitch = pitch_tw_i as f32;
+                    let cur_f = cur_tw as f32;
+                    // Continue the run if the ideal is still in sync with the cursor
+                    // (within half a pitch); otherwise (first line / after a non-LM2
+                    // paragraph moved the cursor / new page) resync to the cursor.
+                    let ideal0 = if cursor.lm2_ideal_y > 0.0
+                        && (cursor.lm2_ideal_y - cur_f).abs() < pitch * 0.5 {
+                        cursor.lm2_ideal_y
+                    } else {
+                        cur_f
+                    };
+                    let ideal1 = ideal0 + cells as f32 * pitch;
+                    let target = (ideal1 / 15.0).round() * 15.0; // 0.75pt = 96dpi px
+                    cursor.set(target / 20.0);
+                    cursor.lm2_ideal_y = ideal1;
+                    cumul_line_idx += cells as usize;
+                } else {
                 // R56c: distinguish "slightly past cell start" (uniform LM2
                 // after 10tw ceiling, e.g. pitch=292 cur=margin+1*pitch+5tw)
                 // from "truly mid-cell" (after irregular non-LM2 paragraph).
@@ -5628,6 +5683,7 @@ impl LayoutEngine {
                 };
                 cursor.set(target_tw as f32 / 20.0);
                 cumul_line_idx += cells as usize;
+                } // end S494 else (legacy cell-aligned / mid-cell branch)
             } else {
             // For single LM=0, gate by direction: only when raw advances MORE than rounded.
             let single_lm0_safe = if is_single_lm0 && raw_spaced_tw > 0.0 {
