@@ -8040,20 +8040,45 @@ impl LayoutEngine {
             // table border at margin - padding - border/2. Only apply when no
             // explicit indent is set (indent=0 means default positioning).
             let pad_l_default = table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(4.95);
-            let border_w = table.style.border_width.unwrap_or(0.5);
-            // 2026-04-19: Apply margin-padding-border offset ONLY when indent is
-            // EXPLICITLY set to 0 (Some(0.0)). When absent (None), use plain margin.
-            // b35 measurement: Word table at margin+5.6 (= cell text start), border at
-            // margin. Prior formula subtracted 5.2pt from margin → 5.2pt left-shift bug.
-            // 2026-05-03: Additionally gate on `!explicit_borders`. 683ff has
-            // explicit `<w:tblBorders>` in tblPr — Word renders its border AT
-            // the margin (no padding subtraction). Style-only-bordered tables
-            // (e.g. b35/gen2_052) need the offset; explicit-borders tables don't.
-            let border_offset = match table.style.indent {
-                Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
-                    pad_l_default + border_w / 2.0
+            // S494b tblInd rule (COM-confirmed, repro tblind_multi + 04b88e/b35/683ff):
+            // when `w:tblInd` is PRESENT (Some, any value incl. 0), Word measures it to the
+            // leading cell's CONTENT, not its border — i.e. the leading cell's left margin
+            // is absorbed. So cell text lands at margin + tblInd, and the border at
+            // margin + tblInd - cellLeftMargin. Repro (tblInd 0/200/817, cellMar 108):
+            // Word text = margin + tblInd EXACTLY for every value; Oxi was margin + tblInd
+            // + cellMargin (+5.4pt). Subtract the leading cell's left margin so content
+            // lands at margin + tblInd. When tblInd is ABSENT (None) Word does NOT absorb
+            // it: content = margin + cellMargin (b35/gen2_052) — leave that path untouched.
+            // This SUBSUMES & removes the old `Some(0) && !explicit_borders` special case
+            // (its content was margin - border/2; the repro shows margin, i.e. pad_l only).
+            // S494b tblInd cell-margin absorption (env-gated OFF, opt-in OXI_S494B_TBLIND_ENABLE).
+            // COM-confirmed by repro (tblind_multi + tblind_cellmar: tblInd 0/200/817 × cellMar
+            // 12/50/108 — Word renders the leading cell content at margin + tblInd, absorbing
+            // the cell left margin). The opt-in form subtracts the leading cell's actual left
+            // margin so content lands at margin + tblInd: a per-glyph WIN on 04b88e +0.0168 and
+            // 34140b +0.0112. BUT it REGRESSES 15076df −0.0231 (a bottom-N doc) — which has the
+            // SAME (tblInd present, cellMar 12) shape as the repro yet does NOT absorb in Word
+            // (its legacy content already matches Word). The structural difference that gates
+            // the absorption (vs the repro) is not yet isolated, so the rule is incomplete →
+            // kept OFF (no-exception-stacking). See spec_tblind_cellmargin_absorption memory.
+            let border_offset = if std::env::var("OXI_S494B_TBLIND_ENABLE").is_ok() {
+                match table.style.indent {
+                    Some(_) => table.rows.first()
+                        .and_then(|r| r.cells.first())
+                        .and_then(|c| c.margins.as_ref())
+                        .and_then(|m| m.left)
+                        .unwrap_or(pad_l_default),
+                    None => 0.0,
                 }
-                _ => 0.0,
+            } else {
+                // Legacy default (unchanged corpus behavior).
+                let border_w = table.style.border_width.unwrap_or(0.5);
+                match table.style.indent {
+                    Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
+                        pad_l_default + border_w / 2.0
+                    }
+                    _ => 0.0,
+                }
             };
             match table.style.alignment.as_deref() {
                 Some("center") => start_x + (content_width - table_width) / 2.0,
