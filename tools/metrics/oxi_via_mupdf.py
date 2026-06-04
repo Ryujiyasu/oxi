@@ -4,11 +4,24 @@ text AA matches Word by construction and the SSIM measures pure LAYOUT fidelity
 (no DirectWrite-vs-MuPDF rasterizer confound).
 
 word_png = Word ExportAsFixedFormat(PDF) -> fitz get_pixmap. This builds a PDF
-from Oxi's --dump-layout JSON (per-char x, per-font, real baseline) and rasterizes
-it the same way. S494 (2026-06-04): prototype confirmed +0.0198 on 1ec1 vs DirectWrite.
+from Oxi's --dump-layout JSON and rasterizes it the same way, so the AA matches
+Word by construction. S494 (2026-06-04): confirmed word_png IS MuPDF (not a
+screenshot/GDI/ClearType render); the text bottom-N weight/AA cap = the
+DirectWrite-vs-MuPDF rasterizer coverage difference.
 
-Usage: python tools/metrics/oxi_via_mupdf.py <docid> [--png OUT.png]
-       python tools/metrics/oxi_via_mupdf.py --bench   (bottom-N + controls vs dwrite)
+★★ NOT FAITHFUL — DIAGNOSTIC/DIRECTION-CONFIRMING ONLY, do NOT use as a gate. ★★
+This inserts each text ELEMENT as a string and lets fitz position glyphs by the
+font's NATURAL advance, which DROPS Oxi's actual per-char positioning (the CJK<->
+half-width 1/4em autoSpace, char_spacing, charGrid stretch). So its SSIM is
+"AA-match-benefit MINUS position-drop-penalty" = NOT a clean measure. Verified:
+Oxi's REAL renderer (dwrite) already matches Word's autoSpace ("平成 19 年..."),
+so this tool's tight render UNDERstates Oxi's fidelity. A faithful MuPDF render
+needs the renderer's EXACT per-glyph x (a Rust per-glyph dump / PDF export) —
+the element-level / per-char-w/n Python rebuild is a proven dead-end. See
+memory/autospace_de_dn_confirmed.md and session494_docgrid_empty_devsnap.md.
+
+Usage: python tools/metrics/oxi_via_mupdf.py <docid>
+       python tools/metrics/oxi_via_mupdf.py --bench
 """
 import json, os, subprocess, sys, tempfile, glob
 import numpy as np
@@ -70,18 +83,17 @@ def build_pdf_png(layout, out_png, asc_cal=None):
                 fn, fobj = font_for(el.get('font_family'))
                 asc = (asc_cal or {}).get(fn, fobj.ascender)
                 baseline = el['y'] + el['text_y_off'] + fs * asc
-                n = len(txt)
-                w = el.get('w', 0.0)
-                # per-char x: distribute the element width uniformly (CJK runs are uniform)
-                adv = (w / n) if (n > 0 and w > 0) else fs
-                x = el['x']
-                for i, ch in enumerate(txt):
-                    if ch == ' ':
-                        continue
-                    try:
-                        pg.insert_text((x + i * adv, baseline), ch, fontname=fn, fontsize=fs, color=(0, 0, 0))
-                    except Exception:
-                        pass
+                # Element-level insert: let MuPDF position each glyph by the FONT's
+                # NATURAL advance (CJK full-width = 1em, half-width digit = 0.5em) —
+                # the SAME way it positions Word's PDF text. The old per-char x = i*w/n
+                # uniform-distribution MANGLED mixed-width runs (spread "19" to full-
+                # width "１ ９"). word_png is MuPDF-natural-advance of Word's PDF, so
+                # natural advance here matches by construction (modulo Oxi's extra
+                # char_spacing / charGrid stretch, which needs PDF Tc — separate piece).
+                try:
+                    pg.insert_text((el['x'], baseline), txt, fontname=fn, fontsize=fs, color=(0, 0, 0))
+                except Exception:
+                    pass
             elif t == 'border':
                 x, y, w, h = el['x'], el['y'], el['w'], el['h']
                 pg.draw_line((x, y), (x + w, y + h), color=(0, 0, 0), width=0.75)
