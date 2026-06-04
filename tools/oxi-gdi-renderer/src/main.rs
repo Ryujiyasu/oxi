@@ -23,6 +23,13 @@ fn main() {
     // restores grayscale AA matching Word EMF output.
     let mut supersample: u32 = 2;
     let mut dump_layout: Option<String> = None;
+    // S494 (2026-06-04): --dump-glyphs=PATH emits each rendered glyph's EXACT
+    // per-char position (GetCharWidthW + character_spacing cumulative, the same
+    // advances TextOutW uses), so the MuPDF render-truth tool can place glyphs
+    // faithfully (with Oxi's autoSpace / char_spacing / charGrid), not fitz's
+    // natural advance. Output: {pages:[{page,width,height,glyphs:[{char,x,top,
+    // font_size,font_family}]}]} in pt.
+    let mut dump_glyphs: Option<String> = None;
     for arg in &args[3..] {
         if let Some(list) = arg.strip_prefix("--exclude=") {
             exclude = list.split(',').map(|s| s.trim().to_lowercase()).collect();
@@ -32,6 +39,9 @@ fn main() {
         }
         if let Some(path) = arg.strip_prefix("--dump-layout=") {
             dump_layout = Some(path.to_string());
+        }
+        if let Some(path) = arg.strip_prefix("--dump-glyphs=") {
+            dump_glyphs = Some(path.to_string());
         }
     }
 
@@ -63,7 +73,7 @@ fn main() {
     // Render each page with GDI
     #[cfg(windows)]
     {
-        render_pages_gdi(&result, output_prefix, dpi, supersample, &exclude);
+        render_pages_gdi(&result, output_prefix, dpi, supersample, &exclude, dump_glyphs.as_deref());
     }
 
     #[cfg(not(windows))]
@@ -87,7 +97,7 @@ fn parse_hex_rgb(s: &str) -> (u8, u8, u8) {
     (r, g, b)
 }
 
-fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, supersample: u32, exclude: &[String]) {
+fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, supersample: u32, exclude: &[String], dump_glyphs: Option<&str>) {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::*;
     use windows::core::*;
@@ -96,11 +106,17 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
     let render_dpi = dpi * supersample.max(1);
     let scale = render_dpi as f64 / 72.0;
 
+    // S494: per-page collected glyphs for --dump-glyphs. Each is
+    // (char, x_pt, top_pt, font_size_pt, font_family).
+    let mut glyph_pages: Vec<(f32, f32, Vec<(char, f32, f32, f32, String)>)> = Vec::new();
+
     for (page_idx, page) in result.pages.iter().enumerate() {
         let out_w = (page.width as f64 * dpi as f64 / 72.0).round() as u32;
         let out_h = (page.height as f64 * dpi as f64 / 72.0).round() as u32;
         let w = (page.width as f64 * scale).round() as i32;
         let h = (page.height as f64 * scale).round() as i32;
+        // S494: per-page glyph buffer (only filled when dump_glyphs is set)
+        let mut page_glyphs: Vec<(char, f32, f32, f32, String)> = Vec::new();
 
         unsafe {
             // Create memory DC and bitmap
@@ -265,6 +281,30 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                 (x, glyph_y)
                             };
                             TextOutW(mem_dc, x_draw, y_draw, &text_wide);
+
+                            // S494: per-char EXACT positions for --dump-glyphs.
+                            // The font is selected and SetTextCharacterExtra(cs_px)
+                            // is active, so per-char advance = GetCharWidthW + cs_px,
+                            // matching what TextOutW just rendered. Horizontal text
+                            // only (vertical handled by the upright/legacy branches).
+                            if dump_glyphs.is_some() && !*is_vertical {
+                                let mut cx = x_draw as f64;
+                                for ch in text.chars() {
+                                    let mut cw: i32 = 0;
+                                    let code = ch as u32;
+                                    let _ = GetCharWidthW(mem_dc, code, code, &mut cw);
+                                    if !ch.is_whitespace() {
+                                        page_glyphs.push((
+                                            ch,
+                                            (cx / scale) as f32,
+                                            (glyph_y as f64 / scale) as f32,
+                                            *font_size,
+                                            family.to_string(),
+                                        ));
+                                    }
+                                    cx += (cw + cs_px) as f64;
+                                }
+                            }
                         }
 
                         // Reset character extra
@@ -791,7 +831,45 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
             DeleteDC(mem_dc);
             ReleaseDC(HWND(std::ptr::null_mut()), screen_dc);
         }
+        if dump_glyphs.is_some() {
+            glyph_pages.push((page.width, page.height, std::mem::take(&mut page_glyphs)));
+        }
     }
+
+    if let Some(path) = dump_glyphs {
+        dump_glyphs_json(&glyph_pages, path);
+        eprintln!("Glyphs dumped to {}", path);
+    }
+}
+
+/// S494: write per-char EXACT glyph positions (pt) for the MuPDF render-truth tool.
+/// Schema: {"pages":[{"page":N,"width":W,"height":H,"glyphs":[
+///   {"char":"あ","x":X,"top":T,"font_size":FS,"font_family":"MS Mincho"}, ...]}]}
+fn dump_glyphs_json(pages: &[(f32, f32, Vec<(char, f32, f32, f32, String)>)], path: &str) {
+    use std::fmt::Write;
+    let mut out = String::from("{\n  \"pages\": [\n");
+    for (pi, (pw, ph, glyphs)) in pages.iter().enumerate() {
+        if pi > 0 { out.push_str(",\n"); }
+        write!(&mut out, "    {{\"page\": {}, \"width\": {:.3}, \"height\": {:.3}, \"glyphs\": [\n",
+               pi + 1, pw, ph).unwrap();
+        let mut first = true;
+        for (ch, x, top, fs, fam) in glyphs {
+            let esc_ch = match *ch {
+                '\\' => "\\\\".to_string(),
+                '"' => "\\\"".to_string(),
+                c => c.to_string(),
+            };
+            let esc_fam = fam.replace('\\', "\\\\").replace('"', "\\\"");
+            if !first { out.push_str(",\n"); }
+            first = false;
+            write!(&mut out,
+                "      {{\"char\": \"{}\", \"x\": {:.3}, \"top\": {:.3}, \"font_size\": {:.2}, \"font_family\": \"{}\"}}",
+                esc_ch, x, top, fs, esc_fam).unwrap();
+        }
+        out.push_str("\n    ]}");
+    }
+    out.push_str("\n  ]\n}\n");
+    std::fs::write(path, out).expect("Failed to write dump-glyphs JSON");
 }
 
 /// Dump layout elements to JSON for per-element x/y diffing against Word DML.
