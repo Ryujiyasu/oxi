@@ -2950,6 +2950,7 @@ impl LayoutEngine {
                         &mut elements,
                         Some(block_idx),
                         page,
+                        false,
                     );
                     let candidate_y_bottom = cursor.cursor_y;
 
@@ -3974,6 +3975,7 @@ impl LayoutEngine {
                         &mut tb_pages, &mut tb_elems,
                         None,
                         page,
+                        false,
                     );
                     elements.extend(tb_elems);
                     elements.extend(table_elements);
@@ -8007,6 +8009,7 @@ impl LayoutEngine {
         current_elements: &mut Vec<LayoutElement>,
         block_idx: Option<usize>,
         page: &Page,
+        is_nested: bool,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
 
@@ -8040,35 +8043,31 @@ impl LayoutEngine {
             // table border at margin - padding - border/2. Only apply when no
             // explicit indent is set (indent=0 means default positioning).
             let pad_l_default = table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(4.95);
-            // S494b tblInd rule (COM-confirmed, repro tblind_multi + 04b88e/b35/683ff):
-            // when `w:tblInd` is PRESENT (Some, any value incl. 0), Word measures it to the
-            // leading cell's CONTENT, not its border — i.e. the leading cell's left margin
-            // is absorbed. So cell text lands at margin + tblInd, and the border at
-            // margin + tblInd - cellLeftMargin. Repro (tblInd 0/200/817, cellMar 108):
-            // Word text = margin + tblInd EXACTLY for every value; Oxi was margin + tblInd
-            // + cellMargin (+5.4pt). Subtract the leading cell's left margin so content
-            // lands at margin + tblInd. When tblInd is ABSENT (None) Word does NOT absorb
-            // it: content = margin + cellMargin (b35/gen2_052) — leave that path untouched.
-            // This SUBSUMES & removes the old `Some(0) && !explicit_borders` special case
-            // (its content was margin - border/2; the repro shows margin, i.e. pad_l only).
             // S494b tblInd cell-margin absorption (env-gated OFF, opt-in OXI_S494B_TBLIND_ENABLE).
-            // COM-confirmed by repro (tblind_multi + tblind_cellmar: tblInd 0/200/817 × cellMar
-            // 12/50/108 — Word renders the leading cell content at margin + tblInd, absorbing
-            // the cell left margin). The opt-in form subtracts the leading cell's actual left
-            // margin so content lands at margin + tblInd: a per-glyph WIN on 04b88e +0.0168 and
-            // 34140b +0.0112. BUT it REGRESSES 15076df −0.0231 (a bottom-N doc) — which has the
-            // SAME (tblInd present, cellMar 12) shape as the repro yet does NOT absorb in Word
-            // (its legacy content already matches Word). The structural difference that gates
-            // the absorption (vs the repro) is not yet isolated, so the rule is incomplete →
-            // kept OFF (no-exception-stacking). See spec_tblind_cellmargin_absorption memory.
+            // The leading-edge spec is COM-confirmed by repros (tblind_multi/cellmar/noborder/
+            // layout/gridbefore/nested: a TOP-LEVEL table's leading cell text lands at
+            // margin + tblInd, absorbing the cell left margin). But applying it as a whole-table
+            // table_x shift is NET-NEGATIVE on the corpus per the per-glyph gate: 04b88e +0.0168
+            // and 34140b +0.0112, yet 15076df −0.0223 AND 2ea81a −0.0170 (both bottom-N). The
+            // nested-scope (is_nested below) was necessary but NOT sufficient — per-element
+            // localization showed 15076df's residual regression is its TOP-LEVEL multi-col table
+            // (tbl0): the absorption improves its MEAN offset (+0.93→+0.33) but more glyphs land
+            // FARTHER from Word (482 vs 321) — i.e. a uniform +0.93 has better pixel overlap than
+            // the variance-spread +0.33, so Word absorbs LESS than the full cell margin for
+            // content that isn't at the literal leading edge. The whole-table shift over-applies
+            // it. Kept OFF until the absorption is modeled per-cell (leading-edge only), not as a
+            // table_x translate. The is_nested gate is retained (nested tables never absorb).
             let border_offset = if std::env::var("OXI_S494B_TBLIND_ENABLE").is_ok() {
                 match table.style.indent {
-                    Some(_) => table.rows.first()
+                    Some(_) if !is_nested => table.rows.first()
                         .and_then(|r| r.cells.first())
                         .and_then(|c| c.margins.as_ref())
                         .and_then(|m| m.left)
                         .unwrap_or(pad_l_default),
-                    None => 0.0,
+                    Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
+                        pad_l_default + table.style.border_width.unwrap_or(0.5) / 2.0
+                    }
+                    _ => 0.0,
                 }
             } else {
                 // Legacy default (unchanged corpus behavior).
@@ -8705,6 +8704,7 @@ impl LayoutEngine {
                         &mut dummy_pages, &mut dummy_elems,
                         block_idx,
                         page,
+                        true,
                     );
                     for elem in nested_elements {
                         cell_elements.push(elem);
