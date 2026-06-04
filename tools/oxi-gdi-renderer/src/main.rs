@@ -283,26 +283,38 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             TextOutW(mem_dc, x_draw, y_draw, &text_wide);
 
                             // S494: per-char EXACT positions for --dump-glyphs.
-                            // The font is selected and SetTextCharacterExtra(cs_px)
-                            // is active, so per-char advance = GetCharWidthW + cs_px,
-                            // matching what TextOutW just rendered. Horizontal text
-                            // only (vertical handled by the upright/legacy branches).
-                            if dump_glyphs.is_some() && !*is_vertical {
-                                let mut cx = x_draw as f64;
-                                for ch in text.chars() {
-                                    let mut cw: i32 = 0;
-                                    let code = ch as u32;
-                                    let _ = GetCharWidthW(mem_dc, code, code, &mut cw);
-                                    if !ch.is_whitespace() {
-                                        page_glyphs.push((
-                                            ch,
-                                            (cx / scale) as f32,
-                                            (glyph_y as f64 / scale) as f32,
-                                            *font_size,
-                                            family.to_string(),
-                                        ));
+                            // Use GetTextExtentExPointW for the cumulative RENDERED
+                            // extents (lpndx[i] = x after UTF-16 unit i) — this captures
+                            // GDI's CJK<->half-width-digit autoSpace that TextOutW adds
+                            // (GetCharWidthW does NOT report it → the prior cumsum was
+                            // tight/wrong). Add cs_px per char (char-extra is separate
+                            // from the text extent). Horizontal text only.
+                            if dump_glyphs.is_some() && !*is_vertical && !text_wide.is_empty() {
+                                let n = text_wide.len() as i32;
+                                let mut dx: Vec<i32> = vec![0; text_wide.len()];
+                                let mut fit: i32 = 0;
+                                let mut sz = SIZE::default();
+                                let ok = GetTextExtentExPointW(
+                                    mem_dc, PCWSTR(text_wide.as_ptr()), n, i32::MAX,
+                                    Some(&mut fit), Some(dx.as_mut_ptr()), &mut sz).as_bool();
+                                if ok {
+                                    // map chars -> UTF-16 index; left edge of char =
+                                    // x_draw + dx[u16_idx-1] + cs_px*(char_index)
+                                    let mut u16i: usize = 0;
+                                    for (ci, ch) in text.chars().enumerate() {
+                                        let left_extent = if u16i == 0 { 0 } else { dx[u16i - 1] };
+                                        let cx = x_draw as f64 + left_extent as f64 + (cs_px as f64) * (ci as f64);
+                                        if !ch.is_whitespace() {
+                                            page_glyphs.push((
+                                                ch,
+                                                (cx / scale) as f32,
+                                                (glyph_y as f64 / scale) as f32,
+                                                *font_size,
+                                                family.to_string(),
+                                            ));
+                                        }
+                                        u16i += ch.len_utf16();
                                     }
-                                    cx += (cw + cs_px) as f64;
                                 }
                             }
                         }
