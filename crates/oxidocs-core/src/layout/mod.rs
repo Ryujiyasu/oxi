@@ -8057,20 +8057,11 @@ impl LayoutEngine {
             // content that isn't at the literal leading edge. The whole-table shift over-applies
             // it. Kept OFF until the absorption is modeled per-cell (leading-edge only), not as a
             // table_x translate. The is_nested gate is retained (nested tables never absorb).
-            let border_offset = if std::env::var("OXI_S494B_TBLIND_ENABLE").is_ok() {
-                match table.style.indent {
-                    Some(_) if !is_nested => table.rows.first()
-                        .and_then(|r| r.cells.first())
-                        .and_then(|c| c.margins.as_ref())
-                        .and_then(|m| m.left)
-                        .unwrap_or(pad_l_default),
-                    Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
-                        pad_l_default + table.style.border_width.unwrap_or(0.5) / 2.0
-                    }
-                    _ => 0.0,
-                }
-            } else {
-                // Legacy default (unchanged corpus behavior).
+            // Always legacy: the tblInd absorption is now applied PER-CELL (only the
+            // leading-edge column cell shifts left by its margin), NOT as a table_x translate.
+            // See the cell loop below (OXI_S494B_TBLIND_ENABLE). A whole-table table_x shift
+            // moved the BORDERS too, which regressed border-visible docs (15076df).
+            let border_offset = {
                 let border_w = table.style.border_width.unwrap_or(0.5);
                 match table.style.indent {
                     Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
@@ -8591,12 +8582,37 @@ impl LayoutEngine {
                 // float-precision lookup); the index-aligned path is canonical.
                 let cell_start_grid = grid_idx.min(col_widths.len().saturating_sub(1));
                 let cell_end_grid = (cell_start_grid + span).min(col_widths.len());
-                let cell_w: f32 = col_widths[cell_start_grid..cell_end_grid].iter().sum();
+                let mut cell_w: f32 = col_widths[cell_start_grid..cell_end_grid].iter().sum();
 
                 let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
                 let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+
+                // S494b tblInd PER-CELL absorption (opt-in OXI_S494B_TBLIND_ENABLE): the
+                // leading-edge column cell (grid col 0) of a NON-nested tblInd table absorbs
+                // its left margin — Word renders its content at margin + tblInd and its left
+                // border at margin + tblInd - cellMargin. Shift only THIS cell's border+content
+                // left by its left margin and widen it so the right edge / column advance are
+                // unchanged (other cells stay put). This replaces the table_x translate, which
+                // moved every column's border and regressed border-visible docs (15076df). Only
+                // when the legacy table_x path did NOT already absorb (border_offset ~0, i.e.
+                // not the Some(0)+style-border case), tblInd present, and at the true leading
+                // column (cell_start_grid==0 — gridBefore rows whose first cell is offset are
+                // skipped, which is why 15076df's content does not move).
+                // Absorb only for a POSITIVELY-INDENTED table (tblInd > 0): the indent is what
+                // absorbs the leading cell's left margin (Word renders the leading cell content
+                // at margin + tblInd). A table at/near the margin (tblInd <= 0, e.g. 2ea81a/
+                // 15076df's -5tw) has no indent to absorb into and renders normally (margin +
+                // cellMargin), so it must NOT shift. This cleanly separates the corpus: 04b88e/
+                // 34140b tblInd=675tw absorb; 2ea81a/15076df tblInd=-5tw do not. (The tblInd=0
+                // narrow-autofit repro absorbs into the margin, but no corpus doc has that.)
+                let lead_absorb = table.style.indent.map_or(false, |v| v > 0.5);
+                if cell_start_grid == 0 && !is_nested && lead_absorb
+                    && std::env::var("OXI_S494B_TBLIND_ENABLE").is_ok() {
+                    cell_x -= pad_l;
+                    cell_w += pad_l;
+                }
 
                 // Round 30 (2026-04-09): When cell top/bottom padding is 0 and
                 // the table has borders, add the border width as implicit padding.
