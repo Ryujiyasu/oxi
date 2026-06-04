@@ -8600,14 +8600,16 @@ impl LayoutEngine {
                 // not the Some(0)+style-border case), tblInd present, and at the true leading
                 // column (cell_start_grid==0 — gridBefore rows whose first cell is offset are
                 // skipped, which is why 15076df's content does not move).
-                // Absorb only for a POSITIVELY-INDENTED table (tblInd > 0): the indent is what
-                // absorbs the leading cell's left margin (Word renders the leading cell content
-                // at margin + tblInd). A table at/near the margin (tblInd <= 0, e.g. 2ea81a/
-                // 15076df's -5tw) has no indent to absorb into and renders normally (margin +
-                // cellMargin), so it must NOT shift. This cleanly separates the corpus: 04b88e/
-                // 34140b tblInd=675tw absorb; 2ea81a/15076df tblInd=-5tw do not. (The tblInd=0
-                // narrow-autofit repro absorbs into the margin, but no corpus doc has that.)
-                let lead_absorb = table.style.indent.map_or(false, |v| v > 0.5);
+                // FALSIFIED as a general rule (kept env-gated OFF). The tblInd absorption is
+                // reproducible in isolated repros but does NOT generalize: NO structural feature
+                // gates absorb-vs-literal across the corpus. tblInd VALUE itself doesn't —
+                // 04b88e tblInd=[250,534,675,817] ABSORBS but a1d6e4/6514f2/d4d126 tblInd=[250,433]
+                // REGRESS (same 250tw, opposite behavior); ditto cellMargin/width/layout/gridBefore/
+                // nesting/borders (all tested). Full 23-doc gate: net -0.0967, 15 down / 3 up.
+                // The `tblInd > pad_l` form below is the best-found gate (excludes the
+                // tblInd~=cellMargin docs) but still net-negative, so OFF. See
+                // spec_tblind_cellmargin_absorption memory for the full structural sweep.
+                let lead_absorb = table.style.indent.map_or(false, |v| v > pad_l + 0.1);
                 if cell_start_grid == 0 && !is_nested && lead_absorb
                     && std::env::var("OXI_S494B_TBLIND_ENABLE").is_ok() {
                     cell_x -= pad_l;
