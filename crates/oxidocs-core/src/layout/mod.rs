@@ -9526,6 +9526,35 @@ impl LayoutEngine {
                                     current_line_chars.clear();
                                     is_first_line = false;
                                 }
+                                // S497 (2026-06-05, SHIP default-on, opt-out OXI_S497_DISABLE):
+                                // a line-start-prohibited char (）。、」 etc.) must NEVER be the
+                                // first char of a cell line (kinsoku 行頭禁則). When the preceding
+                                // char force-fit + broke the line, the next prohibited char lands
+                                // alone at the head of a new line (15076df y408: the closing ） on
+                                // its own line). Word keeps it on the previous line, hanging past
+                                // the wrap limit (burasagari). Pull it back onto the previous
+                                // flushed line. GATE: Phase-1 54/55 with ZERO pagination change
+                                // (no PASS<->FAIL, no score change on any of 55 docs); SSIM
+                                // +0.0027 on 15076df, byte-identical on the rest of the corpus
+                                // (the prohibited-char-starts-cell-line case is rare — only
+                                // 15076df in a 120-doc scan + the 12-doc tokumei/control sample,
+                                // 3a4f/ed025c tombstones unchanged). lib 142/0/6.
+                                if std::env::var("OXI_S497_DISABLE").is_err()
+                                    && buf.is_empty() && current_line.is_empty()
+                                    && !lines.is_empty()
+                                    && kinsoku::is_line_start_prohibited(ch)
+                                {
+                                    if let Some(last) = lines.last_mut() {
+                                        last.push((char_to_string(ch), font_size, cw, bold,
+                                            run.style.italic, run.style.underline,
+                                            run.style.underline_style.clone(), run.style.strikethrough,
+                                            font_family.clone(), run.style.color.clone(),
+                                            run.style.highlight.clone(), cs,
+                                            run.style.text_scale.unwrap_or(100.0)));
+                                        prev_char_emitted = Some(ch);
+                                        continue;
+                                    }
+                                }
                                 buf.push(ch);
                                 buf_w += cw;
                                 buf_chars.push(crate::layout::jc_both_compress::CharContext {
