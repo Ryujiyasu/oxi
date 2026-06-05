@@ -9153,6 +9153,14 @@ impl LayoutEngine {
                             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
                             && self.balance_single_byte_double_byte_width
                             && self.compress_punctuation;
+                        // S497b FALSIFIED (2026-06-05): extending the compute_compression wrap
+                        // lookahead to left-aligned compressPunctuation cells (to model Word's
+                        // end-of-line yakumono oikomi at wrap for non-justified paras) was a NO-OP
+                        // on the whole tokumei family + ed025c/3a4f (dwrite ΔTOTAL +0.0000). The
+                        // tokumei cells do NOT wrap early at yakumono boundaries — S497 (the
+                        // line-start-prohibited hang) already covered the one real case (15076df).
+                        // The remaining tokumei gap is cumulative sub-pixel precision / weight, not
+                        // fixable wrap-precision. Reverted; not gated.
                         let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
                         let mut is_first_line = true;
                         // R7.51 (2026-05-13): autoSpaceDE state for CJK↔Latin transitions.
