@@ -7622,13 +7622,10 @@ impl LayoutEngine {
                 // = 10 twips. Returning 0.0 caused fded6 p.1 -0.10, 7f272a p.1
                 // -0.06, 04b88e p.1 -0.06 SSIM regressions. See
                 // memory/session78_mech_a_v2_05pt_offset.md.
-                if !in_shape_context {
-                    return 0.5;
-                }
-                // Shape context: text at bottom of line box (extra space above).
                 // Per spec §13.4 note: "GDI TextOutW character cell = fontSize".
-                // offset = line_height - max_font_size. COM-confirmed on 1ec1 p1
-                // Shape 4 exact=22pt fontSize=14pt → 8pt offset (not 3.85pt).
+                // offset = line_height - max_font_size = the empty space the exact box
+                // leaves; Word places the text at the BOTTOM of the box (extra space above).
+                // COM-confirmed on 1ec1 p1 Shape 4 (exact=22pt fontSize=14pt → 8pt offset).
                 let mut max_font_size: f32 = 0.0;
                 if line.fragments.is_empty() {
                     max_font_size = para_style.ppr_rpr.as_ref()
@@ -7640,6 +7637,20 @@ impl LayoutEngine {
                         if fs > max_font_size { max_font_size = fs; }
                     }
                 }
+                if !in_shape_context {
+                    // S495 (2026-06-05): BODY/CELL exact also bottom-aligns when the box
+                    // exceeds the font (text at bottom, extra space above) — render-truth
+                    // confirmed: repro line15/font10 Oxi was -3.91 vs Word, line21/font14
+                    // -5.27 (= b5f706 -3.91, db9ca -5.27 to the decimal). Word leaves
+                    // (line - fontCell) above. Floored at the S78 0.5pt so the box~=font
+                    // case (fded6/04b88e, line~=font) is unchanged. opt-out
+                    // OXI_S495_EXACT_BOTTOM_DISABLE.
+                    if std::env::var("OXI_S495_EXACT_BOTTOM_DISABLE").is_ok() {
+                        return 0.5;
+                    }
+                    return (line_height - max_font_size).max(0.5);
+                }
+                // Shape context: text at bottom of line box (extra space above).
                 (line_height - max_font_size).max(0.0)
             }
             _ => {
