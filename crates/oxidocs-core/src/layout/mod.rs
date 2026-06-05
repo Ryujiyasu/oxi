@@ -7639,15 +7639,22 @@ impl LayoutEngine {
                 }
                 if !in_shape_context {
                     // S495 (2026-06-05): BODY/CELL exact also bottom-aligns when the box
-                    // exceeds the font (text at bottom, extra space above) — render-truth
+                    // exceeds the font cell (text at bottom, extra space above) — render-truth
                     // confirmed: repro line15/font10 Oxi was -3.91 vs Word, line21/font14
                     // -5.27 (= b5f706 -3.91, db9ca -5.27 to the decimal). Word leaves
-                    // (line - fontCell) above. Floored at the S78 0.5pt so the box~=font
-                    // case (fded6/04b88e, line~=font) is unchanged. opt-out
-                    // OXI_S495_EXACT_BOTTOM_DISABLE.
+                    // (line - fontCell) above. Floored at the S78 0.5pt so the box~=font case
+                    // (fded6/04b88e, line~=font) is unchanged. opt-out OXI_S495_EXACT_BOTTOM_DISABLE.
                     if std::env::var("OXI_S495_EXACT_BOTTOM_DISABLE").is_ok() {
                         return 0.5;
                     }
+                    // NB: the ideal subtrahend is the font's GLYPH CELL (where the dwrite
+                    // renderer actually places ascent+descent ≈ 1.06*fs for MS Mincho), not
+                    // font_size — using font_size over-reserves by ~0.06*fs (the a47e box≈font
+                    // -0.0015..-0.0026 residual). But Oxi's `line_height_pt` (raw win/hhea cell)
+                    // = font_size for the CJK fonts (OS/2 winAscent+winDescent = 1.0em for MS
+                    // Mincho), so (line - natural) is a NO-OP for CJK and cannot remove the over
+                    // — it is a dwrite-vs-OS/2 cell gap, a renderer-metric issue, not a natural-
+                    // height one. Not worth a per-font factor for -0.0026. Kept at max_font_size.
                     return (line_height - max_font_size).max(0.5);
                 }
                 // Shape context: text at bottom of line box (extra space above).
