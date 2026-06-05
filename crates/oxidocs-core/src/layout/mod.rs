@@ -11713,6 +11713,14 @@ impl LayoutEngine {
                     (_, Some(f)) if (f - 1.0).abs() > 0.01 => false,
                     _ => true,
                 };
+                // S499 FALSIFIED (2026-06-06): routing the is_single_run estimate through
+                // line_height_inner (GDI render line-height, ~13.5) instead of
+                // word_line_height_table_cell (12.625) FIXED the vc_2cell_auto repro
+                // (−1.65→+0.10) but corpus dwrite SSIM was net −1.20: e3c545 −0.0974,
+                // b35 −0.0158, and it did NOT fix the target d4d126 (+0.0000). The
+                // estimate's word_line_height_table_cell is corpus-correct; the render/repro
+                // is the outlier. C2 row-height tombstone (S349/361/445) re-confirmed —
+                // do NOT change the cell row-height estimate corpus-wide. Reverted.
                 let lh = if is_single_run {
                     if snap_in_cell {
                         self.line_height_inner(font_size, eff_ls, eff_lr, metrics, true, grid_pitch, true)
