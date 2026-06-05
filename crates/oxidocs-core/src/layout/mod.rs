@@ -8607,7 +8607,7 @@ impl LayoutEngine {
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
 
-                // S494b tblInd PER-CELL absorption (opt-in OXI_S494B_TBLIND_ENABLE): the
+                // S494b/S496 tblInd PER-CELL absorption (default-ON, opt-out OXI_S496_TBLIND_DISABLE): the
                 // leading-edge column cell (grid col 0) of a NON-nested tblInd table absorbs
                 // its left margin — Word renders its content at margin + tblInd and its left
                 // border at margin + tblInd - cellMargin. Shift only THIS cell's border+content
@@ -8618,18 +8618,23 @@ impl LayoutEngine {
                 // not the Some(0)+style-border case), tblInd present, and at the true leading
                 // column (cell_start_grid==0 — gridBefore rows whose first cell is offset are
                 // skipped, which is why 15076df's content does not move).
-                // FALSIFIED as a general rule (kept env-gated OFF). The tblInd absorption is
-                // reproducible in isolated repros but does NOT generalize: NO structural feature
-                // gates absorb-vs-literal across the corpus. tblInd VALUE itself doesn't —
-                // 04b88e tblInd=[250,534,675,817] ABSORBS but a1d6e4/6514f2/d4d126 tblInd=[250,433]
-                // REGRESS (same 250tw, opposite behavior); ditto cellMargin/width/layout/gridBefore/
-                // nesting/borders (all tested). Full 23-doc gate: net -0.0967, 15 down / 3 up.
-                // The `tblInd > pad_l` form below is the best-found gate (excludes the
-                // tblInd~=cellMargin docs) but still net-negative, so OFF. See
-                // spec_tblind_cellmargin_absorption memory for the full structural sweep.
-                let lead_absorb = table.style.indent.map_or(false, |v| v > pad_l + 0.1);
+                // S496 GATE FOUND (2026-06-05): the absorb-vs-literal split is the document
+                // compatibilityMode, NOT any table-structure feature (S494b ruled all of those
+                // out). Word 2013+ (compatibilityMode 15) changed table layout so the leading
+                // cell does NOT absorb its left margin; Word 2010 (mode <= 14) DOES. Verified
+                // 100% across S494b's set: all 3 absorbers (e3c545/04b88e/34140b) are mode 14,
+                // all 15 regressors (tokumei/kyodokenkyu/order forms a1d6e4/d4d126/15076df/...)
+                // are mode 15. The FULL corpus affected set is exactly those 3 mode-14 docs with
+                // positive tblInd (every other mode-14 doc has no positive tblInd, every mode-15
+                // doc is excluded => byte-identical). Render-truth (e3c545 p4): Word puts the
+                // leading code-block cell text at margin+tblInd, Oxi was at margin+tblInd+pad_l
+                // (+5.4pt over for the default 108tw cell margin). Gate on ANY positive tblInd
+                // (not > pad_l) so the tblInd~=cellMargin tables (e3c545 108tw) also absorb.
+                // opt-out OXI_S496_TBLIND_DISABLE. spec_tblind_cellmargin_absorption memory.
+                let lead_absorb = self.compat_mode <= 14
+                    && table.style.indent.map_or(false, |v| v > 0.1);
                 if cell_start_grid == 0 && !is_nested && lead_absorb
-                    && std::env::var("OXI_S494B_TBLIND_ENABLE").is_ok() {
+                    && std::env::var("OXI_S496_TBLIND_DISABLE").is_err() {
                     cell_x -= pad_l;
                     cell_w += pad_l;
                 }
