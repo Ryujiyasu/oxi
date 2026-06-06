@@ -8578,6 +8578,13 @@ impl LayoutEngine {
             let is_exact_row = row.height_rule.as_deref() == Some("exact");
             let mut max_actual_cell_h: f32 = row_height;
             let elements_before_row = elements.len();
+            // S500 (L1) FALSIFIED (2026-06-06): re-centering vAlign center/bottom cells against
+            // the FINAL row height (fixing early cells centered before later/taller cells set
+            // max_actual_cell_h) FIXED the synthetic repro vc_2cell_auto (-1.65->+0.10) but was
+            // a NO-OP on the real corpus (net -0.0005; every bottom-N page +/-0.0004, 2ea81a
+            // -0.0004) — the stale-height ordering doesn't manifest in real docs (centered cells
+            // are single-cell rows or similar-height) and it does NOT fix d4d126's +3.3 (the
+            // over-estimate direction). Reverted. See cellY_perdoc_scoped_design.md.
             // Apply gridBefore: skip leading grid columns
             let mut grid_idx: usize = row.grid_before as usize;
             let mut cell_x = table_x + col_widths[..grid_idx.min(col_widths.len())].iter().sum::<f32>();
