@@ -43,6 +43,15 @@ fn main() {
     // 0.8758->0.8907 (+0.0149; p2 +0.028, p7 +0.033). Render-only (positions/pagination
     // unchanged -> Phase-1 safe). 4x render cost (was deliberately avoided pre-S493 but
     // the bottom-N gain is real). Override with --supersample=1 for the legacy fast path.
+    // S501 (2026-06-07) — ss3 EVALUATED, kept at ss2 default (decision pending / cost).
+    // ss3 PASSES the Phase-3 bottom-N gate: bottom-20 SUM ss2 16.3152 -> ss3 16.3330
+    // (+0.0178, 15 up / 5 down). Weight-capped gains (0e7af +0.0113, 683f +0.0056, d77a
+    // +0.0036, 1ec1 +0.0033, 15076 +0.0023) outweigh position-capped regressions (b35
+    // -0.0054; 4 others). ss4 = no further gain. Render-only (Phase-1 safe) and verify-
+    // pipeline-only (the browser product renders at native res, unaffected). BUT ss3 = 9x
+    // render (vs ss2 4x): the full ssim_baseline refresh took 90+ min (~3x the ss2 refresh),
+    // i.e. every future verify/gate run triples — a real tooling cost. Kept ss2 default;
+    // ship ss3 via --supersample=3 + a refreshed baseline if the cost is accepted.
     let mut supersample: u32 = 2;
     let mut dump_layout: Option<String> = None;
     // S494: --dump-glyphs=PATH emits each glyph's EXACT per-char position from
