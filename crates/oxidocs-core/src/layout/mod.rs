@@ -6817,19 +6817,26 @@ impl LayoutEngine {
                         // accepted edge case — real docs don't carry 50%-punct lines.
                         // Re-deriving the exact jc/HangingPunctuation gate is next-session
                         // work — see docs/spec/cjk_break_refactor_s492.md.)
-                        // S505 (2026-06-08) ATTEMPTED+REVERTED: disabling burasagari for
-                        // non-justified linesAndChars lines (to make b837's footnote OIDASHI
-                        // like Word, fixing the −14pt cascade) was TOO BROAD — it also
-                        // de-hung b837's BODY lines (which rely on the hang in the natural
-                        // path), over-wrapping them → b837 pagination CASCADED 7→8 pages
-                        // (Phase-1 regression). Confirms S492 §6: the burasagari gate is
-                        // cascade-prone; the real fix needs the footnote-vs-body +
-                        // grid-vs-natural distinction of the S492 multi-session refactor, not
-                        // a bounded can_hang gate. The FINDING stands (b837 footnote should
-                        // oidashi; discriminator = docGrid presence) — see
-                        // session505_b837_kinsoku_oidashi. Reverted to always-hang here.
+                        // S506 (2026-06-08, opt-in OXI_S506_OIDASHI scaffold; default OFF =
+                        // byte-identical) — the CORRECT gate STRUCTURE (compat≥15 oidashi tied
+                        // to the F1 natural-break path), but still cascades pending the
+                        // footnote-vs-body grid distinction. compat≥15 (Word 2013+) does
+                        // OIDASHI not burasagari at line-end (S506 repro: compat 12/14 HANG,
+                        // 15 OIDASHI; b837=15 / e3c545=14). TEST (OXI_S492_JCNATURAL +
+                        // OXI_S506_OIDASHI): b837 STILL cascaded 7→8. ROOT: natural_break_jc
+                        // fires for b837's BODY (fs12, linesAndChars) too — disabling its grid
+                        // count — and scoping it out via OXI_S492_LINESONLY also kills it for
+                        // the FOOTNOTE (fs11) which NEEDS oidashi. break_into_lines cannot tell
+                        // the off-grid footnote (→ natural+oidashi) from the on-grid body (→
+                        // grid count) within one linesAndChars doc. That distinction (does the
+                        // para's font align to the docGrid char pitch?) is the IRREDUCIBLE core
+                        // of the S492 Step-2 refactor — see docs/spec/cjk_break_refactor_s492.md
+                        // §8 and session505_b837_kinsoku_oidashi. compat_mode>=15 correctly
+                        // leaves compat-14 (e3c545) hanging.
+                        let s506_oidashi = std::env::var("OXI_S506_OIDASHI").is_ok()
+                            && natural_break_jc && self.compat_mode >= 15;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
-                            && !s228_block_hang;
+                            && !s228_block_hang && !s506_oidashi;
 
                         if can_hang {
                             current_line.fragments.push(LineFragment {
