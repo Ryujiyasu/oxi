@@ -6833,8 +6833,21 @@ impl LayoutEngine {
                         // of the S492 Step-2 refactor — see docs/spec/cjk_break_refactor_s492.md
                         // §8 and session505_b837_kinsoku_oidashi. compat_mode>=15 correctly
                         // leaves compat-14 (e3c545) hanging.
+                        // S506b/c (2026-06-08, opt-in OXI_S506_OIDASHI, default OFF=byte-id):
+                        // gate on !s476_grid (off-grid path = footnotes/aux, s476_body=false)
+                        // so the BODY's geometric grid count is untouched. Targets exactly the
+                        // compat-15 off-grid footnote (fs11) hang→oidashi. STILL cascades b837
+                        // 7→8: the footnote oidashi correctly makes it 3 lines (=Word) but Oxi
+                        // is THEN 8 pages while WORD fits the same 3-line footnote in 7 — so
+                        // b837 has a SECOND compensating error (Oxi's overall layout ~1 line of
+                        // vertical space TALLER than Word; the wrong 2-line hang footnote was
+                        // offsetting it). The kinsoku oidashi alone cannot land b837 — it needs
+                        // the vertical over-height resolved too (multiply-compensated). The
+                        // GATE is correct (compat≥15 oidashi, body grid preserved); the blocker
+                        // is now the 2nd compensation. See docs/spec/cjk_break_refactor_s492.md
+                        // §8 / session505_b837_kinsoku_oidashi.
                         let s506_oidashi = std::env::var("OXI_S506_OIDASHI").is_ok()
-                            && natural_break_jc && self.compat_mode >= 15;
+                            && !is_justified && self.compat_mode >= 15 && !s476_grid;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
                             && !s228_block_hang && !s506_oidashi;
 
