@@ -8158,6 +8158,27 @@ impl LayoutEngine {
             // preserves the natural pre-pass to avoid 3a4f9f cascade — see
             // session79_adjust_lh_in_table_mixed_cell_valign_falsified.md).
             let mut visual_row_h: f32 = 0.0;
+            // S503 (2026-06-08): centering-only row height using the ACTUAL GDI render
+            // line-height (line_height_inner ~13.5) instead of the estimate's
+            // word_line_height_table_cell (~12.625). visual_row_h under-counts when the
+            // two diverge, so vAlign=center cells (e.g. vc_2cell_auto col0, and col0
+            // generally — it is centered before later/taller cells' actual height is
+            // known) center too HIGH. Tracked as a diff vs visual_row_h (same wrap, same
+            // pad/border/nested — only the cell line-height differs) and fed into
+            // effective_row_h ONLY for the v_offset centering, gated by OXI_S503_ENABLE
+            // (default OFF until corpus-gated). Pagination row_height is untouched.
+            //
+            // S503 STATUS (2026-06-08): VALIDATED + zero-regression, kept OPT-IN.
+            // Fixes vc_2cell_auto col0 (−1.0pt→0.0). Confirms S499's e3c545 −0.0974
+            // was the SHARED pagination estimate, NOT centering (this centering-only
+            // path is e3c545-safe: SSIM +0.0000). HOWEVER no current-corpus impact: it
+            // only fires when snap_in_cell=FALSE (no docGrid/snap_to_grid), but the
+            // bottom-N/tokumei docs all have docGrid → snap_in_cell=TRUE → their estimate
+            // ALREADY uses line_height_inner → center_extra=0. The real db9ca/tokumei
+            // cell-Y errors are a DIFFERENT mechanism (NOT this col0-before-taller-cell
+            // ordering). Opt-in so a future no-docGrid vAlign=center doc gets the fix.
+            let s503_enable = std::env::var("OXI_S503_ENABLE").is_ok();
+            let mut center_row_h: f32 = 0.0;
             let row_entry_cursor_y = cursor.cursor_y;
 
             // S361 (2026-05-27, FALSIFIED): hypothesized that trHeight rows
@@ -8230,6 +8251,10 @@ impl LayoutEngine {
                 let mut cell_content_h = pad_t;
                 // Session 79c: parallel emit-equivalent content_h for visual_row_h
                 let mut cell_content_h_visual = pad_t;
+                // S503: extra height vs visual when using the render line-height (per-cell
+                // sum of (render_para_h − estimate_para_h) over paragraphs). center cell
+                // height = cell_content_h_visual + center_extra.
+                let mut center_extra: f32 = 0.0;
                 // S427 (2026-05-29): adjacent-paragraph spacing collapse inside a
                 // cell. Word collapses sa(prev)+sb(cur) to max(sa,sb) — COM-confirmed
                 // on 29dc6e tbl1 r2c2 (two empty paras, sa=sb=4.35pt exact-12:
@@ -8247,14 +8272,20 @@ impl LayoutEngine {
                 for block in &cell.blocks {
                     match block {
                         Block::Paragraph(para) => {
-                            let (para_h, para_h_visual) = if vert_writing_active {
+                            let (para_h, para_h_visual, para_h_center) = if vert_writing_active {
                                 let h = self.vert_para_height(para);
-                                (h, h)
+                                (h, h, h)
                             } else {
                                 let p1 = self.estimate_para_height(para, inner_w, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
                                 let p2 = self.estimate_para_height_emit(para, inner_w, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
-                                (p1, p2)
+                                // S503: render-line-height variant for centering floor
+                                // (opt-in; default OFF avoids the extra estimate call).
+                                let p3 = if s503_enable {
+                                    self.estimate_para_height_emit_render(para, inner_w, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio)
+                                } else { p2 };
+                                (p1, p2, p3)
                             };
+                            center_extra += para_h_center - para_h_visual;
                             // Day 33 part 17 (2026-05-10): subtract space_before for first
                             // paragraph in cell to match Word's behavior. Mirrors the
                             // suppression in layout_table cell loop at line ~5877. Without
@@ -8377,6 +8408,7 @@ impl LayoutEngine {
 
                 row_height = row_height.max(cell_content_h);
                 visual_row_h = visual_row_h.max(cell_content_h_visual);
+                center_row_h = center_row_h.max(cell_content_h_visual + center_extra);
                 grid_idx += span;
             }
 
@@ -9701,6 +9733,26 @@ impl LayoutEngine {
 
                             // Calculate line total width for alignment
                             let line_total_w: f32 = line.iter().map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _)| tw).sum();
+                            // S502 (2026-06-08, FALSIFIED as a clean win — NOT shipped):
+                            // hypothesized that docGrid linesAndChars cells must center/right-align
+                            // on the GRID-EXPANDED width (natural tw sum + per-fullwidth-char
+                            // charSpace delta), not the natural width, because the render injects
+                            // that delta as character_spacing (~9964) so the rendered line is wider.
+                            // An idealized repro (long pure-fullwidth center line, charSpace=+1453)
+                            // confirmed +3.87pt: Oxi centered on natural 276 vs Word's grid 284.3.
+                            // SIGN: positive charSpace→expand correct, negative (b35 −2714)→natural
+                            // (clamp ≥0). BUT on REAL docs the effect is SUB-PIXEL and net-negative:
+                            // the only affected set is 5 mode-15 tokumei/order docs (linesAndChars
+                            // + charSpace>0 + jc=center-in-cell); their center lines are SHORT, and
+                            // a per-glyph position A/B (vs Word PDF) showed losses (~3.4pt total,
+                            // the longer p6 "匿名データの利用に当たって" line ON 1.45/OFF 0.85 ×4
+                            // docs) outweighing wins (29dc6e (名称) 0.26/0.44, d4d126 0.27/1.15;
+                            // ~1.1pt). The idealized repro did not generalize — Word's real centering
+                            // does not match the simple grid-expand model at this scale. SSIM-
+                            // invisible either way. jc=RIGHT was separately confounded by a real
+                            // merged/gridSpan cell-width error on 29dc6e ※ cells (Oxi ~4.6pt too
+                            // narrow; natural-width right-align was compensating it). Reverted to
+                            // natural-width alignment; left this note so the lever is not retried.
                             let effective_wrap = if line_idx == 0 { first_line_wrap_w } else { wrap_w };
 
                             // Justify: non-last lines for jc=both, all lines for distribute
@@ -10100,6 +10152,14 @@ impl LayoutEngine {
                 // max_actual_cell_h in case visual_row_h underestimated for
                 // unusual cells (defensive).
                 let mut effective_row_h = row_height.max(visual_row_h).max(max_actual_cell_h);
+                // S503 (2026-06-08): include the render-line-height centering floor so a
+                // vAlign=center cell that is laid out BEFORE a taller cell (col0 before
+                // col1) centers within the FULL actual row content height, not the
+                // under-counting estimate. Centering (v_offset) only — row_height (above,
+                // pagination) is unchanged. Opt-in OXI_S503_ENABLE (default OFF).
+                if s503_enable {
+                    effective_row_h = effective_row_h.max(center_row_h);
+                }
                 // S217 (2026-05-23): vmerge=restart cells with vAlign should
                 // center across the FULL merged span, not just row 0.
                 // Look ahead to count span rows where the same grid column has
@@ -11432,7 +11492,7 @@ impl LayoutEngine {
         grid_char_cw_ratio: Option<f32>,
     ) -> f32 {
         self.estimate_para_height_inner(para, available_width, grid_pitch, table_para_style,
-            in_cell, grid_char_pitch, grid_char_cw_ratio, false)
+            in_cell, grid_char_pitch, grid_char_cw_ratio, false, false)
     }
 
     /// S218 (2026-05-23) / S222 (2026-05-23): emit-equivalent row height
@@ -11569,7 +11629,24 @@ impl LayoutEngine {
         grid_char_cw_ratio: Option<f32>,
     ) -> f32 {
         self.estimate_para_height_inner(para, available_width, grid_pitch, table_para_style,
-            in_cell, grid_char_pitch, grid_char_cw_ratio, true)
+            in_cell, grid_char_pitch, grid_char_cw_ratio, true, false)
+    }
+
+    /// S503: same as estimate_para_height_emit but the cell line-height uses the
+    /// GDI render height (line_height_inner) so the result equals the ACTUAL emitted
+    /// content height. Centering-only (vAlign=center floor), NOT pagination.
+    fn estimate_para_height_emit_render(
+        &self,
+        para: &Paragraph,
+        available_width: f32,
+        grid_pitch: Option<f32>,
+        table_para_style: Option<&ParagraphStyle>,
+        in_cell: bool,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> f32 {
+        self.estimate_para_height_inner(para, available_width, grid_pitch, table_para_style,
+            in_cell, grid_char_pitch, grid_char_cw_ratio, true, true)
     }
 
     fn estimate_para_height_inner(
@@ -11582,6 +11659,14 @@ impl LayoutEngine {
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
         force_grid_snap: bool,
+        // S503 (2026-06-08): when true, the single/auto cell line-height uses
+        // line_height_inner (the GDI render height, ~13.5) instead of
+        // word_line_height_table_cell (~12.625), so the result equals the ACTUAL
+        // emitted cell content height. Used ONLY for a centering-only row-height
+        // floor (vAlign=center v_offset) — NOT for row_height/pagination. Decouples
+        // centering from the pagination estimate (S499 regressed e3c545 by changing
+        // the SHARED estimate; this is additive and pagination-safe).
+        use_render_lh: bool,
     ) -> f32 {
         let mut height = 0.0;
         // Table cells snap to grid in default Word mode
@@ -11625,6 +11710,9 @@ impl LayoutEngine {
             let h_added = if is_single_empty {
                 if snap_in_cell {
                     self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, true, grid_pitch, true)
+                } else if use_render_lh {
+                    // S503: actual GDI render line-height (matches emit), centering-only.
+                    self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, para.style.snap_to_grid, grid_pitch, true)
                 } else {
                     metrics.word_line_height_table_cell(empty_fs)
                 }
@@ -11731,6 +11819,9 @@ impl LayoutEngine {
                 let lh = if is_single_run {
                     if snap_in_cell {
                         self.line_height_inner(font_size, eff_ls, eff_lr, metrics, true, grid_pitch, true)
+                    } else if use_render_lh {
+                        // S503: actual GDI render line-height (matches emit), centering-only.
+                        self.line_height_inner(font_size, eff_ls, eff_lr, metrics, para.style.snap_to_grid, grid_pitch, true)
                     } else {
                         metrics.word_line_height_table_cell(font_size)
                     }
