@@ -6848,6 +6848,13 @@ impl LayoutEngine {
                         // S492 multi-session refactor. compat_mode>=15 correctly leaves
                         // compat-14 (e3c545) hanging. See docs/spec/cjk_break_refactor_s492.md
                         // §8 / session505_b837_kinsoku_oidashi.
+                        // S507 (reverted): an oidashi gate for type=lines compat-15 docs
+                        // (683f/0e7af/d77a) was a NO-OP — 0 glyphs changed on 683f. Their
+                        // S492 §2 over-pack is the S475 CAPACITY break, not burasagari, so it
+                        // is addressed by F1 (OXI_S492_JCNATURAL, disables S475) — a
+                        // coverage-track fix that §6 found SSIM-swamped by their structural /
+                        // weight-AA errors. The burasagari/oidashi gate (S506) is for the
+                        // hang-overflow case (b837 footnote), which these docs don't hit.
                         let s506_oidashi = std::env::var("OXI_S506_OIDASHI").is_ok()
                             && !is_justified && self.compat_mode >= 15 && !s476_body;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
