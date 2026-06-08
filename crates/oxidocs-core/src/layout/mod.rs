@@ -6817,6 +6817,17 @@ impl LayoutEngine {
                         // accepted edge case — real docs don't carry 50%-punct lines.
                         // Re-deriving the exact jc/HangingPunctuation gate is next-session
                         // work — see docs/spec/cjk_break_refactor_s492.md.)
+                        // S505 (2026-06-08) ATTEMPTED+REVERTED: disabling burasagari for
+                        // non-justified linesAndChars lines (to make b837's footnote OIDASHI
+                        // like Word, fixing the −14pt cascade) was TOO BROAD — it also
+                        // de-hung b837's BODY lines (which rely on the hang in the natural
+                        // path), over-wrapping them → b837 pagination CASCADED 7→8 pages
+                        // (Phase-1 regression). Confirms S492 §6: the burasagari gate is
+                        // cascade-prone; the real fix needs the footnote-vs-body +
+                        // grid-vs-natural distinction of the S492 multi-session refactor, not
+                        // a bounded can_hang gate. The FINDING stands (b837 footnote should
+                        // oidashi; discriminator = docGrid presence) — see
+                        // session505_b837_kinsoku_oidashi. Reverted to always-hang here.
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
                             && !s228_block_hang;
 
