@@ -7637,6 +7637,31 @@ impl LayoutEngine {
                         if fs > max_font_size { max_font_size = fs; }
                     }
                 }
+                // S504 (2026-06-08, default-ON opt-out OXI_S504_DISABLE): for PURE-LATIN
+                // exact lines the bottom-align subtrahend should be the font GLYPH CELL
+                // (ascent+descent), not the point size. `line_height_pt` = max(win,hhea)/em
+                // × fs ≈ 1.2×fs for Latin, so the point-size subtrahend over-reserves Latin
+                // exact lines by ~0.2×fs (db9ca title sz28 line=420: +2.33pt too low; Word
+                // offset 4.17 = line 21 − cell 16.83 = 1.20×14; S504 → +0.23). SCOPED to
+                // lines whose every fragment is NON-CJK: a CJK font's line_height_pt can
+                // exceed fs (win>1.0em) and shifting CJK exact lines REGRESSED 34140b
+                // −0.0006 — so CJK / mixed lines keep the S495 point-size subtrahend
+                // (unchanged). Floored at fs. See session504_s495_latin_exact_overshoot.
+                let s504_latin_line = std::env::var("OXI_S504_DISABLE").is_err()
+                    && !line.fragments.is_empty()
+                    && line.fragments.iter().all(|frag|
+                        !self.metrics_for_text(&frag.text, &frag.style, para_style).is_cjk_83_64_font());
+                let max_font_cell: f32 = if !s504_latin_line {
+                    max_font_size
+                } else {
+                    let mut c = 0.0_f32;
+                    for frag in &line.fragments {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let cell = self.metrics_for_text(&frag.text, &frag.style, para_style).line_height_pt(fs).max(fs);
+                        if cell > c { c = cell; }
+                    }
+                    c
+                };
                 if !in_shape_context {
                     // S495 (2026-06-05): BODY/CELL exact also bottom-aligns when the box
                     // exceeds the font cell (text at bottom, extra space above) — render-truth
@@ -7654,8 +7679,10 @@ impl LayoutEngine {
                     // = font_size for the CJK fonts (OS/2 winAscent+winDescent = 1.0em for MS
                     // Mincho), so (line - natural) is a NO-OP for CJK and cannot remove the over
                     // — it is a dwrite-vs-OS/2 cell gap, a renderer-metric issue, not a natural-
-                    // height one. Not worth a per-font factor for -0.0026. Kept at max_font_size.
-                    return (line_height - max_font_size).max(0.5);
+                    // height one. For CJK this stays at max_font_size (S504 leaves CJK/mixed
+                    // lines untouched); for PURE-LATIN lines max_font_cell = the glyph cell
+                    // (line_height_pt ≈ 1.2×fs) which removes the ~0.2×fs Latin overshoot.
+                    return (line_height - max_font_cell).max(0.5);
                 }
                 // Shape context: text at bottom of line box (extra space above).
                 (line_height - max_font_size).max(0.0)
