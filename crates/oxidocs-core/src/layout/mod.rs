@@ -5707,6 +5707,18 @@ impl LayoutEngine {
                     // Use mult_cumul_raw (shared position accumulator) with CEIL.
                     let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
                     let new_pos = old_pos + raw_spaced_tw;
+                    // S510 (2026-06-08) FALSIFIED+REVERTED: tried FINER quantization (round
+                    // to 1tw vs the CEIL-10tw here) to match Word's fine line pitch. It DID
+                    // match Word's pitch SET (683f: {13.5,13.6,13.7} vs the 10tw model's
+                    // {13.5,14.0}) BUT made the CUMULATIVE WORSE (last line Oxi−Word −1.50 vs
+                    // −1.20). ROOT CAUSE REVEALED: Oxi's RAW CJK line height (83/64) is
+                    // 13.605 vs Word's 13.626 (−0.021pt/line); the CEIL-10tw was COMPENSATING
+                    // that deficit by bumping to 14.0. So the real vertical lever is the CJK
+                    // 83/64 raw line-height PRECISION (~0.02pt/line too small vs Word,
+                    // accumulating ~1.2pt over a dense page), NOT the cumulative quantization.
+                    // That is per-font line-height precision (Phase-1-critical, deeply-tuned
+                    // 83/64 model). Kept the CEIL-10tw (it compensates reasonably). See
+                    // session509_renderer_justify_snap / session511.
                     let cn = (new_pos / 10.0).ceil() as i32 * 10;
                     let cc = (old_pos / 10.0).ceil() as i32 * 10;
                     (cn, cc)
