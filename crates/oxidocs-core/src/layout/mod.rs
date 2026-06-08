@@ -6833,21 +6833,23 @@ impl LayoutEngine {
                         // of the S492 Step-2 refactor — see docs/spec/cjk_break_refactor_s492.md
                         // §8 and session505_b837_kinsoku_oidashi. compat_mode>=15 correctly
                         // leaves compat-14 (e3c545) hanging.
-                        // S506b/c (2026-06-08, opt-in OXI_S506_OIDASHI, default OFF=byte-id):
-                        // gate on !s476_grid (off-grid path = footnotes/aux, s476_body=false)
-                        // so the BODY's geometric grid count is untouched. Targets exactly the
-                        // compat-15 off-grid footnote (fs11) hang→oidashi. STILL cascades b837
-                        // 7→8: the footnote oidashi correctly makes it 3 lines (=Word) but Oxi
-                        // is THEN 8 pages while WORD fits the same 3-line footnote in 7 — so
-                        // b837 has a SECOND compensating error (Oxi's overall layout ~1 line of
-                        // vertical space TALLER than Word; the wrong 2-line hang footnote was
-                        // offsetting it). The kinsoku oidashi alone cannot land b837 — it needs
-                        // the vertical over-height resolved too (multiply-compensated). The
-                        // GATE is correct (compat≥15 oidashi, body grid preserved); the blocker
-                        // is now the 2nd compensation. See docs/spec/cjk_break_refactor_s492.md
+                        // S506 (2026-06-08, opt-in OXI_S506_OIDASHI scaffold, default OFF =
+                        // byte-identical) — compat≥15 (Word 2013+) does OIDASHI not burasagari
+                        // at line-end (S506 repro: compat 12/14 HANG, 15 OIDASHI; b837=15 /
+                        // e3c545=14). DEFINITIVE CONCLUSION (3 gate conditions tried —
+                        // lines_and_chars / !s476_grid / !s476_body — ALL cascade b837 7→8):
+                        // the cascade is NOT a gate-scope problem. The b837 footnote MUST grow
+                        // 2→3 lines (oidashi, to match Word's char positions), but growing it
+                        // overflows Oxi's layout where Word fits the SAME 3-line footnote in 7
+                        // pages — b837 carries a SECOND, vertical, compensating error (Oxi ~1
+                        // line of vertical space taller than Word; the wrong 2-line hang
+                        // footnote was offsetting it). So the kinsoku oidashi and the vertical
+                        // over-height MUST land TOGETHER — b837 is multiply-compensated, the
+                        // S492 multi-session refactor. compat_mode>=15 correctly leaves
+                        // compat-14 (e3c545) hanging. See docs/spec/cjk_break_refactor_s492.md
                         // §8 / session505_b837_kinsoku_oidashi.
                         let s506_oidashi = std::env::var("OXI_S506_OIDASHI").is_ok()
-                            && !is_justified && self.compat_mode >= 15 && !s476_grid;
+                            && !is_justified && self.compat_mode >= 15 && !s476_body;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
                             && !s228_block_hang && !s506_oidashi;
 
