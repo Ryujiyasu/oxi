@@ -4788,14 +4788,24 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
                         style.border_style = tbl_style.border_style.clone();
                     }
                 }
-                // Inherit default cell margins from table style
-                if style.default_cell_margins.is_none() {
-                    style.default_cell_margins = tbl_style.default_cell_margins.clone();
-                }
-                // Inherit paragraph properties from table style
-                if style.para_style.is_none() {
-                    style.para_style = tbl_style.para_style.clone();
-                }
+            }
+        }
+    }
+
+    // S531 (2026-06-09): cell-margin (and table-style paragraph) inheritance is
+    // INDEPENDENT of whether the table declares its own borders. It was wrongly
+    // nested inside `if !style.border` above, so any bordered table that takes
+    // its cellMar from a tblStyle (e.g. 683f's single-cell `af`-styled 解説 table:
+    // af defines tblCellMar left/right=108tw, the table itself has explicit
+    // tblBorders) dropped the inherited 108tw cellMar and fell back to the 4.95pt
+    // default — making the cell wrap budget ~10.8pt too wide (+1 char/line).
+    if let Some(ref style_id) = style.style_id {
+        if let Some(tbl_style) = styles.table_styles.get(style_id) {
+            if style.default_cell_margins.is_none() {
+                style.default_cell_margins = tbl_style.default_cell_margins.clone();
+            }
+            if style.para_style.is_none() {
+                style.para_style = tbl_style.para_style.clone();
             }
         }
     }

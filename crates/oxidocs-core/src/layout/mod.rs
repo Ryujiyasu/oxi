@@ -9278,7 +9278,35 @@ impl LayoutEngine {
                         // discriminator (rejected). The PRESENCE of
                         // firstLineChars + tblCellMar + multi-column +
                         // auto-layout is the discriminator.
-                        let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract {
+                        // S531 (2026-06-09): a SINGLE-cell table reserves its cellMar as
+                        // padding, so the wrap budget is cell_w - pad_l - pad_r (like Word).
+                        // 683f's `af`-styled 解説 cell (style cellMar 108/108, single cell,
+                        // body-width, left/justified flowing text) fit 45 chars/line vs Word's
+                        // 44 because wrap_base used the full cell_w. Gated to:
+                        //   - single-cell rows (row.cells.len()==1): excludes the S412/S417e
+                        //     right-aligned MULTI-column tabular cells (04b88e x-anchor
+                        //     regression came from those; this never touches them).
+                        //   - default_cell_margins.is_some(): a REAL declared/inherited cellMar
+                        //     (the 4.95pt hardcoded fallback is None -> never fires).
+                        //   - non right/center alignment: cellMar-as-wrap-budget applies to
+                        //     left-to-right flowing/justified text, not right-anchored.
+                        //   - cell_w <= content_width: a body-width single-cell block.
+                        // cell_hang_inner already covers single-cell HANGING-indent paras; this
+                        // adds the non-hanging case. opt-out OXI_S531_DISABLE.
+                        // !has_explicit_cellmar: only when the cellMar is INHERITED (from the
+                        // table style / default table style), NOT author-declared in this
+                        // table's tblPr. 6295e189's form cells set tblCellMar=52tw directly in
+                        // tblPr (has_explicit_cellmar=true) and Word does NOT reduce their wrap
+                        // budget there (subtracting regressed it -0.0036); 683f's `af`-style
+                        // cellMar is inherited (has_explicit_cellmar=false) and Word DOES reduce
+                        // it. This also keeps s531 out of S412's author-declared territory.
+                        let s531_singlecell_cellmar = std::env::var("OXI_S531_DISABLE").is_err()
+                            && row.cells.len() == 1
+                            && table.style.default_cell_margins.is_some()
+                            && !table.style.has_explicit_cellmar
+                            && !matches!(para.alignment, Alignment::Right | Alignment::Center)
+                            && cell_w <= content_width;
+                        let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
