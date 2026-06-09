@@ -10,18 +10,18 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="Oxi - Document Viewer &amp; Editor">
 <meta property="og:description" content="View and edit .docx / .xlsx / .pptx files natively in the browser. Built with Rust + WebAssembly.">
-<meta property="og:image" content="https://ryujiyasu.github.io/oxi/oxi-logo.png">
-<meta property="og:url" content="https://ryujiyasu.github.io/oxi/">
+<meta property="og:image" content="https://ryujiyasu.gitlab.io/oxi/oxi-logo.png">
+<meta property="og:url" content="https://ryujiyasu.gitlab.io/oxi/">
 <meta property="og:site_name" content="Oxi">
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Oxi - Document Viewer &amp; Editor">
 <meta name="twitter:description" content="View and edit .docx / .xlsx / .pptx files natively in the browser. Built with Rust + WebAssembly.">
-<meta name="twitter:image" content="https://ryujiyasu.github.io/oxi/oxi-logo.png">
-<link rel="canonical" href="https://ryujiyasu.github.io/oxi/">
-<link rel="icon" type="image/x-icon" href="../docs/favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="../docs/favicon-32x32.png">
-<link rel="apple-touch-icon" href="../docs/apple-touch-icon.png">
+<meta name="twitter:image" content="https://ryujiyasu.gitlab.io/oxi/oxi-logo.png">
+<link rel="canonical" href="https://ryujiyasu.gitlab.io/oxi/">
+<link rel="icon" type="image/x-icon" href="./favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
@@ -963,7 +963,7 @@ input[type="file"] { display: none; }
     </div>
 </div>
 <header id="landingHeader">
-    <img src="../docs/icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
+    <img src="./icon-64.png" alt="Oxi" height="24" style="border-radius:4px">
     <h1>Oxi</h1>
     <span data-i18n="subtitle">Document viewer &amp; editor — .docx / .xlsx / .pptx (Rust + Wasm)</span>
     <button class="dark-mode-toggle" id="darkModeLanding" onclick="toggleDarkMode()">&#x263D;</button>
@@ -976,12 +976,11 @@ input[type="file"] { display: none; }
         <p class="hint" data-i18n="dropHint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
     <div class="sample-buttons" id="sampleButtons">
-        <button onclick="createNewDocument()" style="font-weight:bold">+ New Document</button>
+        <button onclick="createNewDocument()" style="font-weight:bold" disabled>+ New Document</button>
         <span data-i18n="trySample">Try a sample:</span>
-        <button onclick="loadSample('sample.docx')">Word (.docx)</button>
-        <button onclick="loadSample('sample.xlsx')">Excel (.xlsx)</button>
-        <button onclick="loadSample('sample.pptx')">PowerPoint (.pptx)</button>
-        <button onclick="loadSample('sample.pdf')">PDF (.pdf)</button>
+        <button onclick="loadSample('sample.docx')" disabled>Word (.docx)</button>
+        <button onclick="loadSample('sample.xlsx')" disabled>Excel (.xlsx)</button>
+        <button onclick="loadSample('sample.pptx')" disabled>PowerPoint (.pptx)</button>
     </div>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx,.pdf">
     <div class="toolbar" id="toolbar">
@@ -1061,6 +1060,7 @@ const I18N = {
         parsing: 'Parsing and rendering...',
         loadingSample: 'Loading sample...',
         wasmLoading: 'Wasm is still loading...',
+        engineLoading: 'Loading WASM engine (~47 MB, first visit only)...',
         unsupported: 'Supported formats: .docx, .xlsx, .pptx, .pdf',
         noChanges: 'No changes to save',
         noMatches: 'No matches found',
@@ -1111,6 +1111,7 @@ const I18N = {
         parsing: '解析・描画中...',
         loadingSample: 'サンプルを読み込み中...',
         wasmLoading: 'Wasmを読み込み中...',
+        engineLoading: 'WASMエンジンを読み込み中（約47MB・初回のみ）...',
         unsupported: '対応形式: .docx, .xlsx, .pptx, .pdf',
         noChanges: '変更がありません',
         noMatches: '一致なし',
@@ -1413,7 +1414,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from '../crates/oxi-wasm/pkg/oxi_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from './oxi_wasm.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
@@ -1560,11 +1561,14 @@ function renderCellBlocks(blocks, container) {
 }
 
 async function initialize() {
+    showStatus(t('engineLoading'), 'info');
     try {
         await init();
         wasmReady = true;
         window.__oxiWasmReady = true;
         console.log('Wasm initialized');
+        document.querySelectorAll('#sampleButtons button').forEach(b => { b.disabled = false; });
+        document.getElementById('status').style.display = 'none';
     } catch(e) {
         showStatus('Failed to load Wasm: ' + e.message, 'error');
     }
@@ -2751,6 +2755,16 @@ function renderEditableDocx(doc) {
                                     span.style.transformOrigin = 'left';
                                 }
                             }
+                        }
+                        // w:w character-width scaling (text_scale %): squeeze/expand
+                        // each glyph horizontally (Word's char-width). Mirrors the
+                        // fit_text scaleX; inline-block is required for scaleX. w:w runs
+                        // are typically short labels, so atomic (non-wrapping) is OK.
+                        // The dwrite (S529) and GDI renderers apply this too.
+                        else if (run.style.text_scale && Math.abs(run.style.text_scale - 100) > 0.5) {
+                            span.style.display = 'inline-block';
+                            span.style.transform = 'scaleX(' + (run.style.text_scale / 100).toFixed(3) + ')';
+                            span.style.transformOrigin = 'left';
                         }
                         // Complex script properties
                         if (run.style.bold_cs) span.style.fontWeight = 'bold';
@@ -4115,10 +4129,7 @@ async function loadSample(filename) {
     }
     try {
         showStatus(t('loadingSample'), 'info');
-        // Try relative paths for both docs/ and web/ deployments
-        let resp = await fetch(filename);
-        if (!resp.ok) resp = await fetch('../docs/' + filename);
-        if (!resp.ok) resp = await fetch('../tests/fixtures/' + filename.replace('sample', 'basic_test'));
+        const resp = await fetch('./' + filename);
         if (!resp.ok) throw new Error('Failed to fetch sample: ' + resp.status);
         const buffer = await resp.arrayBuffer();
         const blob = new Blob([buffer]);
