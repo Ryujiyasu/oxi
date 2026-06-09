@@ -4246,6 +4246,12 @@ impl LayoutEngine {
         let available_width = content_width - indent_left - indent_right;
 
         // Render list marker if present
+        // S517 (2026-06-09): index of the emitted list-marker element so the
+        // first-line loop can back-patch its text_y_off to share the body
+        // baseline (the marker element is emitted here, before the line loop
+        // computes text_y_off). Only set for NON-bullet markers (number markers
+        // like ①/(1)); bullets keep their own marker_y_offset tuning untouched.
+        let mut s517_marker_el_idx: Option<usize> = None;
         if let Some(ref marker) = para.style.list_marker {
             let default_style = RunStyle::default();
             let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
@@ -4311,6 +4317,13 @@ impl LayoutEngine {
             let marker_bold = self.resolve_bold(marker_style, &para.style);
             let marker_color = self.resolve_color(marker_style, &para.style).map(|s| s.to_string());
             let marker_base_y = if s467_vsnap { snap075(cursor.visual_y) } else { cursor.visual_y };
+            // S517: remember this marker element's index so the first body line
+            // can set its text_y_off to match (the marker shares the body
+            // baseline — Word-confirmed dy=0 on b837 ①②③). Scoped to non-bullet
+            // markers (marker_y_offset==0) so bullet placement is unchanged.
+            if marker_y_offset == 0.0 {
+                s517_marker_el_idx = Some(elements.len());
+            }
             elements.push(LayoutElement::new(marker_x, marker_base_y + marker_y_offset, marker_width, line_height, LayoutContent::Text {
                     text: marker_text,
                     font_size: marker_font_size,
@@ -5252,6 +5265,30 @@ impl LayoutEngine {
             // Session 76 Mech A fix: pass in_textbox so the function can distinguish
             // body/cell (top-align for exact) from shape (bottom-align).
             let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox);
+
+            // S517 (2026-06-09): the body list-marker element was emitted before
+            // this loop with the default text_y_off=0.0 (never set), so for wide
+            // line boxes (e.g. b837 numbered list, line=18pt font=12pt → off=4.0)
+            // the marker sat (line−fontcell) ABOVE the body baseline. Word renders
+            // the marker ON the body baseline (COM-confirmed dy=+0.00 on b837 p2/p5
+            // ①②③). The cell path already sets marker_el.text_y_off=cell_text_y_off
+            // (mod.rs ~10086); the body path did not. Back-patch the first line's
+            // text_y_off here. RENDER-ONLY (element.y unchanged) → Phase-1 safe.
+            // Guarded: only an element with no paragraph_index (= a marker) is
+            // touched, so a page break that moved the marker out of `elements`
+            // makes this a no-op (current behavior) rather than corrupting a body
+            // fragment.
+            if line_idx == 0 {
+                if let Some(midx) = s517_marker_el_idx.take() {
+                    if let Some(mel) = elements.get_mut(midx) {
+                        if mel.paragraph_index.is_none()
+                            && matches!(mel.content, LayoutContent::Text { .. })
+                        {
+                            mel.text_y_off = text_y_off;
+                        }
+                    }
+                }
+            }
 
             // Compute max ascent across all fragments for baseline alignment.
             // All fragments in a line share the same baseline (matches Word output).
