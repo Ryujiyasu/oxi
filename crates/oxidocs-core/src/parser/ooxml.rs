@@ -815,7 +815,20 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     }
                     "p" if in_body && depth == 0 => {
                         let pr = parse_paragraph(&mut reader, ctx, styles)?;
-                        current_blocks.push(Block::Paragraph(pr.paragraph));
+                        // S525 (coverage): a paragraph whose ONLY content is display
+                        // math (oMathPara, no runs/images/shapes) must NOT emit an
+                        // empty paragraph line before the math — the Math block IS
+                        // the line (Word renders the equation as the paragraph's
+                        // content). Otherwise the math sat ~1 line (~14pt) too low.
+                        let math_only = !pr.math_blocks.is_empty()
+                            && pr.paragraph.runs.is_empty()
+                            && pr.inline_images.is_empty()
+                            && pr.floating_images.is_empty()
+                            && pr.shapes.is_empty()
+                            && pr.text_boxes.is_empty();
+                        if !math_only {
+                            current_blocks.push(Block::Paragraph(pr.paragraph));
+                        }
                         // OMML math blocks become sibling Block::Math entries.
                         for mb in pr.math_blocks {
                             current_blocks.push(Block::Math(mb));
