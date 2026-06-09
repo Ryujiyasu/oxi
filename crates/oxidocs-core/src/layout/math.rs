@@ -341,7 +341,7 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: 0.0,
             }
         }
-        MathExpr::Nary { sub, sup, operand, .. } => {
+        MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
             let fs = ctx.font_size;
             let op_size = if ctx.style.is_display() { fs * 1.6 } else { fs * 1.2 };
             let op_w = op_size * 0.6;
@@ -349,18 +349,41 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let sub_b = sub.as_ref().map(|s| layout_expr(s, &lim_ctx));
             let sup_b = sup.as_ref().map(|s| layout_expr(s, &lim_ctx));
             let op_bbox = layout_expr(operand, ctx);
-            let limits_w = op_w
-                .max(sub_b.as_ref().map(|b| b.advance).unwrap_or(0.0))
-                .max(sup_b.as_ref().map(|b| b.advance).unwrap_or(0.0));
-            MathBBox {
-                advance: limits_w + fs * 0.1 + op_bbox.advance,
-                ascent: (op_size * 0.8)
-                    .max(sup_b.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
-                    .max(op_bbox.ascent),
-                descent: (op_size * 0.2)
-                    .max(sub_b.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
-                    .max(op_bbox.descent),
-                italic_correction: 0.0,
+            // S525: must mirror emit_nary's effective limit location so the
+            // reserved bbox matches the draw. Stacking (undOvr) reserves
+            // op_size+limit above/below; integrals & inline keep subSup (limits
+            // to the right -> height ≈ op_size, width += limits).
+            let op_is_integral = ('\u{222B}'..='\u{2233}').contains(op);
+            let stacked = matches!(lim_loc, crate::ir::LimLoc::UndOvr)
+                || (ctx.style.is_display() && matches!(lim_loc, crate::ir::LimLoc::SubSup) && !op_is_integral);
+            if stacked {
+                let limits_w = op_w
+                    .max(sub_b.as_ref().map(|b| b.advance).unwrap_or(0.0))
+                    .max(sup_b.as_ref().map(|b| b.advance).unwrap_or(0.0));
+                MathBBox {
+                    advance: limits_w + fs * 0.1 + op_bbox.advance,
+                    ascent: (op_size * 0.8)
+                        .max(sup_b.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
+                        .max(op_bbox.ascent),
+                    descent: (op_size * 0.2)
+                        .max(sub_b.as_ref().map(|b| op_size + b.height()).unwrap_or(0.0))
+                        .max(op_bbox.descent),
+                    italic_correction: 0.0,
+                }
+            } else {
+                // subSup: operator + limits to the right beside it.
+                let lim_w = sub_b.as_ref().map(|b| b.advance).unwrap_or(0.0)
+                    .max(sup_b.as_ref().map(|b| b.advance).unwrap_or(0.0));
+                MathBBox {
+                    advance: op_w + lim_w + fs * 0.1 + op_bbox.advance,
+                    ascent: (op_size * 0.8)
+                        .max(sup_b.as_ref().map(|b| fs * 0.4 + b.height()).unwrap_or(0.0))
+                        .max(op_bbox.ascent),
+                    descent: (op_size * 0.2)
+                        .max(sub_b.as_ref().map(|b| fs * 0.3 + b.height()).unwrap_or(0.0))
+                        .max(op_bbox.descent),
+                    italic_correction: 0.0,
+                }
             }
         }
         MathExpr::Function { name, arg } => {
@@ -1052,14 +1075,15 @@ fn emit_nary(
     let table = MathTable::cambria_math();
     let fs = ctx.font_size;
 
-    // S524 (coverage, 2026-06-09): Word places n-ary limits ABOVE/BELOW (undOvr)
-    // for DISPLAY equations by default — subSup is the inline default (or when
-    // explicitly set). The parser hard-defaults to SubSup; flip to UndOvr in
-    // display so the limits STACK (matching Word, and matching the bbox at
-    // layout_expr which already reserves stacked op_size+limit height — without
-    // this the emit drew subSup-to-the-right at ~half the reserved height, e.g.
-    // the repro sum was 31px vs Word 68px). PDF-confirmed on the n-ary repro.
-    let lim_loc = if ctx.style.is_display() && matches!(lim_loc, LimLoc::SubSup) {
+    // S524/S525 (coverage, 2026-06-09): Word places n-ary limits ABOVE/BELOW
+    // (undOvr) for DISPLAY equations by default for STACKING operators
+    // (∑∏⋃⋂⋀⋁⨁⨀ …), but INTEGRALS (∫∬∭∮∯∰∱∲∳, U+222B..U+2233) keep their
+    // limits to the RIGHT (subSup) even in display. The parser hard-defaults to
+    // SubSup; flip to UndOvr in display EXCEPT for integrals (S525: the integral
+    // repro showed Oxi stacked 32×66 vs Word's subSup 41×55). Without the flip
+    // the ∑ repro drew subSup at half the bbox-reserved height (31px vs Word 68).
+    let op_is_integral = ('\u{222B}'..='\u{2233}').contains(&op);
+    let lim_loc = if ctx.style.is_display() && matches!(lim_loc, LimLoc::SubSup) && !op_is_integral {
         LimLoc::UndOvr
     } else {
         lim_loc
