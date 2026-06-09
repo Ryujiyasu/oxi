@@ -276,9 +276,12 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let table = MathTable::cambria_math();
             let fs = ctx.font_size;
             let gap = table.du_to_pt(table.constants.OverbarVerticalGap, fs);
+            // S525 (coverage): an accent (hat/bar/tilde) is a SMALL glyph just
+            // above the base — reserve ~0.35×fs, not 0.9×fs (Word x̂ = 14px tall
+            // vs Oxi's 28px with 0.9). Mirrors emit_accent's acc_size.
             MathBBox {
                 advance: bb.advance,
-                ascent: bb.ascent + gap + fs * 0.9,
+                ascent: bb.ascent + gap + fs * 0.35,
                 descent: bb.descent,
                 italic_correction: 0.0,
             }
@@ -402,7 +405,8 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let table = MathTable::cambria_math();
             let fs = ctx.font_size;
             let gap = table.du_to_pt(table.constants.StretchStackGapAboveMin, fs);
-            let chr_h = fs * 0.8;
+            // S525: mirror emit_group_chr's reduced brace size (0.5×fs, ~0.45 reserve).
+            let chr_h = fs * 0.45;
             let mut bbox = bb;
             match pos {
                 crate::ir::BarPos::Top => bbox.ascent += gap + chr_h,
@@ -1000,10 +1004,12 @@ fn emit_matrix(
             .fold(0.0_f32, f32::max))
         .collect();
 
-    // Inter-column gap ~ MathLeading (from MATH constants).
-    let col_gap = table.du_to_pt(table.constants.MathLeading, fs);
-    // Inter-row gap: same order of magnitude as col_gap.
-    let row_gap = table.du_to_pt(table.constants.MathLeading, fs);
+    // S525 (coverage): inter-column gap. MathLeading (~1.5%fs) is far too small
+    // for a matrix — Word spaces columns by ~0.8em (the default mcSp). Measured:
+    // 2-col single-digit matrix Word 42px wide vs Oxi 23 (gap ≈0). Use 0.8em.
+    let col_gap = fs * 0.8;
+    // Inter-row gap: a smaller fraction (rows are spaced by leading + a bit).
+    let row_gap = fs * 0.35;
 
     // Matrix origin y: top of first row = baseline_y - axis_height - half_height.
     // For simplicity, center vertically on the math axis.
@@ -1207,19 +1213,22 @@ fn emit_group_chr(
     let mut elems = base_elems;
 
     let gap = table.du_to_pt(table.constants.StretchStackGapAboveMin, fs);
-    let chr_size = fs * 0.8;
+    // S525 (coverage): the over/under brace (⏞⏟) is a WIDE, SHORT stretchy
+    // glyph — render at ~0.5×fs and reserve ~0.45×fs, not 0.8×fs (under-brace
+    // "xyz" was Oxi 37px tall vs Word 22). Center it across the base width.
+    let chr_size = fs * 0.5;
     let chr_x = x + (base_bbox.advance - chr_size * 0.6) / 2.0;
 
     let chr_baseline = match pos {
-        BarPos::Top => baseline_y - base_bbox.ascent - gap - chr_size * 0.2,
-        BarPos::Bot => baseline_y + base_bbox.descent + gap + chr_size * 0.8,
+        BarPos::Top => baseline_y - base_bbox.ascent - gap - chr_size * 0.1,
+        BarPos::Bot => baseline_y + base_bbox.descent + gap + chr_size * 0.6,
     };
     elems.push(emit_text_at(chr.to_string(), chr_x, chr_baseline, chr_size));
 
     let mut bbox = base_bbox;
     match pos {
-        BarPos::Top => bbox.ascent += gap + chr_size,
-        BarPos::Bot => bbox.descent += gap + chr_size,
+        BarPos::Top => bbox.ascent += gap + chr_size * 0.9,
+        BarPos::Bot => bbox.descent += gap + chr_size * 0.9,
     }
     (elems, bbox)
 }
@@ -1391,25 +1400,23 @@ fn emit_accent(
         base_bbox.advance / 2.0
     };
 
-    // Accent y: above base's ascent with OverbarVerticalGap gap.
-    let acc_size = fs * 0.9; // slightly smaller than base
+    // Accent y: a SMALL glyph sitting just above the base top with a small gap.
+    // S525 (coverage): acc_size 0.9→0.6×fs and reserve ~0.35×fs height (the hat
+    // ink), not the full glyph em — Word x̂ is 14px tall vs Oxi's 28px before.
+    let acc_size = fs * 0.6;
     let ascent = base_bbox.ascent;
-    let accent_y_top = baseline_y - ascent
-        - table.du_to_pt(table.constants.OverbarVerticalGap, fs);
-    // emit_text_at places text at top = baseline - ascent_approx.
-    // We want the accent's BOTTOM at accent_y_top. Approximating accent
-    // ascent as fs*0.8, we set its baseline at accent_y_top + fs*0.8.
-    let accent_baseline = accent_y_top + acc_size * 0.2;
-    // Accent char rendered at (x + attach_x, accent_baseline) but shifted
-    // left by half accent width for visual centering.
+    let gap = table.du_to_pt(table.constants.OverbarVerticalGap, fs);
+    // The combining-accent glyph draws its ink ABOVE its baseline; place the
+    // baseline so the accent sits just above base-top + gap.
+    let accent_baseline = baseline_y - ascent - gap + acc_size * 0.55;
+    // Accent char rendered at (x + attach_x), shifted left by half its width.
     let accent_w = acc_size * 0.4;
     let accent_x = x + attach_x - accent_w / 2.0;
     elems.push(emit_text_at(accent.to_string(), accent_x, accent_baseline, acc_size));
 
     let bbox = MathBBox {
         advance: base_bbox.advance,
-        ascent: base_bbox.ascent + table.du_to_pt(table.constants.OverbarVerticalGap, fs)
-            + acc_size,
+        ascent: base_bbox.ascent + gap + fs * 0.35,
         descent: base_bbox.descent,
         italic_correction: 0.0,
     };
