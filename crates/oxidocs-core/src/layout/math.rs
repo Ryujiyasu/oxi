@@ -135,12 +135,78 @@ pub fn layout_math_block(block: &MathBlock, font_size: f32) -> MathBBox {
         MathBlock::Inline(xs) => xs,
         MathBlock::Display { content, .. } => content,
     };
+    let gaps = atom_gaps(exprs, font_size); // S527 inter-atom math-class spacing
     let mut acc = MathBBox::default();
-    for e in exprs {
+    for (i, e) in exprs.iter().enumerate() {
+        acc.advance += gaps[i];
         let b = layout_expr(e, &ctx);
         acc = acc.hstack(&b);
     }
     acc
+}
+
+/// S527 (coverage): TeX-style math-class inter-atom spacing. A math run gets
+/// extra space around relation operators (=<>≤≥→…, "thick" 5/18 em) and binary
+/// operators (+−×÷±…, "medium" 4/18 em); large operators get "thin" (3/18 em).
+/// Without this, `E=m` / `x+y` render with no operator spacing (too narrow).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AClass { Ord, Bin, Rel, Op, Open, Close, Punct }
+
+fn classify_math_char(c: char) -> AClass {
+    match c {
+        '=' | '<' | '>' | '≠' | '≤' | '≥' | '≈' | '≡' | '∼' | '≅' | '∝'
+        | '∈' | '∉' | '∋' | '⊂' | '⊃' | '⊆' | '⊇' | '≪' | '≫' | '≐' | '≑'
+        | '→' | '←' | '↔' | '⇒' | '⇐' | '⇔' | '↦' | '≔' | '≜' => AClass::Rel,
+        '+' | '-' | '\u{2212}' | '±' | '∓' | '×' | '÷' | '⋅' | '∗' | '∘' | '∙'
+        | '∪' | '∩' | '∨' | '∧' | '⊕' | '⊗' | '⊖' | '⊙' | '⊎' | '⊓' | '⊔' => AClass::Bin,
+        '(' | '[' | '{' | '⟨' | '⌊' | '⌈' => AClass::Open,
+        ')' | ']' | '}' | '⟩' | '⌋' | '⌉' => AClass::Close,
+        ',' | ';' => AClass::Punct,
+        _ => AClass::Ord,
+    }
+}
+
+fn classify_atom(e: &MathExpr) -> AClass {
+    match e {
+        MathExpr::Text(s) | MathExpr::Run { text: s, .. } => {
+            let mut it = s.chars();
+            match (it.next(), it.next()) {
+                (Some(c), None) => classify_math_char(c),
+                _ => AClass::Ord, // multi-char identifier
+            }
+        }
+        MathExpr::Nary { .. } => AClass::Op,
+        _ => AClass::Ord,
+    }
+}
+
+/// Per-atom leading gap for a sequence (gap before atom i; gap[0]=0). Reclassifies
+/// a binary op to Ord (no space) when it is unary (first, or after Bin/Rel/Op/Open/Punct).
+fn atom_gaps(children: &[MathExpr], fs: f32) -> Vec<f32> {
+    let thin = fs * 3.0 / 18.0;
+    let med = fs * 4.0 / 18.0;
+    let thick = fs * 5.0 / 18.0;
+    let mut gaps = vec![0.0_f32; children.len()];
+    let mut prev: Option<AClass> = None;
+    for (i, c) in children.iter().enumerate() {
+        let mut cls = classify_atom(c);
+        if cls == AClass::Bin {
+            let unary = matches!(prev, None | Some(AClass::Bin) | Some(AClass::Rel)
+                | Some(AClass::Op) | Some(AClass::Open) | Some(AClass::Punct));
+            if unary { cls = AClass::Ord; }
+        }
+        if let Some(p) = prev {
+            gaps[i] = match (p, cls) {
+                (AClass::Rel, _) | (_, AClass::Rel) => thick,
+                (AClass::Bin, _) | (_, AClass::Bin) => med,
+                (AClass::Op, _) | (_, AClass::Op) => thin,
+                (AClass::Punct, _) => thin,
+                _ => 0.0,
+            };
+        }
+        prev = Some(cls);
+    }
+    gaps
 }
 
 /// Dispatch bbox computation by MathExpr variant. Phase 2 implements
@@ -150,8 +216,10 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
         MathExpr::Text(s) => leaf_text_bbox(s, ctx),
         MathExpr::Run { text, .. } => leaf_text_bbox(text, ctx),
         MathExpr::Seq(children) => {
+            let gaps = atom_gaps(children, ctx.font_size);
             let mut acc = MathBBox::default();
-            for c in children {
+            for (i, c) in children.iter().enumerate() {
+                acc.advance += gaps[i]; // S527 inter-atom math-class spacing
                 acc = acc.hstack(&layout_expr(c, ctx));
             }
             acc
@@ -668,10 +736,13 @@ pub fn emit_expr(
             (vec![el], bbox)
         }
         MathExpr::Seq(children) => {
+            let gaps = atom_gaps(children, ctx.font_size);
             let mut elems = Vec::new();
             let mut cur_x = x;
             let mut total = MathBBox::default();
-            for child in children {
+            for (i, child) in children.iter().enumerate() {
+                cur_x += gaps[i]; // S527 inter-atom math-class spacing
+                total.advance += gaps[i];
                 let (e, b) = emit_expr(child, cur_x, baseline_y, ctx);
                 elems.extend(e);
                 cur_x += b.advance;
@@ -1626,9 +1697,12 @@ pub fn emit_math_block(
         MathBlock::Inline(xs) => xs,
         MathBlock::Display { content, .. } => content,
     };
+    // S527 inter-atom math-class spacing applied to the top-level content too.
+    let gaps = atom_gaps(exprs, font_size);
     // Pre-compute baseline: first pass finds needed ascent.
     let mut total_bbox = MathBBox::default();
-    for e in exprs {
+    for (i, e) in exprs.iter().enumerate() {
+        total_bbox.advance += gaps[i];
         let b = layout_expr(e, &ctx);
         total_bbox = total_bbox.hstack(&b);
     }
@@ -1637,7 +1711,8 @@ pub fn emit_math_block(
 
     let mut elems = Vec::new();
     let mut cur_x = x;
-    for e in exprs {
+    for (i, e) in exprs.iter().enumerate() {
+        cur_x += gaps[i];
         let (ee, b) = emit_expr(e, cur_x, baseline_y, &ctx);
         elems.extend(ee);
         cur_x += b.advance;
