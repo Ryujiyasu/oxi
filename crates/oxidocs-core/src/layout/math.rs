@@ -318,8 +318,11 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             let gap = table.du_to_pt(gap_du, fs);
             let thk = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
             let extra = table.du_to_pt(table.constants.RadicalExtraAscender, fs);
+            // S528: √ sign width scales only for a TALL radicand (else base size).
+            let rad_h = rb.ascent + rb.descent;
+            let sign_fs = if rad_h > fs * 1.2 { (rad_h + gap + thk).max(fs) } else { fs };
             MathBBox {
-                advance: rb.advance + fs * 0.6,
+                advance: rb.advance + sign_fs * 0.55,
                 ascent: rb.ascent + gap + thk + extra,
                 descent: rb.descent,
                 italic_correction: 0.0,
@@ -1020,9 +1023,24 @@ fn emit_radical(
     let rule_thick = table.du_to_pt(table.constants.RadicalRuleThickness, fs);
     let extra_asc = table.du_to_pt(table.constants.RadicalExtraAscender, fs);
 
-    // Radical sign "√" (U+221A) rendered as text. Its ascent + descent should
-    // cover the radicand's full height + vertical gap + rule thickness.
-    let sign_width = fs * 0.6;  // approximate √ glyph advance
+    // S528 (coverage): the √ sign STRETCHES to the radicand height (Word selects
+    // a taller MATH glyph variant for tall radicands — fractions, nested radicals).
+    // Approximate by rendering the √ glyph at a font size that spans the radicand
+    // height + gap + rule, instead of a fixed `fs` (which left tall radicands
+    // sticking out the top, e.g. √√x was 36×28 vs Word 47×49).
+    // Only stretch the √ for a TALL radicand (fraction, nested radical, etc.);
+    // a normal single-line radicand keeps the base √ size. NB: a true stretchy √
+    // is taller-NOT-wider (Word selects a narrow tall MATH glyph variant); the
+    // renderer ignores text_scale and we have no variant glyphs, so the font-
+    // scaled √ is proportionally wider than Word's for tall cases — but it COVERS
+    // the radicand (vs a tiny base √ leaving the fraction sticking out before).
+    let rad_height = rad_bbox.ascent + rad_bbox.descent;
+    let sign_fs = if rad_height > fs * 1.2 {
+        (rad_height + v_gap + rule_thick).max(fs)
+    } else {
+        fs
+    };
+    let sign_width = sign_fs * 0.55;
 
     // Radicand inner left edge (after √ sign).
     let radicand_x = x + sign_width;
@@ -1032,15 +1050,11 @@ fn emit_radical(
     let bar_y = radicand_top_y - v_gap - rule_thick / 2.0;
     let bar_width = rad_bbox.advance;
 
-    // Render the √ sign. Its top should roughly align with bar.
+    // Render the √ sign at the (possibly stretched) size, baseline placed so the
+    // glyph top ≈ bar_y and bottom ≈ the radicand bottom.
     let mut elems = Vec::new();
-    // Substitute √ char (U+221A, not in our substitution table).
-    elems.push(emit_text_at(
-        '\u{221A}'.to_string(),
-        x,
-        baseline_y,
-        fs,
-    ));
+    let sign_baseline = bar_y + sign_fs * 0.78;
+    elems.push(emit_text_at('\u{221A}'.to_string(), x, sign_baseline, sign_fs));
 
     // Render radicand.
     let (rad_elems, _rb) = emit_expr(radicand, radicand_x, baseline_y, ctx);
