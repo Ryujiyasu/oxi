@@ -331,7 +331,7 @@ unsafe fn render_page_elements(
                 text, font_size, font_family, bold, italic, color,
                 underline: _, underline_style, strikethrough, double_strikethrough,
                 highlight, character_spacing,
-                text_scale: _, is_vertical, ..
+                text_scale, is_vertical, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
                 // Session 75 Phase D (2026-05-17): el.y is LINE BOX TOP; pass
@@ -360,7 +360,7 @@ unsafe fn render_page_elements(
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, *double_strikethrough, is_double_underline,
                     highlight.as_deref(), *character_spacing,
-                    *is_vertical,
+                    *is_vertical, *text_scale,
                 )?;
             }
             LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
@@ -784,6 +784,7 @@ unsafe fn render_text(
     highlight: Option<&str>,
     character_spacing_pt: f32,
     is_vertical: bool,
+    text_scale_pct: f32,
 ) -> windows::core::Result<()> {
     use windows::core::*;
     use windows::Win32::Graphics::Direct2D::*;
@@ -1030,6 +1031,27 @@ unsafe fn render_text(
         }
     };
 
+    // S529 (coverage): w:w character-width scaling (text_scale %). The layout
+    // already narrows the per-char ADVANCE to text_scale%, but the renderer was
+    // drawing each glyph at FULL width within the narrowed slot → CJK glyphs
+    // overlapped/crammed for w:w<100 (and were spread for >100). Word compresses
+    // each GLYPH horizontally. Apply a horizontal scale = text_scale/100 around
+    // the glyph's left edge (origin.x) so the glyph fills exactly its (already
+    // scaled) advance. Skips vertical text. Affects 5 corpus docs using <w:w>.
+    let ww_scale = text_scale_pct / 100.0;
+    let ww_applied = !is_vertical && (ww_scale - 1.0).abs() > 0.005;
+    let ww_saved = if ww_applied {
+        let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+        rt.GetTransform(&mut saved);
+        let ax = origin.x; // left edge anchor (DIP)
+        let m = windows::Foundation::Numerics::Matrix3x2 {
+            M11: ww_scale, M12: 0.0, M21: 0.0, M22: 1.0,
+            M31: ax * (1.0 - ww_scale), M32: 0.0,
+        };
+        rt.SetTransform(&(m * saved));
+        Some(saved)
+    } else { None };
+
     rt.DrawTextLayout(
         origin,
         &layout,
@@ -1040,6 +1062,9 @@ unsafe fn render_text(
     if faux_bold {
         let o2 = D2D_POINT_2F { x: origin.x + faux_dx, y: origin.y };
         rt.DrawTextLayout(o2, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
+    if let Some(saved) = ww_saved {
+        rt.SetTransform(&saved);
     }
 
     // Restore prior transform if we changed it for rotation.
