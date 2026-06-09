@@ -46,7 +46,7 @@ fn output_flat(result: &layout::LayoutResult, out: &mut impl Write) {
                     ).unwrap();
                     writeln!(out, "T\t{}", text).unwrap();
                 }
-                layout::LayoutContent::TableBorder { x1, y1, x2, y2, ref color, width } => {
+                layout::LayoutContent::TableBorder { x1, y1, x2, y2, ref color, width, style: _ } => {
                     let col = color.as_deref().unwrap_or("#000000");
                     writeln!(out, "BORDER\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{}\t{}", x1, y1, x2, y2, col, width).unwrap();
                 }
