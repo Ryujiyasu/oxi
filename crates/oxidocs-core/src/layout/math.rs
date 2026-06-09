@@ -95,6 +95,26 @@ impl MathLayoutContext {
 /// Uses a simple heuristic: width = fontSize × 0.5 (math italic letters
 /// average ~0.5em wide); ascent/descent approximate 0.7 / 0.2 em.
 /// Refined in Phase 3 with actual Cambria Math horizontal advance tables.
+/// S527 (coverage): per-char Cambria Math advance estimate (em). The flat 0.5em
+/// was far too narrow — Word-measured advances: `=`0.75, `+`0.97, `m`/`M`0.85,
+/// `E`0.63, `x`0.54, `i`/`l`0.32, digits 0.56. A per-class estimate (no committed
+/// Cambria Math advance table exists yet) keeps operators/wide letters wide and
+/// narrow letters narrow, so operator expressions/identifiers don't pack too tight.
+pub fn glyph_advance_em(c: char) -> f32 {
+    match c {
+        'i' | 'j' | 'l' | 'ı' | '.' | ',' | ';' | ':' | '\'' | '!' | '|' | 'f' | 't' | 'r' => 0.33,
+        'm' | 'w' | 'M' | 'W' => 0.86,
+        '=' | '≠' | '≈' | '≡' => 0.75,
+        '+' => 0.97,
+        '-' | '\u{2212}' | '±' | '∓' | '×' | '÷' | '∗' | '⋅' => 0.88,
+        '<' | '>' | '≤' | '≥' => 0.78,
+        '(' | ')' | '[' | ']' | '{' | '}' | '/' => 0.4,
+        '0'..='9' => 0.56,
+        'A'..='Z' => 0.68,
+        _ => 0.52,
+    }
+}
+
 pub fn leaf_char_bbox(c: char, ctx: &MathLayoutContext) -> MathBBox {
     let eff = ctx.effective_font_size();
     let sub = math_substitute(c);
@@ -104,7 +124,7 @@ pub fn leaf_char_bbox(c: char, ctx: &MathLayoutContext) -> MathBBox {
         .map(|du| table.du_to_pt(du, eff))
         .unwrap_or(0.0);
     MathBBox {
-        advance: eff * 0.5,
+        advance: eff * glyph_advance_em(c),
         ascent: eff * 0.7,
         descent: eff * 0.2,
         italic_correction: italic_corr,
