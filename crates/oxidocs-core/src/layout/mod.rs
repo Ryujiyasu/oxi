@@ -7391,6 +7391,12 @@ impl LayoutEngine {
                 // This unifies V1-V6 (no flag, no snap) and b5f706 real-doc
                 // (with flag, snap to pitch) under one rule.
                 let cell_snap_allowed = !in_table_cell || self.adjust_line_height_in_table;
+                // S521 (2026-06-09) FALSIFIED + reverted: a controlled SINGLE-line AUTO-height
+                // cell repro showed Word using natural cell line height (not the grid pitch), but
+                // the cell-natural change regressed the corpus massively (33-ALH-doc gate net
+                // −5.44, d77a pagination broke, b35 −0.12). The grid-snap is CORRECT for real
+                // MULTI-line cells; the single-line repro does not generalize (Nth confirmation of
+                // the cell row-height tombstone, cf S499). Do NOT re-attempt cell-natural-height.
                 if snap_to_grid && is_single && cell_snap_allowed {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
