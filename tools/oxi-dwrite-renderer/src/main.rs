@@ -302,6 +302,29 @@ unsafe fn render_page_elements(
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
 
+    // S518 (2026-06-09): per-line BODY reference (font/size) for aligning a Symbol-font
+    // list marker to its line's body baseline. The Symbol bullet () renders in the
+    // Symbol font whose DWrite ascent is ~2pt smaller than the body font at fs11, so
+    // (y+off-1+symbol_ascent) lands ~2pt ABOVE the body — runs on one line don't share a
+    // baseline (DrawTextLayout uses each font's own ascent). Word draws the bullet on the
+    // line baseline. SCOPED to Symbol-font markers (paragraph_index None + family "Symbol")
+    // so b837 number markers (S517, body font) and / bullets (body font) are untouched.
+    // Key by line-box top (el.y) rounded to 0.25pt; first body text element wins.
+    let mut line_body_ref: std::collections::HashMap<i32, (f32, String, f32, bool, bool)> =
+        std::collections::HashMap::new();
+    for el in &page.elements {
+        if let LayoutContent::Text { font_size, font_family, bold, italic, .. } = &el.content {
+            if el.paragraph_index.is_some() {
+                let key = (el.y * 4.0).round() as i32;
+                line_body_ref.entry(key).or_insert_with(|| (
+                    el.y + el.text_y_off,
+                    font_family.as_deref().unwrap_or("Calibri").to_string(),
+                    *font_size, *bold, *italic,
+                ));
+            }
+        }
+    }
+
     for el in &page.elements {
         match &el.content {
             LayoutContent::Text {
@@ -315,10 +338,25 @@ unsafe fn render_page_elements(
                 // el.y + el.text_y_off as the glyph-top y to preserve pre-Phase-D
                 // pixel positions. See memory/session71_y_convention_refactor_design.md.
                 let is_double_underline = underline_style.as_deref() == Some("double");
+                // S518: align a Symbol-font marker to its line's body baseline.
+                let mut glyph_top_y = el.y + el.text_y_off;
+                let fam = font_family.as_deref().unwrap_or("Calibri");
+                if el.paragraph_index.is_none() && fam == "Symbol"
+                    && std::env::var("OXI_S518_BULLET_DISABLE").is_err()
+                {
+                    if let Some((body_top, body_fam, body_fs, body_b, body_i)) =
+                        line_body_ref.get(&((el.y * 4.0).round() as i32))
+                    {
+                        let body_asc = font_ascent_pt(dwrite_factory, body_fam, *body_fs, *body_b, *body_i);
+                        let mark_asc = font_ascent_pt(dwrite_factory, fam, *font_size, *bold, *italic);
+                        // marker baseline := body baseline (both share el.y+text_y_off after S517)
+                        glyph_top_y = *body_top + (body_asc - mark_asc);
+                    }
+                }
                 render_text(
                     rt, dwrite_factory,
-                    el.x, el.y + el.text_y_off, el.width, el.height,
-                    text, font_family.as_deref().unwrap_or("Calibri"),
+                    el.x, glyph_top_y, el.width, el.height,
+                    text, fam,
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, *double_strikethrough, is_double_underline,
                     highlight.as_deref(), *character_spacing,
@@ -694,6 +732,42 @@ unsafe fn render_line(
 }
 
 #[cfg(windows)]
+// S518 (2026-06-09): the DWrite ascent (GetLineMetrics[0].baseline) for a font/size,
+// in points — the SAME value DrawTextLayout uses to place the baseline below the
+// layout-rect top. Used to align a Symbol-font list marker (whose ascent is ~2pt
+// smaller than the body at fs11) to its line's BODY baseline. Returns fs*0.8 on any
+// DWrite error (harmless fallback; the caller only uses the DIFFERENCE of two ascents).
+unsafe fn font_ascent_pt(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    font_family: &str, font_size_pt: f32, bold: bool, italic: bool,
+) -> f32 {
+    use windows::core::*;
+    use windows::Win32::Graphics::DirectWrite::*;
+    let weight = if bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
+    let style = if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL };
+    let family_wide: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
+    let locale_wide: Vec<u16> = "ja-jp".encode_utf16().chain(std::iter::once(0)).collect();
+    let fmt = match dwrite_factory.CreateTextFormat(
+        PCWSTR(family_wide.as_ptr()), None, weight, style,
+        DWRITE_FONT_STRETCH_NORMAL, font_size_pt * PT_TO_DIP, PCWSTR(locale_wide.as_ptr())) {
+        Ok(f) => f, Err(_) => return font_size_pt * 0.8,
+    };
+    let text_wide: Vec<u16> = "X".encode_utf16().collect();
+    let layout = match dwrite_factory.CreateTextLayout(
+        &text_wide, &fmt, 1000.0, font_size_pt * 2.0 * PT_TO_DIP) {
+        Ok(l) => l, Err(_) => return font_size_pt * 0.8,
+    };
+    let mut lcount: u32 = 0;
+    let _ = layout.GetLineMetrics(None, &mut lcount);
+    if lcount > 0 {
+        let mut lm = vec![DWRITE_LINE_METRICS::default(); lcount as usize];
+        if layout.GetLineMetrics(Some(&mut lm), &mut lcount).is_ok() {
+            return lm[0].baseline / PT_TO_DIP;
+        }
+    }
+    font_size_pt * 0.8
+}
+
 unsafe fn render_text(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
