@@ -448,6 +448,18 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 italic_correction: bb.italic_correction,
             }
         }
+        // S526 (coverage): boxed/grouped wrappers.
+        MathExpr::BorderBox { base, .. } => {
+            let pad = ctx.font_size * 0.22;
+            let bb = layout_expr(base, ctx);
+            MathBBox {
+                advance: bb.advance + 2.0 * pad,
+                ascent: bb.ascent + pad,
+                descent: bb.descent + pad,
+                italic_correction: 0.0,
+            }
+        }
+        MathExpr::BoxExpr(inner) | MathExpr::Phantom(inner) => layout_expr(inner, ctx),
         // Primitives not yet implemented — return zero bbox.
         _ => MathBBox::default(),
     }
@@ -711,6 +723,34 @@ pub fn emit_expr(
         }
         MathExpr::PreScript { base, sub, sup } => {
             emit_prescript(base, sub, sup, x, baseline_y, ctx)
+        }
+        // S526 (coverage): boxed equation — base + a stroked rectangle.
+        MathExpr::BorderBox { base, .. } => {
+            let pad = ctx.font_size * 0.22;
+            let base_bb = layout_expr(base, ctx);
+            let (mut elems, _) = emit_expr(base, x + pad, baseline_y, ctx);
+            let rect_top = baseline_y - base_bb.ascent - pad;
+            let rect_h = base_bb.ascent + base_bb.descent + 2.0 * pad;
+            let rect_w = base_bb.advance + 2.0 * pad;
+            let rect = LayoutElement::new(x, rect_top, rect_w, rect_h, LayoutContent::BoxRect {
+                fill: None,
+                stroke_color: Some("#000000".to_string()),
+                stroke_width: 0.5,
+                corner_radius: 0.0,
+            });
+            elems.insert(0, rect); // behind the glyphs
+            let bbox = MathBBox {
+                advance: base_bb.advance + 2.0 * pad,
+                ascent: base_bb.ascent + pad,
+                descent: base_bb.descent + pad,
+                italic_correction: 0.0,
+            };
+            (elems, bbox)
+        }
+        MathExpr::BoxExpr(inner) | MathExpr::Phantom(inner) => {
+            // BoxExpr is a transparent grouping; Phantom reserves space. Both
+            // emit the inner content (phantom ink-suppression is a refinement).
+            emit_expr(inner, x, baseline_y, ctx)
         }
         // Other primitives: fall back to flat text via extract_flat_text.
         _ => {
