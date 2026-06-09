@@ -1052,6 +1052,19 @@ fn emit_nary(
     let table = MathTable::cambria_math();
     let fs = ctx.font_size;
 
+    // S524 (coverage, 2026-06-09): Word places n-ary limits ABOVE/BELOW (undOvr)
+    // for DISPLAY equations by default — subSup is the inline default (or when
+    // explicitly set). The parser hard-defaults to SubSup; flip to UndOvr in
+    // display so the limits STACK (matching Word, and matching the bbox at
+    // layout_expr which already reserves stacked op_size+limit height — without
+    // this the emit drew subSup-to-the-right at ~half the reserved height, e.g.
+    // the repro sum was 31px vs Word 68px). PDF-confirmed on the n-ary repro.
+    let lim_loc = if ctx.style.is_display() && matches!(lim_loc, LimLoc::SubSup) {
+        LimLoc::UndOvr
+    } else {
+        lim_loc
+    };
+
     // Operator glyph: render larger if grow or display.
     let op_size = if ctx.style.is_display() { fs * 1.6 } else { fs * 1.2 };
     let op_w = op_size * 0.6;

@@ -3091,7 +3091,24 @@ impl LayoutEngine {
                     // Fraction/Sup/Sub/SubSup render stacked; other primitives
                     // fall back to flat text for now.
                     let math_font_size: f32 = 10.5;
-                    let x = page.margin.left;
+                    // S524 (coverage, 2026-06-09): apply the display equation's jc
+                    // (default Center) — Word CENTERS display math (oMathPara) at the
+                    // page center; Oxi previously hard-coded the left margin. PDF-confirmed
+                    // on a/b, x^2, x_i, sqrt(x), nested (all Word-centered at page mid).
+                    // Compute the bbox width first, then position by jc.
+                    let content_w = (page.size.width - page.margin.left - page.margin.right).max(0.0);
+                    let bbox_pre = crate::layout::math::layout_math_block(math_block, math_font_size);
+                    let math_jc = match math_block {
+                        crate::ir::MathBlock::Display { jc, .. } => *jc,
+                        _ => crate::ir::MathAlignment::Left,
+                    };
+                    let x = match math_jc {
+                        crate::ir::MathAlignment::Center | crate::ir::MathAlignment::CenterGroup =>
+                            page.margin.left + ((content_w - bbox_pre.advance) * 0.5).max(0.0),
+                        crate::ir::MathAlignment::Right =>
+                            page.margin.left + (content_w - bbox_pre.advance).max(0.0),
+                        crate::ir::MathAlignment::Left => page.margin.left,
+                    };
                     let (math_elems, bbox) = crate::layout::math::emit_math_block(
                         math_block, x, cursor.cursor_y, math_font_size,
                     );
