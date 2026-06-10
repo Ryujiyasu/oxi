@@ -1741,10 +1741,22 @@ impl LayoutEngine {
         // Post-layout pass: substitute PAGE and NUMPAGES field placeholders
         let total_pages = pages.len();
         for (page_idx, page) in pages.iter_mut().enumerate() {
+            // S534 (2026-06-10): apply the section's pgNumType format to the
+            // PAGE field. 3a4f's footer section sets `<w:pgNumType
+            // w:fmt="numberInDash"/>` → Word renders "- 34 -"; Oxi rendered
+            // the bare number. layout_to_ir_page maps this LayoutPage back to
+            // its IR section page, which carries page_number_format.
+            let page_num_fmt = layout_to_ir_page.get(page_idx)
+                .and_then(|&ir| doc_resolved.pages.get(ir))
+                .and_then(|p| p.page_number_format.clone());
             for elem in &mut page.elements {
                 if let LayoutContent::Text { text, field_type: Some(ft), font_size, .. } = &mut elem.content {
                     let new_text = match ft {
-                        FieldType::Page => format!("{}", page_idx + 1),
+                        FieldType::Page => match page_num_fmt.as_deref() {
+                            Some(fmt) => crate::parser::numbering::format_number(
+                                (page_idx + 1) as u32, fmt),
+                            None => format!("{}", page_idx + 1),
+                        },
                         FieldType::NumPages => format!("{}", total_pages),
                     };
                     if &new_text != text {

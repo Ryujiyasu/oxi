@@ -205,9 +205,14 @@ fn map_symbol_bullets(text: &str) -> String {
     }).collect()
 }
 
-fn format_number(n: u32, fmt: &str) -> String {
+/// Format a number per ST_NumberFormat. Also used for PAGE-field rendering
+/// with the section's pgNumType format (S534: 3a4f footer numberInDash).
+pub(crate) fn format_number(n: u32, fmt: &str) -> String {
     match fmt {
         "decimal" => n.to_string(),
+        // pgNumType: page number wrapped in dashes ("- 1 -"). Word renders
+        // halfwidth digits with "- " / " -" (3a4f p34 footer pixel-confirmed).
+        "numberInDash" => format!("- {} -", n),
         "decimalFullWidth" => {
             // １, ２, ３, ... (U+FF10 = fullwidth '0')
             n.to_string()

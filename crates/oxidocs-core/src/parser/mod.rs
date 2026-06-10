@@ -1,4 +1,4 @@
-mod numbering;
+pub(crate) mod numbering;
 mod ooxml;
 pub mod omml;
 pub mod relationships;
