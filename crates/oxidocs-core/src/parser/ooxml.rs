@@ -3119,6 +3119,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut text_body_anchor: Option<String> = None;
     // S481: bodyPr@vertOverflow ("overflow" default / "clip" / "ellipsis").
     let mut text_vert_overflow: Option<String> = None;
+    // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
+    let mut is_canvas = false;
 
     loop {
         match reader.read_event()? {
@@ -3126,6 +3128,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                 let local = local_name(e.name().as_ref());
                 depth += 1;
                 match local.as_str() {
+                    "wpc" => {
+                        is_canvas = true;
+                    }
                     "anchor" => {
                         is_anchor = true;
                         for attr in e.attributes().flatten() {
@@ -3910,18 +3915,34 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         None
     };
 
-    // S535b: flow reservation for inline canvases TRIED + REVERTED. Emitting a
-    // data-less placeholder Image (wp:extent) for inline text-bearing drawings
-    // EXPLODED 3a4f pagination 0.9931 -> 0.8076 (282 paras +1..+3 from word
-    // p65 on): the two 代替休暇 canvases only account for ~268pt, so the
-    // sibling-Block::Image model over-reserves via page-break interaction
-    // (atomic image push wastes page bottoms) and/or double-counts the host
-    // line. Word's model is the canvas IS the host paragraph's LINE (line
-    // height = extent), not a sibling block. The flow fix needs the
-    // inline-drawing-in-line model (line height = max(text, drawing extent))
-    // — deferred (see session535 memory). The synthetic paragraph-relative
-    // text_box position above IS kept: it eliminates the exact-duplicate
-    // page-top-left rendering (render-only, no flow effect).
+    // S535b: flow reservation for ALL inline text-bearing drawings TRIED +
+    // REVERTED (3a4f pagination 0.9931 -> 0.8076, 282 paras +1..+3): the
+    // placeholder fired on every inline has_visual drawing AND the empty host
+    // paragraph line was still emitted (double count).
+    // S537b (2026-06-10): retried SCOPED to wordprocessingCanvas (wpc) only,
+    // now that S537/S536 suppress the empty host paragraph: an image-only
+    // paragraph's line = extent EXACTLY per the pinned spec
+    // (_s537_inline_line.py), so a canvas-only paragraph reserves exactly
+    // wp:extent — Word's model. The canvas content textbox (synthetic
+    // paragraph-relative position above) anchors at this placeholder block
+    // and renders ON the reserved area.
+    let image = if image.is_none() && inline_tb && is_canvas && text_box.is_some()
+        && width > 0.0 && height > 0.0
+    {
+        Some(Image {
+            data: Vec::new(),
+            width,
+            height,
+            alt_text: None,
+            content_type: None,
+            position: None,
+            wrap_type: None,
+            crop: None,
+            anchor_block_index: 0,
+        })
+    } else {
+        image
+    };
 
     Ok(DrawingResult { image, shape, text_box })
 }
