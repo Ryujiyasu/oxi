@@ -3221,6 +3221,20 @@ impl LayoutEngine {
                 .get(text_box.anchor_block_index)
                 .copied()
                 .unwrap_or(0);
+            // S535: env-gated anchor-resolution tracing (figure-collage overlap).
+            if std::env::var("OXI_DEBUG_TB").is_ok() {
+                let (rx, ry) = self.resolve_textbox_position(text_box, page, &block_y_positions);
+                let anchor_in_range = text_box.anchor_block_index < block_y_positions.len();
+                let preview: String = text_box.blocks.iter().filter_map(|b| match b {
+                    Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(8).collect::<String>()),
+                    _ => None,
+                }).find(|s| !s.is_empty()).unwrap_or_default();
+                eprintln!("[TB] tbi={} anchor={} in_range={} tgt_page={} resolved=({:.1},{:.1}) wh=({:.0},{:.0}) vrel={:?} text={:?}",
+                    tbi, text_box.anchor_block_index, anchor_in_range, target_page, rx, ry,
+                    text_box.width, text_box.height,
+                    text_box.position.as_ref().and_then(|p| p.v_relative.clone()),
+                    preview);
+            }
             let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
             if let Some(lp) = pages.get_mut(target_page) {
                 lp.elements.extend(tb_elements);

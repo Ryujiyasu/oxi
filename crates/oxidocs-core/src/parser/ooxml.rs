@@ -3838,12 +3838,37 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     // cover the underlying body text that Word renders behind/through the shape.
     let is_outline_shape = shape.is_some() && shape_text_blocks.is_empty();
     let has_visual = !has_no_fill || !has_no_stroke;
+    // S535 (2026-06-10): an INLINE drawing (wp:inline, no wp:anchor position)
+    // that carries a text box — e.g. a wordprocessingCanvas (wpc) figure with
+    // label textboxes (3a4f's 代替休暇 figures, "キャンバス 3", extent
+    // 389×137pt) — occupies flow space like an inline image (Word reserves
+    // wp:extent in the host line) and renders its content AT that reserved
+    // area. Previously such a text_box had position=None, so the layout's
+    // resolve fell back to (margin.left, margin.top): every inline canvas
+    // rendered at the page TOP-LEFT (3a4f's two figures overlapped there,
+    // duplicating 20 label elements exactly) and NO flow height was reserved
+    // (the word-p63/64 7-paragraph delta=-1 cluster).
+    // Fix: give the text_box a synthetic paragraph-relative position (y=0 at
+    // its host block) and emit a data-less placeholder Image of the drawing
+    // extent so the flow reserves the canvas height (renderers skip empty
+    // data; Block::Image height handling exists for body and cells per S533).
+    let inline_tb = !is_anchor;
+    let tb_position = position.clone().or_else(|| if inline_tb {
+        Some(FloatingPosition {
+            x: 0.0,
+            y: 0.0,
+            h_relative: Some("column".to_string()),
+            v_relative: Some("paragraph".to_string()),
+            h_align: None,
+            v_align: None,
+        })
+    } else { None });
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
             blocks: shape_text_blocks,
             width,
             height,
-            position,
+            position: tb_position,
             border: !has_no_stroke,
             stroke_color: if has_no_stroke { None } else { stroke_color_saved.clone() },
             stroke_width: if has_no_stroke { None } else { stroke_width_saved },
@@ -3854,7 +3879,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             inset_right: text_inset_right,
             inset_top: text_inset_top,
             inset_bottom: text_inset_bottom,
-            wrap_type,
+            // S535: an inline canvas text_box must stay RENDER-ONLY — without
+            // an explicit WrapType::None the table wrap-below rule (layout
+            // ~2415) fires on its new synthetic position and pushes following
+            // tables below the canvas band (3a4f pagination 0.9931 -> 0.7434,
+            // 395 paras +1). Real anchored textboxes keep their parsed wrap.
+            wrap_type: if inline_tb && wrap_type.is_none() {
+                Some(crate::ir::WrapType::None)
+            } else {
+                wrap_type
+            },
             v_text_anchor: text_body_anchor,
             relative_height,
             behind_doc,
@@ -3863,6 +3897,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     } else {
         None
     };
+
+    // S535b: flow reservation for inline canvases TRIED + REVERTED. Emitting a
+    // data-less placeholder Image (wp:extent) for inline text-bearing drawings
+    // EXPLODED 3a4f pagination 0.9931 -> 0.8076 (282 paras +1..+3 from word
+    // p65 on): the two 代替休暇 canvases only account for ~268pt, so the
+    // sibling-Block::Image model over-reserves via page-break interaction
+    // (atomic image push wastes page bottoms) and/or double-counts the host
+    // line. Word's model is the canvas IS the host paragraph's LINE (line
+    // height = extent), not a sibling block. The flow fix needs the
+    // inline-drawing-in-line model (line height = max(text, drawing extent))
+    // — deferred (see session535 memory). The synthetic paragraph-relative
+    // text_box position above IS kept: it eliminates the exact-duplicate
+    // page-top-left rendering (render-only, no flow effect).
 
     Ok(DrawingResult { image, shape, text_box })
 }
