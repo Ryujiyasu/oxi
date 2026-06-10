@@ -576,8 +576,12 @@ mod tests {
         let doc = parse_docx(data).expect("should parse docx with image");
 
         let page = &doc.pages[0];
-        // 4 blocks: "Before image" paragraph, image paragraph, inline Image block, "After image" paragraph
-        assert_eq!(page.blocks.len(), 4);
+        // 3 blocks: "Before image" paragraph, inline Image block, "After image"
+        // paragraph. S537: the image-only host paragraph is suppressed — in
+        // Word the inline image IS the paragraph's line (COM repro
+        // _s537_inline_line: image-only para line = extent exactly), so
+        // keeping the empty host paragraph double-counted one line.
+        assert_eq!(page.blocks.len(), 3);
 
         // First paragraph: "Before image"
         match &page.blocks[0] {
@@ -587,11 +591,11 @@ mod tests {
             _ => panic!("expected paragraph"),
         }
 
-        // Third block: inline image
-        assert!(matches!(&page.blocks[2], ir::Block::Image(_)), "expected inline image block");
+        // Second block: inline image
+        assert!(matches!(&page.blocks[1], ir::Block::Image(_)), "expected inline image block");
 
-        // Fourth paragraph: "After image"
-        match &page.blocks[3] {
+        // Third paragraph: "After image"
+        match &page.blocks[2] {
             ir::Block::Paragraph(p) => {
                 assert_eq!(p.runs[0].text, "After image");
             }

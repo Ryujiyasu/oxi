@@ -826,7 +826,19 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             && pr.floating_images.is_empty()
                             && pr.shapes.is_empty()
                             && pr.text_boxes.is_empty();
-                        if !math_only {
+                        // S537 (2026-06-10): image-only paragraphs — the inline image
+                        // IS the paragraph's line in Word (COM repro _s537_inline_line:
+                        // image-only para line = extent EXACTLY, 120.00pt for a 120pt
+                        // image, both default and atLeast spacing; no extra text line).
+                        // Emitting the empty host Block::Paragraph before the sibling
+                        // Block::Image double-counted one line (~14.5pt) per image
+                        // paragraph. Body twin of the S536 cell suppression.
+                        // opt-out OXI_S537_DISABLE.
+                        let image_only = !pr.inline_images.is_empty()
+                            && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                            && pr.math_blocks.is_empty()
+                            && std::env::var("OXI_S537_DISABLE").is_err();
+                        if !math_only && !image_only {
                             current_blocks.push(Block::Paragraph(pr.paragraph));
                         }
                         // OMML math blocks become sibling Block::Math entries.
