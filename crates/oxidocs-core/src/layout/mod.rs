@@ -6321,23 +6321,22 @@ impl LayoutEngine {
                 if yakumono_compressed[char_index] && !is_opening_bracket {
                     char_width *= 0.5;
                 } else if yakumono_enabled {
-                    // Expand pair rule: when yakumono_compressed[neighbor] = true AND
-                    // this char is also yakumono, both compress.
+                    // S532 (2026-06-10): the former "expand pair" rule (a yakumono
+                    // ADJACENT to a pair-compressed one also compresses ×0.5) is
+                    // REMOVED — Word compresses ONLY the FIRST char of an adjacent
+                    // pair; the second keeps its natural advance. Measured
+                    // (_s532_pair_repro.py, MS Gothic 12pt, PDF per-char origins):
+                    // 。」=6.00/12.00, ）」=6.00/12.00, 。「=6.00/12.00 — identical
+                    // in centered, loose-justified and wrapping-justified lines.
+                    // (The 2026-04-16 b837 "。）→6+6" COM note conflated the pair
+                    // rule with justify-demand compression of the second char.)
                     let is_yakumono_any = matches!(ch,
                         '（' | '）' | '「' | '」' | '『' | '』' | '〔' | '〕' |
                         '【' | '】' | '《' | '》' | '〈' | '〉' | '｛' | '｝' |
                         '［' | '］' | '、' | '。' | '，' | '．'
                     );
                     if is_yakumono_any {
-                        let prev_compressed = char_index > 0
-                            && yakumono_compressed[char_index - 1];
-                        let next_compressed = char_index + 1 < chars_vec.len()
-                            && yakumono_compressed[char_index + 1];
-                        if (prev_compressed || next_compressed) && !is_opening_bracket {
-                            // Adjacent to pair-compressed yakumono: also compress
-                            // (except opening brackets — see explanation above)
-                            char_width *= 0.5;
-                        } else if matches!(ch, '、' | '。' | '，' | '．') {
+                        if matches!(ch, '、' | '。' | '，' | '．') {
                             // Standalone 、 。 between non-triggers: spec §4.7b round 5
                             // floor = fontSize × 2/3. Trying 0.667 instead of 0.583.
                             let prev_non_tr = char_index == 0
@@ -7093,25 +7092,76 @@ impl LayoutEngine {
         //     (Word's demand-driven rule: compression amount matches actual overflow)
         //   - No revert: natural greatly exceeds available (demand ≥ total savings) →
         //     keep full compression
+        // S532 (2026-06-10): PAIR-compressed yakumono (。」/）」 adjacency) is
+        // EXCLUDED from the revert — Word compresses adjacent-pair punctuation
+        // UNCONDITIONALLY (minimal repro _s532_pair_repro.py: 。 advance = 6.0pt
+        // exactly, in centered, loose-justified AND wrapping-justified lines
+        // alike; d77a title/body 。」 gate pixels agree). Only the demand-driven
+        // compressions (standalone 、。 ×0.6667, line-start narrow yakumono)
+        // revert on loose lines. The pair members are re-identified here by
+        // mirroring the break-time pair rule over the line's char sequence
+        // (a fragment is typically one CJK char). Fragments the break never
+        // compressed have width==natural, so over-marking is a no-op.
+        // opt-out OXI_S532_DISABLE.
+        let s532_keep_pairs = std::env::var("OXI_S532_DISABLE").is_err();
         for line in &mut lines {
             if !line.was_compressed { continue; }
-            let savings: f32 = line.fragments.iter()
-                .map(|f| (f.natural_width - f.width).max(0.0)).sum();
+            let pair_frag: Vec<bool> = if s532_keep_pairs {
+                let line_chars: Vec<(usize, char)> = line.fragments.iter().enumerate()
+                    .flat_map(|(i, f)| f.text.chars().map(move |c| (i, c)))
+                    .collect();
+                let n = line_chars.len();
+                let mut v = vec![false; n];
+                for k in 0..n {
+                    let c = line_chars[k].1;
+                    if kinsoku::is_yakumono_closing(c) {
+                        if k + 1 < n && kinsoku::is_yakumono_trigger(line_chars[k + 1].1) {
+                            v[k] = true;
+                        }
+                    } else if kinsoku::is_yakumono_opening(c) {
+                        if k > 0 && kinsoku::is_yakumono_trigger(line_chars[k - 1].1) && !v[k - 1] {
+                            v[k] = true;
+                        }
+                    }
+                }
+                let mut mask = vec![false; line.fragments.len()];
+                for k in 0..n {
+                    let (fi, c) = line_chars[k];
+                    let is_opening = matches!(c,
+                        '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［');
+                    // Only the FIRST char of an adjacent pair compresses (S532
+                    // measurement); the second keeps natural advance, so only
+                    // v[k] members need revert protection.
+                    if v[k] && !is_opening {
+                        mask[fi] = true;
+                    }
+                }
+                mask
+            } else {
+                vec![false; line.fragments.len()]
+            };
+            let savings: f32 = line.fragments.iter().enumerate()
+                .filter(|(fi, _)| !pair_frag[*fi])
+                .map(|(_, f)| (f.natural_width - f.width).max(0.0)).sum();
             if savings <= 0.5 { continue; }
             let demand = (line.natural_total_width - available_width).max(0.0);
             if demand <= 0.5 {
                 // Full revert: loose line, no compression needed
-                for f in &mut line.fragments {
-                    f.width = f.natural_width;
+                for (fi, f) in line.fragments.iter_mut().enumerate() {
+                    if !pair_frag[fi] {
+                        f.width = f.natural_width;
+                    }
                 }
-                line.was_compressed = false;
+                line.was_compressed = line.fragments.iter().enumerate()
+                    .any(|(fi, f)| pair_frag[fi] && (f.natural_width - f.width) > 0.5);
             } else if demand < savings {
                 // Partial revert: demand-scaled. Release (savings - demand) back to
                 // compressed fragments proportionally, matching Word's per-line
                 // demand-driven compression on line-start yakumono (d77a pi=24-27
                 // COM: ・ compresses -0.5 to -2.5pt based on line overflow demand).
                 let keep_ratio = demand / savings;
-                for f in &mut line.fragments {
+                for (fi, f) in line.fragments.iter_mut().enumerate() {
+                    if pair_frag[fi] { continue; }
                     let f_saving = (f.natural_width - f.width).max(0.0);
                     if f_saving > 0.0 {
                         f.width = f.natural_width - f_saving * keep_ratio;
