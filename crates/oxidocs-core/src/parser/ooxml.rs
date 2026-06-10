@@ -4198,6 +4198,13 @@ fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, style
                     }
                     "drawing" if in_choice && depth == 1 => {
                         let dr = parse_drawing(reader, ctx, styles)?;
+                        if std::env::var("OXI_DEBUG_AC").is_ok() {
+                            eprintln!("[AC] Choice drawing: img={} shape={} tb={} shape_blocks={} tb_paras={} (kept={})",
+                                dr.image.is_some(), dr.shape.is_some(), dr.text_box.is_some(),
+                                dr.shape.as_ref().map(|s| s.text_blocks.len()).unwrap_or(0),
+                                dr.text_box.as_ref().map(|t| t.blocks.len()).unwrap_or(0),
+                                result.is_none() && dr.has_content());
+                        }
                         // Only keep if it produced something useful (image, shape, or text box)
                         if result.is_none() && dr.has_content() {
                             result = Some(dr);
@@ -4205,6 +4212,12 @@ fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, style
                     }
                     "pict" if (in_choice || in_fallback) && depth == 1 && result.is_none() => {
                         let dr = parse_vml_pict(reader, ctx, styles)?;
+                        if std::env::var("OXI_DEBUG_AC").is_ok() {
+                            eprintln!("[AC] pict (in_choice={} in_fallback={}): img={} shape={} tb={} shape_blocks={}",
+                                in_choice, in_fallback,
+                                dr.image.is_some(), dr.shape.is_some(), dr.text_box.is_some(),
+                                dr.shape.as_ref().map(|s| s.text_blocks.len()).unwrap_or(0));
+                        }
                         if dr.has_content() {
                             result = Some(dr);
                         }
