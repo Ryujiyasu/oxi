@@ -5463,7 +5463,23 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                             cell_text_boxes.push(tb);
                         }
                         cell_shapes.extend(pr.shapes);
-                        blocks.push(Block::Paragraph(pr.paragraph));
+                        // S536 (2026-06-10): suppress the EMPTY host paragraph of a
+                        // cell inline image — in Word the image IS the paragraph's
+                        // line, so pushing both the (empty) Block::Paragraph and the
+                        // forwarded Block::Image double-counts one line. COM-measured
+                        // on 3a4f's calendar table: Word rendered height 448.5pt
+                        // (Tables(33) cell top 120.0 -> after 568.5) vs Oxi row
+                        // 466.25 = +17.75 ≈ exactly the pict para's 17.5pt line
+                        // (spacing line=350 atLeast). Mirrors the S525 math_only
+                        // empty-paragraph suppression (ooxml.rs ~823) for the
+                        // image-in-cell case.
+                        let image_only = std::env::var("OXI_S331_DISABLE").is_err()
+                            && !pr.inline_images.is_empty()
+                            && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                            && pr.math_blocks.is_empty();
+                        if !image_only {
+                            blocks.push(Block::Paragraph(pr.paragraph));
+                        }
                         // S331 (2026-05-26): forward inline images from cell
                         // paragraphs so cell height includes drawing. Body-level
                         // parser does this at line 736/781; cell parser was
