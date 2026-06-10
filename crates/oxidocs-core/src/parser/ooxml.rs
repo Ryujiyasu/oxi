@@ -5409,9 +5409,14 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                         // parser does this at line 736/781; cell parser was
                         // dropping pr.inline_images, pr.math_blocks etc.,
                         // causing cells with inline drawings to be shorter than
-                        // Word renders them. Env-gated default OFF until
-                        // corpus measurement confirms net improvement.
-                        if std::env::var("OXI_S331_CELL_INLINE_IMG").as_deref() == Ok("1") {
+                        // Word renders them.
+                        // S533 (2026-06-10): default ON (opt-out OXI_S331_DISABLE).
+                        // The S331 forward had stayed env-gated OFF; combined with
+                        // the missing layout arms (cell placement + row-height
+                        // estimate, added in S533) an image-bearing cell collapsed
+                        // to its text height — 3a4f p34's 321.75pt calendar EMF
+                        // cell rendered ~28pt, the Phase-1 sole-FAIL root cause.
+                        if std::env::var("OXI_S331_DISABLE").is_err() {
                             for mb in pr.math_blocks {
                                 blocks.push(Block::Math(mb));
                             }

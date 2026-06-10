@@ -8777,11 +8777,24 @@ impl LayoutEngine {
                 free_space > 0.0 && free_space < widow_threshold
             };
 
+            // S533 (2026-06-10): a row carrying an inline IMAGE block is pushed
+            // WHOLE to the next page instead of splitting (when it fits a fresh
+            // page). Word treats the image's line as atomic — 3a4f's calendar
+            // row (466pt cell: 321.75pt EMF + paragraphs, trHeight 7910 atLeast)
+            // starts fresh on Word's p34; Oxi's element-level split stranded the
+            // image across the boundary and the post-split cursor under-advanced,
+            // overlapping the following content. Rows taller than a full page
+            // still split (unavoidable).
+            let row_has_image_block = row.cells.iter()
+                .any(|c| c.blocks.iter().any(|b| matches!(b, Block::Image(_))));
+            let image_atomic_push = row_has_image_block && row_height <= content_height;
+
             // needs_row_split: only when overflow + table allows split.
             // widow_break_needed overrides split — we want the whole table on next page.
             let needs_row_split = row_overflows && !row.cant_split && has_content
                 && (is_single_cell_row || has_lrpb_mid_row)
-                && !widow_break_needed;
+                && !widow_break_needed
+                && !image_atomic_push;
 
             if (row_overflows || lrpb_row_should_break || widow_break_needed) && has_content && !needs_row_split {
                 // Push all accumulated elements (including previous rows) to current page
@@ -10340,6 +10353,23 @@ impl LayoutEngine {
                         }
                     }
                 }
+                Block::Image(img) => {
+                    // S533 (2026-06-10): place inline images inside table cells.
+                    // The parser forwards cell-paragraph inline images as sibling
+                    // Block::Image (S331, default ON as of S533); without this arm
+                    // the image occupied no height and emitted no element, so an
+                    // image-bearing cell collapsed to its text height (3a4f p34:
+                    // the 321.75pt year-calendar EMF cell rendered ~28pt, pulling
+                    // ~7 paragraphs up a page = the Phase-1 sole FAIL).
+                    cell_elements.push(LayoutElement::new(
+                        cell_x + pad_l, content_h, img.width, img.height,
+                        LayoutContent::Image {
+                            data: img.data.clone(),
+                            content_type: img.content_type.clone(),
+                        }));
+                    content_h += img.height;
+                    prev_cell_sa = None;
+                }
                 _ => {}
                 } // match block
                 } // for block
@@ -11814,6 +11844,14 @@ impl LayoutEngine {
                             }
                             cell_content_h += nr_h;
                         }
+                    }
+                    Block::Image(img) => {
+                        // S533: inline image in a cell contributes its height
+                        // (mirrors the pre-pass arm at ~8532 and the placement
+                        // arm; without it the row-height estimate ignored the
+                        // image and the row collapsed to text height).
+                        cell_content_h += img.height;
+                        prev_sa = None;
                     }
                     _ => {}
                 }
