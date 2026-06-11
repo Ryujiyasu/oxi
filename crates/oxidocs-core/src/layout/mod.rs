@@ -6811,11 +6811,14 @@ impl LayoutEngine {
                             let c = f.text.chars().next().unwrap_or(' ');
                             if s543_oikomi && !s472_demand {
                                 // S543 light tier: every compressible yakumono
-                                // (、，。．+ opening AND closing brackets) gives
-                                // exactly fs*0.75/10.5; fragments already below
-                                // natural contribute their remainder only.
+                                // (、，。．+ opening AND closing brackets) gives a
+                                // FLAT 0.75pt (sweep-measured at fs=10.5 AND fs=12:
+                                // compressed advance = fs−0.75 both, NOT fs-scaled —
+                                // repro_s543_punct_sweep.py; ！？ never compress).
+                                // Fragments already below natural contribute their
+                                // remainder only.
                                 if !kinsoku::is_s473_compressible(c) { continue; }
-                                let cap = font_size * (0.75 / 10.5);
+                                let cap = 0.75f32;
                                 let floor = font_size - cap;
                                 let rem = (f.width - floor).max(0.0);
                                 if rem > 0.001 { comps.push((i, rem)); }
