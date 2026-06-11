@@ -1121,6 +1121,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let mut math_blocks: Vec<crate::ir::MathBlock> = Vec::new();
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
+    // S540 (2026-06-11): explicit `<w:jc w:val="left"/>` parses to Left ==
+    // Alignment::default(), which the style/docDefaults inheritance below
+    // treated as "unset" and overrode with the style chain's jc (3a4f ① paras:
+    // explicit left + default style Normal jc=both → Oxi justified them while
+    // Word honors the explicit left). Track explicitness separately.
+    let mut has_explicit_jc = false;
     let mut style_id: Option<String> = None;
     let mut num_pr_ref: Option<NumPrRef> = None;
     let mut para_sect_pr: Option<SectionProperties> = None;
@@ -1142,6 +1148,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         style = s;
                         if let Some(a) = explicit_align {
                             alignment = a;
+                            has_explicit_jc = true;
                         }
                         style_id = sid;
                         num_pr_ref = npr;
@@ -1523,7 +1530,9 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     if let Some(ref sid) = effective_style_id {
         if let Some(defined) = styles.styles.get(sid) {
             // Inherit alignment from style if not explicitly set in paragraph
-            if alignment == Alignment::default() {
+            // (S540: explicit jc=left == default Left, so gate on the flag,
+            // not the value)
+            if !has_explicit_jc && alignment == Alignment::default() {
                 if let Some(style_align) = defined.alignment {
                     alignment = style_align;
                 }
@@ -1705,7 +1714,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
     // Inherit alignment from docDefaults pPrDefault (jc)
-    if alignment == Alignment::default() {
+    // (S540: explicit jc=left must not be overridden — see has_explicit_jc)
+    if !has_explicit_jc && alignment == Alignment::default() {
         if let Some(doc_align) = styles.doc_default_alignment {
             alignment = doc_align;
         }
