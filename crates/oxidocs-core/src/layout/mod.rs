@@ -6198,19 +6198,25 @@ impl LayoutEngine {
             // capacity break. Default OFF (byte-identical). Phase-1-sensitive (fewer
             // chars/line on jc=left → more lines → pagination shift) → env-gated +
             // full canary before ship.
-            let s492_jcnatural = std::env::var("OXI_S492_JCNATURAL").is_ok();
-            // S492f: applies to BOTH docGrid types. For non-justified paras the
-            // yakumono COMPRESSION (justify-specific, S492) must be off; the GRID
-            // count still applies via char_grid_extra (each fullwidth char padded to
-            // pitch, break bounded by available_tw=content-indent) so disabling the
-            // s476 capacity does NOT lose the grid for linesAndChars — it just stops
-            // the punct-capacity from over-packing +1 char past the boundary on b837's
-            // jc=left lines (clean alignment idx 23/69/75: Word 36 / Oxi 37 overflow).
-            // The earlier b837 0.5775 cascade was with the burasagari-gate ON (since
-            // reverted); retest with it OFF. OXI_S492_LINESONLY re-scopes to type=lines.
-            let s492_lines_only = std::env::var("OXI_S492_LINESONLY").is_ok();
-            let natural_break_jc = s492_jcnatural && !is_justified
-                && (!lines_and_chars || !s492_lines_only);
+            // S539 (2026-06-11): SHIPPED default-ON, scoped to NON-linesAndChars
+            // (the former OXI_S492_JCNATURAL + OXI_S492_LINESONLY config).
+            // The S492-era blocker was 3a4f p2-p5 SSIM regressions; S539 traced
+            // them to the style-basedOn jc-inheritance bug (parser/styles.rs):
+            // paragraphs Word justifies (Normal jc=both via pStyle chain) were
+            // resolved jc=left by Oxi, so the natural break wrongly rewrapped
+            // them. With jc resolution fixed, the full-corpus gate is clean:
+            // SSIM 1 up (d77a p2 +0.0090) / 409 unchanged / 0 regress,
+            // Phase-1 54/55 with 3a4f histogram identical to baseline.
+            // linesAndChars (b837 family) stays EXCLUDED: full-scope round-1
+            // gate showed b837 pagination cascade 0.9997->0.5775 (30 paras +1
+            // page; p5-p7 SSIM -0.53) even though p1-p4 improved +0.039 — the
+            // b837 jc=left grid-line break needs its own investigation before
+            // widening (OXI_S492_JCNATURAL still forces the full scope).
+            // Opt-out: OXI_S492_DISABLE restores capacity-break for all paras.
+            let s492_full = std::env::var("OXI_S492_JCNATURAL").is_ok();
+            let natural_break_jc = std::env::var("OXI_S492_DISABLE").is_err()
+                && !is_justified
+                && (!lines_and_chars || s492_full);
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
             // S475 capacity-budget break (env-gated, default OFF = byte-identical).
             // Greedy first-fit where each punct contributes break-compression CAPACITY
