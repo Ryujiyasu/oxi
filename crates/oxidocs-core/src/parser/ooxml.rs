@@ -61,7 +61,7 @@ impl OoxmlParser {
         let metadata = self.parse_metadata();
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
         let default_tab_stop = self.parse_default_tab_stop();
-        let compat_mode = self.parse_compat_mode();
+        let (compat_mode, compat_mode_explicit) = self.parse_compat_mode();
         let compress_punctuation = self.parse_compress_punctuation();
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
         let balance_single_byte_double_byte_width =
@@ -359,6 +359,7 @@ impl OoxmlParser {
             adjust_line_height_in_table,
             default_tab_stop,
             compat_mode,
+            compat_mode_explicit,
             compress_punctuation,
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
@@ -649,10 +650,15 @@ impl OoxmlParser {
     }
 
     /// Parse word/settings.xml for compatibilityMode.
-    fn parse_compat_mode(&mut self) -> u32 {
+    /// Returns (mode, explicit). `explicit=false` = no compatibilityMode
+    /// compatSetting in settings.xml (legacy Word ≤2010 document; Word lays
+    /// these out with ≤14 behavior — S545). The mode still DEFAULTS to 15 so
+    /// the shipped `compat_mode >= 15` gates keep their corpus-validated
+    /// behavior; legacy-sensitive consumers check the explicit flag.
+    fn parse_compat_mode(&mut self) -> (u32, bool) {
         let xml = match self.read_part("word/settings.xml") {
             Ok(x) => x,
-            Err(_) => return 15, // default to Word 2013+
+            Err(_) => return (15, false), // default to Word 2013+
         };
         let mut reader = Reader::from_str(&xml);
         loop {
@@ -668,7 +674,7 @@ impl OoxmlParser {
                             if key == "val" { val = v; }
                         }
                         if is_compat_mode {
-                            return val.parse().unwrap_or(15);
+                            return (val.parse().unwrap_or(15), true);
                         }
                     }
                 }
@@ -677,7 +683,7 @@ impl OoxmlParser {
                 _ => {}
             }
         }
-        15
+        (15, false)
     }
 
     /// Parse word/settings.xml for w:characterSpacingControl value.

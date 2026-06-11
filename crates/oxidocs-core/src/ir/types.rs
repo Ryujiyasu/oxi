@@ -32,6 +32,14 @@ pub struct Document {
     /// 14=Word 2010, 15=Word 2013+. Affects table cell grid snap behavior.
     #[serde(default)]
     pub compat_mode: u32,
+    /// S545 (2026-06-11): whether a compatibilityMode compatSetting was
+    /// actually present. ABSENT means a legacy (Word ≤2010) document, which
+    /// Word lays out with ≤14 behavior (e.g. jc=left demand oikomi), but
+    /// parse_compat_mode reports 15 for backward compatibility with the
+    /// shipped >=15 gates (S475/S476/...). Consumers that need Word's
+    /// legacy-vs-2013 split must check `compat_mode <= 14 || !compat_mode_explicit`.
+    #[serde(default)]
+    pub compat_mode_explicit: bool,
     /// w:characterSpacingControl from settings.xml.
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana"
     /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.

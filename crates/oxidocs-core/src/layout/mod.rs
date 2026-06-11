@@ -1503,6 +1503,10 @@ pub struct LayoutEngine {
     default_tab_stop: f32,
     /// Compatibility mode: 14=Word 2010 (table cells no grid snap), 15=Word 2013+ (grid snap)
     compat_mode: u32,
+    /// S545: whether compatibilityMode was explicitly present in settings.xml.
+    /// Absent = legacy (Word ≤2010) document — Word applies ≤14 layout
+    /// behaviors (jc=left demand oikomi) even though compat_mode reports 15.
+    compat_mode_explicit: bool,
     /// w:characterSpacingControl: enable yakumono (CJK punctuation) compression
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
@@ -1598,6 +1602,7 @@ impl LayoutEngine {
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
             compat_mode: 15,
+            compat_mode_explicit: true,
             compress_punctuation: false,
             do_not_expand_shift_return: false,
             balance_single_byte_double_byte_width: false,
@@ -1642,6 +1647,7 @@ impl LayoutEngine {
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
+            compat_mode_explicit: doc.compat_mode_explicit,
             compress_punctuation: doc.compress_punctuation,
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
             balance_single_byte_double_byte_width: doc.balance_single_byte_double_byte_width,
@@ -6781,19 +6787,20 @@ impl LayoutEngine {
                     // (tools/metrics/repro_s542_width.py, verbatim 7f272a ３． para:
                     // ．（、 all 9.75 mid-line, 45-char L1; short lines stay 10.50 =
                     // demand-gated). Opening brackets DO compress in this tier
-                    // (（第 → 9.75 measured). compat=14 docs exhibit it (7f272a),
-                    // so no compat>=15 gate.
-                    // GATE RESULT (2026-06-11, full corpus): 13 up / 4 down net
-                    // +0.1015 — recovers ALL S540-exposed pages (7f272a p1
-                    // +0.0368, 34140b p1-p6, 04b88e x3, fded6) BUT over-packs
-                    // d77a p2/p9 and ed025c p3/p5 (bottom-5 sum −0.001 → strict
-                    // Phase-3 gate fails). The compressible SET/cap is too wide:
-                    // Word's per-type membership needs the punct-type sweep
-                    // (see memory/session543). Default OFF (byte-identical)
-                    // until the set is pinned; opt-in OXI_S543_OIKOMI.
+                    // S545 (2026-06-11) THE GATE: the demand oikomi is a
+                    // compatibilityMode ≤ 14 (Word 2010) layout behavior.
+                    // Bidirectionally repro-confirmed: the isolated real ed025c
+                    // para (compat 15, refuses) FIRES when flipped to 14; the
+                    // synthetic (compat 14, fires) STOPS when flipped to 15.
+                    // ABSENT compatSetting = legacy doc = Word lays out ≤14
+                    // (d77a/34140b/04b88e/fded6 have none and oikomi in Word),
+                    // but parse_compat_mode reports 15 for them → use the
+                    // explicit flag. ed025c (explicit 15) is correctly excluded.
+                    // Default ON (spec complete); opt-out OXI_S543_DISABLE.
                     let s543_oikomi = natural_break_jc
-                        && std::env::var("OXI_S543_OIKOMI").is_ok()
-                        && self.compress_punctuation;
+                        && std::env::var("OXI_S543_DISABLE").is_err()
+                        && self.compress_punctuation
+                        && (self.compat_mode <= 14 || !self.compat_mode_explicit);
                     let mut s472_absorb = false;
                     if (s472_demand || s543_oikomi) && overflow_tw > 0
                         && self.compress_punctuation
@@ -6858,7 +6865,32 @@ impl LayoutEngine {
                             }
                         }
                         let budget_tw = pt_to_tw(comps.iter().map(|(_, c)| *c).sum());
-                        if !comps.is_empty() && overflow_tw <= budget_tw {
+                        if !comps.is_empty() && overflow_tw <= budget_tw && s543_oikomi && !s472_demand {
+                            // S545 Word selection rule (per-char COM, ed025c
+                            // compat-14-flipped L2): compress the MINIMUM
+                            // number of puncts, each by its FULL cap (0.75),
+                            // comma/period class (、，。．) before brackets,
+                            // left-to-right within a class — NOT a water-fill
+                            // (Word's compressed puncts sit at exactly fs−0.75
+                            // while the rest stay natural).
+                            let mut order: Vec<(usize, f32)> = comps.clone();
+                            order.sort_by_key(|(fi, _)| {
+                                let c = current_line.fragments[*fi].text.chars().next().unwrap_or(' ');
+                                let class = if matches!(c, '、' | '，' | '。' | '．') { 0usize } else { 1 };
+                                (class, *fi)
+                            });
+                            let mut needed = (overflow_tw as f32) / 20.0;
+                            let mut saved = 0.0f32;
+                            for (fi, rem) in &order {
+                                if needed <= 0.001 { break; }
+                                current_line.fragments[*fi].width -= *rem;
+                                saved += *rem;
+                                needed -= *rem;
+                            }
+                            current_width -= saved;
+                            current_width_tw = current_width_tw.saturating_sub(pt_to_tw(saved));
+                            s472_absorb = true;
+                        } else if !comps.is_empty() && overflow_tw <= budget_tw {
                             // water-fill the overflow across comps (cap-aware), reducing
                             // current_width so accumulation stays coherent.
                             let mut needed = (overflow_tw as f32) / 20.0;
