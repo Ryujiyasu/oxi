@@ -10,6 +10,17 @@ pub use math_glyphs::{MathGlyphTables, GlyphVariant};
 
 fn default_upm() -> u16 { 2048 }
 
+/// S546 (2026-06-11): UPM=256 halfwidth chars (ASCII digits/letters AND
+/// halfwidth katakana) advance exactly fontSize/2 in Word's layout space —
+/// NOT floor-to-10tw (the 2026-04-11 rule, falsified by the S546 fs-sweep:
+/// MS Mincho 10.5pt digit/letter/ｱｲｳ all measure 5.25 mid-cluster at
+/// fs 9/10.5/12/14; repro_s546_digit_sweep.py). The old "5.0 not 5.25"
+/// was a 96dpi paint-snap artifact. Opt-out: OXI_S546_DISABLE.
+pub fn s546_exact_halfwidth() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_S546_DISABLE").is_err())
+}
+
 /// Pixel-rounded multiplication matching Word's font metrics.
 /// All font metric values are pre-normalized to [0,1] range (÷UPM),
 /// so this is simply `round(value * ppem)`.
@@ -634,9 +645,9 @@ impl FontMetricsRegistry {
             if is_fullwidth(c) { return font_size; }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
-                // COM-confirmed (2026-04-11): UPM=256 half-width uses 10-twip rounded half.
-                // MS Mincho 10.5pt: floor(210/2/10)*10/20 = 5.0pt (not 5.25pt).
-                // Only matters at non-integer fontSize (10.5pt). Integer sizes equal fontSize/2.
+                // S546 (2026-06-11): exactly fontSize/2 (see s546_exact_halfwidth).
+                if s546_exact_halfwidth() { return font_size / 2.0; }
+                // Pre-S546 floor-to-10tw model (OXI_S546_DISABLE):
                 let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
                 return half_tw / 20.0;
             }
@@ -707,6 +718,8 @@ impl FontMetricsRegistry {
             }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
+                // S546 (2026-06-11): exactly fontSize/2 (see s546_exact_halfwidth).
+                if s546_exact_halfwidth() { return font_size / 2.0; }
                 let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
                 return half_tw / 20.0;
             }

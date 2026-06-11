@@ -1572,6 +1572,23 @@ fn heading_default_font_size(level: u8) -> f32 {
     }
 }
 
+/// S546 (2026-06-11): autoSpaceDE/DN gap = exactly fontSize/4 in Word's
+/// layout space (2.625 @10.5pt). The old per-fontSize table
+/// (((fs/2)+0.5).floor()*0.5: 2.5 @9-10.5, 3.0 @11-12, 3.5 @14 — COM 2026-04-08)
+/// was derived from painted advances, which carry the 96dpi cumulative px-snap
+/// (true 13.125 paints as 13.5 → "3.0 before"; cluster end lands exact →
+/// "2.25 after"). The S546 fs-sweep (repro_s546_digit_sweep.py, fs 9/10.5/12/14,
+/// MS Mincho + Century digits/letters/kana boundaries) is explained to the
+/// decimal by gap = fs/4 in true space, both sides; per-cluster total = fs/2.
+/// Opt-out: OXI_S546_DISABLE (shared with the fs/2 halfwidth fix).
+fn s546_autospace_extra(font_size: f32) -> f32 {
+    if crate::font::s546_exact_halfwidth() {
+        font_size / 4.0
+    } else {
+        ((font_size / 2.0) + 0.5).floor() * 0.5
+    }
+}
+
 /// Snap character spacing to pixel grid (DPI=96 fixed).
 /// Character spacing pixel-snap: Word converts twips→pixels at 96 DPI
 /// using round-to-nearest integer division, then back to points.
@@ -6674,10 +6691,8 @@ impl LayoutEngine {
                         && ((prev_is_alpha && para_style.auto_space_de)
                             || (prev_is_digit && para_style.auto_space_dn))
                     {
-                        // §4.6.2 autoSpaceDE per-fontSize formula — COM-confirmed 2026-04-08.
-                        //   9-10.5pt → 2.5pt, 11-12pt → 3.0pt, 14pt → 3.5pt,
-                        //   16pt → 4.0pt, 18pt → 4.5pt (8 sizes verified, both directions).
-                        let extra = ((font_size / 2.0) + 0.5).floor() * 0.5;
+                        // S546: gap = fs/4 true-space (old per-fontSize table = paint artifact).
+                        let extra = s546_autospace_extra(font_size);
                         if let Some(last) = current_line.fragments.last_mut() {
                             last.width += extra;
                             last.natural_width += extra;
@@ -6817,15 +6832,20 @@ impl LayoutEngine {
                             if f.text.chars().count() != 1 { continue; }
                             let c = f.text.chars().next().unwrap_or(' ');
                             if s543_oikomi && !s472_demand {
-                                // S543 light tier: every compressible yakumono
-                                // (、，。．+ opening AND closing brackets) gives a
-                                // FLAT 0.75pt (sweep-measured at fs=10.5 AND fs=12:
-                                // compressed advance = fs−0.75 both, NOT fs-scaled —
-                                // repro_s543_punct_sweep.py; ！？ never compress).
-                                // Fragments already below natural contribute their
-                                // remainder only.
+                                // S543 light tier compressibles (、，。．+ opening AND
+                                // closing brackets; ！？ never compress).
+                                // S546 (2026-06-12): each punct can compress down to its
+                                // HALVING floor (fs/2) — the margin-sweep fit boundaries
+                                // (_s546e/_s546f: single 、 fits overflow 5.10 not 5.35;
+                                // 3-punct line frees −1.5/−1.5/−2.25 at need 5.05)
+                                // falsified the S543b flat 0.75 cap, which was a painted
+                                // (1px) artifact of small demands. The LINE-TOTAL budget
+                                // is fs/2 (see below). Pre-S546 (OXI_S546_DISABLE):
+                                // flat 0.75/punct.
                                 if !kinsoku::is_s473_compressible(c) { continue; }
-                                let cap = 0.75f32;
+                                let cap = if crate::font::s546_exact_halfwidth() {
+                                    font_size / 2.0
+                                } else { 0.75 };
                                 let floor = font_size - cap;
                                 let rem = (f.width - floor).max(0.0);
                                 if rem > 0.001 { comps.push((i, rem)); }
@@ -6864,28 +6884,65 @@ impl LayoutEngine {
                                 comps.push((i, cap));
                             }
                         }
-                        let budget_tw = pt_to_tw(comps.iter().map(|(_, c)| *c).sum());
+                        // S546 (2026-06-12): for the S543 light tier the fit budget is
+                        // LINE-TOTAL fs/2 — one halfwidth char worth — independent of
+                        // punct count (margin-sweep boundaries: single 、 [5.10, 5.35],
+                        // 4-punct line [5.10, 5.60], both bracketing 5.25 at fs=10.5;
+                        // 0.75×count would cap the 4-punct line at 3.0). Capped by Σrem
+                        // (puncts already compressed, e.g. S532 pairs, contribute less).
+                        let budget_tw = if s543_oikomi && !s472_demand
+                            && crate::font::s546_exact_halfwidth()
+                        {
+                            pt_to_tw((font_size / 2.0).min(comps.iter().map(|(_, c)| *c).sum()))
+                        } else {
+                            pt_to_tw(comps.iter().map(|(_, c)| *c).sum())
+                        };
                         if !comps.is_empty() && overflow_tw <= budget_tw && s543_oikomi && !s472_demand {
-                            // S545 Word selection rule (per-char COM, ed025c
-                            // compat-14-flipped L2): compress the MINIMUM
-                            // number of puncts, each by its FULL cap (0.75),
-                            // comma/period class (、，。．) before brackets,
-                            // left-to-right within a class — NOT a water-fill
-                            // (Word's compressed puncts sit at exactly fs−0.75
-                            // while the rest stay natural).
+                            // S545/S546 Word distribution rule: comma/period class
+                            // (、，。．) before brackets, left-to-right within a class.
+                            // S546 deep-demand refinement: the freed amount is assigned
+                            // in 0.75pt QUANTA, round-robin across the ordered puncts,
+                            // n_quanta = round(overflow/0.75) — reproduces BOTH the
+                            // S545 min-count×0.75 observations (small demand: need 1.5
+                            // /3 puncts → 2 quanta → 2 puncts −0.75, 1 natural) AND the
+                            // deep-demand split (_s546d r=1358: need 5.05 → 7 quanta →
+                            // 、−2.25 （−1.5 ）−1.5 = the COM-painted advances exactly).
+                            // Pre-S546: full-rem greedy (cap 0.75 ⇒ identical behavior).
                             let mut order: Vec<(usize, f32)> = comps.clone();
                             order.sort_by_key(|(fi, _)| {
                                 let c = current_line.fragments[*fi].text.chars().next().unwrap_or(' ');
                                 let class = if matches!(c, '、' | '，' | '。' | '．') { 0usize } else { 1 };
                                 (class, *fi)
                             });
-                            let mut needed = (overflow_tw as f32) / 20.0;
                             let mut saved = 0.0f32;
-                            for (fi, rem) in &order {
-                                if needed <= 0.001 { break; }
-                                current_line.fragments[*fi].width -= *rem;
-                                saved += *rem;
-                                needed -= *rem;
+                            if crate::font::s546_exact_halfwidth() {
+                                let quantum = 0.75f32;
+                                let mut n_quanta =
+                                    ((overflow_tw as f32 / 20.0) / quantum).round() as i32;
+                                let mut rem_cap: Vec<f32> =
+                                    order.iter().map(|(_, r)| *r).collect();
+                                'outer: loop {
+                                    let mut assigned_any = false;
+                                    for (oi, (fi, _)) in order.iter().enumerate() {
+                                        if n_quanta <= 0 { break 'outer; }
+                                        if rem_cap[oi] >= quantum - 0.001 {
+                                            current_line.fragments[*fi].width -= quantum;
+                                            rem_cap[oi] -= quantum;
+                                            saved += quantum;
+                                            n_quanta -= 1;
+                                            assigned_any = true;
+                                        }
+                                    }
+                                    if !assigned_any { break; }
+                                }
+                            } else {
+                                let mut needed = (overflow_tw as f32) / 20.0;
+                                for (fi, rem) in &order {
+                                    if needed <= 0.001 { break; }
+                                    current_line.fragments[*fi].width -= *rem;
+                                    saved += *rem;
+                                    needed -= *rem;
+                                }
                             }
                             current_width -= saved;
                             current_width_tw = current_width_tw.saturating_sub(pt_to_tw(saved));
@@ -7110,10 +7167,8 @@ impl LayoutEngine {
                             f.text.chars().last().map_or(false, |c| kinsoku::is_cjk_ideograph_or_kana(c))
                         });
                         if prev_is_cjk_ideo {
-                            // §4.6.2 autoSpaceDE per-fontSize formula — COM-confirmed 2026-04-08.
-                            //   9-10.5pt → 2.5pt, 11-12pt → 3.0pt, 14pt → 3.5pt,
-                            //   16pt → 4.0pt, 18pt → 4.5pt (8 sizes verified, both directions).
-                            let extra = ((font_size / 2.0) + 0.5).floor() * 0.5;
+                            // S546: gap = fs/4 true-space (old per-fontSize table = paint artifact).
+                            let extra = s546_autospace_extra(font_size);
                             if let Some(last) = current_line.fragments.last_mut() {
                                 last.width += extra;
                                 last.natural_width += extra;
@@ -9740,7 +9795,7 @@ impl LayoutEngine {
                                     let dn_boundary = (prev_cjk_ideo && cur_digit) || (prev_digit && cur_cjk_ideo);
                                     if (de_boundary && para.style.auto_space_de)
                                         || (dn_boundary && para.style.auto_space_dn) {
-                                        ((font_size / 2.0) + 0.5).floor() * 0.5
+                                        s546_autospace_extra(font_size)
                                     } else { 0.0 }
                                 };
                                 let cw = cw + auto_space_extra;
@@ -11712,7 +11767,7 @@ impl LayoutEngine {
                     let dn_boundary = (prev_cjk_ideo && cur_digit) || (prev_digit && cur_cjk_ideo);
                     if (de_boundary && para.style.auto_space_de)
                         || (dn_boundary && para.style.auto_space_dn) {
-                        ((font_size / 2.0) + 0.5).floor() * 0.5
+                        s546_autospace_extra(font_size)
                     } else { 0.0 }
                 };
                 let cw = cw + auto_space_extra;

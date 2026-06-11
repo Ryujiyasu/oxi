@@ -353,9 +353,18 @@ unsafe fn render_page_elements(
                         glyph_top_y = *body_top + (body_asc - mark_asc);
                     }
                 }
+                // S546 (2026-06-12): FALSIFIED full-corpus — naive element-x
+                // 96dpi snap (round(x/0.75)*0.75) regressed 216/410 pages net
+                // −1.1369 (the horizontal analog of S468 VSNAP). Word snaps the
+                // TRUE cumulative per-char x; Oxi element x already carries
+                // compression/justify adjustments, so snapping injects ±0.375
+                // noise instead of aligning. Kept opt-IN for experiments.
+                let snap_x = if std::env::var("OXI_S546_XSNAP").is_ok() {
+                    (el.x / 0.75).round() * 0.75
+                } else { el.x };
                 render_text(
                     rt, dwrite_factory,
-                    el.x, glyph_top_y, el.width, el.height,
+                    snap_x, glyph_top_y, el.width, el.height,
                     text, fam,
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, *double_strikethrough, is_double_underline,
