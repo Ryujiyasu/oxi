@@ -6772,9 +6772,32 @@ impl LayoutEngine {
                     // 、 fragments already on the line are retroactively shrunk by the
                     // absorbed overflow so the line fits exactly (break count AND render
                     // both match Word). This replaces the over-eager flat pre-compress.
+                    // S543 (2026-06-11): demand oikomi for the NON-justified natural
+                    // path. Word compresses each compressible yakumono on the line by
+                    // a LIGHT -0.75pt (at fs=10.5; scaled fs*0.75/10.5) to fit one
+                    // more char when the natural overflow is within that budget;
+                    // otherwise oidashi with zero compression (S492's zero-compression
+                    // observation was the oidashi branch only). Repro-confirmed
+                    // (tools/metrics/repro_s542_width.py, verbatim 7f272a ３． para:
+                    // ．（、 all 9.75 mid-line, 45-char L1; short lines stay 10.50 =
+                    // demand-gated). Opening brackets DO compress in this tier
+                    // (（第 → 9.75 measured). compat=14 docs exhibit it (7f272a),
+                    // so no compat>=15 gate.
+                    // GATE RESULT (2026-06-11, full corpus): 13 up / 4 down net
+                    // +0.1015 — recovers ALL S540-exposed pages (7f272a p1
+                    // +0.0368, 34140b p1-p6, 04b88e x3, fded6) BUT over-packs
+                    // d77a p2/p9 and ed025c p3/p5 (bottom-5 sum −0.001 → strict
+                    // Phase-3 gate fails). The compressible SET/cap is too wide:
+                    // Word's per-type membership needs the punct-type sweep
+                    // (see memory/session543). Default OFF (byte-identical)
+                    // until the set is pinned; opt-in OXI_S543_OIKOMI.
+                    let s543_oikomi = natural_break_jc
+                        && std::env::var("OXI_S543_OIKOMI").is_ok()
+                        && self.compress_punctuation;
                     let mut s472_absorb = false;
-                    if s472_demand && overflow_tw > 0
-                        && self.compress_punctuation && self.compat_mode >= 15
+                    if (s472_demand || s543_oikomi) && overflow_tw > 0
+                        && self.compress_punctuation
+                        && (self.compat_mode >= 15 || s543_oikomi)
                     {
                         let nat = font_size;
                         // Cap-aware compressibles for the whole-line FIT budget:
@@ -6786,7 +6809,17 @@ impl LayoutEngine {
                         for (i, f) in current_line.fragments.iter().enumerate() {
                             if f.text.chars().count() != 1 { continue; }
                             let c = f.text.chars().next().unwrap_or(' ');
-                            if s473_locomp {
+                            if s543_oikomi && !s472_demand {
+                                // S543 light tier: every compressible yakumono
+                                // (、，。．+ opening AND closing brackets) gives
+                                // exactly fs*0.75/10.5; fragments already below
+                                // natural contribute their remainder only.
+                                if !kinsoku::is_s473_compressible(c) { continue; }
+                                let cap = font_size * (0.75 / 10.5);
+                                let floor = font_size - cap;
+                                let rem = (f.width - floor).max(0.0);
+                                if rem > 0.001 { comps.push((i, rem)); }
+                            } else if s473_locomp {
                                 // S473: break budget = Σ cap over ALL compressibles
                                 // (、。，．+ closing AND opening brackets — break-flip
                                 // showed opening （ compresses at break too), cap =
