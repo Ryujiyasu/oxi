@@ -158,11 +158,20 @@ fn resolve_single_style(styles: &mut StyleSheet, id: &str, depth: u32) {
 
         // Get parent's resolved properties
         let parent_para = styles.styles.get(parent_id).map(|d| d.paragraph.clone());
+        // S539 (2026-06-11): jc lives on StyleDefinition.alignment (not
+        // ParagraphStyle), so merge_para_style never propagated it down the
+        // basedOn chain. 3a4f style "n" (no jc) basedOn "a"/Normal (jc=both)
+        // resolved to None → paragraphs using "n" fell back to left and took
+        // the non-justified break/render path, while Word justifies them.
+        let parent_align = styles.styles.get(parent_id).and_then(|d| d.alignment);
 
         if let Some(parent) = parent_para {
             let def = styles.styles.get_mut(id).unwrap();
             // Merge: child overrides parent. Only fill in None/default fields from parent.
             merge_para_style(&mut def.paragraph, &parent);
+            if def.alignment.is_none() {
+                def.alignment = parent_align;
+            }
         }
     }
 
