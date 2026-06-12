@@ -11,12 +11,15 @@ DOCS = os.path.join(ROOT, 'tools', 'golden-test', 'documents', 'docx')
 GDI = os.path.join(ROOT, 'tools', 'oxi-gdi-renderer', 'target', 'release', 'oxi-gdi-renderer.exe')
 
 
+DISABLE_VAR = os.environ.get('BREAKDIFF_VAR', 'OXI_S546_DISABLE')
+
+
 def dump(docx, tag, disable):
     env = dict(os.environ)
     if disable:
-        env['OXI_S546_DISABLE'] = '1'
+        env[DISABLE_VAR] = '1'
     else:
-        env.pop('OXI_S546_DISABLE', None)
+        env.pop(DISABLE_VAR, None)
     out = 'c:/tmp/_s546_bd_%s.json' % tag
     subprocess.run([GDI, docx, r'c:\tmp\_s546bd', '--dump-layout=' + out],
                    capture_output=True, env=env)

@@ -6101,6 +6101,15 @@ impl LayoutEngine {
         }
 
         let n_fragments = fragments.len();
+        // S547 (2026-06-12): w:kern resolved per paragraph (any fragment rPr
+        // kern>0, else the paragraph/docDefaults default-run kern). Gates the
+        // yakumono pair halving (break-time rule AND the S532 Stage-2 revert
+        // protection). See the gate comment at yakumono_pair_enabled below.
+        let para_kern_on = fragments.iter().any(|&(_, st, _, _, _)|
+                st.kern.map_or(false, |k| k > 0.0))
+            || para_style.default_run_style.as_ref()
+                .and_then(|rs| rs.kern).map_or(false, |k| k > 0.0);
+        let s547_kern_gate = std::env::var("OXI_S547_DISABLE").is_err();
         // S466 (2026-05-31, SHIPPED default-ON, opt-out OXI_S466_DISABLE):
         // hoisted once — see h8_trigger comment below. (a) compute positive grid
         // expansion for fs>=default, AND (b) apply it to char_width so the WRAP
@@ -6174,7 +6183,26 @@ impl LayoutEngine {
             let cjk_font_has_hwid = cjk_metrics
                 .map(|m| crate::font::font_supports_hwid(&m.family))
                 .unwrap_or(false);
-            let yakumono_pair_enabled = self.compress_punctuation || cjk_font_has_hwid;
+            // S547 (2026-06-12): the pair-halving gate is w:kern — NOT
+            // compressPunctuation and NOT compat. 2×2×2 COM matrix
+            // (_s547b_gate_matrix.py): kern=2 halves 、（/（「 even under
+            // doNotCompress at any compat; kern absent never halves even with
+            // compressPunctuation (the full 26×26 sweep at kern=0 had ZERO
+            // non-natural pairs). S532's "unconditional" was measured on
+            // kern=2 docs. kern is a RUN property; resolved per fragment:
+            // run rPr → paragraph-style chain (default_run_style, basedOn
+            // merge carries kern) → docDefaults (merge in ooxml.rs). The
+    // pair scan below is per-fragment (chars_vec), so fragment
+            // granularity is exact. Opt-out OXI_S547_DISABLE restores the
+            // pre-S547 compress_punctuation gate.
+            let frag_kern_on = style.kern
+                .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                .map_or(false, |k| k > 0.0);
+            let yakumono_pair_enabled = if s547_kern_gate {
+                frag_kern_on || cjk_font_has_hwid
+            } else {
+                self.compress_punctuation || cjk_font_has_hwid
+            };
             let yakumono_enabled = self.compress_punctuation;
             // S472 (2026-06-01) DEMAND-DRIVEN yakumono refactor (user chose the big
             // refactor path). Word does NOT pre-compress standalone 、 at wrap time:
@@ -7258,7 +7286,13 @@ impl LayoutEngine {
         // (a fragment is typically one CJK char). Fragments the break never
         // compressed have width==natural, so over-marking is a no-op.
         // opt-out OXI_S532_DISABLE.
-        let s532_keep_pairs = std::env::var("OXI_S532_DISABLE").is_err();
+        // S547: the pair revert-protection only applies where the pair rule
+        // itself applies (w:kern docs). Without this, a kern-less doc whose
+        // standalone 、 was pre-compressed by OTHER rules and happens to sit
+        // before an opener would be wrongly protected from the loose-line
+        // revert (Word keeps it natural — kern0 sweep had zero halved pairs).
+        let s532_keep_pairs = std::env::var("OXI_S532_DISABLE").is_err()
+            && (!s547_kern_gate || para_kern_on);
         for line in &mut lines {
             if !line.was_compressed { continue; }
             let pair_frag: Vec<bool> = if s532_keep_pairs {

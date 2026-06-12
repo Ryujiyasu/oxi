@@ -1667,6 +1667,9 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if para_rs.font_family_east_asia.is_none() { para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone(); }
             if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia { para_rs.has_explicit_east_asia = true; }
             if para_rs.color.is_none() { para_rs.color = doc_rs.color.clone(); }
+            // S547 (2026-06-12): w:kern gates the yakumono pair halving — must
+            // survive the docDefaults merge like the font fields.
+            if para_rs.kern.is_none() { para_rs.kern = doc_rs.kern; }
         } else {
             style.default_run_style = styles.doc_default_run_style.clone();
         }

@@ -96,12 +96,18 @@ pub fn is_cjk_compressible(ch: char) -> bool {
 const YAKUMONO_CLOSING: &[char] = &[
     '）', '」', '』', '〕', '】', '》', '〙', '〗', '｝', '］',
     '、', '。', '，', '．',
+    // S547 (2026-06-12): 〉 confirmed in the full 26×26 pair sweep
+    // (_s547_kern_pairs.py — every closer+comma class member halves before
+    // any yakumono except ！？, kern-gated).
+    '〉',
 ];
 
 /// Opening-side punctuation that compresses (50%) when preceded by a trigger.
 /// These have built-in left-side spacing that gets removed.
 const YAKUMONO_OPENING: &[char] = &[
     '（', '「', '『', '〔', '【', '《', '〘', '〖', '｛', '［',
+    // S547: 〈 confirmed (halves after opener/・：；, kern-gated).
+    '〈',
 ];
 
 /// Trigger chars: presence triggers compression of an adjacent closing/opening punct.
@@ -109,12 +115,13 @@ const YAKUMONO_OPENING: &[char] = &[
 /// triggers but NOT compressible themselves.
 const YAKUMONO_TRIGGER: &[char] = &[
     // openers
-    '（', '「', '『', '〔', '【', '《', '〘', '〖', '｛', '［',
+    '（', '「', '『', '〔', '【', '《', '〘', '〖', '｛', '［', '〈',
     // closers
-    '）', '」', '』', '〕', '】', '》', '〙', '〗', '｝', '］',
+    '）', '」', '』', '〕', '】', '》', '〙', '〗', '｝', '］', '〉',
     // commas/periods
     '、', '。', '，', '．',
     // special triggers (themselves uncompressed): middle dot, colon, semicolon
+    // (S547 26×26 sweep: trigger set = all yakumono EXCEPT ！？)
     '・', '：', '；',
 ];
 
