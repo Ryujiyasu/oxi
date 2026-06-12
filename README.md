@@ -7,7 +7,7 @@ View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — n
 
 [Live Demo](https://ryujiyasu.gitlab.io/oxi/) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
-![MIT License](https://img.shields.io/badge/license-MIT-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
+![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
 
 ---
 
@@ -32,7 +32,7 @@ View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — n
 
 Billions of people depend on proprietary document formats (.docx, .xlsx, .pptx, .pdf) for work, education, and government — yet no truly compatible open-source rendering engine exists. LibreOffice breaks layouts. Google Docs requires a server. The world deserves a document engine that is:
 
-- **Free forever** — MIT license, no vendor lock-in
+- **Free forever** — MPL-2.0 core (improvements to the engine flow back to everyone; embedding stays free), MIT/Apache-2.0 bindings, no vendor lock-in
 - **No proprietary format** — Oxi reads and writes only standard formats (.docx / .odt / .xlsx / .pptx / .pdf). Oxi never asks anyone to migrate into an Oxi-specific container
 - **Both ODF and OOXML are first-class** — neither is a second-class import
 - **Runs anywhere** — browser, desktop, mobile, server, embedded
@@ -70,7 +70,7 @@ Oxi's Ra loop is a mechanical convergence toward SSIM = 1.0 against Microsoft Wo
 | **Google Docs** | Server-rendered | Proprietary. Requires server. Intentionally diverges from Word layout |
 | **docx-rs / rdocx** | Rust DOCX libraries | Read/write and export only — no layout engine for browser rendering |
 
-**Oxi's unique combination:** OSS (MIT) + Rust/WASM client-side + dual-format first-class (.docx + .odt, no proprietary "Oxi format") + COM-measured pixel-perfect Word compatibility + zero server cost. No other project occupies this intersection.
+**Oxi's unique combination:** OSS (MPL-2.0 core + permissive bindings — embeddable in proprietary products, unlike AGPL) + Rust/WASM client-side + dual-format first-class (.docx + .odt, no proprietary "Oxi format") + COM-measured pixel-perfect Word compatibility + zero server cost. No other project occupies this intersection.
 
 LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). Microsoft Word inverts that. Oxi's IR is format-agnostic from the start — neither format owns it, so neither degrades on round-trip.
 
@@ -494,7 +494,10 @@ See [Vision: The Oxi Ecosystem](#vision-the-oxi-ecosystem) for the distinction b
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Run tests and lint (`cargo test && cargo clippy`)
-4. Submit a pull request with pixel accuracy results
+4. Sign off your commits (`git commit -s`) — Oxi uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO). No CLA, no copyright assignment: your code stays yours
+5. Submit a pull request with pixel accuracy results
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
@@ -510,4 +513,14 @@ See [Vision: The Oxi Ecosystem](#vision-the-oxi-ecosystem) for the distinction b
 
 ## License
 
-MIT
+Oxi is licensed in three layers, chosen to maximize both adoption and the flow of improvements back into the canonical tree:
+
+| Layer | License | Why |
+|-------|---------|-----|
+| **Core engine** (`oxi-common`, `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`, `oxihanko`, `oxi-cli`, `oxi-desktop`) | [MPL-2.0](LICENSE) | File-level copyleft: modifications to engine files must be published, so layout-fidelity improvements converge into one tree. Embedding Oxi in proprietary or commercial products is fully permitted — only changes to Oxi's own files must be shared. Same license as LibreOffice and Firefox |
+| **Bindings** (`oxi-wasm`, `oxidocs-python`) | MIT OR Apache-2.0 | Standard Rust dual license — zero friction for embedding in any stack |
+| **Conformance corpus** (self-authored repro documents under `tools/golden-test/repros/`) | CC BY-SA 4.0 | The Word-compatibility test suite is a shared public asset; improvements to it must stay shared |
+
+Contributions are accepted under the [Developer Certificate of Origin](https://developercertificate.org/) (`git commit -s`). There is no CLA — contributors keep their copyright, and the project cannot relicense your work out from under you.
+
+All third-party dependencies must be MPL-2.0-compatible (MIT, Apache-2.0, BSD, etc.).
