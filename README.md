@@ -213,14 +213,14 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
-  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03"]
+  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126]
+  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189]
 ```
 
 > The small step at **05-30** is not a regression: Phase 3 recomputed a clean
 > SSIM baseline from scratch, so points before and after that date sit on
-> slightly different measurement bases. **06-03** is the current per-page mean
+> slightly different measurement bases. **06-12** is the current per-page mean
 > over scored pages.
 
 | Date | avg SSIM | gate / Phase | Key Changes |
@@ -242,6 +242,7 @@ xychart-beta
 | 2026-05-29 | — | **Phase 2** (element IoU) | Gate moves to per-element bounding-box IoU; plateaus at mean IoU ≈ **0.9692**. Phase 2's median-dy subtraction absorbs uniform per-table offsets, so the IoU ≥ 0.99 entry bar proved structurally unreachable — which is precisely why the real remaining error (a uniform table-top offset, visible only in pixels) was invisible to it. See [CLAUDE.md](CLAUDE.md) |
 | 2026-05-30 | per-page **0.8862** · per-doc **0.9235** | **Phase 3** (SSIM) | Primary gate switches back to pixel SSIM (mean ≥ 0.99 + bottom-N floor) on a freshly recomputed baseline. SSIM is the only metric that sees the uniform table-top offset Phase 2 hid. Phase 1 (54/55) and Phase 2 (0.9692) are kept as regression sentinels |
 | 2026-06-03 | per-page **0.9126** | **Phase 3** · Phase 1 54/55 | R35 yakumono capacity-budget line breaking (S475/S476, docGrid `lines`+`linesAndChars`), then a 36-doc correctness sweep shipping localized coverage fixes: floating-textbox z-order (S478), 144 pt footnote separator (S479), dash-dot art borders (S480), explicit nil-cell-border suppression (S482), Word "final" revision view (S483), **upright CJK vertical writing** (S489), ellipse ○ option-markers (S490) |
+| 2026-06-12 | per-page **0.9189** | **Phase 3** · Phase 1 54/55 | Two weeks of COM-measured spec re-derivations (S495-S548): `lineRule=exact` text bottom-aligns in its box (S495), cell inline images (S533), inline drawing canvases (S535/S537), three justification bugs — style-chain `jc` inheritance, explicit `jc=left` vs style default, jc-left natural breaks (S539/S540) — demand *oikomi* with a line-total fs/2 budget under Word-2010 compat (S543-S546), **character-width trio**: UPM-256 halfwidth = fs/2 exact, autoSpaceDE/DN = fs/4 true-space, yakumono pair-halving gated on `w:kern` with the full 26×26 pair table (S546/S547), compat-15 oidashi-not-burasagari + exact-line page-break threshold (S548). The single Phase-1 FAIL (`3a4f9f`) is down to 3 paragraphs (one page early), all traced to the inline-image text-line model |
 
 **Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 3 — pixel SSIM** (mean ≥ 0.99 + bottom-N floor), active since 2026-05-30. Earlier phases are kept as regression sentinels: **Phase 1** pagination correctness (per-paragraph page match, 54/55) and **Phase 2** element IoU (mean 0.9692). Phases 1 and 2 each plateaued below their entry bars for structural reasons — pagination on one split-table outlier, IoU because its median-dy subtraction hides uniform table offsets — so the gate advanced to the metric that can see the remaining pixel error. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
 

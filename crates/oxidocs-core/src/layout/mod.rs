@@ -4672,7 +4672,25 @@ impl LayoutEngine {
             // full line_h. COM-confirmed via db9ca18 i=37 (+5.25pt overflow
             // accepted by Word).
             let natural_lh = natural_line_heights.get(line_idx).copied().unwrap_or(effective_lh);
-            let break_threshold = natural_lh.min(effective_lh);
+            // S548b (2026-06-12, opt-out OXI_S548B_DISABLE): the Day-33
+            // leniency is the INK-BOTTOM rule and does NOT apply to
+            // lineRule=exact. For exact lines the text sits at the BOTTOM of
+            // the box (S495 bottom-align) — there is no spare leading below
+            // the ink — so the FULL box height must fit above the bottom
+            // margin. 3a4f p43→p44: ① para (line=350 exact, 17.5pt) at
+            // cursor 741.5, content bottom 756.85: natural_lh 13.6 fit it
+            // (755.1) where Word pushes (741.25+17.5=758.75 > 756.85) — one
+            // of the 5 delta=-1 boundary paras behind the Phase-1 sole FAIL.
+            // Auto/grid lines keep the Day-33 natural_lh leniency (db9ca's
+            // +5.25 leading acceptance is the auto-grid case: ink at top,
+            // leading below).
+            let s548b_exact_full = para.style.line_spacing_rule.as_deref() == Some("exact")
+                && std::env::var("OXI_S548B_DISABLE").is_err();
+            let break_threshold = if s548b_exact_full {
+                effective_lh
+            } else {
+                natural_lh.min(effective_lh)
+            };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
             let line_lenient_extra = if !para_fn_heights.is_empty() {
@@ -7107,8 +7125,32 @@ impl LayoutEngine {
                         // hang-overflow case (b837 footnote), which these docs don't hit.
                         let s506_oidashi = std::env::var("OXI_S506_OIDASHI").is_ok()
                             && !is_justified && self.compat_mode >= 15 && !s476_body;
+                        // S548 (2026-06-12, default ON, opt-out OXI_S548_DISABLE):
+                        // the S506-confirmed rule shipped with its correct scope.
+                        // compat≥15 (Word 2013+) does OIDASHI, not burasagari, at
+                        // line-end (S506 repro: compat 12/14 HANG, 15 OIDASHI).
+                        // EXPLICIT compat only — absent compatSetting = legacy doc
+                        // = Word 2010 layout = burasagari stays (d77a/34140b/
+                        // 04b88e/fded6; same semantics as the S545 oikomi gate).
+                        // BODY paragraphs included (S506's !s476_body excluded
+                        // them = no-op for the 3a4f class: its kern=0 注釈 para
+                        // 「…就業規則は、」hung the 、 at natural width 5.3pt PAST
+                        // the right margin where Word compat-15 pushes は、 down
+                        // → every 注釈 para one line short → the 5 delta=-1
+                        // boundary paras = the Phase-1 sole FAIL).
+                        // linesAndChars (b837) excluded: its footnote oidashi is
+                        // coupled to a compensating vertical over-height (S506
+                        // definitive conclusion) — needs the S492 §8 refactor.
+                        // s476_body: MAIN BODY flow only — applying the oidashi to
+                        // CELL/textbox paragraphs regressed ed025c p4 −0.0685 (its
+                        // narrow fitText cells re-wrapped); Word's in-cell hang
+                        // behavior is unmeasured — body is the COM-pinned scope.
+                        let s548_oidashi = std::env::var("OXI_S548_DISABLE").is_err()
+                            && !is_justified && s476_body
+                            && self.compat_mode >= 15 && self.compat_mode_explicit
+                            && !lines_and_chars;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
-                            && !s228_block_hang && !s506_oidashi;
+                            && !s228_block_hang && !s506_oidashi && !s548_oidashi;
 
                         if can_hang {
                             current_line.fragments.push(LineFragment {
