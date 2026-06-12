@@ -3090,7 +3090,22 @@ impl LayoutEngine {
                     prev_space_after = 0.0;
                 }
                 Block::Image(img) => {
-                    if cursor.cursor_y + img.height > start_y + content_height {
+                    // S549 (2026-06-12, opt-out OXI_S549_DISABLE): in a docGrid
+                    // lines section the image-only paragraph's line occupies a
+                    // WHOLE number of grid cells — ceil(extent/pitch)×pitch.
+                    // COM repro (_s549_img_grid.py, pitch 18): extent 185→198
+                    // (11 cells), 100→108, 90→90, 36→36 (exact multiples pass
+                    // through); docGrid none → extent EXACTLY (S537 model
+                    // unchanged). Live 3a4f "/" figures (extent 185 → Word
+                    // block 198) were leaving every downstream para 13pt high
+                    // → the last 3 Phase-1 delta=-1 boundary paras.
+                    let img_adv = match page.grid_line_pitch {
+                        Some(p) if p > 0.1 && std::env::var("OXI_S549_DISABLE").is_err() => {
+                            (img.height / p).ceil() * p
+                        }
+                        _ => img.height,
+                    };
+                    if cursor.cursor_y + img_adv > start_y + content_height {
                         if num_columns > 1 && current_column + 1 < num_columns {
                             current_column += 1;
                             start_x = col_x_positions[current_column];
@@ -3115,7 +3130,7 @@ impl LayoutEngine {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
                     }));
-                    cursor.advance(img.height);
+                    cursor.advance(img_adv);
                     prev_para_style_id = None;
                 }
                 Block::UnsupportedElement(_) => {
