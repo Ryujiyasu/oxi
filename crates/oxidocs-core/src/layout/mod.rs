@@ -6877,8 +6877,32 @@ impl LayoutEngine {
                         && std::env::var("OXI_S543_DISABLE").is_err()
                         && self.compress_punctuation
                         && (self.compat_mode <= 14 || !self.compat_mode_explicit);
+                    // S556 scaffold (opt-IN OXI_S556_JUST15; default OFF =
+                    // byte-identical): the c15 justified pack tier, re-applied
+                    // for integration debugging. Slack-table rule from
+                    // S551-S555 (T={1:6.5,2:4.15,3:3.3,4:2.65,5+:2.15}).
+                    // OXI_S556_DEBUG=1 prints each candidate decision.
+                    let s556_just15 = is_justified
+                        && std::env::var("OXI_S556_JUST15").is_ok()
+                        && self.compress_punctuation
+                        && self.compat_mode >= 15 && self.compat_mode_explicit
+                        && !lines_and_chars
+                        // PLAIN pulls only: a line-start-prohibited overflow
+                        // char is the KINSOKU path's case (S550 K matrix:
+                        // c15 = oidashi, NO compression) — the pack matrices
+                        // all pulled plain 国.
+                        && !kinsoku::is_line_start_prohibited(ch)
+                        && current_line.fragments.iter()
+                            .all(|f| f.width >= f.natural_width - 0.001)
+                        && {
+                            let cs: Vec<char> = current_line.fragments.iter()
+                                .flat_map(|f| f.text.chars()).collect();
+                            !cs.windows(2).any(|w|
+                                kinsoku::is_yakumono_trigger(w[0])
+                                    && kinsoku::is_yakumono_trigger(w[1]))
+                        };
                     let mut s472_absorb = false;
-                    if (s472_demand || s543_oikomi) && overflow_tw > 0
+                    if (s472_demand || s543_oikomi || s556_just15) && overflow_tw > 0
                         && self.compress_punctuation
                         && (self.compat_mode >= 15 || s543_oikomi)
                     {
@@ -6892,7 +6916,11 @@ impl LayoutEngine {
                         for (i, f) in current_line.fragments.iter().enumerate() {
                             if f.text.chars().count() != 1 { continue; }
                             let c = f.text.chars().next().unwrap_or(' ');
-                            if s543_oikomi && !s472_demand {
+                            if s556_just15 && !s543_oikomi && !s472_demand {
+                                // indices only; rem=0 keeps legacy budget at 0.
+                                if !kinsoku::is_s473_compressible(c) { continue; }
+                                comps.push((i, 0.0));
+                            } else if s543_oikomi && !s472_demand {
                                 // S543 light tier compressibles (、，。．+ opening AND
                                 // closing brackets; ！？ never compress).
                                 // S546 (2026-06-12): each punct can compress down to its
@@ -6943,6 +6971,57 @@ impl LayoutEngine {
                                     _ => continue,
                                 };
                                 comps.push((i, cap));
+                            }
+                        }
+                        // S556: justified-c15 slack-table pack + quanta distribution.
+                        if s556_just15 && !s543_oikomi && !s472_demand && !comps.is_empty() {
+                            let n = comps.len();
+                            let t_n = match n {
+                                1 => 6.5f32,
+                                2 => 4.15,
+                                3 => 3.3,
+                                4 => 2.65,
+                                _ => 2.15,
+                            };
+                            let need = overflow_tw as f32 / 20.0;
+                            let slack = char_width - need;
+                            let fire = need > 0.0 && slack >= t_n;
+                            if std::env::var("OXI_S556_DEBUG").is_ok() {
+                                let head: String = current_line.fragments.iter()
+                                    .flat_map(|f| f.text.chars()).take(12).collect();
+                                eprintln!("S556 cand ch={} need={:.2} slack={:.2} n={} t={:.2} fire={} head={}",
+                                    ch, need, slack, n, t_n, fire, head);
+                            }
+                            if fire {
+                                let q = (need / 0.75).round() as i32;
+                                if q >= 1 {
+                                    let mut order: Vec<usize> =
+                                        comps.iter().map(|(fi, _)| *fi).collect();
+                                    order.sort_by_key(|fi| {
+                                        let c = current_line.fragments[*fi].text.chars().next().unwrap_or(' ');
+                                        let class = if matches!(c, '、' | '，' | '。' | '．') { 0usize } else { 1 };
+                                        (class, *fi)
+                                    });
+                                    let floor = font_size / 2.0;
+                                    let mut remaining = q;
+                                    'rr: loop {
+                                        let mut placed = false;
+                                        for fi in order.iter() {
+                                            if remaining == 0 { break 'rr; }
+                                            if current_line.fragments[*fi].width - 0.75 >= floor - 0.001 {
+                                                current_line.fragments[*fi].width -= 0.75;
+                                                remaining -= 1;
+                                                placed = true;
+                                            }
+                                        }
+                                        if !placed { break; }
+                                    }
+                                    let saved = (q - remaining) as f32 * 0.75;
+                                    current_width -= saved;
+                                    current_width_tw = current_width_tw.saturating_sub(pt_to_tw(saved));
+                                    current_capw_tw = current_capw_tw.saturating_sub(pt_to_tw(saved));
+                                    s472_absorb = true;
+                                }
                             }
                         }
                         // S546 (2026-06-12): for the S543 light tier the fit budget is
