@@ -9053,6 +9053,16 @@ impl LayoutEngine {
                     cell_content_h_visual += _border_overhead * 0.375;
                 }
 
+                if dump_table {
+                    let ftext: String = cell.blocks.iter().filter_map(|b| {
+                        if let Block::Paragraph(p) = b {
+                            Some(p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                        } else { None }
+                    }).collect::<Vec<_>>().join("|");
+                    eprintln!("[CELL_DUMP] row={} span={} cell_w={:.2} inner_w={:.2} content_h={:.2} text={:?}",
+                        row_idx, span, cell_w, inner_w, cell_content_h,
+                        ftext.chars().take(24).collect::<String>());
+                }
                 row_height = row_height.max(cell_content_h);
                 visual_row_h = visual_row_h.max(cell_content_h_visual);
                 center_row_h = center_row_h.max(cell_content_h_visual + center_extra);
