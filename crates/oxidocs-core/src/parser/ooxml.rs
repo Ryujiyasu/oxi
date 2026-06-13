@@ -4125,26 +4125,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         }
     }
 
-    // Build image if we have a blip reference
-    let image = if let Some(rid) = rel_id {
-        let data = ctx.media.get(&rid).cloned().unwrap_or_default();
-        let content_type = ctx.media_types.get(&rid).cloned();
-        Some(Image {
-            data,
-            width,
-            height,
-            alt_text: None,
-            content_type,
-            position: None,
-            wrap_type: None,
-            crop: None,
-            anchor_block_index: 0,
-        })
-    } else {
-        None
-    };
-
-    // VML absolute-positioned shapes get a FloatingPosition
+    // VML absolute-positioned shapes get a FloatingPosition. Computed BEFORE
+    // the image (S566) so an absolutely-positioned VML picture carries it and
+    // is classified as FLOATING by the IR builder, not inline.
     let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
         Some(FloatingPosition {
             x: margin_left,
@@ -4153,6 +4136,36 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             v_relative: Some("text".to_string()),
             h_align: None,
             v_align: None,
+        })
+    } else {
+        None
+    };
+
+    // Build image if we have a blip reference
+    let image = if let Some(rid) = rel_id {
+        let data = ctx.media.get(&rid).cloned().unwrap_or_default();
+        let content_type = ctx.media_types.get(&rid).cloned();
+        // S566 (2026-06-14): an absolutely-positioned VML picture (harassmanual's
+        // 509.75x726.75pt flowchart, z-index<0 behind text) must carry its
+        // FloatingPosition so the IR builder (`Separate inline images ... from
+        // floating images`) classifies it as FLOATING and does NOT reserve its
+        // height in the body flow. Previously hardcoded position:None -> treated
+        // as INLINE -> ~2 pages of flow reserved -> spurious empty pages p5/p6.
+        // wrap_type None = behind-text overlay, no text reservation.
+        // Opt-out OXI_S566_DISABLE restores the old inline (position:None) path.
+        let s566 = std::env::var("OXI_S566_DISABLE").is_err();
+        let img_position = if s566 { vml_position.clone() } else { None };
+        let img_wrap = if s566 && vml_position.is_some() { Some(WrapType::None) } else { None };
+        Some(Image {
+            data,
+            width,
+            height,
+            alt_text: None,
+            content_type,
+            position: img_position,
+            wrap_type: img_wrap,
+            crop: None,
+            anchor_block_index: 0,
         })
     } else {
         None
