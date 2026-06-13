@@ -1,0 +1,11 @@
+{
+  "pages": [
+    {"page": 1, "width": 595.300, "height": 841.900, "elements": [
+      {"type": "text", "x": 113.000, "y": 100.500, "w": 409.500, "h": 13.500, "text": "⑦　常に整理整頓に努め、通路、避難口又は消火設備のある所に物品を置かないこと。", "font_size": 10.50, "para_idx": 0, "run_idx": null, "char_offset": null, "cell_para_idx": 0, "cell_row_idx": 0, "cell_col_idx": 0, "text_y_off": 2.000},
+      {"type": "border", "x": 97.550, "y": 100.000, "w": 412.200, "h": 0.000, "text": null, "font_size": 0.00, "para_idx": null, "run_idx": null, "char_offset": null, "cell_para_idx": null, "cell_row_idx": null, "cell_col_idx": null, "text_y_off": 0.000},
+      {"type": "border", "x": 97.550, "y": 113.125, "w": 412.200, "h": 0.000, "text": null, "font_size": 0.00, "para_idx": null, "run_idx": null, "char_offset": null, "cell_para_idx": null, "cell_row_idx": null, "cell_col_idx": null, "text_y_off": 0.000},
+      {"type": "border", "x": 97.550, "y": 100.000, "w": 0.000, "h": 13.125, "text": null, "font_size": 0.00, "para_idx": null, "run_idx": null, "char_offset": null, "cell_para_idx": null, "cell_row_idx": null, "cell_col_idx": null, "text_y_off": 0.000},
+      {"type": "border", "x": 509.750, "y": 100.000, "w": 0.000, "h": 13.125, "text": null, "font_size": 0.00, "para_idx": null, "run_idx": null, "char_offset": null, "cell_para_idx": null, "cell_row_idx": null, "cell_col_idx": null, "text_y_off": 0.000}
+    ]}
+  ]
+}
