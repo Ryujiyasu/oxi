@@ -162,14 +162,30 @@ pub fn is_s473_compressible(ch: char) -> bool {
 /// scaled by fs/12. `pair_pt`/`solo_pt` are env-tunable (flat-K = pass equal).
 pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32, fs: f32) -> f32 {
     let scale = fs / 12.0;
-    // trailing-space punct = comma/period + CLOSING brackets (their right half-em
-    // collapses when meeting an adjacent bracket).
-    let is_trailing_space = matches!(c, '、' | '。' | '，' | '．') || YAKUMONO_CLOSING.contains(&c);
     let next_is_bracket = next.map_or(false, |n| {
         YAKUMONO_OPENING.contains(&n) || YAKUMONO_CLOSING.contains(&n)
     });
-    if is_trailing_space && next_is_bracket {
-        return pair_pt * scale;
+    // Adjacent-yakumono (pair) collapse at break. The FIRST char's break
+    // capacity depends on its CLASS (S558 2026-06-13, split — was uniform):
+    //  - a CLOSING bracket before any bracket collapses a full half-em
+    //    (pair_pt ≈ 6.0pt @12). This matches the render pair-halving and is the
+    //    d77a para9 fix: ）」（ cluster (）→6.0, 」→6.0) lets L3 pack 40 like
+    //    Word (under PAIR=2.5 L3 broke at 39 → a cascade that the justified
+    //    pack scaffold then fired on spuriously — see session557).
+    //  - a comma/period before a bracket trims only LIGHTLY (solo_pt) — it does
+    //    NOT collapse a half-em at break. 3a4f para294 L6 (…含まれます。）を…)
+    //    must keep its natural break; a blanket pair_pt=6.0 over-packed the 。）
+    //    39→41 and pushed a paragraph up a page (Phase-1 regression).
+    if next_is_bracket {
+        // NB: YAKUMONO_CLOSING also contains 、。，． — test the comma/period set
+        // FIRST so periods/commas take the LIGHT trim, and only true closing
+        // BRACKETS take the full half-em.
+        if matches!(c, '、' | '。' | '，' | '．') {
+            return solo_pt * scale;
+        }
+        if YAKUMONO_CLOSING.contains(&c) {
+            return pair_pt * scale;
+        }
     }
     // solo light trim: any compressible punct/bracket + nakaguro.
     if is_s473_compressible(c) || c == '・' {

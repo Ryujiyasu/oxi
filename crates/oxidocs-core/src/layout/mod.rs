@@ -6350,8 +6350,14 @@ impl LayoutEngine {
                 && !natural_break_jc;  // S492: non-justified paras break at natural
             let s476_cap: f32 = std::env::var("OXI_S476_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.0);
+            // S558 (2026-06-13): s475_pair default 2.5 → 6.0. A CLOSING bracket
+            // before another bracket collapses a full half-em at break (matching
+            // the render pair-halving); the old 2.5 under-counted it, so
+            // bracket-cluster justified lines (d77a para9 L3 ）」（) broke a char
+            // early — an SSIM cascade. Comma/period-first pairs still trim lightly
+            // (s475_max_compress split — see kinsoku.rs). Env-tunable.
             let s475_pair: f32 = if s476_grid { s476_cap } else {
-                std::env::var("OXI_S475_PAIR").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5) };
+                std::env::var("OXI_S475_PAIR").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0) };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5) };
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
