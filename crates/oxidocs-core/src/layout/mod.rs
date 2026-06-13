@@ -4793,7 +4793,20 @@ impl LayoutEngine {
             // leading below).
             let s548b_exact_full = para.style.line_spacing_rule.as_deref() == Some("exact")
                 && std::env::var("OXI_S548B_DISABLE").is_err();
-            let break_threshold = if s548b_exact_full {
+            // S562 SHIP (2026-06-14, default ON, opt-out OXI_S562B_DISABLE): the
+            // Day-33 natural_lh leniency does NOT apply to EMPTY paragraphs.
+            // roudoujoken's −1: a trailing empty para (i=147) at the page-2 bottom
+            // ends ~1.7pt past the bottom margin; Oxi's natural_lh leniency kept it
+            // on p2, but Word pushes it to p3 (the empty para's full grid box must
+            // fit). That keeps Oxi's page 3 starting ~15.7pt higher (no empty atop
+            // p3) → ８.「休暇」 fit p3 where Word has it on p4. db9ca (the leniency's
+            // COM source) is a CONTENT line (ink at top, leading below) — empties
+            // have no ink to anchor, so Word uses their full box. Discriminator =
+            // empty para. GATE: Phase-1 55/57 → 56/57 (roudoujoken FAIL→PASS), 0
+            // PASS→FAIL, mean 0.9980; only kyotei (multi-col residual) still fails.
+            let s562b_empty_full = std::env::var("OXI_S562B_DISABLE").is_err()
+                && para.runs.iter().all(|r| r.text.is_empty());
+            let break_threshold = if s548b_exact_full || s562b_empty_full {
                 effective_lh
             } else {
                 natural_lh.min(effective_lh)
