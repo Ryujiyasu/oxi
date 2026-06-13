@@ -8886,7 +8886,14 @@ impl LayoutEngine {
                     0.0
                 };
                 // For line-wrapping estimation, use cell_w (not inner_w after padding)
-                // Word allows text to extend into cell margins for wrapping purposes
+                // Word allows text to extend into cell margins for wrapping purposes.
+                // S561 (2026-06-13): a cellMar-subtraction probe (cell_w − pad_l −
+                // pad_r) did NOT fix roudoujoken r7 — the estimate computes the
+                // (5)裁量 line at < cell_w − cellMar while the RENDER paints it 430.5pt
+                // (past the cell's own right border). The estimate UNDER-counts the
+                // line width vs the render, so it fits a line Word wraps. The real
+                // co-cause is the estimate↔render char-width discrepancy (S546
+                // halfwidth/autospace), not just the budget. See memory.
                 let inner_w = cell_w.max(0.0);
                 let mut cell_content_h = pad_t;
                 // Session 79c: parallel emit-equivalent content_h for visual_row_h
