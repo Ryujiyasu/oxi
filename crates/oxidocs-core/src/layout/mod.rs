@@ -6302,6 +6302,19 @@ impl LayoutEngine {
                 && !is_justified
                 && (!lines_and_chars || s492_full);
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
+            // S557 (2026-06-13, part of the OXI_S556_JUST15 opt-in scaffold):
+            // c15-explicit JUSTIFIED paragraphs keep standalone 、。，．at
+            // NATURAL width at break — Word defers ALL their compression to
+            // the per-line pack decision (d77a para9-L6 ground truth: Word's
+            // 38-char line = naturals overflowing 2.5 → packed −0.75×3 onto
+            // 、）、; Oxi's legacy ×0.6667 pre-compress baked −4/punct into
+            // width AND natural_width, blinding the pack tier's need (7.0 vs
+            // Word's 14.5 for the 39th char) and its all-natural guard).
+            let s557_natural_just15 = std::env::var("OXI_S556_JUST15").is_ok()
+                && is_justified
+                && self.compress_punctuation
+                && self.compat_mode >= 15 && self.compat_mode_explicit
+                && !lines_and_chars;
             // S475 capacity-budget break (env-gated, default OFF = byte-identical).
             // Greedy first-fit where each punct contributes break-compression CAPACITY
             // (pair-first 6.0 / solo 1.5, env-tunable; flat-K = equal). Bypasses the
@@ -6465,10 +6478,12 @@ impl LayoutEngine {
                                 // standalone = near-full, only compressed on line-slack).
                                 // The demand-absorb below compresses any of them as a
                                 // line's overflow requires.
-                                if (s472_demand || s474_natural || s475_break) && matches!(ch, '、' | '，' | '。' | '．') {
+                                if (s472_demand || s474_natural || s475_break || s557_natural_just15)
+                                    && matches!(ch, '、' | '，' | '。' | '．') {
                                     // no compression at break; demand-absorb handles fit
                                     // (s474_natural: leave natural, no absorb either =
-                                    // pure natural-greedy diagnostic)
+                                    // pure natural-greedy diagnostic; s557: c15 justified
+                                    // keeps naturals for the pack tier)
                                 } else {
                                     char_width *= 0.6667;
                                 }
@@ -6987,10 +7002,23 @@ impl LayoutEngine {
                             let slack = char_width - need;
                             let fire = need > 0.0 && slack >= t_n;
                             if std::env::var("OXI_S556_DEBUG").is_ok() {
+                                // S557 (2026-06-13): the width components expose that
+                                // `overflow_tw` in the s475_break (justified c15)
+                                // regime is a CAPACITY overflow (capw + capinc −
+                                // avail), measured against s475's shallow 2.5pt/punct
+                                // compression — NOT a natural overflow. wid−capw is
+                                // the s475 compression already baked in. The d77a
+                                // para9 "counterexample" is a CASCADE artifact (L3
+                                // under-packs 39 vs Word 40 → all later windows shift
+                                // +1; Word's に…あらか line is a different 38-char
+                                // window than Oxi's drifted 拠…あら). NOT a pack-rule
+                                // gap. See [[session557_*]].
                                 let head: String = current_line.fragments.iter()
                                     .flat_map(|f| f.text.chars()).take(12).collect();
-                                eprintln!("S556 cand ch={} need={:.2} slack={:.2} n={} t={:.2} fire={} head={}",
-                                    ch, need, slack, n, t_n, fire, head);
+                                eprintln!("S556 cand ch={} need={:.2} slack={:.2} n={} t={:.2} fire={} | s475brk={} wid={:.2} capw={:.2} avail={:.2} capinc={:.2} cw={:.2} head={}",
+                                    ch, need, slack, n, t_n, fire,
+                                    s475_break, current_width_tw as f32/20.0, current_capw_tw as f32/20.0,
+                                    available_tw as f32/20.0, s475_capinc as f32/20.0, char_width, head);
                             }
                             if fire {
                                 let q = (need / 0.75).round() as i32;
