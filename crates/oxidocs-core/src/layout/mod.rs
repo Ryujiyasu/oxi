@@ -9732,7 +9732,53 @@ impl LayoutEngine {
                             && !table.style.has_explicit_cellmar
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center)
                             && cell_w <= content_width;
-                        let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar {
+                        // S559 SHIP (2026-06-13, default ON, opt-out OXI_S559_DISABLE): a
+                        // JUSTIFIED single-cell AUTOFIT-SQUEEZED table reserves Word's DEFAULT
+                        // 108tw cellMar even though default_cell_margins.is_none() (so the s531
+                        // gate above — which requires is_some() — never fires on it). This is
+                        // the 3a4f para-2234 ⑦ over-pack: Oxi packed ⑦ on 1 line (39 chars),
+                        // Word wraps to 2 (L1=37; COM: gridCol 8244 − cellMar 216 − firstLine
+                        // 210 = 7818tw). The −18pt loss pulled para 2260 to p80 (Word p81) =
+                        // 3a4f's sole Phase-1 FAIL.
+                        // DISCRIMINATOR (why ⑦ reserves but the 86 same-signature cells don't):
+                        //   - row.cells.len()==1, !has_explicit_cellmar, non-right (= s531 scope)
+                        //   - tcW − gridCol >= 8pt: the cell is AUTOFIT-SQUEEZED (its preferred
+                        //     width exceeds the laid column by ~one cellMar; ⑦ tcW 8458 >
+                        //     gridCol 8244 = 214tw). diff==0 cells (got their preferred width)
+                        //     are excluded.
+                        //   - JUSTIFIED (jc=both): ⑦ is jc=both via style a7; the structurally
+                        //     IDENTICAL p19 cell is explicit jc=left and Word does NOT reserve
+                        //     cellMar there (Oxi-OFF matched it at 2 lines). Firing on p19 (jc=
+                        //     left) over-wrapped it 2→3, and the +1 line at page 19 cascaded the
+                        //     {1:1323} pagination regression. Restricting to Justify excludes p19.
+                        // VALIDATION: full corpus Phase-1 pagination 54/55 → 55/55, 0 PASS→FAIL,
+                        // mean_score 1.0000. Only 2 paras change line count corpus-wide under the
+                        // rule (⑦ 1→2 = the fix; one p94 justified cell 119→121, post-2260, no
+                        // new delta). NOTE: jc-vs-left is the empirical discriminator here but ⑦
+                        // also has left=0 while p19 has left=459, so the two are confounded —
+                        // "justl0" (Justify AND left≈0) gives identical corpus results. The pad
+                        // subtracted is Oxi's 4.95pt fallback (Word's true default is 5.4pt/108tw;
+                        // the 0.9pt gap is within ⑦'s wrap slack so the rule still fires correctly).
+                        // Env OXI_S559_CELLMAR overrides the rule for A/B testing: all / tcwgt /
+                        // just (= default) / justl0.
+                        let s559_disabled = std::env::var("OXI_S559_DISABLE").is_ok();
+                        let s559_mode = std::env::var("OXI_S559_CELLMAR").ok();
+                        let s559_tcw_gt = cell.width.map_or(false, |tcw| tcw - cell_w >= 8.0);
+                        let s559_base = !s559_disabled
+                            && row.cells.len() == 1
+                            && !table.style.has_explicit_cellmar
+                            && !matches!(para.alignment, Alignment::Right | Alignment::Center)
+                            && cell_w <= content_width;
+                        let s559_justified =
+                            matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                        let s559_cellmar = s559_base && match s559_mode.as_deref() {
+                            Some("all") => true,
+                            Some("tcwgt") => s559_tcw_gt,
+                            Some("justl0") => s559_tcw_gt && s559_justified && p_indent_left.abs() < 1.0,
+                            // default (None) or "just" = the shipped rule
+                            _ => s559_tcw_gt && s559_justified,
+                        };
+                        let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
