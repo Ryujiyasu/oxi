@@ -187,15 +187,20 @@ impl OoxmlParser {
                     n
                 }
                 last.total_lrpb_count += count_lrpbs_in_blocks_local(&section.blocks);
+                // S560: record this continuous section's column layout at the
+                // block index where its blocks begin, so layout can switch
+                // column geometry per section. MUST capture the offset BEFORE
+                // extending. The old `last.columns = ...` overwrite collapsed
+                // the whole merged page to the LAST section's column count,
+                // mis-laying-out earlier sections (kyotei36spec: a 1-col form
+                // table rendered in the trailing 2-col 記載心得 context).
+                last.column_runs.push((last.blocks.len(), section.properties.columns.clone()));
                 last.blocks.extend(section.blocks);
                 last.floating_images.extend(section.floating_images);
                 last.text_boxes.extend(section.text_boxes);
                 last.shapes.extend(section.shapes);
                 last.footnotes.extend(footnotes_list);
                 last.endnotes.extend(endnotes_list);
-                if section.properties.columns.is_some() {
-                    last.columns = section.properties.columns;
-                }
             } else {
                 // S394 (2026-05-27): count total LRPBs in section blocks
                 // (body + nested tables). Used by S391 per-line LRPB gate.
@@ -222,6 +227,10 @@ impl OoxmlParser {
                     n
                 }
                 let total_lrpb = count_lrpbs_in_blocks(&section.blocks);
+                // S560: seed the per-section column-run list with this (first)
+                // section's column layout at block 0. Continuous sections merged
+                // later append their own (block_start, columns) entries.
+                let column_runs = vec![(0usize, section.properties.columns.clone())];
                 pages.push(Page {
                     blocks: section.blocks,
                     size: section.properties.page_size,
@@ -240,6 +249,7 @@ impl OoxmlParser {
                     text_boxes: section.text_boxes,
                     shapes: section.shapes,
                     columns: section.properties.columns,
+                    column_runs,
                     header_distance: section.properties.header_distance,
                     footer_distance: section.properties.footer_distance,
                     page_number_format: section.properties.page_number_format,

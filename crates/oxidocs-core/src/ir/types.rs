@@ -124,6 +124,19 @@ pub struct Page {
     /// Column layout for this section
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns: Option<ColumnLayout>,
+    /// S560 (2026-06-13): per-section column layouts within a merged
+    /// continuous-section page. When `continuous` section breaks merge
+    /// multiple sections into one Page (see parser ooxml.rs), each section
+    /// may declare a DIFFERENT column count (e.g. kyotei36spec: a 1-col
+    /// form table followed by a continuous 2-col 記載心得 instruction
+    /// block). The old single `columns` field could only hold ONE layout
+    /// (the last section's), so the 1-col content was wrongly laid out in
+    /// the 2-col context. `column_runs` records (block_start_index,
+    /// section_columns) for each section span so layout can switch the
+    /// column geometry at each boundary. Empty = use `columns` for the
+    /// whole page (single-section / non-parser constructions).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub column_runs: Vec<(usize, Option<ColumnLayout>)>,
     /// Page number format (e.g. "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number_format: Option<String>,

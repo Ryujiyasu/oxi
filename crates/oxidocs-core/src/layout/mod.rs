@@ -2335,41 +2335,85 @@ impl LayoutEngine {
 
         // Multi-column layout: compute column X positions and widths
         // COM-confirmed: col_x = margin + Σ(prev_width + prev_spacing)
-        let num_columns = page.columns.as_ref().map(|c| c.num.max(1) as usize).unwrap_or(1);
-        let mut col_x_positions: Vec<f32> = Vec::with_capacity(num_columns);
-        let mut col_widths: Vec<f32> = Vec::with_capacity(num_columns);
-
-        if num_columns > 1 {
-            if let Some(ref cols) = page.columns {
-                if !cols.columns.is_empty() {
-                    // Unequal width columns: use explicit definitions
-                    let mut x = page.margin.left;
-                    for col_def in &cols.columns {
-                        col_x_positions.push(x);
-                        col_widths.push(col_def.width);
-                        x += col_def.width + col_def.space.unwrap_or(0.0);
-                    }
-                } else {
-                    // Equal width columns
-                    let spacing = cols.space.unwrap_or(36.0); // default 36pt
-                    let col_w = (total_content_width - spacing * (num_columns - 1) as f32) / num_columns as f32;
-                    let mut x = page.margin.left;
-                    for _ in 0..num_columns {
-                        col_x_positions.push(x);
-                        col_widths.push(col_w);
-                        x += col_w + spacing;
+        // S560 (2026-06-13): factored into a closure so per-section column
+        // layouts (page.column_runs, populated when `continuous` section breaks
+        // merge sections with DIFFERENT column counts) can be recomputed at
+        // each section boundary inside the block loop below.
+        let margin_left = page.margin.left;
+        let compute_cols = |cols: &Option<crate::ir::ColumnLayout>| -> (usize, Vec<f32>, Vec<f32>) {
+            let num = cols.as_ref().map(|c| c.num.max(1) as usize).unwrap_or(1);
+            let mut xs: Vec<f32> = Vec::with_capacity(num);
+            let mut ws: Vec<f32> = Vec::with_capacity(num);
+            if num > 1 {
+                if let Some(ref c) = cols {
+                    if !c.columns.is_empty() {
+                        // Unequal width columns: use explicit definitions
+                        let mut x = margin_left;
+                        for col_def in &c.columns {
+                            xs.push(x);
+                            ws.push(col_def.width);
+                            x += col_def.width + col_def.space.unwrap_or(0.0);
+                        }
+                    } else {
+                        // Equal width columns
+                        let spacing = c.space.unwrap_or(36.0); // default 36pt
+                        let col_w = (total_content_width - spacing * (num - 1) as f32) / num as f32;
+                        let mut x = margin_left;
+                        for _ in 0..num {
+                            xs.push(x);
+                            ws.push(col_w);
+                            x += col_w + spacing;
+                        }
                     }
                 }
             }
+            if xs.is_empty() {
+                xs.push(margin_left);
+                ws.push(total_content_width);
+            }
+            (xs.len(), xs, ws)
+        };
+
+        let (mut num_columns, mut col_x_positions, mut col_widths) = compute_cols(&page.columns);
+
+        // S560: per-section column runs. Switch per-section ONLY when the
+        // merged page has HETEROGENEOUS column counts (e.g. kyotei36spec: a
+        // 1-col form table + a continuous 2-col 記載心得 instruction block).
+        // When all runs share one column count (the entire 269-doc baseline is
+        // num=1), `heterogeneous` is false and the loop never switches → the
+        // pre-S560 single-layout path runs byte-identically.
+        let col_runs: Vec<(usize, usize, Vec<f32>, Vec<f32>)> = page.column_runs.iter()
+            .map(|(start, cols)| {
+                let (n, xs, ws) = compute_cols(cols);
+                (*start, n, xs, ws)
+            })
+            .collect();
+        let heterogeneous = {
+            let mut it = col_runs.iter().map(|r| r.1);
+            match it.next() {
+                Some(first) => it.any(|n| n != first),
+                None => false,
+            }
+        };
+        if heterogeneous {
+            // Base the page on the FIRST run's column layout; subsequent runs
+            // switch in at their block boundaries.
+            if let Some((_, n, xs, ws)) = col_runs.first() {
+                num_columns = *n;
+                col_x_positions = xs.clone();
+                col_widths = ws.clone();
+            }
         }
-        if col_x_positions.is_empty() {
-            col_x_positions.push(page.margin.left);
-            col_widths.push(total_content_width);
-        }
+        let mut active_run_idx: usize = 0;
 
         let mut current_column: usize = 0;
         let mut start_x = col_x_positions[0];
         let mut content_width = col_widths[0];
+        // S560: lowest column-bottom reached on the current page, so a
+        // following column-section flows below ALL columns of the one it
+        // succeeds. Only read on the heterogeneous (per-section column) path.
+        let mut section_max_y = start_y;
+        let mut section_prev_page = 0usize;
 
         let grid_pitch = page.grid_line_pitch;
         let mut mult_cumul_raw: f32 = 0.0;
@@ -2430,6 +2474,45 @@ impl LayoutEngine {
         let mut floating_tables_per_page: Vec<Vec<(f32, f32)>> = vec![Vec::new()];
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            // S560: on a fresh page the section-bottom tracker resets to the
+            // top content origin (the deep value belongs to the prior page).
+            if heterogeneous && current_page_idx != section_prev_page {
+                section_max_y = start_y;
+                section_prev_page = current_page_idx;
+            }
+            // S560: switch column geometry at a section boundary within a
+            // merged continuous-section page (only when heterogeneous, i.e.
+            // the page mixes column counts — kyotei36spec's 1-col form table
+            // followed by a continuous 2-col 記載心得 block). Word flows the
+            // new section continuously below the previous section's content;
+            // a 1-col section must NOT inherit the trailing 2-col geometry.
+            if heterogeneous
+                && active_run_idx + 1 < col_runs.len()
+                && block_idx >= col_runs[active_run_idx + 1].0
+            {
+                while active_run_idx + 1 < col_runs.len()
+                    && block_idx >= col_runs[active_run_idx + 1].0
+                {
+                    active_run_idx += 1;
+                }
+                let run_cols = col_runs[active_run_idx].1;
+                // Only re-flow when the column COUNT changes; consecutive
+                // same-count sections keep flowing in the current column.
+                if run_cols != num_columns {
+                    // New section continues below ALL columns of the section
+                    // it succeeds (continuous flow, same page if room).
+                    section_max_y = section_max_y.max(cursor.cursor_y);
+                    cursor.set(section_max_y);
+                    let run = &col_runs[active_run_idx];
+                    num_columns = run.1;
+                    col_x_positions = run.2.clone();
+                    col_widths = run.3.clone();
+                    current_column = 0;
+                    start_x = col_x_positions[0];
+                    content_width = col_widths[0];
+                    section_max_y = cursor.cursor_y;
+                }
+            }
             // S469: the wrap-below anchor offset is page-local. Reset it when the
             // flow has advanced to a new page since the previous block.
             if current_page_idx != anchor_offset_page {
@@ -3174,6 +3257,11 @@ impl LayoutEngine {
                         cursor.advance(advance);
                     }
                 }
+            }
+            // S560: record the deepest column-bottom reached on this page so a
+            // following column-section (heterogeneous path) starts below it.
+            if heterogeneous {
+                section_max_y = section_max_y.max(cursor.cursor_y);
             }
         }
 
