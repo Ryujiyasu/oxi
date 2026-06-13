@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Integration tests for oxicells-core formula evaluation.
 //!
 //! S350's public_api_integration covered SUM/AVERAGE/arithmetic/cell-refs.

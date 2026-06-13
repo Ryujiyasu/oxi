@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Integration tests: parse `<w:docDefaults>` + `<w:style>` blocks
 //! end-to-end and verify `Document.styles.{doc_default_run_style,
 //! doc_default_para_style, doc_default_alignment, default_paragraph_style_id,

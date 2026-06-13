@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 /// Extract local name from a potentially namespaced XML tag (e.g., "w:body" -> "body")
 pub fn local_name(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");

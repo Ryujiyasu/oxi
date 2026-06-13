@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Integration tests: parse `<w:tabs>` / `<w:tab>` elements end-to-end
 //! and verify `Paragraph.style.tab_stops` populates with the expected
 //! position, alignment, and leader.

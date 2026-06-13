@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Diagnostic tool: emits a textual line-by-line layout dump. Some scratch
 // counters (para_y, para_line_count) are kept for ad-hoc instrumentation.
 #![allow(unused_variables, unused_assignments)]

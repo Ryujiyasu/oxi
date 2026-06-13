@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Integration tests: parse `<w:tbl>` end-to-end and verify
 //! `Block::Table` produces correct row/cell structure including
 //! horizontal merge (gridSpan), vertical merge (vMerge), and cell

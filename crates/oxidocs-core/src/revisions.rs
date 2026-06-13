@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! S-03 — IR-level accept / reject commands for tracked changes.
 //!
 //! These mutate the `Document` in place, baking the accepted (or rejected)

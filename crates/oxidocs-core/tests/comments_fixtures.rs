@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! End-to-end parse of the comments/tracked-changes fixture set.
 //!
 //! These tests run the full `parse_docx` pipeline against the 10 fixtures in

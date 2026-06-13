@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Integration tests: IR-level assertions on `<w:pPrChange>` and
 //! `<w:rPrChange>` after `parse_docx`. Deepening pass over the existing
 //! comments_samples fixtures (S306, modeled on S293 OMML deepening and

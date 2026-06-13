@@ -2,7 +2,7 @@
 name = "oxi-common"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "MPL-2.0"
 description = "Shared OOXML utilities for Oxi suite (ZIP, XML, relationships)"
 
 [dependencies]

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Integration tests: parse `<w:tr><w:trPr>...</w:trPr></w:tr>` end-to-end
 //! and verify `TableRow.{height, height_rule, header, cant_split,
 //! grid_before, cell_margins_override}` after `parse_docx`.

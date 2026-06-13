@@ -2,7 +2,7 @@
 name = "oxislides-core"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "MPL-2.0"
 description = "Core presentation processing engine for OxiSlides (.pptx)"
 
 [dependencies]

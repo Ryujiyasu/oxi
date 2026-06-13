@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // S344 diagnostic: dump every paragraph's snap_to_grid + text prefix.
 // Used to verify whether b35123 paragraphs other than i=89 actually have
 // snap_to_grid=false in Oxi's parsed view (vs XML inspection showing

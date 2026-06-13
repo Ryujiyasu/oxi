@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Word jc=both / jc=distribute per-character compression algorithm.
 //!
 //! Based on COM measurement of 116 minimal-repro variants (S112-S116, 2026-05-19).
