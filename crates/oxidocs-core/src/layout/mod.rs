@@ -11627,6 +11627,13 @@ impl LayoutEngine {
                 }
 
                 // Push current page elements
+                if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    let cur_txt = current_page_elems.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
+                    let nxt_txt = next_page_elems.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
+                    let nxt_maxy = next_page_elems.iter().map(|e| match &e.content { LayoutContent::TableBorder { y2, .. } => *y2, _ => e.y + e.height }).fold(0.0_f32, f32::max);
+                    eprintln!("[SPLIT] split_y={:.1} ptop={:.1} pbot={:.1} pages_pre={} | cur_elems={} (txt {}) | next_elems={} (txt {}) next_maxy={:.1}",
+                        split_y, page_top, page_bottom, pages.len(), current_page_elems.len(), cur_txt, next_page_elems.len(), nxt_txt, nxt_maxy);
+                }
                 elements.extend(current_page_elems);
                 current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
@@ -11686,7 +11693,23 @@ impl LayoutEngine {
                         .filter(|e| e.is_paragraph_start_with_lrpb && e.y > page_top + 0.5)
                         .map(|e| e.y)
                         .fold(f32::INFINITY, f32::min);
-                    let next_split = if lrpb_next_split.is_finite() && lrpb_next_split < page_bottom {
+                    // S565 (2026-06-14): page-half-full gate on the overflow-loop
+                    // LRPB pull-back (mirror of S563 for the body s391 path). A
+                    // STALE lastRenderedPageBreak inside a multi-page row cell
+                    // (harassbun: 1 table / 1 row / 1 cell, an LRPB at y=64.5 only
+                    // 16.5pt below page_top) pulled the continuation split to ~1
+                    // line, spawning a near-empty page (p2) — same class as S563
+                    // but in the row-split overflow loop (R7.56), which S564
+                    // missed (S564 gated the FIRST-split path at 11348, but the
+                    // first split here falls back to page_bottom because
+                    // lrpb_split_y 807.5 > page_bottom; the real stale LRPB is in
+                    // THIS loop). Only honour the LRPB once the continuation page
+                    // is at least half full. Opt-out OXI_S565_DISABLE.
+                    let s565_half_full = std::env::var("OXI_S565_DISABLE").is_ok()
+                        || lrpb_next_split > page_top + content_height * 0.5;
+                    let next_split = if lrpb_next_split.is_finite()
+                        && lrpb_next_split < page_bottom
+                        && s565_half_full {
                         lrpb_next_split
                     } else {
                         page_bottom
@@ -11781,6 +11804,11 @@ impl LayoutEngine {
                         }
                     }
 
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        let tp_txt = this_page.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
+                        let ov_txt = overflow.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
+                        eprintln!("[SPLIT-LOOP] next_split={:.1} -> pushed this_page txt={} | overflow txt={}", next_split, tp_txt, ov_txt);
+                    }
                     pages.push(LayoutPage {
                         width: page_width,
                         height: page_height,
@@ -11789,6 +11817,11 @@ impl LayoutEngine {
                     remaining = overflow;
                 }
 
+                if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    let rem_txt = remaining.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
+                    let rem_maxy = remaining.iter().map(|e| match &e.content { LayoutContent::TableBorder { y2, .. } => *y2, _ => e.y + e.height }).fold(0.0_f32, f32::max);
+                    eprintln!("[SPLIT-END] pages_now={} | remaining(=p_cont) elems={} txt={} maxy={:.1}", pages.len(), remaining.len(), rem_txt, rem_maxy);
+                }
                 elements = remaining;
                 // S269 Pattern A fix (default ON since S269 part 7): replace
                 // geometric overflow with structural line_pitch snap matching
