@@ -4883,7 +4883,23 @@ impl LayoutEngine {
                 let s394_max = std::env::var("OXI_S394_LRPB_MAX").ok()
                     .and_then(|v| v.parse::<usize>().ok())
                     .unwrap_or(30);
-                has_lrpb_here && page.total_lrpb_count <= s394_max
+                // S563 SHIP (2026-06-14, default ON, opt-out OXI_S563_DISABLE): only
+                // respect a lastRenderedPageBreak when the current page is substantially
+                // full (cursor past content_height/2). A LRPB that fires near the page
+                // TOP is a STALE hint (Word re-rendered and the break moved) — respecting
+                // it forces a premature mid-paragraph break leaving the page nearly empty.
+                // ikujikaigo: 1 LRPB in pi=60 fires at cursor ~66 (p4 ~8% full) →
+                // premature → 108 paras pushed +1 (0.3455 → 0.9758 with this gate). b837's
+                // LRPBs fire near the page BOTTOM (real breaks) → still respected. GATE:
+                // full corpus 58/62 (ikujikaigo 0.3455→0.9758, 0 baseline PASS→FAIL;
+                // b837/d77a/3a4f/ed025 all PASS). total_lrpb_count≤30 (S394) AND
+                // page-substantially-full (S563) together discriminate stale LRPBs.
+                let s563_full = if std::env::var("OXI_S563_DISABLE").is_ok() {
+                    true
+                } else {
+                    cursor.cursor_y > page_top + content_height * 0.5
+                };
+                has_lrpb_here && page.total_lrpb_count <= s394_max && s563_full
             } else {
                 false
             };
