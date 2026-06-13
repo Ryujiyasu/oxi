@@ -9884,6 +9884,16 @@ impl LayoutEngine {
                             // default (None) or "just" = the shipped rule
                             _ => s559_tcw_gt && s559_justified,
                         };
+                        // S562 (2026-06-14): a hanging+span>1 cellMar-subtract gate
+                        // (OXI_S562) was PROTOTYPED here for roudoujoken's r7 (5)裁量
+                        // cell and CONFIRMED to render r7 correctly (17→18 lines = Word)
+                        // — but the roudoujoken −1 pagination was UNCHANGED. So the r7
+                        // cell over-fit is a REAL but NON-OPERATIVE bug: its +1 line
+                        // (~14pt) on the pages-1-2 form table does NOT tip ８.「休暇」 on
+                        // page 3. The operative −1 cause is a page-3 cascade still
+                        // unidentified (r7, s475/pi16, and the 記載要領 paras all ruled
+                        // out). Gate removed (no merge-gate benefit + cell-wrap risk).
+                        // See memory session560 for the full ruled-out chain.
                         let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
