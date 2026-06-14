@@ -2041,7 +2041,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true, false);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true, false, false);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -4598,7 +4598,8 @@ impl LayoutEngine {
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type);
+        let para_has_lrpb = para.runs.iter().any(|r| r.has_last_rendered_page_break);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb);
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
@@ -6166,6 +6167,7 @@ impl LayoutEngine {
         s476_body: bool,
         is_justified: bool,
         doc_grid_no_type: bool,
+        para_has_lrpb: bool,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -6514,8 +6516,23 @@ impl LayoutEngine {
             // (s475_max_compress split — see kinsoku.rs). Env-tunable.
             let s475_pair: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_PAIR").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0) };
+            // S575 (2026-06-15): BODY oikomi — raise the solo 約物 cap to 3.0 for the
+            // MAIN body flow (s476_body) so jc=both type=lines compat=15 bodies fit
+            // Word's demand compression (ikujikaigo i=41/i=57: mid 、 renders 9.0 = −3.0;
+            // +1×4 → PASS). GATED to paras WITHOUT a lastRenderedPageBreak: the higher cap
+            // REDISTRIBUTES chars within a para's lines (line COUNT unchanged), which SHIFTS
+            // which line a run's char_offset==0 lands on → the S391 per-line-LRPB respect
+            // then fires on a DIFFERENT line → a spurious mid-para page break (d77a's
+            // "イは、編集…" para, 1 LRPB: +18pt continuation cascade → cell over page 6/7 =
+            // the 16-session d77a blocker, isolated via OXI_S391_PER_LINE_LRPB=0 + env
+            // bisection). ikujikaigo i=41/i=57 have 0 LRPBs → safe to redistribute. The
+            // break itself is solo-STABLE (count unchanged); only the LRPB attribution is
+            // sensitive, so skip the oikomi when there's an LRPB to preserve. Opt-out
+            // OXI_S575_DISABLE.
+            let s475_solo_default = if s476_body && !para_has_lrpb
+                && std::env::var("OXI_S575_DISABLE").is_err() { 3.0 } else { 2.5 };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
-                std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5) };
+                std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo_default) };
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
@@ -12712,7 +12729,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), false);
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), false, false);
                 lines.len().max(1)
             };
 
