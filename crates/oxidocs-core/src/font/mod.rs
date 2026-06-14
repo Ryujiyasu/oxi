@@ -873,6 +873,17 @@ fn normalize_family_name(name: &str) -> String {
         // line heights. Yu Mincho gives correct CJK 83/64 height and proportional Latin widths.
         "MS明朝" => "Yu Mincho Regular".to_string(),
         "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" | "MSＰ明朝" => "MS PMincho".to_string(),
+        // S567 (2026-06-14): HG Gothic family, katakana-encoded names (e.g.
+        // "HGSｺﾞｼｯｸM" = HGS Gothic M). The English forms (HGSGothicE etc.) are
+        // already recognized in is_cjk_font_family, but the halfwidth-katakana
+        // forms used in real docs were not — so an unrecognized HGSｺﾞｼｯｸM fell
+        // through to the MS UI Gothic proportional fallback (kana ~9pt). COM
+        // (_s567_charadv, harassmanual): Word renders HGSｺﾞｼｯｸM with EVERY CJK
+        // char (kanji AND kana) at fullwidth advance = font_size (に=を=す=12.0pt
+        // at 12pt), grid-independent (NOGRID identical). Map to MS Gothic so the
+        // UPM=256 fullwidth path returns font_size. Opt-out OXI_S567_DISABLE.
+        "HGSｺﾞｼｯｸM" | "HGSｺﾞｼｯｸE" | "HGｺﾞｼｯｸM" | "HGｺﾞｼｯｸE"
+            if std::env::var("OXI_S567_DISABLE").is_err() => "MS Gothic".to_string(),
         "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => "Yu Gothic Regular".to_string(),
         "游ゴシック Medium" | "游ゴシック Bold" => "Yu Gothic Bold".to_string(),
         "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
