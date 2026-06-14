@@ -884,6 +884,12 @@ fn normalize_family_name(name: &str) -> String {
         // UPM=256 fullwidth path returns font_size. Opt-out OXI_S567_DISABLE.
         "HGSｺﾞｼｯｸM" | "HGSｺﾞｼｯｸE" | "HGｺﾞｼｯｸM" | "HGｺﾞｼｯｸE"
             if std::env::var("OXI_S567_DISABLE").is_err() => "MS Gothic".to_string(),
+        // S574 (2026-06-15) FALSIFIED + reverted: HGPｺﾞｼｯｸM (HG *Proportional*
+        // Gothic) is proportional (COM _kojin_charadv: 本=6.75 事=11.25 avg ~9.5 at
+        // 10.5pt) but NO Oxi font matches: the unrecognized fallback (MS UI Gothic)
+        // is avg 8.7 (too narrow → kojin over-packs, 0.9769) and MS PGothic is avg
+        // ~10 (too wide → 0.9538, +16 over-correct). HGPｺﾞｼｯｸM needs its OWN GDI
+        // width table (Windows-runner measurement) — left unmapped (8.7 is closest).
         "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => "Yu Gothic Regular".to_string(),
         "游ゴシック Medium" | "游ゴシック Bold" => "Yu Gothic Bold".to_string(),
         "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
