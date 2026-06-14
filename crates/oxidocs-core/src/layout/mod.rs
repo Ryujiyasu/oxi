@@ -4625,7 +4625,7 @@ impl LayoutEngine {
 
         // Widow/orphan control: pre-compute line heights for lookahead
         let line_heights: Vec<f32> = lines.iter().map(|line| {
-            self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch)
+            self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch, page.doc_grid_no_type)
         }).collect();
         // Day 33 part 65 (2026-05-12): natural line heights (ascent+descent only)
         // for page-break threshold. Word allows grid-snap LEADING to extend
@@ -8005,8 +8005,9 @@ impl LayoutEngine {
         para_font_size: f32,
         snap_to_grid: bool,
         grid_pitch: Option<f32>,
+        grid_no_type: bool,
     ) -> f32 {
-        self.line_height_for_line_inner(line, para_style, para_font_size, snap_to_grid, grid_pitch, false)
+        self.line_height_for_line_inner(line, para_style, para_font_size, snap_to_grid, grid_pitch, false, grid_no_type)
     }
 
     /// Returns ascent+descent only (no grid snap, no leading) for a line.
@@ -8054,6 +8055,7 @@ impl LayoutEngine {
         snap_to_grid: bool,
         grid_pitch: Option<f32>,
         in_table_cell: bool,
+        grid_no_type: bool,
     ) -> f32 {
         let _default_style = RunStyle::default();
 
@@ -8191,6 +8193,12 @@ impl LayoutEngine {
                 let snapped = if para_style.snap_to_grid {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
+                            if grid_no_type {
+                                // S571: no-type docGrid uses device-snapped natural,
+                                // not whole-cell ceil (see `_` arm below).
+                                let dev = (base / 0.75).floor() * 0.75;
+                                pitch.max(dev)
+                            } else {
                             // S195: narrower grid-snap tolerance — empty paragraph
                             // whose natural lh slightly exceeds pitch (e.g. 14pt MS
                             // Mincho 18.126pt at 18pt pitch). Without this it
@@ -8204,6 +8212,7 @@ impl LayoutEngine {
                             let apply_tol = is_empty && just_over_pitch;
                             let tol = if apply_tol { 0.5 } else { 0.0 };
                             (((base - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch
+                            }
                         } else { base }
                     } else { base }
                 } else { base };
@@ -8223,6 +8232,23 @@ impl LayoutEngine {
                 if snap_to_grid && is_single_line {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
+                            // S571 (2026-06-14): a NO-TYPE docGrid does NOT snap each
+                            // line to whole grid cells. The linePitch is the DEFAULT
+                            // line advance, but a line taller than the pitch (e.g. a
+                            // 14pt heading in a 14.3pt grid) uses its NATURAL height
+                            // device-snapped to 96dpi px, NOT ceil-to-2-cells.
+                            // GOLD-STANDARD (ikujidetail PDF render-truth): 11pt body
+                            // -> 14.28 (=pitch), 14pt heading -> 18.0
+                            // (=floor(18.5/0.75)*0.75), NOT 28.6 (the ceil result).
+                            // Rule = max(linePitch, floor(natural/0.75)*0.75). This
+                            // realizes the long-dead doc_grid_no_type design intent
+                            // (skip the CJK 83/64 whole-cell inflation). The COM
+                            // Single-height table (grid288=16.5) was measured in a
+                            // TYPED-grid context and does NOT match the no-type render.
+                            if grid_no_type {
+                                let dev = (spaced / 0.75).floor() * 0.75;
+                                return pitch.max(dev);
+                            }
                             // S195: narrower grid-snap tolerance (see comment above)
                             let is_empty = line.fragments.iter()
                                 .all(|f| f.text.is_empty());
