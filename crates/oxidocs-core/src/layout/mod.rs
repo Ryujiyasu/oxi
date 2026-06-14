@@ -11490,6 +11490,11 @@ impl LayoutEngine {
                     let original_shift = split_y - page_top;
                     let correct_shift = (min_overflow_text_y + original_shift) - page_top;
                     let adjust = correct_shift - original_shift;
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        let first_after = min_overflow_text_y - adjust;
+                        eprintln!("[REANCHOR] page_top={:.2} split_y={:.2} min_overflow_text_y={:.2} orig_shift={:.2} correct_shift={:.2} adjust={:.2} -> first_overflow_line_y={:.2}",
+                            page_top, split_y, min_overflow_text_y, original_shift, correct_shift, adjust, first_after);
+                    }
                     for e in next_page_elems.iter_mut() {
                         if matches!(e.content, LayoutContent::Text { .. }) {
                             e.y -= adjust;
