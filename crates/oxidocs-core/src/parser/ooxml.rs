@@ -6113,8 +6113,21 @@ fn parse_section_properties(
                         {
                             grid_line_pitch = Some(line_pitch as f32 / 20.0);
                         } else if grid_type.is_empty() && line_pitch > 0 {
-                            // docGrid exists with linePitch but no type attribute
+                            // docGrid exists with linePitch but no type attribute.
+                            // S571 (2026-06-14): Word STILL uses the linePitch for LINE
+                            // SPACING even with no type attribute. RENDER-TRUTH (ikujidetail
+                            // 育児介護 詳細版, compat=11, docGrid linePitch=286 no type):
+                            // Word's body line pitch = 14.3pt (= 286tw); Oxi used the
+                            // font-natural ~14.5pt → +0.2pt/line accumulating → each page
+                            // fits ~1 fewer para → a per-page +1 over-count (+1×73). The
+                            // doc_grid_no_type flag was DEAD (set but never consumed in
+                            // layout) so the linePitch was simply dropped. Treat a no-type
+                            // docGrid with linePitch as a LINE grid (use its linePitch).
+                            // Opt-out OXI_S571_DISABLE.
                             doc_grid_no_type = true;
+                            if std::env::var("OXI_S571_DISABLE").is_err() {
+                                grid_line_pitch = Some(line_pitch as f32 / 20.0);
+                            }
                         }
                         // linesAndChars: compute character grid pitch
                         // COM-confirmed (2026-04-03): charGrid is active even without charSpace.
