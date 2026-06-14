@@ -2041,7 +2041,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true, false);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -4598,7 +4598,7 @@ impl LayoutEngine {
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type);
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
@@ -6165,6 +6165,7 @@ impl LayoutEngine {
         lines_and_chars: bool,
         s476_body: bool,
         is_justified: bool,
+        doc_grid_no_type: bool,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -6419,9 +6420,26 @@ impl LayoutEngine {
             // widening (OXI_S492_JCNATURAL still forces the full scope).
             // Opt-out: OXI_S492_DISABLE restores capacity-break for all paras.
             let s492_full = std::env::var("OXI_S492_JCNATURAL").is_ok();
+            // S572 (2026-06-14): extend the S568 LEGACY jc=left 約物 OIKOMI to
+            // NO-TYPE docGrid docs (S568 covered only linesAndChars). ikujidetail
+            // (compat=11, no-type docGrid linePitch=286, jc=left, compressPunctuation)
+            // compresses a tight line's 約物 to fit — COM (_s572_charadv): on the
+            // over-wrapping para i=199 Word renders the mid-line 、 at 9.0pt and the
+            // line-end 。 at 5.25pt (half-width) where a slack line (i=5) keeps both
+            // at 11.25 = DEMAND-DRIVEN oikomi, not general 約物詰め. Oxi broke at
+            // NATURAL (natural_break_jc) → the trailing char over-wrapped 1→2 lines
+            // (i=199/231/419) → +1×27. Same discriminator as S568 (compat<15 +
+            // compressPunctuation + non-justified), just no-type instead of
+            // linesAndChars. SCOPE: the ONLY compat<15 compressPunctuation no-type
+            // docGrid doc in the corpus is ikujidetail (single-doc-scoped, like
+            // S568). Opt-out OXI_S572_DISABLE.
+            let s572_legacy_notype_oikomi = std::env::var("OXI_S572_DISABLE").is_err()
+                && doc_grid_no_type && s476_body && !is_justified
+                && self.compress_punctuation && self.compat_mode < 15;
             let natural_break_jc = std::env::var("OXI_S492_DISABLE").is_err()
                 && !is_justified
-                && (!lines_and_chars || s492_full);
+                && (!lines_and_chars || s492_full)
+                && !s572_legacy_notype_oikomi;
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
             // S557 (2026-06-13, part of the OXI_S556_JUST15 opt-in scaffold):
             // c15-explicit JUSTIFIED paragraphs keep standalone 、。，．at
@@ -6478,7 +6496,8 @@ impl LayoutEngine {
             let s476_grid = (std::env::var("OXI_S476_DISABLE").is_err()
                 && lines_and_chars && s476_body
                 && self.compress_punctuation && self.compat_mode >= 15)
-                || s568_legacy_oikomi;
+                || s568_legacy_oikomi
+                || s572_legacy_notype_oikomi;
             let s475_break = ((std::env::var("OXI_S475_DISABLE").is_err()
                 && self.compress_punctuation && self.compat_mode >= 15
                 && !lines_and_chars)
@@ -6486,7 +6505,7 @@ impl LayoutEngine {
                 && !natural_break_jc;  // S492: non-justified paras break at natural
             let s476_cap: f32 = std::env::var("OXI_S476_CAP").ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(if s568_legacy_oikomi { 6.0 } else { 3.0 });
+                .unwrap_or(if s568_legacy_oikomi || s572_legacy_notype_oikomi { 6.0 } else { 3.0 });
             // S558 (2026-06-13): s475_pair default 2.5 → 6.0. A CLOSING bracket
             // before another bracket collapses a full half-em at break (matching
             // the render pair-halving); the old 2.5 under-counted it, so
@@ -12693,7 +12712,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), false);
                 lines.len().max(1)
             };
 
