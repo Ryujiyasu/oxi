@@ -11482,10 +11482,24 @@ impl LayoutEngine {
                 // is wrong when the line's top is below split_y but its bottom
                 // straddles. Compute the actual minimum y of overflow text and
                 // re-shift.
+                // S570 (2026-06-14): collapse a LEADING EMPTY line at the row-split
+                // continuation top. A cell empty paragraph that straddles the page
+                // boundary lands a full-height (16.5pt) blank line at the continuation
+                // top; Word COLLAPSES it (RENDER-TRUTH harassbun: Word's first p2 line
+                // is content at y=51.9, Oxi had an empty text line at y=48 + content at
+                // 64.5 = a +16.5pt offset). Anchor to the first NON-EMPTY text and drop
+                // the leading empty-text lines above it. Opt-out OXI_S570_DISABLE.
+                let s570 = std::env::var("OXI_S570_DISABLE").is_err();
                 let min_overflow_text_y = next_page_elems.iter()
-                    .filter(|e| matches!(e.content, LayoutContent::Text { .. }))
+                    .filter(|e| matches!(&e.content,
+                        LayoutContent::Text { text, .. } if !s570 || !text.trim().is_empty()))
                     .map(|e| e.y)
                     .fold(f32::INFINITY, f32::min);
+                if s570 && min_overflow_text_y.is_finite() {
+                    next_page_elems.retain(|e| !matches!(&e.content,
+                        LayoutContent::Text { text, .. }
+                            if text.trim().is_empty() && e.y < min_overflow_text_y - 0.1));
+                }
                 if min_overflow_text_y.is_finite() {
                     let original_shift = split_y - page_top;
                     let correct_shift = (min_overflow_text_y + original_shift) - page_top;
