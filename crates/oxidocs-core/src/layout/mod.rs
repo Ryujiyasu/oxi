@@ -6461,16 +6461,32 @@ impl LayoutEngine {
             // linesAndChars family (b837/b35/1636/31420/6514/a1d6/87b29/29dc6e/1ec1)
             // keeps its baseline=Word page count at K=3.0. b837 +0.0455. aux/cell
             // calls (s476_body=false) stay excluded to avoid the 7→9 cell cascade.
-            let s476_grid = std::env::var("OXI_S476_DISABLE").is_err()
+            // S568 (2026-06-14): LEGACY (compat ≤14) linesAndChars compressPunctuation
+            // docs apply jc=left 約物 OIKOMI (the s476 capacity break) that the
+            // compat≥15 gate excludes. harassmanual (compat=11) orphans a trailing
+            // char (く) that Word fits by compressing a mid-line 読点 、 to half-em
+            // (COM _s568_p16_adv: 、 advance 6.0pt, every other char 12.0). The
+            // discriminator is compat: modern (15) jc=left breaks at NATURAL widths
+            // (S492/S539 measured + shipped), legacy demands oikomi (see the
+            // compat_mode_explicit note at mod.rs:1512). The ONLY compat<15
+            // linesAndChars compressPunctuation doc in the corpus is harassmanual
+            // (compat=14 docs are type=lines, not linesAndChars), so this is a
+            // single-doc-scoped change. Cap = full half-em (6.0). Opt-out OXI_S568_DISABLE.
+            let s568_legacy_oikomi = std::env::var("OXI_S568_DISABLE").is_err()
                 && lines_and_chars && s476_body
-                && self.compress_punctuation && self.compat_mode >= 15;
+                && self.compress_punctuation && self.compat_mode < 15;
+            let s476_grid = (std::env::var("OXI_S476_DISABLE").is_err()
+                && lines_and_chars && s476_body
+                && self.compress_punctuation && self.compat_mode >= 15)
+                || s568_legacy_oikomi;
             let s475_break = ((std::env::var("OXI_S475_DISABLE").is_err()
                 && self.compress_punctuation && self.compat_mode >= 15
                 && !lines_and_chars)
                 || s476_grid)
                 && !natural_break_jc;  // S492: non-justified paras break at natural
             let s476_cap: f32 = std::env::var("OXI_S476_CAP").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(3.0);
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(if s568_legacy_oikomi { 6.0 } else { 3.0 });
             // S558 (2026-06-13): s475_pair default 2.5 → 6.0. A CLOSING bracket
             // before another bracket collapses a full half-em at break (matching
             // the render pair-halving); the old 2.5 under-counted it, so
