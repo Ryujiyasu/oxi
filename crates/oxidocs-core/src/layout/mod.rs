@@ -5316,6 +5316,17 @@ impl LayoutEngine {
                             '、' | '，' => fs / 3.0,
                             '。' | '．' => fs / 2.0,
                             '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）' => fs / 2.0,
+                            // S578 (2026-06-15): ・ (nakaguro) compresses on demand at
+                            // RENDER too. The BREAK already budgets ・ (s475_max_compress
+                            // handles it) but the render water-fill OMITTED it (cap 0 → ・
+                            // stuck at natural 12.0) = a break/render inconsistency (the
+                            // exact class S573 flagged). Word compresses ・ demand-driven:
+                            // median ~11.5 (light), down to 5.14 on tight lines (d77a) =
+                            // cap ≈ fs/2, same class as 。/closing brackets. MEASURED 3-doc
+                            // (_cb_yakumono_compare, Word PDF vs Oxi: ・ signed Oxi−Word
+                            // = b837 +0.53, d77a +0.94, ikujikaigo +0.77 — uniformly
+                            // UNDER-compressed). Opt-out OXI_S578_DISABLE.
+                            '・' if std::env::var("OXI_S578_DISABLE").is_err() => fs / 2.0,
                             _ => 0.0,
                         }};
                         if cap > 0.0 && f.width > fs * 0.6 {
