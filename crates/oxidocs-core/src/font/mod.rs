@@ -416,6 +416,24 @@ impl FontMetricsRegistry {
             }
         }
 
+        // S579 (2026-06-15): HGPｺﾞｼｯｸM (HG Proportional Gothic M) — synthesize a
+        // proportional CJK FontMetrics from MS Gothic. GDI confirms identical line
+        // metrics (tmHeight/asc/desc = MS Gothic) so line height is correct; the
+        // char_widths are CLEARED so all advances come from the "HGPGothicM" GDI
+        // width table (gdi_width_overrides.json) or, for chars absent from it, the
+        // UPM=256 fullwidth path (kanji = font_size). normalize_family_name maps
+        // "HGPｺﾞｼｯｸM" → "HGPGothicM" and is_pgothic_family routes it through the GDI
+        // table so its proportional kana/ASCII/punct widths win (S579). Opt-out
+        // OXI_S579_DISABLE (mapping falls back to MS UI Gothic).
+        if let Some(ms_gothic) = fonts.get("MS Gothic").cloned() {
+            let hgp = FontMetrics {
+                family: "HGPGothicM".to_string(),
+                char_widths: HashMap::new(),
+                ..ms_gothic
+            };
+            fonts.insert("HGPGothicM".to_string(), hgp);
+        }
+
         // Load COM-measured line height table
         let com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>> = {
             #[cfg(has_local_font_metrics)]
@@ -646,7 +664,8 @@ impl FontMetricsRegistry {
     pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
         // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly.
         // EXCEPTION: MS PGothic / MS PMincho are proportional (see char_width_pt_with_gdi_map).
-        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
+        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho"
+            || metrics.family == "HGPGothicM";  // S579: proportional CJK, GDI-table widths
 
         // PGothic-specific override: COM-measured v4 widths (same-char
         // repetition, no autoSpaceDE contamination) take priority over
@@ -737,7 +756,8 @@ impl FontMetricsRegistry {
         // EXCEPTION: MS PGothic / MS PMincho are proportional CJK fonts —
         // they share UPM=256 with MS Gothic/Mincho but use per-char GDI widths.
         // COM-confirmed (c7b9 P9 MS PGothic 10.5pt): 48-49 ch/line, not 43.
-        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho";
+        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho"
+            || metrics.family == "HGPGothicM";  // S579: proportional CJK, GDI-table widths
         if metrics.units_per_em == 256 && !is_pgothic_family {
             if is_fullwidth(c) {
                 return font_size;
@@ -906,12 +926,18 @@ fn normalize_family_name(name: &str) -> String {
         // UPM=256 fullwidth path returns font_size. Opt-out OXI_S567_DISABLE.
         "HGSｺﾞｼｯｸM" | "HGSｺﾞｼｯｸE" | "HGｺﾞｼｯｸM" | "HGｺﾞｼｯｸE"
             if std::env::var("OXI_S567_DISABLE").is_err() => "MS Gothic".to_string(),
-        // S574 (2026-06-15) FALSIFIED + reverted: HGPｺﾞｼｯｸM (HG *Proportional*
-        // Gothic) is proportional (COM _kojin_charadv: 本=6.75 事=11.25 avg ~9.5 at
-        // 10.5pt) but NO Oxi font matches: the unrecognized fallback (MS UI Gothic)
-        // is avg 8.7 (too narrow → kojin over-packs, 0.9769) and MS PGothic is avg
-        // ~10 (too wide → 0.9538, +16 over-correct). HGPｺﾞｼｯｸM needs its OWN GDI
-        // width table (Windows-runner measurement) — left unmapped (8.7 is closest).
+        // S579 (2026-06-15): HGPｺﾞｼｯｸM (HG *Proportional* Gothic M) gets its OWN
+        // GDI width table (gen_hgp_gothic_widths.py, stored under "HGPGothicM" in
+        // gdi_width_overrides.json). It is genuinely proportional — kana ~9.0pt,
+        // ASCII ~6.75pt, 、。~6.75pt, kanji fullwidth 10.5pt @10.5 — so neither the
+        // MS UI Gothic fallback (kana 8.25 too narrow → kojin over-packs, 0.9769)
+        // nor MS PGothic (kana 9.75 too wide → S574 over-corrected 0.9538) fit. The
+        // GDI facename "HGPｺﾞｼｯｸM" resolves the real font (the fullwidth name
+        // "HGPゴシックM" falls back to MS PGothic). VERIFIED vs Word PDF render-truth
+        // on kojin (kana/kanji/punct all match; Word adds ~0.2pt justify on top).
+        // Mapped to the canonical "HGPGothicM" (is_cjk_font_family / is_pgothic_family).
+        // Opt-out OXI_S579_DISABLE → falls back to MS UI Gothic.
+        "HGPｺﾞｼｯｸM" if std::env::var("OXI_S579_DISABLE").is_err() => "HGPGothicM".to_string(),
         "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => "Yu Gothic Regular".to_string(),
         "游ゴシック Medium" | "游ゴシック Bold" => "Yu Gothic Bold".to_string(),
         "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
