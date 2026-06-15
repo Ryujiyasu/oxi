@@ -4838,6 +4838,13 @@ impl LayoutEngine {
             } else {
                 ink_line_heights.get(line_idx).copied().unwrap_or(natural_lh).min(natural_lh)
             };
+            // S582 (2026-06-15) FALSIFIED the "S576 ink-leniency is ~1.75pt too
+            // loose" hypothesis for ikujidetail's +1×2: an OXI_INK_MARGIN sweep
+            // showed margin 0 (= ink=em, current) is OPTIMAL; +1.0/+1.5 unchanged,
+            // +1.75 WORSE (+1×5), +2.0..box +1×12 (the S571b state). So the
+            // page-bottom threshold is correct; the +1×2 are the doc-wide para-spill
+            // break-POINT cascade (which line of a wrapped para lands at the bottom),
+            // reset by the real pi=149/263 LRPBs — not a threshold calibration.
             let break_threshold = if s548b_exact_full || s562b_empty_full {
                 effective_lh
             } else {
