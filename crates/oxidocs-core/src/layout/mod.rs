@@ -4931,12 +4931,23 @@ impl LayoutEngine {
                 } else {
                     cursor.cursor_y > page_top + content_height * 0.5
                 };
+                // S577 margin-discriminator FALSIFIED (2026-06-15): hypothesis was
+                // "respect the LRPB only when the line fits with margin > M (real
+                // early break) and ignore small-margin LRPBs (stale)". The
+                // S391-dependent docs were safe (b837/d77a/3a4f/ed025/ikujikaigo all
+                // PASS at M=7 — their reals have large margin), BUT ikujidetail got
+                // WORSE (0.9951→0.9902): ignoring its margin-1.75 LRPBs (pi=149/263)
+                // created −1×2 elsewhere WITHOUT fixing the +1×2, i.e. those LRPBs
+                // were COMPENSATING (S559 pattern), not the direct cause. The +1×2
+                // (wi=355/440) is a tangled S391/page-bottom cascade, not a clean
+                // stale-LRPB. Deferred to a focused S391 session.
                 has_lrpb_here && page.total_lrpb_count <= s394_max && s563_full
             } else {
                 false
             };
             let needs_page_break = natural_needs_page_break || s391_lrpb_break;
-            if std::env::var("OXI_DUMP_BREAK").is_ok() && line_idx == 0 {
+            if std::env::var("OXI_DUMP_BREAK").is_ok()
+                && (line_idx == 0 || (std::env::var("OXI_DUMP_BREAK_ALL").is_ok() && cursor.cursor_y > 700.0)) {
                 let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
                 let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
                 eprintln!(
