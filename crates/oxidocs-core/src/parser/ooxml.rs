@@ -1940,7 +1940,22 @@ fn parse_paragraph_properties(
                                             let k = local_name(a.key.as_ref());
                                             let v = String::from_utf8_lossy(&a.value).to_string();
                                             match k.as_str() {
-                                                "ascii" | "hAnsi" => { ppr_rpr.font_family = Some(v); }
+                                                // S583 (2026-06-16): the paragraph-mark / empty-para
+                                                // line height is governed by the ASCII font (Word
+                                                // measures the ¶ as a Latin glyph). When ascii≠hAnsi
+                                                // (e.g. kojin's 様式 spacer: ascii=HGPｺﾞｼｯｸM hAnsi=Century)
+                                                // ascii must win — the old `ascii|hAnsi => set` made
+                                                // hAnsi (parsed last) overwrite ascii → Century → the
+                                                // 14pt empty wrongly snapped to 1 cell. Opt-out
+                                                // OXI_S583_DISABLE restores the old last-wins behavior
+                                                // (keeps the layout-side gate's canary complete).
+                                                "ascii" => { ppr_rpr.font_family = Some(v); }
+                                                "hAnsi" => {
+                                                    if ppr_rpr.font_family.is_none()
+                                                        || std::env::var("OXI_S583_DISABLE").is_ok() {
+                                                        ppr_rpr.font_family = Some(v);
+                                                    }
+                                                }
                                                 "eastAsia" => {
                                                     ppr_rpr.font_family_east_asia = Some(v);
                                                     ppr_rpr.has_explicit_east_asia = true;

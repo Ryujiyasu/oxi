@@ -8385,19 +8385,32 @@ impl LayoutEngine {
                             // S195: narrower grid-snap tolerance — empty paragraph
                             // whose natural lh slightly exceeds pitch (e.g. 14pt MS
                             // Mincho 18.125pt at 18pt pitch) snaps to 1 cell (18pt),
-                            // not 2 cells (36pt). S580b (2026-06-15) tried REMOVING this
-                            // to fix kojin's trailing 14pt empty-para run (which Word
-                            // DOES render at 2 cells / 36pt — COM-confirmed) but it
-                            // regressed model PASS→FAIL: model's 14pt empty TOC para
-                            // (wi=173) genuinely renders at 1 cell. Oxi computes BOTH at
-                            // natural 18.125 (MS Gothic & MS Mincho share win 220/36/256),
-                            // so the run-vs-TOC discriminator is not yet isolated — Word's
-                            // TOC line model differs. Tolerance KEPT until that spec is
-                            // re-derived. See [[char_budget_wall]] kojin section.
+                            // not 2 cells (36pt). This is the WESTERN-ascii empty-para
+                            // case (model wi=173: ascii=Century, eastAsia=MS Mincho —
+                            // Oxi's base comes from the eastAsia 83/64 font = 18.125,
+                            // but Word measures the ¶ with the ASCII font = Century,
+                            // which fits 1 cell). S583 (2026-06-16): the discriminator
+                            // is the ASCII font's CJK-ness — a CJK-ascii empty (kojin's
+                            // 様式 spacer: ascii=HGPｺﾞｼｯｸM) must NOT be snapped down; Word
+                            // renders it at 2 cells (COM-confirmed gap=36.00). So the
+                            // tolerance applies only when the ASCII font is Western.
+                            // (S580b removed S195 entirely → regressed model because it
+                            // lacked this ascii discriminator.) The tolerance window
+                            // (base ≤ pitch+0.5) only ever fires at grid360 for 14pt, so
+                            // non-360 grids (1ec1 g357, 2ea81a g323) are unaffected.
+                            // Opt-out OXI_S583_DISABLE restores the old (model-only) gate.
+                            // See [[empty_para_ascii_font]].
                             let is_empty = line.fragments.iter()
                                 .all(|f| f.text.is_empty());
                             let just_over_pitch = spaced > pitch && spaced <= pitch + 0.5;
-                            let apply_tol = is_empty && just_over_pitch;
+                            let ascii_is_cjk = is_empty
+                                && std::env::var("OXI_S583_DISABLE").is_err()
+                                && {
+                                    let rpr_ref = para_style.ppr_rpr.as_ref()
+                                        .cloned().unwrap_or_default();
+                                    self.metrics_for(&rpr_ref, para_style).is_cjk_83_64_font()
+                                };
+                            let apply_tol = is_empty && just_over_pitch && !ascii_is_cjk;
                             let tol = if apply_tol { 0.5 } else { 0.0 };
                             return (((spaced - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
                         }
