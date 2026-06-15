@@ -15,7 +15,7 @@ def is_yak(c): return c in YAK
 
 OXI = os.path.abspath(sys.argv[1])
 PDF = os.path.abspath(sys.argv[2])
-ONLY_PAGE = int(sys.argv[3]) if len(sys.argv) > 3 else None
+ONLY_PAGE = next((int(a) for a in sys.argv[3:] if a.isdigit()), None)
 
 # ---- Word PDF per-char ----
 def word_lines(pdf):
@@ -153,6 +153,17 @@ for pno in range(min(len(wpages), len(opages))):
                 maxdrift = max(maxdrift, abs(ox - wx))
         drift.append(maxdrift)
         if is_yak(wc[-1][0]): endyak_drift.append(maxdrift)
+        if '--drift-detail' in sys.argv and maxdrift > 2.5:
+            # re-walk and print per-char position (start-aligned) Word vs Oxi
+            wx2 = 0.0; ox2 = 0.0
+            print(f"\n DRIFT {maxdrift:.2f} L{wi} n={len(wc)} end={wc[-1][0]!r}: {wt[:40]}")
+            for k in range(len(wc) - 1):
+                c = wc[k][0]
+                d = ox2 - wx2
+                mark = ' *' if abs(d) > 1.0 else ''
+                if is_yak(c) or mark:
+                    print(f"    [{k:2d}] {c} word_x={wx2:6.2f} oxi_x={ox2:6.2f} drift={d:+5.2f}{mark}")
+                wx2 += wadv[k][1]; ox2 += oc[k][1]
         bad = [d for d in diffs if abs(d[3]) > 0.6]
         if VERBOSE and bad:
             print(f" L{wi} n={len(wc)} drift={maxdrift:.2f}: {wt[:42]}")
