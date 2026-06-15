@@ -4757,7 +4757,34 @@ impl LayoutEngine {
                     run_base
                 }
             };
-            base * para.style.line_spacing.unwrap_or(1.0) * 20.0
+            let raw = base * para.style.line_spacing.unwrap_or(1.0) * 20.0;
+            // S584 (2026-06-16): a TYPED docGrid line (body OR cell) is never
+            // shorter than 1 grid cell, even with a COMPRESSING auto multiplier
+            // (line<240). The BODY multiple-spacing path uses this cumulative
+            // raw-twip model (bypassing line_height_for_line's grid snap), so
+            // the floor must be applied to raw_spaced_tw here; the CELL path has
+            // the mirror clamp in line_height_inner. COM-confirmed (mult_grid
+            // repro, MS Mincho 10.5pt linePitch=360): line=204 (0.85x) AND
+            // line=240 (1.0x) both render 18.0pt (=1 cell = 360tw); Oxi's
+            // un-clamped 0.85*natural gave 11.5pt. (The actual corpus win is
+            // tokyoshugyo's パワハラ list — 11 line=204 paras — but those live in
+            // a TABLE cell, fixed by the line_height_inner clamp; this body site
+            // is a corpus no-op since the only typed-grid body auto-mult is
+            // 3a4f/model's line=360 empty which already exceeds 1 cell. Kept for
+            // body correctness, validated by the repro.) Scope: snap_to_grid
+            // only (a snap_to_grid=false para uses its natural height), typed
+            // grid only (!doc_grid_no_type — no-type uses device-snapped
+            // natural). mult>=1.25 (raw>pitch*20) is a no-op. The exact
+            // fractional-cell formula does NOT generalize across font sizes
+            // (14pt is flat 29.25), so only the universal "line >= 1 grid cell"
+            // floor is applied. Opt-out OXI_S584_DISABLE.
+            if let Some(pitch) = grid_pitch {
+                if para.style.snap_to_grid && !page.doc_grid_no_type && pitch > 0.0
+                    && std::env::var("OXI_S584_DISABLE").is_err()
+                {
+                    raw.max(pitch * 20.0)
+                } else { raw }
+            } else { raw }
         } else { 0.0 };
         // LM2 (charGrid) and LM0 single spacing: carry cumul_line_idx across paragraphs.
         // COM-confirmed (2026-04-12, 0e7a p2): Word maintains cumulative line index
@@ -8095,7 +8122,33 @@ impl LayoutEngine {
                     let tw = spaced * 20.0;
                     (tw / 10.0).ceil() * 10.0 / 20.0
                 } else {
-                    spaced
+                    // S584 (2026-06-16): a TYPED docGrid CELL line is never shorter
+                    // than 1 grid cell, even with a COMPRESSING auto multiplier
+                    // (line<240). Word grid-snaps cell lines when snap_to_grid is
+                    // set AND adjustLineHeightInTable is present; the single-spacing
+                    // cell snap above (the `is_single` block) already does this, but
+                    // the multiple-spacing fallthrough returned raw 0.85*natural. COM
+                    // (tokyoshugyo パワハラ cell, line=204 0.85x, MS Mincho 10.5pt
+                    // linePitch=360): Word renders 18.0pt (=1 cell, i=363-368 at 18pt
+                    // advance), Oxi gave 11.5. Gated on `snap_to_grid` (NOT just
+                    // cell_snap_allowed): a snap_to_grid=false cell (b35123
+                    // linesAndChars + charSpace, fs=9 cells) uses its NATURAL height
+                    // and must NOT be clamped — without this gate it regressed
+                    // b35123/bd90b00 PASS→FAIL (the cell row-height tombstone). The
+                    // is_single block uses the same `snap_to_grid && cell_snap_allowed`
+                    // gate, so single+snap cells already snap there and never reach
+                    // here; only multiple-spacing+snap cells do. mult>=1.25
+                    // (spaced>pitch) is a no-op. Opt-out OXI_S584_DISABLE.
+                    if snap_to_grid && cell_snap_allowed
+                        && std::env::var("OXI_S584_DISABLE").is_err()
+                    {
+                        match grid_pitch {
+                            Some(pitch) if pitch > 0.0 => spaced.max(pitch),
+                            _ => spaced,
+                        }
+                    } else {
+                        spaced
+                    }
                 }
             }
         }
@@ -8416,6 +8469,33 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // S584 (2026-06-16): a TYPED "lines" docGrid line is never
+                // shorter than 1 grid cell, even with a COMPRESSING auto
+                // multiplier (line<240). Word clamps the multiplied height UP
+                // to the grid pitch. COM-confirmed (mult_grid repro, MS Mincho
+                // 10.5pt linePitch=360): line=204 (0.85x) AND line=240 (1.0x)
+                // both render 18.0pt (=1 cell); Oxi's un-snapped multiple path
+                // gave 0.85*natural = 11.5pt. Scope: typed grid only
+                // (!grid_no_type — a no-type grid uses device-snapped natural,
+                // handled in the is_single branch above), BODY only
+                // (!in_table_cell — cells have their own row-height machinery).
+                // mult>=1.25 (spaced > pitch) is a no-op (the only corpus body
+                // auto-mult cases are tokyoshugyo line=204 and the line=360
+                // empty in 3a4f/model which already exceeds pitch). The exact
+                // mult>=1.25 fractional-cell formula (9*mult+9 for 10.5pt) does
+                // NOT generalize across font sizes (14pt is flat 29.25), so it
+                // is intentionally NOT implemented — only the universal
+                // "line >= 1 grid cell" floor. Opt-out OXI_S584_DISABLE.
+                let spaced = if snap_to_grid && !grid_no_type && !in_table_cell
+                    && std::env::var("OXI_S584_DISABLE").is_err()
+                {
+                    match grid_pitch {
+                        Some(pitch) if pitch > 0.0 => spaced.max(pitch),
+                        _ => spaced,
+                    }
+                } else {
+                    spaced
+                };
                 // Round to 10 twips (0.5pt) — Word internal line height precision.
                 // COM-confirmed (2026-04-07): LayoutMode=0 uses ROUND to 0.5pt.
                 //   ＭＳ 明朝 10.5 LM=0: 13.625*1.15=15.66 → round 15.5pt (Word: 15.5pt)
