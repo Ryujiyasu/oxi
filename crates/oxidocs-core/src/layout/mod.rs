@@ -4931,17 +4931,27 @@ impl LayoutEngine {
                 } else {
                     cursor.cursor_y > page_top + content_height * 0.5
                 };
-                // S577 margin-discriminator FALSIFIED (2026-06-15): hypothesis was
-                // "respect the LRPB only when the line fits with margin > M (real
-                // early break) and ignore small-margin LRPBs (stale)". The
-                // S391-dependent docs were safe (b837/d77a/3a4f/ed025/ikujikaigo all
-                // PASS at M=7 — their reals have large margin), BUT ikujidetail got
-                // WORSE (0.9951→0.9902): ignoring its margin-1.75 LRPBs (pi=149/263)
-                // created −1×2 elsewhere WITHOUT fixing the +1×2, i.e. those LRPBs
-                // were COMPENSATING (S559 pattern), not the direct cause. The +1×2
-                // (wi=355/440) is a tangled S391/page-bottom cascade, not a clean
-                // stale-LRPB. Deferred to a focused S391 session.
-                has_lrpb_here && page.total_lrpb_count <= s394_max && s563_full
+                // S577 margin-discriminator FALSIFIED (had the sign BACKWARDS):
+                // it respected LARGE-margin LRPBs and ignored small-margin ones.
+                // S581 (2026-06-15) inverts it correctly: a STALE LRPB fires FAR
+                // from the page bottom (the line plus the NEXT line both fit, i.e.
+                // > 1 line of room below); a REAL page-bottom LRPB fires when the
+                // line is the LAST that fits (the next line would overflow). The
+                // physical test: respect only when `over > -effective_lh`. PDF
+                // render-truth: ikujidetail pi=24 (over=-22.95, p1) is a stale LRPB
+                // Word IGNORES (continues para 24 two more lines) → a 2-line page-1
+                // shift cascading via para-spills to the +1×2 (wi=355/440); pi=149/263
+                // (over=-1.75, line at the bottom, next line overflows) are REAL.
+                // b837 pi=89 (over=-22.35) is also stale (b837 PASSES without S391).
+                // The reals measured: d77a -0.50, 3a4f -0.85, ikujidetail -1.75 — all
+                // within 1 line of the bottom. Opt-out OXI_S581_DISABLE.
+                let s581_stale = if std::env::var("OXI_S581_DISABLE").is_ok() {
+                    false
+                } else {
+                    let over = cursor.cursor_y + break_threshold - effective_break_bottom;
+                    over < -effective_lh
+                };
+                has_lrpb_here && page.total_lrpb_count <= s394_max && s563_full && !s581_stale
             } else {
                 false
             };
