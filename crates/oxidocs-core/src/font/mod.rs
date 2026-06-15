@@ -297,6 +297,20 @@ impl FontMetrics {
         let exclude_yu = std::env::var("OXI_S322_EXCLUDE_YU")
             .map(|v| v != "0" && v != "false")
             .unwrap_or(false);
+        // S580 (2026-06-15): HGPGothicM (the S579-synthesized proportional HG
+        // Gothic = MS Gothic win metrics + GDI-table widths) MUST take the CJK
+        // 83/64 line-height path. S579's synthesis cloned MS Gothic's
+        // win_ascent/win_descent but the 83/64 decision here is by family NAME,
+        // and "HGPGothicM" was not in the list → it silently fell to the Western
+        // (em-based) path → 14pt line natural = 14.25pt instead of 18.16pt.
+        // In kojin's type=lines linePitch=360 grid, the run of 14pt empty paras
+        // (the trailing 様式 spacer) snapped to 1 cell (18pt) instead of Word's
+        // 2 cells (36pt) — COM-confirmed gap=36.00 across wi=589..618. That
+        // ~0.8-page under-count lost the closing-notes page (Oxi 21 vs Word 22).
+        // Opt-out OXI_S580_DISABLE restores the (buggy) Western path.
+        if self.family.as_str() == "HGPGothicM" {
+            return std::env::var("OXI_S580_DISABLE").is_err();
+        }
         if exclude_yu {
             matches!(
                 self.family.as_str(),
@@ -417,9 +431,12 @@ impl FontMetricsRegistry {
         }
 
         // S579 (2026-06-15): HGPｺﾞｼｯｸM (HG Proportional Gothic M) — synthesize a
-        // proportional CJK FontMetrics from MS Gothic. GDI confirms identical line
-        // metrics (tmHeight/asc/desc = MS Gothic) so line height is correct; the
-        // char_widths are CLEARED so all advances come from the "HGPGothicM" GDI
+        // proportional CJK FontMetrics from MS Gothic. The win_ascent/win_descent
+        // are MS Gothic's, but the CJK 83/64 line-height path is gated by family
+        // NAME in is_cjk_83_64_font — see S580 there, which adds "HGPGothicM" so
+        // the line height actually uses 83/64 (without it the synthesized font
+        // silently fell to the Western em-based path: 14pt → 14.25pt not 18.16pt).
+        // The char_widths are CLEARED so all advances come from the "HGPGothicM" GDI
         // width table (gdi_width_overrides.json) or, for chars absent from it, the
         // UPM=256 fullwidth path (kanji = font_size). normalize_family_name maps
         // "HGPｺﾞｼｯｸM" → "HGPGothicM" and is_pgothic_family routes it through the GDI

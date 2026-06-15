@@ -8319,13 +8319,9 @@ impl LayoutEngine {
                                 let dev = (base / 0.75).floor() * 0.75;
                                 pitch.max(dev)
                             } else {
-                            // S195: narrower grid-snap tolerance — empty paragraph
-                            // whose natural lh slightly exceeds pitch (e.g. 14pt MS
-                            // Mincho 18.126pt at 18pt pitch). Without this it
-                            // over-snaps to 2 cells (36pt). 3a4f pi=132 pattern.
-                            // Gate: empty paragraph + base just over pitch (≤ pitch + 0.5).
-                            // S238 (2026-05-23): removed OXI_LEGACY_NO_GRID_SNAP_TOL
-                            // legacy env-var fallback during hardening pass.
+                            // S195: narrower grid-snap tolerance (see the `_` arm
+                            // below for the full S195/S580b rationale — kept until the
+                            // run-vs-TOC empty-para spec is re-derived).
                             let is_empty = line.fragments.iter()
                                 .all(|f| f.text.is_empty());
                             let just_over_pitch = base > pitch && base <= pitch + 0.5;
@@ -8369,7 +8365,18 @@ impl LayoutEngine {
                                 let dev = (spaced / 0.75).floor() * 0.75;
                                 return pitch.max(dev);
                             }
-                            // S195: narrower grid-snap tolerance (see comment above)
+                            // S195: narrower grid-snap tolerance — empty paragraph
+                            // whose natural lh slightly exceeds pitch (e.g. 14pt MS
+                            // Mincho 18.125pt at 18pt pitch) snaps to 1 cell (18pt),
+                            // not 2 cells (36pt). S580b (2026-06-15) tried REMOVING this
+                            // to fix kojin's trailing 14pt empty-para run (which Word
+                            // DOES render at 2 cells / 36pt — COM-confirmed) but it
+                            // regressed model PASS→FAIL: model's 14pt empty TOC para
+                            // (wi=173) genuinely renders at 1 cell. Oxi computes BOTH at
+                            // natural 18.125 (MS Gothic & MS Mincho share win 220/36/256),
+                            // so the run-vs-TOC discriminator is not yet isolated — Word's
+                            // TOC line model differs. Tolerance KEPT until that spec is
+                            // re-derived. See [[char_budget_wall]] kojin section.
                             let is_empty = line.fragments.iter()
                                 .all(|f| f.text.is_empty());
                             let just_over_pitch = spaced > pitch && spaced <= pitch + 0.5;
