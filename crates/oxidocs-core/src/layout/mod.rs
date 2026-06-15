@@ -4638,6 +4638,14 @@ impl LayoutEngine {
         let natural_line_heights: Vec<f32> = lines.iter().map(|line| {
             self.natural_line_height_for_line(line, &para.style, para_font_size)
         }).collect();
+        // S576 (2026-06-15): glyph-ink line heights (typo_sum*fs ≈ em) for the
+        // page-bottom break-fit. The natural_line_heights above are the SPACING
+        // box (win*83/64 = 1.297*em for CJK), ~3.2pt larger than the real glyph
+        // ink — that over-count rejected page-bottom lines Word fits (their grid
+        // leading hangs into the margin). See break_threshold below.
+        let ink_line_heights: Vec<f32> = lines.iter().map(|line| {
+            self.ink_line_height_for_line(line, &para.style, para_font_size)
+        }).collect();
 
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
@@ -4807,10 +4815,33 @@ impl LayoutEngine {
             // PASS→FAIL, mean 0.9980; only kyotei (multi-col residual) still fails.
             let s562b_empty_full = std::env::var("OXI_S562B_DISABLE").is_err()
                 && para.runs.iter().all(|r| r.text.is_empty());
+            // S576 (2026-06-15, default ON, opt-out OXI_S576_DISABLE): the
+            // page-bottom break-fit measures the GLYPH INK (≈ em), not the
+            // line-SPACING box. natural_lh is win_sum*83/64 = 1.297*em for CJK
+            // (MS Mincho 11pt → 14.25), ~3.2pt larger than the real ink; that
+            // over-count rejected page-bottom lines Word fits (their grid
+            // leading hangs into the margin). PDF gold-standard ikujidetail p9
+            // "３ 請求…": ink bbox h=11.04 ≈ em=11.0, fits its 14.3 grid box;
+            // Oxi at 14.25 rejected → +1 cascade on word pages 9/12-16 (12
+            // paras). ink_lh = typo_sum*fs (= em for MS/Yu Mincho/Gothic).
+            // Exact lines (S548b: text bottom-aligned, no spare leading) and
+            // empty paras (S562b: no ink to anchor) keep the FULL box.
+            // SCOPE = no-type docGrid ONLY. A TYPED docGrid (w:type=lines /
+            // linesAndChars) grid-SNAPS each line to a whole cell, so the
+            // page-bottom occupant is the full grid cell, not the glyph ink —
+            // applying ink-leniency to typed grids let Oxi fit a line Word
+            // breaks (ikujikaigo + model each picked up −1×3, PASS→FAIL). A
+            // no-type docGrid uses the natural device-snapped advance (S571b),
+            // so its leading genuinely overhangs the margin like LM0.
+            let ink_lh = if std::env::var("OXI_S576_DISABLE").is_ok() || !page.doc_grid_no_type {
+                natural_lh
+            } else {
+                ink_line_heights.get(line_idx).copied().unwrap_or(natural_lh).min(natural_lh)
+            };
             let break_threshold = if s548b_exact_full || s562b_empty_full {
                 effective_lh
             } else {
-                natural_lh.min(effective_lh)
+                ink_lh.min(effective_lh)
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
@@ -4909,9 +4940,9 @@ impl LayoutEngine {
                 let pi_str = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
                 let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(15).collect();
                 eprintln!(
-                    "[BR_DUMP] pi={} line0 cursor_y={:.3} eff_lh={:.3} line_h={:.3} sum={:.3} pg_top={:.3} pg_bot={:.3} brk={} text={:?}",
-                    pi_str, cursor.cursor_y, effective_lh, line_height,
-                    cursor.cursor_y + effective_lh, page_top, page_top + content_height,
+                    "[BR_DUMP] pi={} line0 cursor_y={:.3} eff_lh={:.3} nat_lh={:.3} ink_lh={:.3} brk_thr={:.3} eff_bot={:.3} over={:.3} brk={} text={:?}",
+                    pi_str, cursor.cursor_y, effective_lh, natural_lh, ink_lh, break_threshold,
+                    effective_break_bottom, cursor.cursor_y + break_threshold - effective_break_bottom,
                     needs_page_break, txt
                 );
             }
@@ -8081,6 +8112,37 @@ impl LayoutEngine {
             }
         }
         max_ascent + max_descent
+    }
+
+    /// S576 (2026-06-15): glyph-INK height of a line (≈ em), for the
+    /// page-bottom break-fit check. Word lets the line-spacing leading hang
+    /// into the bottom margin and only requires the glyph ink to fit the
+    /// content area. natural_line_height_for_line returns the SPACING box
+    /// (win_sum*83/64 = 1.297*em for CJK); this returns typo_sum*fs (= em).
+    /// See FontMetrics::glyph_ink_height_pt.
+    fn ink_line_height_for_line(
+        &self,
+        line: &Line,
+        para_style: &ParagraphStyle,
+        para_font_size: f32,
+    ) -> f32 {
+        let mut max_ink: f32 = 0.0;
+        if line.fragments.is_empty() {
+            let font_size = para_style.ppr_rpr.as_ref()
+                .and_then(|r| r.font_size)
+                .unwrap_or(para_font_size);
+            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+            let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+            max_ink = metrics.glyph_ink_height_pt(font_size);
+        } else {
+            for frag in &line.fragments {
+                let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                let ink = metrics.glyph_ink_height_pt(font_size);
+                if ink > max_ink { max_ink = ink; }
+            }
+        }
+        max_ink
     }
 
     fn line_height_for_line_inner(

@@ -205,6 +205,28 @@ impl FontMetrics {
         font_descent * 15.0 / 20.0
     }
 
+    /// Glyph-ink height in points — the typographic em-occupancy of the line,
+    /// NOT the line-spacing box. = (sTypoAscender + |sTypoDescender|) * font_size.
+    /// S576 (2026-06-15): for the PAGE-BOTTOM break-fit check Word measures the
+    /// glyph ink (≈ em), letting the line-spacing LEADING hang into the bottom
+    /// margin. `word_ascent_pt + word_descent_pt` (the natural_lh) is the
+    /// SPACING box: for CJK 83/64 fonts it = win_sum * 83/64 * fs = 1.297*em
+    /// (MS Mincho 11pt → 14.25), ~3.2pt larger than the real glyph ink. PDF
+    /// gold-standard (ikujidetail p9 "３ 請求…"): ink bbox h=11.04 ≈ em=11.0,
+    /// fits with its 14.3pt grid box overhanging the margin; Oxi (using the
+    /// 14.25 spacing box) rejected it → +1 page cascade. typo_sum = 1.0em for
+    /// MS Mincho/Gothic and Yu Mincho/Gothic (measured font_metrics.json), so
+    /// this returns the em. Falls back to the win-based natural height when
+    /// typo metrics are absent (typo_sum ~ 0).
+    pub fn glyph_ink_height_pt(&self, font_size: f32) -> f32 {
+        let typo_sum = self.typo_ascent + self.typo_descent;
+        if typo_sum < 0.1 {
+            // No typo metrics — fall back to win-based ascent+descent.
+            return self.word_ascent_pt(font_size) + self.word_descent_pt(font_size);
+        }
+        typo_sum * font_size
+    }
+
     /// Line height for LayoutMode=0 (no document grid).
     /// COM-confirmed (2026-04-07): For CJK 83/64: returns the EXACT
     /// `win_sum * fontSize * 83/64` value (no quantization). The caller is
