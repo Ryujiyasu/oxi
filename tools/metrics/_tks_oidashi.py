@@ -57,6 +57,78 @@ import fitz
 
 YAK = '、。，．・「」『』（）【】〔〕'
 OPENERS = '「『（【〔《〈'
+CLOSERS = '」』）】〕》〉'
+
+# --demand: derive Word's per-約物 compression discriminator. For each Word 約物
+# (mid-line, has a successor on the same line), classify compressed (advance <
+# 0.9×em) vs natural, and tabulate by next-char class + line position. The em is
+# the line's median non-約物 advance (robust to font size). Run with --reexport
+# fresh PDF. This is the prescribed statistical derivation of the oikomi/oidashi
+# per-line demand discriminator (the S573 wall).
+if '--demand' in __import__('sys').argv:
+    import sys as _sys, os as _os, tempfile as _tmp
+    _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    from collections import Counter as _C
+    _PDF = _os.path.join(_tmp.gettempdir(), 'tks_truth.pdf')
+    _doc = fitz.open(_PDF)
+    def _cls(c):
+        if c in '、，': return 'comma'
+        if c in '。．': return 'period'
+        if c == '・': return 'naka'
+        if c in OPENERS: return 'opener'
+        if c in CLOSERS: return 'closer'
+        if c and ('0' <= c <= '9' or 'A' <= c <= 'Z' or 'a' <= c <= 'z'): return 'latin'
+        return 'cjk'
+    rows = []  # (yak_class, compressed, next_cls, posfrac, em)
+    for pno in range(46, 65):  # 賃金 chapter
+        rd = _doc[pno - 1].get_text('rawdict'); chars = []
+        for blk in rd['blocks']:
+            if blk.get('type', 0): continue
+            for ln in blk.get('lines', []):
+                for sp in ln['spans']:
+                    for ch in sp['chars']:
+                        b = ch['bbox']
+                        if 60 < b[1] < 800: chars.append((round((b[1]+b[3])/2, 1), b[0], b[2], ch['c']))
+        rws = {}
+        for yc, x0, x1, c in chars: rws.setdefault(yc, []).append((x0, x1, c))
+        for yc in sorted(rws):
+            r = sorted(rws[yc])
+            if len(r) < 4: continue
+            advs = [r[i+1][0] - r[i][0] for i in range(len(r)-1)]
+            # em = median advance of non-約物 chars
+            nonyak = [advs[i] for i in range(len(r)-1) if r[i][2] not in YAK]
+            if not nonyak: continue
+            em = sorted(nonyak)[len(nonyak)//2]
+            x_left = r[0][0]; x_right = r[-1][1]; span = x_right - x_left
+            for i in range(len(r)-1):
+                c = r[i][2]
+                if c not in '、。，．・」』）】〕':  # compressible 約物
+                    continue
+                adv = advs[i]
+                compressed = adv < 0.9 * em
+                nxt = _cls(r[i+1][2])
+                posfrac = (r[i][0] - x_left) / span if span > 0 else 0
+                rows.append((_cls(c), compressed, nxt, posfrac, em, adv))
+    print(f"\n===== Word per-約物 DEMAND discriminator ({len(rows)} compressible 約物, 賃金 chapter) =====")
+    comp = [r for r in rows if r[1]]
+    nat = [r for r in rows if not r[1]]
+    print(f"  compressed (oikomi): {len(comp)} ({100*len(comp)/max(1,len(rows)):.1f}%)   natural: {len(nat)}")
+    print("  --- by 約物 type: compressed / total ---")
+    for yt in ['comma', 'period', 'naka', 'closer']:
+        tot = [r for r in rows if r[0] == yt]; cc = [r for r in tot if r[1]]
+        if tot: print(f"     {yt}: {len(cc)}/{len(tot)} compressed ({100*len(cc)/len(tot):.0f}%)")
+    print("  --- compressed 約物 by NEXT-char class ---")
+    for k, n in _C(r[2] for r in comp).most_common():
+        tot = sum(1 for r in rows if r[2] == k)
+        print(f"     next={k}: {n} compressed / {tot} total ({100*n/tot:.0f}% of next={k})")
+    print("  --- natural 約物 by NEXT-char class (for contrast) ---")
+    for k, n in _C(r[2] for r in nat).most_common():
+        print(f"     next={k}: {n} natural")
+    # position: do compressed 約物 cluster late in the line (line-fitting)?
+    import statistics as _st
+    if comp: print(f"  compressed posfrac: median={_st.median(r[3] for r in comp):.2f}")
+    if nat: print(f"  natural   posfrac: median={_st.median(r[3] for r in nat):.2f}")
+    _sys.exit()
 
 def word_lines():
     """Word PDF chapter -> list of dicts {page,y,chars=[(c,x0,x1)]}, reading order."""
