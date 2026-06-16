@@ -198,6 +198,8 @@ def ctx(s, n=22): return s[-n:] if s else ''
 had_room = [e for e in oid if e['room'] >= e['pushed_w'] - 0.5]
 no_room  = [e for e in oid if e['room'] <  e['pushed_w'] - 0.5]
 print(f"VERDICT split: {len(had_room)} HAD-ROOM (demand oidashi), {len(no_room)} NO-ROOM (width gap)")
+hr_cell = sum(1 for e in had_room if e['in_cell']); hr_body = len(had_room) - hr_cell
+print(f"  HAD-ROOM split: {hr_cell} cell (boundary artifact: pageRight≠cell-right), {hr_body} BODY (genuine non-greedy/kinsoku)")
 ncell = sum(1 for e in oid if e['in_cell']); print(f"  cell lines: {ncell}/{len(oid)}, body lines: {len(oid)-ncell}/{len(oid)}\n")
 print("--- OIDASHI detail (room = pageRight − WordLineEnd; pushed_w = pushed char width) ---")
 for e in oid:
