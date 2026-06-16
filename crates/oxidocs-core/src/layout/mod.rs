@@ -10303,7 +10303,7 @@ impl LayoutEngine {
                             cell_w
                         };
                         let wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
-                        let first_line_wrap_w = if p_first_line_indent < 0.0 {
+                        let mut first_line_wrap_w = if p_first_line_indent < 0.0 {
                             (wrap_base - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
@@ -10332,6 +10332,23 @@ impl LayoutEngine {
                                 .sum();
                             (marker.clone(), marker_fs, marker_width)
                         });
+                        // S592 (2026-06-17, opt-IN OXI_S592=1): a SPACE-suffix numbered CELL
+                        // paragraph (the 賃金 regulation 第N条 boxes) renders its number INLINE at
+                        // the cell-left indent (NOT outdented), body flowing AFTER it. Word does
+                        // not outdent a space-suffix number (no tab). Oxi outdented the marker
+                        // (marker_x −list_indent) AND did not reserve marker width on line-1 →
+                        // body over-fit + overlapped the marker. FIX: reserve marker width on
+                        // line-1 (wrap), place the marker at cell-left, start the body after it.
+                        // Cross-doc PDF: tokyoshugyo 第４条 x97.6, 3a4f 第２条 x95.7 = cell-left.
+                        let s592_cell_space = std::env::var("OXI_S592").ok().as_deref() == Some("1")
+                            && matches!(para.style.list_suff.as_deref(), Some("space"))
+                            && para.style.list_indent.unwrap_or(0.0) > 0.5;
+                        let s592_marker_reserve = if s592_cell_space {
+                            list_marker_info.as_ref().map(|(_, fs, w)| w + fs * 0.25).unwrap_or(0.0)
+                        } else { 0.0 };
+                        if s592_cell_space {
+                            first_line_wrap_w = (first_line_wrap_w - s592_marker_reserve).max(0.0);
+                        }
 
                         // Collect runs into lines with greedy wrapping
                         // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing, text_scale)
@@ -11179,15 +11196,22 @@ impl LayoutEngine {
                                 .and_then(|v| v.parse::<f32>().ok())
                                 .unwrap_or(1.5);
                             let cell_text_y_off = cell_text_y_off + cell_glyph_dy;
-                            let mut rx = 0.0_f32;
+                            // S592: line-1 body starts AFTER the inline marker (no overlap).
+                            let mut rx = if s592_cell_space && line_idx == 0 { s592_marker_reserve } else { 0.0_f32 };
                             // Emit list marker on the first line of the paragraph.
                             if line_idx == 0 {
                                 if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
                                     let list_indent = para.style.list_indent.unwrap_or(18.0);
                                     let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
                                     // Session 75 Phase D: y is LINE BOX TOP; renderer adds cell_text_y_off.
+                                    // S592: place a space-suffix number at cell-left (no outdent).
+                                    let marker_x = if s592_cell_space {
+                                        cell_x + pad_l + line_indent
+                                    } else {
+                                        cell_x + pad_l + line_indent - list_indent
+                                    };
                                     let mut marker_el = LayoutElement::new(
-                                        cell_x + pad_l + line_indent - list_indent,
+                                        marker_x,
                                         content_h,
                                         mk_w,
                                         lh,
