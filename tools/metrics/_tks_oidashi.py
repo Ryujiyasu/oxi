@@ -333,6 +333,9 @@ if '--roots' in sys.argv:
     print(f"\n===== per-paragraph CASCADE ROOTS: {len(roots)} paragraphs with a break divergence =====")
     nc = sum(1 for r in roots if r['in_cell'])
     print(f"  {len(over)} over-fit roots, {len(under)} under-fit roots | {nc} cell, {len(roots)-nc} body")
+    cell_over = sum(1 for r in roots if r['in_cell'] and 'over-fit' in r['kind'])
+    cell_under = sum(1 for r in roots if r['in_cell'] and 'under-fit' in r['kind'])
+    print(f"  CELL roots: {cell_over} over-fit (Oxi keeps, cell too wide), {cell_under} under-fit (Oxi wraps, missing cluster-compress)")
     print("  --- root break-char freq (the char at the first divergence) ---")
     for c, k in Counter(r['char'] for r in roots).most_common(15):
         t = ' [YAK]' if c in YAK else ''
