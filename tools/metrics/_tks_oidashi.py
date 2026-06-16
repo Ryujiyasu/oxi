@@ -265,9 +265,20 @@ if '--roots' in sys.argv:
     for c, k in Counter(r['char'] for r in roots).most_common(15):
         t = ' [YAK]' if c in YAK else ''
         print(f"     '{c}' ×{k}{t}")
-    print("  --- sample body roots (ctx = …prev|breakchar) ---")
-    for r in [r for r in roots if not r['in_cell']][:18]:
-        print(f"     {r['kind'][:12]} '{r['prev']}'→'{r['char']}'  …{r['ctx']}")
+    # Classify body OVER-fit roots: autospace (digit/Latin in ctx) vs 約物 vs pure-CJK
+    import re
+    body_over = [r for r in roots if not r['in_cell'] and 'over-fit' in r['kind']]
+    has_latin = [r for r in body_over if re.search(r'[0-9A-Za-zＡ-Ｚａ-ｚ０-９]', r['ctx'])]
+    has_yak = [r for r in body_over if any(c in YAK for c in r['ctx']) and r not in has_latin]
+    pure = [r for r in body_over if r not in has_latin and r not in has_yak]
+    print(f"  --- body OVER-fit roots ({len(body_over)}): {len(has_latin)} have digit/Latin (autospace), "
+          f"{len(has_yak)} 約物-only, {len(pure)} pure-CJK ---")
+    print("  sample autospace (digit/Latin) body over-fit roots:")
+    for r in has_latin[:10]:
+        print(f"     '{r['prev']}'→'{r['char']}'  …{r['ctx']}")
+    print("  sample pure-CJK body over-fit roots:")
+    for r in pure[:10]:
+        print(f"     '{r['prev']}'→'{r['char']}'  …{r['ctx']}")
 
 # ===== PAGE-DELTA: collision-robust per-char page delta (the gate the official
 # pagination_diff can't compute on this doc — char-stream aligned, no text-prefix
