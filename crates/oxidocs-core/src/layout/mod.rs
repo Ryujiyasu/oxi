@@ -10202,7 +10202,42 @@ impl LayoutEngine {
                         // unidentified (r7, s475/pi16, and the 記載要領 paras all ruled
                         // out). Gate removed (no merge-gate benefit + cell-wrap risk).
                         // See memory session560 for the full ruled-out chain.
-                        let wrap_base = if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
+                        // S585 (2026-06-16, default ON, opt-out OXI_S585_DISABLE):
+                        // a full-page-width single-cell table whose declared gridCol
+                        // SLIGHTLY exceeds the page content area subtracts its cellMar
+                        // from the wrap budget (Word fits the content to the page).
+                        // tokyoshugyo's regulation-box tables: cell_w=427.85 (fixed
+                        // layout keeps the declared gridCol 8557tw) > content_width
+                        // 8504tw=425.2 — Word's wrap ≈ gridCol − 2×cellMar (the ④para
+                        // line is 412.4pt wide, NOT the full 427.85); Oxi used
+                        // wrap_base=cell_w → fit ~1-2 more chars/line → 16 paras
+                        // under-wrap by 1 line → the doc-wide −1 page drift.
+                        // The +5pt cell_w over (Oxi's right border at content+2×cellMar
+                        // vs Word's +1×) DISQUALIFIES s531/s559 (both require
+                        // cell_w ≤ content_width), so this gate handles cell_w > content.
+                        // DISCRIMINATOR `over < 5pt`: a TRUE full-page table exceeds the
+                        // content area by < one cellMar (tokyoshugyo +2.65pt = ~half the
+                        // 99tw cellMar). A genuinely-WIDE table (harassbun +19.65,
+                        // 1636 +7.1) overflows the page deliberately and Word keeps its
+                        // full cell_w — firing on those over-wrapped them PASS→FAIL
+                        // (the cell-wrap tombstone). Single-cell, non-right, inherited
+                        // cellMar (!has_explicit_cellmar — author-declared cellMar is
+                        // S412/S418 territory). Corpus-validated: Phase-1 65/69 unchanged
+                        // (0 PASS→FAIL; 1636/harassbun stay PASS), tokyoshugyo
+                        // 0.7107→0.8071 (page count 89→90=Word). RESIDUAL +1×282
+                        // oscillation = per-cell wrap-narrowing variance (Word narrows
+                        // some cells by < 2×cellMar) — the page COUNT is right but the
+                        // per-cell line distribution isn't exact (deferred). See
+                        // [[tokyoshugyo_wrap_not_cellheight]].
+                        let s585_cellmar = std::env::var("OXI_S585_DISABLE").is_err()
+                            && row.cells.len() == 1
+                            && !table.style.has_explicit_cellmar
+                            && !matches!(para.alignment, Alignment::Right | Alignment::Center)
+                            && cell_w > content_width
+                            && (cell_w - content_width) < 5.0;
+                        let wrap_base = if s585_cellmar {
+                            (cell_w - pad_l - pad_r).max(0.0)
+                        } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
