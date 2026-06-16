@@ -375,6 +375,25 @@ if '--pagedelta' in sys.argv:
         print(f"   Δ{d:+d}: {dh[d]:6d} ({100*dh[d]/tot:5.1f}%) {bar}")
     d0 = dh.get(0, 0)
     print(f"   delta=0 (correct page): {100*d0/tot:.1f}%")
+    # Localize the cascade: per Word page, the dominant delta + the first text of
+    # each page where delta flips to +1 (the cascade origin).
+    perpage = {}
+    seq2 = []
+    for blk in sm.get_matching_blocks():
+        for k in range(blk.size):
+            wi = blk.a + k; oi = blk.b + k
+            wl = ws[wi][1]; ol = os_[oi][1]
+            wp = W[wl]['page']; op = O[ol]['page']
+            perpage.setdefault(wp, Counter())[op - wp] += 1
+            seq2.append((wp, op - wp, wtext[wi]))
+    print("   --- per Word-page dominant Δ (region localization) ---")
+    prev_dom = 0
+    for wp in sorted(perpage):
+        dom = perpage[wp].most_common(1)[0][0]
+        flag = '  <<< Δ flips here' if dom != prev_dom else ''
+        if dom != 0 or flag:
+            print(f"     Wp{wp}: Δ={dom:+d} {dict(perpage[wp])}{flag}")
+        prev_dom = dom
 
 # ===== ABSORPTION: how much 約物 compression Word applies per FULL line =====
 # absorption = Σ(natural em widths) − actual line width. >0 = Word compressed
