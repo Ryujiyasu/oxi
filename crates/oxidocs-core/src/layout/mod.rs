@@ -10262,12 +10262,27 @@ impl LayoutEngine {
                         // some cells by < 2×cellMar) — the page COUNT is right but the
                         // per-cell line distribution isn't exact (deferred). See
                         // [[tokyoshugyo_wrap_not_cellheight]].
+                        // S591 (2026-06-16): the over threshold for the S585b
+                        // single-cell cellMar-subtract. DERIVED structurally
+                        // (docx tblGrid analysis): a TRUE full-page table declares
+                        // gridCol = content + up to 2×cellMar (≈9.9pt at 99tw),
+                        // so over ∈ (0, ~10]. Genuinely-WIDE tables Word keeps full
+                        // are MORE (harassbun +19.6 single-cell, 1636 +14.3 3-col).
+                        // The old <5.0 caught tokyoshugyo's main boxes (+2.65) but
+                        // MISSED its T15 (+9.9, =2×cellMar) → 1-page short. Raising
+                        // to <11 catches the full-page intent class while excluding
+                        // harassbun (+19.6); 1636's over-wide table is multi-col so
+                        // the cells.len()==1 gate excludes it regardless. Default
+                        // kept 5.0 (S585b ship value) pending corpus canary; set
+                        // OXI_S585_OVER=11 to test the raised threshold.
+                        let s585_over_thresh: f32 = std::env::var("OXI_S585_OVER")
+                            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
                         let s585_cellmar = std::env::var("OXI_S585_DISABLE").is_err()
                             && row.cells.len() == 1
                             && !table.style.has_explicit_cellmar
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center)
                             && cell_w > content_width
-                            && (cell_w - content_width) < 5.0;
+                            && (cell_w - content_width) < s585_over_thresh;
                         let wrap_base = if s585_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
