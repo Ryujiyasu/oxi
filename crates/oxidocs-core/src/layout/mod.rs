@@ -10262,27 +10262,35 @@ impl LayoutEngine {
                         // some cells by < 2×cellMar) — the page COUNT is right but the
                         // per-cell line distribution isn't exact (deferred). See
                         // [[tokyoshugyo_wrap_not_cellheight]].
-                        // S591 (2026-06-16): the over threshold for the S585b
-                        // single-cell cellMar-subtract. DERIVED structurally
-                        // (docx tblGrid analysis): a TRUE full-page table declares
-                        // gridCol = content + up to 2×cellMar (≈9.9pt at 99tw),
-                        // so over ∈ (0, ~10]. Genuinely-WIDE tables Word keeps full
-                        // are MORE (harassbun +19.6 single-cell, 1636 +14.3 3-col).
-                        // The old <5.0 caught tokyoshugyo's main boxes (+2.65) but
-                        // MISSED its T15 (+9.9, =2×cellMar) → 1-page short. Raising
-                        // to <11 catches the full-page intent class while excluding
-                        // harassbun (+19.6); 1636's over-wide table is multi-col so
-                        // the cells.len()==1 gate excludes it regardless. Default
-                        // kept 5.0 (S585b ship value) pending corpus canary; set
-                        // OXI_S585_OVER=11 to test the raised threshold.
-                        let s585_over_thresh: f32 = std::env::var("OXI_S585_OVER")
-                            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+                        // S591 (2026-06-16): the S585b single-cell cellMar-subtract
+                        // DISCRIMINATOR. The over-amount alone is FALSIFIED (canary:
+                        // OXI_S585_OVER=11 → 1636 PASS→FAIL — 1636's over∈[5,11) cell
+                        // is in a tblW=dxa table Word keeps wide). The TRUE rule is
+                        // tblW TYPE (docx tblGrid + 3-doc analysis): a tblW=auto table
+                        // is AUTO-SIZED → Word fits it to the page content (CLAMP);
+                        // tblW=dxa declares an explicit width → Word HONORS it
+                        // (KEEP-WIDE, overflow). tokyoshugyo's regulation boxes
+                        // (T15/T41/T57/T101, over +4.5..+9.9) are ALL tblW=auto → clamp;
+                        // harassbun (+19.6) and 1636 (+14.3) are tblW=dxa → keep.
+                        // RULE: clamp if over<5.0 (preserve the S585b ship value, all
+                        // canary-validated) OR (tblW=auto AND over < 11 = up to ~2×cellMar,
+                        // the auto-fit full-page envelope). The old <5.0 MISSED T15/T57/
+                        // T101 (over +9.9, tblW=auto) → the 賃金 chapter stayed 1pg short.
+                        // ★NOTE the body↔cell COUPLING (--pagedelta): clamping cells alone
+                        // over-fills (the ×0.6667-short body compensates over-wide cells);
+                        // tokyoshugyo PASS needs body(S590)+cells+S586 jointly. This fixes
+                        // the CELL piece correctly (canary-clean by tblW=dxa exclusion).
+                        // OXI_S585_OVER tunes the auto bound (default 11).
+                        let s585_auto_over: f32 = std::env::var("OXI_S585_OVER")
+                            .ok().and_then(|v| v.parse().ok()).unwrap_or(11.0);
+                        let s585_tblw_auto = table.style.width_type.as_deref() == Some("auto");
+                        let s585_over = cell_w - content_width;
                         let s585_cellmar = std::env::var("OXI_S585_DISABLE").is_err()
                             && row.cells.len() == 1
                             && !table.style.has_explicit_cellmar
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center)
                             && cell_w > content_width
-                            && (cell_w - content_width) < s585_over_thresh;
+                            && (s585_over < 5.0 || (s585_tblw_auto && s585_over < s585_auto_over));
                         let wrap_base = if s585_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
