@@ -6638,7 +6638,8 @@ impl LayoutEngine {
             // early — an SSIM cascade. Comma/period-first pairs still trim lightly
             // (s475_max_compress split — see kinsoku.rs). Env-tunable.
             let s475_pair: f32 = if s476_grid { s476_cap } else {
-                std::env::var("OXI_S475_PAIR").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0) };
+                std::env::var("OXI_S475_PAIR").ok().and_then(|v| v.parse().ok())
+                    .unwrap_or(if s590_legacy_just_cap { 1.5 } else { 6.0 }) };
             // S575 (2026-06-15): BODY oikomi — raise the solo 約物 cap to 3.0 for the
             // MAIN body flow (s476_body) so jc=both type=lines compat=15 bodies fit
             // Word's demand compression (ikujikaigo i=41/i=57: mid 、 renders 9.0 = −3.0;
@@ -6652,7 +6653,12 @@ impl LayoutEngine {
             // break itself is solo-STABLE (count unchanged); only the LRPB attribution is
             // sensitive, so skip the oikomi when there's an LRPB to preserve. Opt-out
             // OXI_S575_DISABLE.
-            let s475_solo_default = if s476_body && !para_has_lrpb
+            // S590: derived break-time 約物 demand cap ≈ 1.5pt (sweep minimum,
+            // _tks_oidashi: divergence 666@0 → 618@1.5 → 925@2.5). Word's BREAK
+            // cap (~1.5) < its RENDER cap (~2.9) — break is conservative, render
+            // (justify) compresses more. Env OXI_S475_SOLO overrides.
+            let s475_solo_default = if s590_legacy_just_cap { 1.5 }
+                else if s476_body && !para_has_lrpb
                 && std::env::var("OXI_S575_DISABLE").is_err() { 3.0 } else { 2.5 };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo_default) };
