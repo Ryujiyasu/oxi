@@ -218,6 +218,55 @@ for c, n in Counter(e['prev_char'] for e in oid).most_common():
     tag = ' [yakumono]' if c in YAK else ''
     print(f"   '{c}' ×{n}{tag}")
 
+# ===== ABSORPTION: how much 約物 compression Word applies per FULL line =====
+# absorption = Σ(natural em widths) − actual line width. >0 = Word compressed
+# 約物 (oikomi); ≈0 = natural; <0 = Word expanded (justify spread). The MAX
+# positive absorption on full (justified) lines = Word's per-line oikomi budget.
+if '--absorb' in sys.argv:
+    import unicodedata
+    FS = 10.5
+    def is_fw(c):
+        if c in ' 　\t': return False
+        return unicodedata.east_asian_width(c) in ('W', 'F', 'A')
+    COMPRESS = '、。，．・」』】〕》〉｝］）'
+    rows = []
+    for li, ln in enumerate(W):
+        cs = ln['chars']
+        if len(cs) < 3: continue
+        x0 = cs[0][1]; x1 = cs[-1][2]
+        actual = x1 - x0
+        nat = sum(FS if is_fw(c) else FS / 2.0 for c, _, _ in cs)
+        pright = wpage_right.get(ln['page'], 0)
+        full = x1 >= pright - FS  # reaches the margin = justified non-last line
+        nyak = sum(1 for c, _, _ in cs if c in COMPRESS)
+        rows.append({'absorb': nat - actual, 'full': full, 'nyak': nyak,
+                     'page': ln['page'], 'n': len(cs)})
+    full = [r for r in rows if r['full']]
+    print(f"\n===== ABSORPTION on {len(full)} full(justified) Word lines (of {len(rows)}) =====")
+    import statistics
+    av = [r['absorb'] for r in full]
+    print(f"  absorption pt: min={min(av):.2f} p25={statistics.quantiles(av,n=4)[0]:.2f} "
+          f"median={statistics.median(av):.2f} p75={statistics.quantiles(av,n=4)[2]:.2f} "
+          f"p95={sorted(av)[int(len(av)*0.95)]:.2f} max={max(av):.2f}")
+    # histogram in 1pt buckets
+    from collections import Counter
+    h = Counter(round(a) for a in av)
+    print("  histogram (1pt buckets):", dict(sorted(h.items())))
+    # per-約物 compression on lines that DID compress (absorb > 0.5)
+    comp = [r for r in full if r['absorb'] > 0.5 and r['nyak'] > 0]
+    print(f"\n  lines Word COMPRESSED (absorb>0.5, has 約物): {len(comp)}")
+    per = [r['absorb'] / r['nyak'] for r in comp]
+    if per:
+        print(f"  per-約物 compression pt: median={statistics.median(per):.2f} "
+              f"p95={sorted(per)[int(len(per)*0.95)]:.2f} max={max(per):.2f}")
+    # lines that did NOT compress despite having 約物 (absorb<=0.5) = oidashi/expand
+    nocomp = [r for r in full if r['absorb'] <= 0.5 and r['nyak'] > 0]
+    print(f"  full lines NOT compressed despite 約物 (expand/natural): {len(nocomp)}")
+    # the discriminator question: is there a clean absorb cap?
+    big = [r for r in full if r['absorb'] > 3.0]
+    print(f"  full lines with absorption > 3.0pt: {len(big)} "
+          f"(absorb,nyak): {[(round(r['absorb'],1),r['nyak']) for r in sorted(big,key=lambda r:-r['absorb'])[:15]]}")
+
 # ===== OIKOMI side: what char does Word KEEP that Oxi wrapped? (kinsoku check) =====
 print("\n--- OIKOMI break-char (char Word KEEPS on the line, Oxi wraps) frequency ---")
 def is_prohib(c): return c in '、。，．）」』】〕》〉｝］・ーぁぃぅぇぉっゃゅょゎ々'

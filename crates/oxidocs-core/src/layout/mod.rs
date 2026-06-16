@@ -6610,10 +6610,23 @@ impl LayoutEngine {
                 && self.compress_punctuation && self.compat_mode >= 15)
                 || s568_legacy_oikomi
                 || s572_legacy_notype_oikomi;
+            // S590 (2026-06-16, opt-IN OXI_S590=1, default OFF = byte-identical):
+            // LEGACY (compat<15) JUSTIFIED body paras use the s475 CAPACITY break
+            // (greedy + compress-to-fit only when overflow ≤ Σ約物-caps, cap≈2.5)
+            // instead of the flat ×0.6667 pre-compress (−3.5pt, over-compresses) OR
+            // S589 pure-natural (0, under-fits the real oikomi lines). DERIVED:
+            // _tks_oidashi.py --absorb on the Word PDF — Word's per-約物 oikomi
+            // compression caps at ~2.9pt (median 1.93), and only 14/219 full lines
+            // compress (176 expand at natural 約物). So the capacity model with
+            // cap≈2.5 (≈ Word max) reproduces Word's compress-14/expand-176 split,
+            // unlike ×0.6667 (over) / S589-natural (under) / S543-fs/2 (way over).
+            let s590_legacy_just_cap = std::env::var("OXI_S590").ok().as_deref() == Some("1")
+                && is_justified && self.compress_punctuation
+                && self.compat_mode < 15 && !lines_and_chars;
             let s475_break = ((std::env::var("OXI_S475_DISABLE").is_err()
                 && self.compress_punctuation && self.compat_mode >= 15
                 && !lines_and_chars)
-                || s476_grid)
+                || s476_grid || s590_legacy_just_cap)
                 && !natural_break_jc;  // S492: non-justified paras break at natural
             let s476_cap: f32 = std::env::var("OXI_S476_CAP").ok()
                 .and_then(|v| v.parse().ok())
