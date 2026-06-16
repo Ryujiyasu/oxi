@@ -10314,6 +10314,29 @@ impl LayoutEngine {
                         // cratered it (909 paras +1). Restricting to para_has_tab
                         // excludes 3a4f entirely while keeping d77a's カ/タ list items.
                         let para_has_tab = para.runs.iter().any(|r| r.text.contains('\t'));
+                        // S586 (2026-06-16, opt-IN OXI_S586=1, default OFF = byte-identical;
+                        // SCAFFOLD held pending the coupled #2 fix): page-44 約物 OIKOMI. A LEGACY
+                        // (compat<15) compressPunctuation CELL line whose trailing char would
+                        // orphan (<=2 chars to para end) by a SMALL overflow (<= OXI_S586_CAP,
+                        // default 3.5pt) is pulled up by collapsing a 約物 immediately before an
+                        // OPENING bracket (the 、「 inter-space fully vanishes, -7.5pt). DISCRIMINATOR
+                        // derived from the 4-firing dataset + Word PDF (S585c): of 4 orphan+small
+                        // lines, ONLY page-44 «…については、「育児…» has 、 before an opener (Word
+                        // collapses=oikomi); the 3 with 、 before a KANJI are Word OIDASHI. Fires on
+                        // EXACTLY 1 corpus line and eliminates region-2 +1×282 (the SOLE region-2
+                        // root). ★HELD default-OFF: page-44 alone exposes sub-bug #2 (the 賃金
+                        // chapter is a real ~1-page over-fit, Word p46-64=19pg vs Oxi 18pg; Oxi
+                        // fits more chars/line in its cells = the char-budget OIDASHI side, same
+                        // wall as #1, NOT separately pinnable — per-element localization blocked by
+                        // the doc's repeated-phrase text + table-dense fitz). Ship BOTH when #2/the
+                        // wall lands (cf. the S506 OIDASHI scaffold pattern). See
+                        // [[tokyoshugyo_wrap_not_cellheight]], [[char_budget_wall]].
+                        let s586_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).collect();
+                        let s586_orphan = std::env::var("OXI_S586").ok().as_deref() == Some("1")
+                            && self.compat_mode < 15 && self.compress_punctuation;
+                        let s586_cap: f32 = std::env::var("OXI_S586_CAP").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(3.5);
+                        let mut s586_run_offset = 0usize;
 
                         for run in &para.runs {
                             let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -10331,7 +10354,8 @@ impl LayoutEngine {
                             let mut buf_w: f32 = 0.0;
                             // S118: per-char context for jc_both_compress integration.
                             let mut buf_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
-                            for ch in run.text.chars() {
+                            let s586_run_chars: Vec<char> = run.text.chars().collect();
+                            for (s586_ci, ch) in s586_run_chars.iter().copied().enumerate() {
                                 // Session 109 (2026-05-19): honour soft line breaks
                                 // (<w:br/>) and column/page break markers within table
                                 // cells. The OOXML parser converts <w:br/> to '\n' in
@@ -10529,7 +10553,30 @@ impl LayoutEngine {
                                 // cs=-1tw=-0.05pt is below Word's compression threshold.
                                 let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
                                 let run_has_neg_cs = cs <= -0.1;
-                                let would_overflow = if jc_gate_active && run_has_neg_cs && would_overflow_natural {
+                                // S586 orphan + small-overflow + 約物→opener oikomi (scaffold).
+                                let s586_overflow_fixed = if s586_orphan && would_overflow_natural
+                                    && !kinsoku::is_cjk_compressible(ch) {
+                                    let gpos = s586_run_offset + s586_ci;
+                                    let chars_to_end = s586_para_chars.len().saturating_sub(gpos);
+                                    let overflow = (line_x + buf_w + cw) - effective_wrap;
+                                    if chars_to_end <= 2 && overflow <= s586_cap {
+                                        let seq: Vec<char> = current_line_chars.iter()
+                                            .chain(buf_chars.iter()).map(|c| c.ch)
+                                            .chain(std::iter::once(ch)).collect();
+                                        // collapse a 約物 immediately before an opening bracket
+                                        // to ~3.0pt (full 、「 inter-space vanish), natural − 3.0.
+                                        let collapse: f32 = seq.iter().enumerate()
+                                            .filter(|(i, &c)| matches!(c, '、' | '。' | '，' | '．')
+                                                && seq.get(i + 1).map_or(false, |&n| kinsoku::is_yakumono_opening(n)))
+                                            .map(|_| (font_size - 3.0).max(0.0))
+                                            .sum();
+                                        collapse > 0.0
+                                            && (line_x + buf_w + cw - collapse) <= effective_wrap
+                                    } else { false }
+                                } else { false };
+                                let would_overflow = if s586_overflow_fixed {
+                                    false
+                                } else if jc_gate_active && run_has_neg_cs && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                                         ch,
                                         natural_advance: cw,
@@ -10712,6 +10759,7 @@ impl LayoutEngine {
                                 line_x += buf_w;
                                 current_line_chars.extend(buf_chars.drain(..));
                             }
+                            s586_run_offset += s586_run_chars.len();
                         }
                         if !current_line.is_empty() {
                             lines.push(current_line);
