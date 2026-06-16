@@ -104,6 +104,7 @@ def oxi_lines():
             out.append({'page': pg['page'], 'y': key, 'text': txt,
                         'char_offset': row[0].get('char_offset'),
                         'para': row[0].get('cell_para_idx'),
+                        'para_idx': row[0].get('para_idx'),
                         'row': row[0].get('cell_row_idx'),
                         'col': row[0].get('cell_col_idx'),
                         'x0': row[0]['x'], 'x1': row[-1]['x'] + row[-1].get('w', 0)})
@@ -219,6 +220,54 @@ print("\n--- OIDASHI prev-char (last char Word keeps on the line) frequency ---"
 for c, n in Counter(e['prev_char'] for e in oid).most_common():
     tag = ' [yakumono]' if c in YAK else ''
     print(f"   '{c}' ×{n}{tag}")
+
+# ===== ROOTS: per-paragraph FIRST break divergence (the cascade roots). Within
+# each Oxi paragraph, walk matched chars in order; Oxi breaks where its line
+# increments, Word where its line increments. The FIRST char where they disagree
+# = that paragraph's root divergence (the rest of the para cascades). =====
+if '--roots' in sys.argv:
+    from collections import Counter
+    def pkey(ol): return (ol.get('para_idx'), ol.get('para'), ol.get('row'), ol.get('col'))
+    # matched (word_line, oxi_line, char) in stream order
+    matched = []
+    for blk in sm.get_matching_blocks():
+        for k in range(blk.size):
+            wi = blk.a + k; oi = blk.b + k
+            matched.append((ws[wi][1], os_[oi][1], wtext[wi]))
+    # group by oxi paragraph (contiguous runs of same pkey)
+    roots = []
+    i = 0
+    n = len(matched)
+    while i < n:
+        para = pkey(O[matched[i][1]])
+        j = i
+        seq = []
+        while j < n and pkey(O[matched[j][1]]) == para:
+            seq.append(matched[j]); j += 1
+        # walk seq; find first break disagreement
+        for k in range(1, len(seq)):
+            pwl, pol, _ = seq[k-1]; wl, ol, c = seq[k]
+            wb = wl != pwl; ob = ol != pol
+            if wb != ob:
+                kind = 'W-breaks-Oxi-keeps(over-fit)' if wb else 'Oxi-breaks-W-keeps(under-fit)'
+                roots.append({'para': para, 'kind': kind, 'char': c,
+                              'prev': seq[k-1][2],
+                              'in_cell': para[1] is not None,
+                              'ctx': ''.join(x[2] for x in seq[max(0,k-10):k+2])})
+                break
+        i = j
+    over = [r for r in roots if 'over-fit' in r['kind']]
+    under = [r for r in roots if 'under-fit' in r['kind']]
+    print(f"\n===== per-paragraph CASCADE ROOTS: {len(roots)} paragraphs with a break divergence =====")
+    nc = sum(1 for r in roots if r['in_cell'])
+    print(f"  {len(over)} over-fit roots, {len(under)} under-fit roots | {nc} cell, {len(roots)-nc} body")
+    print("  --- root break-char freq (the char at the first divergence) ---")
+    for c, k in Counter(r['char'] for r in roots).most_common(15):
+        t = ' [YAK]' if c in YAK else ''
+        print(f"     '{c}' ×{k}{t}")
+    print("  --- sample body roots (ctx = …prev|breakchar) ---")
+    for r in [r for r in roots if not r['in_cell']][:18]:
+        print(f"     {r['kind'][:12]} '{r['prev']}'→'{r['char']}'  …{r['ctx']}")
 
 # ===== PAGE-DELTA: collision-robust per-char page delta (the gate the official
 # pagination_diff can't compute on this doc — char-stream aligned, no text-prefix
