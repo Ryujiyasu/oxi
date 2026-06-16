@@ -266,6 +266,22 @@ if '--absorb' in sys.argv:
     big = [r for r in full if r['absorb'] > 3.0]
     print(f"  full lines with absorption > 3.0pt: {len(big)} "
           f"(absorb,nyak): {[(round(r['absorb'],1),r['nyak']) for r in sorted(big,key=lambda r:-r['absorb'])[:15]]}")
+    # Print the TEXT of the high-absorb lines + flag 約物 PAIRS (default kerning,
+    # not demand oikomi). Need the line object back: rows carry page+n but not li.
+    print("  --- high-absorb line texts (does compression = 約物 PAIR kern or DEMAND?) ---")
+    def has_pair(s):
+        return any(s[i] in COMPRESS and s[i+1] in (COMPRESS + OPENERS) for i in range(len(s)-1))
+    shown = 0
+    for ln in W:
+        cs = ln['chars']
+        if len(cs) < 3: continue
+        nat = sum(FS if is_fw(c) else FS/2.0 for c,_,_ in cs)
+        ab = nat - (cs[-1][2]-cs[0][1])
+        if ab > 3.0 and cs[-1][2] >= wpage_right.get(ln['page'],0) - FS:
+            txt = ''.join(c for c,_,_ in cs)
+            print(f"     absorb={ab:.1f} pair={has_pair(txt)} | {txt[:44]}")
+            shown += 1
+            if shown >= 14: break
 
 # ===== OIKOMI side: what char does Word KEEP that Oxi wrapped? (kinsoku check) =====
 print("\n--- OIKOMI break-char (char Word KEEPS on the line, Oxi wraps) frequency ---")
