@@ -6540,6 +6540,19 @@ impl LayoutEngine {
                 && (!lines_and_chars || s492_full)
                 && !s572_legacy_notype_oikomi;
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
+            // S589 (2026-06-16, opt-IN OXI_S589=1, default OFF = byte-identical):
+            // LEGACY (compat<15) JUSTIFIED body paras break standalone 、。，． at
+            // NATURAL width instead of the flat ×0.6667 pre-compress (mod.rs:6764)
+            // that over-packs 、-heavy lines by ~1 char. ROOT of tokyoshugyo #2:
+            // _tks_oidashi.py (char-stream-aligned Word-PDF vs Oxi) localized the
+            // 賃金 chapter over-fit to 102 "Word-NAT / Oxi-½" mid-、 — Oxi compresses
+            // 、 at break, Word breaks at natural (compressing only on justify-slack).
+            // natural_break_jc/s557 cover only !is_justified / c15; legacy JUSTIFIED
+            // (compat<15, type=lines) was uncovered → ×0.6667 fired. compat=11 docs:
+            // tokyoshugyo. See [[char_budget_wall]], [[tokyoshugyo_wrap_not_cellheight]].
+            let s589_legacy_just_natural = std::env::var("OXI_S589").ok().as_deref() == Some("1")
+                && is_justified && self.compress_punctuation
+                && self.compat_mode < 15 && !lines_and_chars;
             // S557 (2026-06-13, part of the OXI_S556_JUST15 opt-in scaffold):
             // c15-explicit JUSTIFIED paragraphs keep standalone 、。，．at
             // NATURAL width at break — Word defers ALL their compression to
@@ -6754,7 +6767,8 @@ impl LayoutEngine {
                                 // standalone = near-full, only compressed on line-slack).
                                 // The demand-absorb below compresses any of them as a
                                 // line's overflow requires.
-                                if (s472_demand || s474_natural || s475_break || s557_natural_just15)
+                                if (s472_demand || s474_natural || s475_break || s557_natural_just15
+                                        || s589_legacy_just_natural)
                                     && matches!(ch, '、' | '，' | '。' | '．') {
                                     // no compression at break; demand-absorb handles fit
                                     // (s474_natural: leave natural, no absorb either =
