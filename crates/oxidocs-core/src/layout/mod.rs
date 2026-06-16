@@ -6637,9 +6637,13 @@ impl LayoutEngine {
             // bracket-cluster justified lines (d77a para9 L3 ）」（) broke a char
             // early — an SSIM cascade. Comma/period-first pairs still trim lightly
             // (s475_max_compress split — see kinsoku.rs). Env-tunable.
+            // S590 refinement (2026-06-16): per-TYPE caps — solo (、。，．) = 1.5
+            // (the derived break demand), but bracket-PAIR clusters keep 6.0 (S558,
+            // the lever-3 heavy cluster compression). Measured (S591 cells clamped,
+            // break divergence): solo1.5/pair1.5=593 → solo1.5/pair6.0=542 (best).
             let s475_pair: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_PAIR").ok().and_then(|v| v.parse().ok())
-                    .unwrap_or(if s590_legacy_just_cap { 1.5 } else { 6.0 }) };
+                    .unwrap_or(6.0) };
             // S575 (2026-06-15): BODY oikomi — raise the solo 約物 cap to 3.0 for the
             // MAIN body flow (s476_body) so jc=both type=lines compat=15 bodies fit
             // Word's demand compression (ikujikaigo i=41/i=57: mid 、 renders 9.0 = −3.0;
