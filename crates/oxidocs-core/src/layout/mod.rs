@@ -10295,8 +10295,17 @@ impl LayoutEngine {
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center)
                             && cell_w > content_width
                             && (s585_over < 5.0 || (s585_tblw_auto && s585_over < s585_auto_over));
+                        // S594 (2026-06-17, opt-IN OXI_S594=1): narrow the S585b cell
+                        // wrap_base by ONE EXTRA cellMar. S585c: Oxi's cell right border is
+                        // at content+2×cellMar vs Word's +1× → Oxi's cell_w over-computes by
+                        // ~1 cellMar, so wrap_base=cell_w−2×pad=417.95 is still ~5pt wider
+                        // than Word's true content ≈413 (=cell_w−3×cellMar). The 66 residual
+                        // CELL over-fit roots (S7m) are this width over. Subtract one more
+                        // cellMar to reach Word's content (single-cell S585b tables only;
+                        // 3a4f/model 第N条 are in BODY → unaffected).
+                        let s594_extra = if std::env::var("OXI_S594").ok().as_deref() == Some("1") { pad_l } else { 0.0 };
                         let wrap_base = if s585_cellmar {
-                            (cell_w - pad_l - pad_r).max(0.0)
+                            (cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
