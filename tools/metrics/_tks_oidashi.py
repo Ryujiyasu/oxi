@@ -218,6 +218,27 @@ for c, n in Counter(e['prev_char'] for e in oid).most_common():
     tag = ' [yakumono]' if c in YAK else ''
     print(f"   '{c}' ×{n}{tag}")
 
+# ===== PAGE-DELTA: collision-robust per-char page delta (the gate the official
+# pagination_diff can't compute on this doc — char-stream aligned, no text-prefix
+# collision). delta = oxi_page − word_page. Run whole-doc (TKS_WP/OP=1:91). =====
+if '--pagedelta' in sys.argv:
+    from collections import Counter
+    dh = Counter()
+    matched = 0
+    for blk in sm.get_matching_blocks():
+        for k in range(blk.size):
+            wi = blk.a + k; oi = blk.b + k
+            wp = W[ws[wi][1]]['page']; op = O[os_[oi][1]]['page']
+            dh[op - wp] += 1
+            matched += 1
+    print(f"\n===== per-char PAGE-DELTA (oxi_page − word_page), {matched} matched chars =====")
+    tot = sum(dh.values())
+    for d in sorted(dh):
+        bar = '#' * int(60 * dh[d] / tot)
+        print(f"   Δ{d:+d}: {dh[d]:6d} ({100*dh[d]/tot:5.1f}%) {bar}")
+    d0 = dh.get(0, 0)
+    print(f"   delta=0 (correct page): {100*d0/tot:.1f}%")
+
 # ===== ABSORPTION: how much 約物 compression Word applies per FULL line =====
 # absorption = Σ(natural em widths) − actual line width. >0 = Word compressed
 # 約物 (oikomi); ≈0 = natural; <0 = Word expanded (justify spread). The MAX
