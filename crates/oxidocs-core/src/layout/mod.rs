@@ -10582,6 +10582,16 @@ impl LayoutEngine {
                                 }
                                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                                // OXI_CJKADV_K=<pt>: experimental — widen the fullwidth-CJK cell
+                                // break advance (Word's typed-docGrid CJK advance ≈10.56 vs Oxi em
+                                // 10.50). Applied to chars whose natural advance ≈ font_size (full-
+                                // width). Tests whether matching Word's advance + cell width aligns
+                                // the 賃金 chapter. Affects break AND render (page-count test only).
+                                if let Ok(k) = std::env::var("OXI_CJKADV_K") {
+                                    if (cw - font_size).abs() < 1.0 {
+                                        cw += k.parse::<f32>().unwrap_or(0.0);
+                                    }
+                                }
                                 // 2026-04-19: Apply charSpace as ABSOLUTE delta (not fs-scaled).
                                 // COM-measured b35 fs=9 → 8.3pt, fs=10.5 → 9.8pt: both are
                                 // fs − |charSpace_pt| (0.663pt), NOT fs × ratio.
