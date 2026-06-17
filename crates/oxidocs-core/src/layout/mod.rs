@@ -10365,7 +10365,10 @@ impl LayoutEngine {
                         // CELL over-fit roots (S7m) are this width over. Subtract one more
                         // cellMar to reach Word's content (single-cell S585b tables only;
                         // 3a4f/model 第N条 are in BODY → unaffected).
-                        let s594_extra = if std::env::var("OXI_S594").ok().as_deref() == Some("1") { pad_l } else { 0.0 };
+                        let s594_extra = if let Ok(k) = std::env::var("OXI_S594_K") {
+                            // tunable extra narrowing (pt) for the cell wrap_base sweep
+                            k.parse::<f32>().unwrap_or(0.0)
+                        } else if std::env::var("OXI_S594").ok().as_deref() == Some("1") { pad_l } else { 0.0 };
                         let wrap_base = if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
@@ -10707,7 +10710,15 @@ impl LayoutEngine {
                                     let gpos = s586_run_offset + s586_ci;
                                     let chars_to_end = s586_para_chars.len().saturating_sub(gpos);
                                     let overflow = (line_x + buf_w + cw) - effective_wrap;
-                                    if chars_to_end <= 2 && overflow <= s586_cap {
+                                    // OXI_S586_FIT=1: experimental — fit unconditionally when the
+                                    // page-44 signature (約物→opener cluster present) fires, with a
+                                    // generous overflow cap. Tests whether fitting the page-44 box
+                                    // at the S594-narrowed width aligns the 賃金 chapter (Δ0).
+                                    let s586_fit_mode = std::env::var("OXI_S586_FIT").ok().as_deref() == Some("1");
+                                    let fit_cap = if s586_fit_mode {
+                                        std::env::var("OXI_S586_FITCAP").ok().and_then(|v| v.parse().ok()).unwrap_or(15.0)
+                                    } else { s586_cap };
+                                    if chars_to_end <= 2 && overflow <= fit_cap {
                                         let seq: Vec<char> = current_line_chars.iter()
                                             .chain(buf_chars.iter()).map(|c| c.ch)
                                             .chain(std::iter::once(ch)).collect();
@@ -10718,8 +10729,30 @@ impl LayoutEngine {
                                                 && seq.get(i + 1).map_or(false, |&n| kinsoku::is_yakumono_opening(n)))
                                             .map(|_| (font_size - 3.0).max(0.0))
                                             .sum();
-                                        collapse > 0.0
-                                            && (line_x + buf_w + cw - collapse) <= effective_wrap
+                                        if s586_fit_mode {
+                                            // FULL-CLUSTER capacity: Word fits the orphan char by
+                                            // compressing the whole line's 約物 cluster (page-44:
+                                            // 、→3.0 [-7.5], ・→9.4 [-1.1]×2, 」→8.3 [-2.2] ≈ -11.9pt).
+                                            // Gate stays on the 約物→opener signature (`collapse>0`);
+                                            // available = opener-adjacent 約物 (full -7.5) + every
+                                            // other compressible 約物 (up to half-em). Fit iff the
+                                            // line (incl. ch) minus available compression ≤ wrap.
+                                            let mut available = collapse; // opener-adjacent 約物
+                                            for (i, &c) in seq.iter().enumerate() {
+                                                let opener_adj = matches!(c, '、' | '。' | '，' | '．')
+                                                    && seq.get(i + 1).map_or(false, |&n| kinsoku::is_yakumono_opening(n));
+                                                if opener_adj { continue; } // already counted in `collapse`
+                                                if matches!(c, '、' | '。' | '，' | '．'
+                                                    | '」' | '』' | '）' | '】' | '〕' | '・') {
+                                                    available += font_size / 2.0;
+                                                }
+                                            }
+                                            collapse > 0.0
+                                                && (line_x + buf_w + cw - available) <= effective_wrap
+                                        } else {
+                                            collapse > 0.0
+                                                && (line_x + buf_w + cw - collapse) <= effective_wrap
+                                        }
                                     } else { false }
                                 } else { false };
                                 let would_overflow = if s586_overflow_fixed {
