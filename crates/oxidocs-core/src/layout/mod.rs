@@ -3532,10 +3532,24 @@ impl LayoutEngine {
                             page.size.height - page.margin.bottom
                         };
 
-                        // Find the last body element Y on this page to avoid overlap
-                        let body_bottom_y = lp.elements.iter()
-                            .map(|e| e.y + e.height)
-                            .fold(0.0_f32, f32::max);
+                        // Find the last body element Y on this page to avoid overlap.
+                        // S596 (2026-06-17): exclude FOOTER-region elements (those at or
+                        // below footnote_bottom — e.g. the footer page-number). For a
+                        // no-docGrid doc (bunkacontract) the footer "N" glyph sits in
+                        // lp.elements at y≈757 (below footnote_bottom 753) and was taken
+                        // as body_bottom_y=774.8 → the footnote area (top ≈ footnote_bottom)
+                        // always overlapped it → fit=0, footnotes never rendered. Grid
+                        // docs (b837/kojin) were unaffected (their footer is not in
+                        // lp.elements here / body is already above the area), so this is
+                        // a no-op for them. Opt-out OXI_S596_DISABLE.
+                        let body_bottom_y = if std::env::var("OXI_S596_DISABLE").is_ok() {
+                            lp.elements.iter().map(|e| e.y + e.height).fold(0.0_f32, f32::max)
+                        } else {
+                            lp.elements.iter()
+                                .filter(|e| e.y < footnote_bottom)
+                                .map(|e| e.y + e.height)
+                                .fold(0.0_f32, f32::max)
+                        };
 
                         // Calculate footnote heights — grid-snap per paragraph to
                         // match actual render (layout_paragraph stacks lines at
