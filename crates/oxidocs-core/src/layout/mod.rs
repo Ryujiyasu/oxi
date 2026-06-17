@@ -2850,6 +2850,9 @@ impl LayoutEngine {
                         && is_empty_p(&page.blocks[block_idx + 2])
                         && is_content_para(&page.blocks[block_idx + 3]);
                     let adjacent_to_empty_run = !this_empty && (prev_2_empty || next_2_empty);
+                    // S603: is the next sibling block a table? (page-bottom full-cell rule)
+                    let next_block_is_table = matches!(
+                        page.blocks.get(block_idx + 1), Some(Block::Table(_)));
 
                     // Step 0: bucket for per-page fn refs actually rendered by this
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
@@ -2871,6 +2874,7 @@ impl LayoutEngine {
                         lm2_param,
                         Some(&mut mult_cumul_raw),
                         adjacent_to_empty_run,
+                        next_block_is_table,
                         Some(&mut para_fn_refs_per_page),
                         // R7.53: first-line lenient — add back this para's
                         // own fn reserve delta so line 0 fits if it would
@@ -3424,7 +3428,7 @@ impl LayoutEngine {
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
-                            false, None,
+                            false, false, None,
                             0.0,
                             &empty_fn_h_hdr,
                         );
@@ -3454,7 +3458,7 @@ impl LayoutEngine {
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
                             false, 0.0, None, None, None,
-                            false, None,
+                            false, false, None,
                             0.0,
                             &empty_fn_h_ftr,
                         );
@@ -3769,7 +3773,7 @@ impl LayoutEngine {
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
                                         false, 0.0, None, None, None,
-                                        false, None,
+                                        false, false, None,
                                         0.0,
                                         &empty_fn_h_note,
                                     );
@@ -4057,7 +4061,7 @@ impl LayoutEngine {
                         None, false, // no prev style/contextual tracking
                         true, // in_textbox: suppress CJK compression
                         0.0, None, None, None,
-                        false, None,
+                        false, false, None,
                         0.0,
                         &empty_fn_h_txbx,
                     );
@@ -4260,6 +4264,14 @@ impl LayoutEngine {
         mut lm2_grid_cells: Option<&mut usize>,
         mut mult_cumul_raw: Option<&mut f32>,
         adjacent_to_empty_run: bool,
+        // S603 (2026-06-18): the next sibling block is a TABLE. Used by the
+        // typed-grid page-bottom full-cell rule: Word uses the FULL grid cell
+        // (no natural_lh leading-hang leniency) for a paragraph's LAST line when
+        // the next block is a table, but keeps the leniency when followed by body
+        // text. Derived: 6/6 typed-grid leniency-regressing canary lines (db9ca,
+        // kojin×4, roudoujoken×2, 34140) are followed by BODY; 3a4f para278 line4
+        // (the cap+ぶら下げ compensating-error junction) is followed by a table.
+        next_block_is_table: bool,
         // Step 0 (Option B fn reserve fix): per-page bucket of unique fn_ref
         // ids attributed to the lines rendered on each page offset.
         // line_fn_refs_out[0] = ids on current page; [i>0] = ids moved to
@@ -4892,7 +4904,27 @@ impl LayoutEngine {
             // page-bottom threshold is correct; the +1×2 are the doc-wide para-spill
             // break-POINT cascade (which line of a wrapped para lands at the bottom),
             // reset by the real pi=149/263 LRPBs — not a threshold calibration.
-            let break_threshold = if s548b_exact_full || s562b_empty_full {
+            // S603 (2026-06-18, default ON, opt-out OXI_S603_DISABLE): a TYPED docGrid
+            // (w:type=lines / linesAndChars) line normally keeps the Day-33 natural_lh
+            // leading-hang leniency at the page bottom (the grid LEADING, cell−natural_lh,
+            // is allowed to overhang the bottom margin). EXCEPTION: the LAST line of a
+            // paragraph immediately followed by a TABLE block uses the FULL grid cell —
+            // Word does NOT let that line's leading hang when a table follows (the
+            // table/para junction is measured at full line height). DERIVED from the
+            // Phase-1 gate: a blanket "typed grid uses full cell" regressed 6 docs
+            // (db9ca/kojin/roudoujoken/34140) whose page-bottom leniency lines are all
+            // followed by BODY text → keep the leniency; 3a4f para278 line4 (followed by
+            // the box279 table) is the ONLY full-cell case. 3a4f para278: cursor 741.1 +
+            // cell 18 = 759.1 > content_bottom 756.85 → break to page 34 (= Word); the
+            // natural_lh 13.6 → 754.7 leniency wrongly kept it on page 33, the
+            // compensating S559 error behind the cap-3.1+ぶら下げ −1 at para306. Exact
+            // (S548b) and empty (S562b) lines already use the full box.
+            let s603_typed_fullbox = next_block_is_table
+                && line_idx + 1 == lines.len()
+                && std::env::var("OXI_S603_DISABLE").is_err()
+                && !page.doc_grid_no_type
+                && !s548b_exact_full && !s562b_empty_full;
+            let break_threshold = if s548b_exact_full || s562b_empty_full || s603_typed_fullbox {
                 effective_lh
             } else {
                 ink_lh.min(effective_lh)
@@ -6722,8 +6754,15 @@ impl LayoutEngine {
             // OXI_S575_CAP: targeted sweep of the NON-LRPB body 約物 cap ONLY
             // (keeps the LRPB branch at 2.5 so the S391 redistribution gate stays
             // conservative — unlike OXI_S475_SOLO which overrides every branch).
+            // S604 (2026-06-18): default raised 3.0 → 3.1. The body 約物 demand cap
+            // 3.1 (+line-end ぶら下げ S601) matches Word's oikomi line counts for the
+            // ohno-family regulation docs (matsuiikuji/ohnochingin FAIL→PASS) and the
+            // 3a4f/model paras 69/173/294 (Word 5/1/6 lines = Oxi cap-3.1; cap-3.0
+            // under-fit by 1 line each). The cap-3.1 −1 it once caused on 3a4f/model
+            // (a typed-grid page-bottom compensating error at para278) is now fixed by
+            // S603 (page-bottom full-cell before a table). Phase-1 73→75, 0 PASS→FAIL.
             let s575_body_cap: f32 = std::env::var("OXI_S575_CAP").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(3.0);
+                .and_then(|v| v.parse().ok()).unwrap_or(3.1);
             let s475_solo_default = if s590_legacy_just_cap { 1.5 }
                 else if s476_body && !para_has_lrpb
                 && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
@@ -7182,11 +7221,12 @@ impl LayoutEngine {
                                 .and_then(|v| v.parse::<f32>().ok()).unwrap_or(4.0);
                             current_width_tw + pt_to_tw(char_width)
                                 - available_tw - pt_to_tw(tol)
-                        } else if std::env::var("OXI_S601").ok().as_deref() == Some("1")
+                        } else if std::env::var("OXI_S601_DISABLE").is_err()
                             && matches!(ch, '。' | '、' | '，' | '．' | '・')
                             && current_capw_tw <= available_tw
                         {
-                            // S601 (opt-in, char-budget wall): line-end 約物 ぶら下げ
+                            // S601 (2026-06-18, default ON, opt-out OXI_S601_DISABLE;
+                            // char-budget wall): line-end 約物 ぶら下げ
                             // (overflowPunct, default-ON for Japanese). A hangable 約物
                             // at the line end hangs PAST the right margin when the
                             // PRECEDING content fits (current_capw_tw ≤ available) — its
