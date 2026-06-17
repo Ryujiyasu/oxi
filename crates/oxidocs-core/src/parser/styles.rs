@@ -818,7 +818,19 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
             style.word_wrap = enabled;
         }
         "pageBreakBefore" => {
-            style.page_break_before = true;
+            // CT_OnOff: w:val="0"/"false"/"off" disables (the Heading styles in
+            // the AI-guideline corpus carry <w:pageBreakBefore w:val="0"/> — Word
+            // honours val=0 and does NOT break; the old presence-only parse forced
+            // a break before every styled heading → 3-page docs blew up to 9-17
+            // pages). See S597.
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                }
+            }
+            style.page_break_before = enabled;
         }
         "contextualSpacing" => {
             let mut enabled = true;
@@ -1334,7 +1346,19 @@ fn parse_style_definition(
                             style.word_wrap = enabled;
                         }
                         "pageBreakBefore" => {
-                            style.page_break_before = true;
+                            // CT_OnOff: respect w:val="0"/"false"/"off" (S597). This
+                            // is the second style-pPr handler (aiguideline's Heading
+                            // styles route through here); the presence-only parse made
+                            // <w:pageBreakBefore w:val="0"/> force a break → 3-page
+                            // doc → 9 pages.
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                                }
+                            }
+                            style.page_break_before = enabled;
                         }
                         "keepNext" => style.keep_next = true,
                         "keepLines" => style.keep_lines = true,
