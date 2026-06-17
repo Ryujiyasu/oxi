@@ -7140,7 +7140,26 @@ impl LayoutEngine {
                                 s475_pair, s475_solo, font_size))
                     } else { 0 };
                     let overflow_tw = if s475_break {
-                        current_capw_tw + s475_capinc - available_tw
+                        // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
+                        // Word's per-line oikomi is a SMALL budget, not the per-約物 cap.
+                        // DERIVED from the Word PDF (_ikuji_oikomi_derive.py, 176 oikomi
+                        // lines): 90% overflow em-natural by ≤2.1pt (median 1.5); a char
+                        // overflowing by a full em (para 152 «る» ~11pt) is WRAPPED
+                        // (oidashi). The s476 capacity (6.0pt × n約物 ≈ 24pt+) over-credits
+                        // → fits «る。» past the margin. Replace it with the natural
+                        // (render-width) break + a small oikomi tolerance: keep the char
+                        // only if it overflows by ≤ TOL (light 約物 compression absorbs it).
+                        // Opt-out OXI_S595_DISABLE; tune OXI_S595_TOL.
+                        if s572_legacy_notype_oikomi
+                            && std::env::var("OXI_S595_DISABLE").is_err()
+                        {
+                            let tol = std::env::var("OXI_S595_TOL").ok()
+                                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(4.0);
+                            current_width_tw + pt_to_tw(char_width)
+                                - available_tw - pt_to_tw(tol)
+                        } else {
+                            current_capw_tw + s475_capinc - available_tw
+                        }
                     } else {
                         current_width_tw + pt_to_tw(char_width) - available_tw
                     };
