@@ -6535,9 +6535,36 @@ impl LayoutEngine {
             let s572_legacy_notype_oikomi = std::env::var("OXI_S572_DISABLE").is_err()
                 && doc_grid_no_type && s476_body && !is_justified
                 && self.compress_punctuation && self.compat_mode < 15;
+            // S592 (2026-06-17, default ON, opt-out OXI_S592_DISABLE): a
+            // PROPORTIONAL CJK font (MS PGothic / MS PMincho / HGPGothicM) in a
+            // linesAndChars docGrid is OFF-GRID — its chars do NOT align to the
+            // grid char pitch, so Word breaks it at NATURAL width (proportional),
+            // NOT via the on-grid s476 capacity break. The natural_break_jc gate
+            // excludes ALL lines_and_chars docs (the S492 §8 "off-grid footnote
+            // vs on-grid body" distinction Oxi couldn't make) — but the font
+            // proportionality IS that distinction. kojin (HGPGothicM, linesAndChars,
+            // jc=None, compat=15): the s476 capacity break credited the 2 mid-line
+            // 、 ~5.2pt of demand compression (over_tw=−26 where the ACTUAL width
+            // overflows +78tw, OXI_DBG_KOJIN) → fit a trailing こ Word WRAPS →
+            // para i297 packed 3 lines (Word 4) → i303 crept onto p11 = the −1.
+            // Word does NOT compress these jc=None 約物 (left-aligned, no justify
+            // demand; the line is proportional, off-grid). DISCRIMINATOR = the
+            // dominant CJK font is proportional (pgothic family) — monospace
+            // linesAndChars bodies (1ec/tokumei = MS Mincho/Gothic, on-grid) are
+            // UNAFFECTED (they keep the grid capacity break). Only kojin + parttime
+            // (HGPGothicM) match in the corpus. Opt-out OXI_S592_DISABLE.
+            let para_off_grid = std::env::var("OXI_S592_DISABLE").is_err()
+                && lines_and_chars
+                && fragments.iter()
+                    .find(|(t, _, _, _, _)| t.chars().any(|c| !c.is_whitespace() && c != '\u{3000}'))
+                    .map_or(false, |(_, rs, _, _, _)| {
+                        self.metrics_for_cjk(rs, para_style)
+                            .map_or(false, |m| matches!(m.family.as_str(),
+                                "MS PGothic" | "MS PMincho" | "HGPGothicM"))
+                    });
             let natural_break_jc = std::env::var("OXI_S492_DISABLE").is_err()
                 && !is_justified
-                && (!lines_and_chars || s492_full)
+                && (!lines_and_chars || s492_full || para_off_grid)
                 && !s572_legacy_notype_oikomi;
             let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc;
             // S589 (2026-06-16, opt-IN OXI_S589=1, default OFF = byte-identical):
@@ -6605,9 +6632,20 @@ impl LayoutEngine {
             let s568_legacy_oikomi = std::env::var("OXI_S568_DISABLE").is_err()
                 && lines_and_chars && s476_body
                 && self.compress_punctuation && self.compat_mode < 15;
+            // S592 (2026-06-17): a PROPORTIONAL CJK font (pgothic family) in a
+            // linesAndChars grid is OFF-GRID, so the s476 capacity break must NOT
+            // fire — its 約物 are already at the font's narrow proportional advance
+            // (HGPGothicM 、 = 6.75pt, no fullwidth aki to remove), so Word does NOT
+            // demand-compress them at break time (it justifies via inter-char
+            // expansion instead — S579 "Word adds ~0.2pt justify on top"). kojin
+            // (justified via docDefaults jc=both) was crediting ~5.2pt of phantom
+            // 約物 compression to fit a trailing こ Word WRAPS (OXI_DBG_KOJIN:
+            // over_tw=−26 capacity vs +78tw actual). Excluding para_off_grid drops
+            // s475_break → natural break → こ wraps → para i297 4 lines = Word.
             let s476_grid = (std::env::var("OXI_S476_DISABLE").is_err()
                 && lines_and_chars && s476_body
-                && self.compress_punctuation && self.compat_mode >= 15)
+                && self.compress_punctuation && self.compat_mode >= 15
+                && !para_off_grid)
                 || s568_legacy_oikomi
                 || s572_legacy_notype_oikomi;
             // S590 (2026-06-16, opt-IN OXI_S590=1, default OFF = byte-identical):
@@ -6791,12 +6829,17 @@ impl LayoutEngine {
                                 // The demand-absorb below compresses any of them as a
                                 // line's overflow requires.
                                 if (s472_demand || s474_natural || s475_break || s557_natural_just15
-                                        || s589_legacy_just_natural)
+                                        || s589_legacy_just_natural || para_off_grid)
                                     && matches!(ch, '、' | '，' | '。' | '．') {
                                     // no compression at break; demand-absorb handles fit
                                     // (s474_natural: leave natural, no absorb either =
                                     // pure natural-greedy diagnostic; s557: c15 justified
                                     // keeps naturals for the pack tier)
+                                    // S592: para_off_grid (proportional CJK font in a
+                                    // linesAndChars grid) keeps its 約物 at the font's
+                                    // natural proportional advance — HGPGothicM 、 = 6.75pt
+                                    // is already narrow (no fullwidth aki), Word does NOT
+                                    // pre-compress it ×0.6667 (→4.5pt over-packs the line).
                                 } else {
                                     char_width *= 0.6667;
                                 }
