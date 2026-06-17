@@ -12501,7 +12501,20 @@ impl LayoutEngine {
             // overflow by 0.55pt and Oxi wrap to 2 lines instead of 1
             // (Word renders 1 line). +25pt cumulative row 0 over-pump.
             let is_fixed = table.style.layout.as_deref() == Some("fixed");
-            if !is_floating && !is_fixed && total > available && table.grid_columns.len() > 1 {
+            // S593 (2026-06-17, default ON, opt-out OXI_S593_DISABLE): a tblW=dxa
+            // table declares an EXPLICIT fixed width — Word renders it at that width
+            // (overflowing the page right edge) and does NOT shrink the last column
+            // to fit the content area. The R7.24 last-column shrink is for AUTOFIT
+            // tables (tblW=auto/pct) that overflow a parent cell. kojin's form1
+            // 取扱記録表 (tblW=14000 dxa = 700pt > content 504.6pt, tblLayout=None)
+            // had its last col c9 clipped 81.3→38.95pt → the 廃棄/記載日 data cells
+            // over-wrapped ~2 lines → the table rendered ~26pt too tall → the trailing
+            // empties + «（様式：記入例）»#2 spilled to p18 (the residual +1 after S592).
+            // S591 established the dxa=keep-wide / auto=clamp discriminator for cell
+            // margins; apply the same discriminator to col-width resolution here.
+            let is_dxa_fixed = std::env::var("OXI_S593_DISABLE").is_err()
+                && table.style.width_type.as_deref() == Some("dxa");
+            if !is_floating && !is_fixed && !is_dxa_fixed && total > available && table.grid_columns.len() > 1 {
                 let mut cols = table.grid_columns.clone();
                 let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
                 let last = (available - prefix_sum).max(0.0);
