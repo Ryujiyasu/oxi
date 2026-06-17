@@ -6699,9 +6699,14 @@ impl LayoutEngine {
             // _tks_oidashi: divergence 666@0 → 618@1.5 → 925@2.5). Word's BREAK
             // cap (~1.5) < its RENDER cap (~2.9) — break is conservative, render
             // (justify) compresses more. Env OXI_S475_SOLO overrides.
+            // OXI_S575_CAP: targeted sweep of the NON-LRPB body 約物 cap ONLY
+            // (keeps the LRPB branch at 2.5 so the S391 redistribution gate stays
+            // conservative — unlike OXI_S475_SOLO which overrides every branch).
+            let s575_body_cap: f32 = std::env::var("OXI_S575_CAP").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(3.0);
             let s475_solo_default = if s590_legacy_just_cap { 1.5 }
                 else if s476_body && !para_has_lrpb
-                && std::env::var("OXI_S575_DISABLE").is_err() { 3.0 } else { 2.5 };
+                && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo_default) };
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
