@@ -1653,7 +1653,12 @@ impl LayoutEngine {
         let default_font_size = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_size)
-            .unwrap_or(11.0);
+            // S600: the Word/OOXML default font size when docDefaults omits sz is
+            // 10pt (sz=20), not 11pt. atimesresume (no docDefaults sz) renders its
+            // body+cells at 10pt in Word; Oxi's 11.0 fallback made every no-sz run
+            // 1pt too large → cell line height 13.5→15.0 → table over-tall.
+            // Opt-out OXI_S600_DISABLE restores 11.0.
+            .unwrap_or(if std::env::var("OXI_S600_DISABLE").is_ok() { 11.0 } else { 10.0 });
         let default_font_family = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family.clone());
