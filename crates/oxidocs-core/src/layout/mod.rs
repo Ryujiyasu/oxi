@@ -7182,6 +7182,21 @@ impl LayoutEngine {
                                 .and_then(|v| v.parse::<f32>().ok()).unwrap_or(4.0);
                             current_width_tw + pt_to_tw(char_width)
                                 - available_tw - pt_to_tw(tol)
+                        } else if std::env::var("OXI_S601").ok().as_deref() == Some("1")
+                            && matches!(ch, '。' | '、' | '，' | '．' | '・')
+                            && current_capw_tw <= available_tw
+                        {
+                            // S601 (opt-in, char-budget wall): line-end 約物 ぶら下げ
+                            // (overflowPunct, default-ON for Japanese). A hangable 約物
+                            // at the line end hangs PAST the right margin when the
+                            // PRECEDING content fits (current_capw_tw ≤ available) — its
+                            // width is NOT counted, so the line is not broken before it.
+                            // DERIVED from Word PDF render-truth (_yak_stat.py,
+                            // ohnoshugyo): Word fits 42-char ２． lines via mid-約物
+                            // compression + the line-end 。 hanging to x521 (11pt past
+                            // content-right 510). Oxi's s475 break counted the 。 width →
+                            // over-wrapped. Hanging makes overflow_tw ≤ 0 → 約物 placed.
+                            current_capw_tw - available_tw
                         } else {
                             current_capw_tw + s475_capinc - available_tw
                         }
