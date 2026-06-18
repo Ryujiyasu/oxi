@@ -8774,6 +8774,26 @@ impl LayoutEngine {
                                 // because its pitch (14.3) ≈ its CJK natural (14.28).
                                 let dev = (spaced / 0.75).floor() * 0.75;
                                 if s609_no_type_natural {
+                                    // S615 (2026-06-19) FALSIFIED+REVERTED — keep FLOOR.
+                                    // MEASURED (measure_cjk_notype_line_heights.py + 24-line
+                                    // averaging): Word's no-type-grid raw line height =
+                                    // 83/64×fs EXACTLY, and Word RENDERS by accumulating the
+                                    // raw and snapping each box's CUMULATIVE Y to the 0.75pt
+                                    // grid (gaps oscillate ±1px around the raw; 26pt → a
+                                    // consistent COM-box gap 33.75 vs Oxi FLOOR 33.0). So a
+                                    // FLOOR→ROUND change (33.0→33.75) makes the title COM box
+                                    // top match Word — BUT the full-corpus pixel SSIM A/B
+                                    // (ssim_ab.py OXI_S615_DISABLE) was net **−0.5715, 36
+                                    // gen2 docs REGRESS**. The Information(6) box top is NOT
+                                    // the rendered glyph anchor (CLAUDE.md caveat): Word
+                                    // renders the body ~0.75pt ABOVE its COM box top, so
+                                    // Oxi's FLOOR (under-shooting the COM box) lands the
+                                    // RENDERED body closer to Word than ROUND. The title
+                                    // FLOOR is a COMPENSATING error tuned into the S611/S614
+                                    // vertical stack — correcting it alone breaks the balance
+                                    // (S559 pattern). A real fix needs re-deriving the whole
+                                    // vertical stack against the PIXEL truth, not COM box
+                                    // tops. See [[gen2_vertical_drift]].
                                     return dev;
                                 }
                                 return pitch.max(dev);
