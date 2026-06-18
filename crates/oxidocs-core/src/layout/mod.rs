@@ -9283,6 +9283,20 @@ impl LayoutEngine {
                         // suggests a single line-height-proportional δ (the
                         // S455/S456 leading-proportional idea, now with two
                         // regimes to fit).
+                        // S616 (2026-06-19) — no-type-grid body glyph offset δ-swept,
+                        // 2.5 CONFIRMED already optimal (no separate value needed). The
+                        // pixel re-derivation (vstack_dy.py) decomposed the gen2 residual
+                        // into: title aligned (S614); a −1.26pt title-BLOCK deficit
+                        // (box-position, all content below the title pulled up); a
+                        // +0.106pt/line body ACCUMULATION (box-position, the S611 run_base/
+                        // round residual). The ONLY render-only lever is this CJK glyph
+                        // offset — δ-swept on the gen2 word_png corpus (the PIXEL truth,
+                        // since PDF/COM box tops MISLEAD per S615): net(B−A) vs 2.5 was
+                        // +0.10 @2.0, +0.29 @1.75, +0.51 @1.5, +0.31 @2.75, +0.77 @3.0 —
+                        // 2.5 is the PEAK in both directions. So the body offset is NOT a
+                        // lever; the residual is purely the coupled box-position wall
+                        // (title line-height + body accumulation), element.y-affecting and
+                        // in the most-reverted S611/S612/S615 area — deferred.
                         let s457_dy = if line.fragments.iter().any(|f| {
                             self.metrics_for_text(&f.text, &f.style, para_style)
                                 .is_cjk_83_64_font()
