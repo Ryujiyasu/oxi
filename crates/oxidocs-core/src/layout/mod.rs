@@ -1653,13 +1653,32 @@ impl LayoutEngine {
         let default_font_size = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_size)
-            // S600 (2026-06-18, REVERTED): tried 10.0 (the OOXML no-sz default;
-            // atimesresume renders at 10pt in Word) but it REGRESSED 7
-            // kyodokenkyuyoushiki word_png docs (SSIM −0.0845) which Word renders
-            // at 11pt — both are compat=15 / no docDefaults sz / no Normal sz, so
-            // Word's no-sz default is per-baseline/environment, NOT docx-derivable.
-            // 11.0 matches MORE baselines. Opt-IN OXI_S600=1 for 10pt (atimesresume).
-            .unwrap_or(if std::env::var("OXI_S600").ok().as_deref() == Some("1") { 10.0 } else { 11.0 });
+            // S608 (2026-06-18, OPT-IN OXI_S608=1, default OFF): when docDefaults has
+            // NO sz, fall to the DEFAULT PARAGRAPH STYLE (Normal) sz before the flat
+            // app-default — the next link in the OOXML resolution chain that
+            // for_document otherwise SKIPS. COM-measured (Font.Size): atimesresume
+            // (Normal NO sz) body = 10.0pt, kyodokenkyuyoushiki01 (Normal sz=21) body
+            // = 10.5pt — so the flat 11.0 mis-sizes the BODY of no-docDefaults-sz docs.
+            // ★HELD OPT-IN: enabling it fixes atimesresume (FAIL→PASS, body 10pt) and
+            // kyotei36spec (+0.11 pagination, Normal sz=16→8pt engine default) BUT the
+            // for_document value is ALSO the line-height fallback for NON-styled
+            // contexts (empty paras), and there Word uses 11 even when Normal sz=21 →
+            // SSIM A/B regressed kyodoken08/11 + tokumei_08_07 + order_09/12 (net
+            // −0.0508; their bodies are byte-identical = 10.5 via STYLE resolution, only
+            // the empty-para line heights shift). No clean discriminator separates "body
+            // wants Normal sz" from "empty-para wants 11" via the single engine default
+            // (the S600 environment-dependent-default wall). Needs a BODY-SCOPED size
+            // resolution (apply Normal sz to body runs, leave the engine default at 11
+            // for non-styled line heights) — a focused follow-up. Until then, default
+            // OFF to avoid the tuned-doc SSIM regression. See ssim_ab.py A/B evidence.
+            .or_else(|| {
+                if std::env::var("OXI_S608").ok().as_deref() != Some("1") { return None; }
+                doc.styles.default_paragraph_style_id.as_ref()
+                    .and_then(|id| doc.styles.styles.get(id))
+                    .and_then(|sd| sd.paragraph.default_run_style.as_ref())
+                    .and_then(|rs| rs.font_size)
+            })
+            .unwrap_or(if std::env::var("OXI_S608").ok().as_deref() == Some("1") { 10.0 } else { 11.0 });
         let default_font_family = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family.clone());
@@ -6798,27 +6817,27 @@ impl LayoutEngine {
             // under-fit by 1 line each). The cap-3.1 −1 it once caused on 3a4f/model
             // (a typed-grid page-bottom compensating error at para278) is now fixed by
             // S603 (page-bottom full-cell before a table). Phase-1 73→75, 0 PASS→FAIL.
-            // S607 (2026-06-18): default 3.1 → 3.4. The body solo 約物 break cap 3.1
-            // (= 0.258em, scaled by fs/12 in s475_max_compress) UNDER-packed 約物 lines
-            // vs Word on BOTH font sizes: nedocontract (12pt, all-12pt regulation doc)
-            // para41 fit 34 chars / Word 35 (Word compresses each mid-line 、 by 3.36pt
-            // = 0.28em to fit the trailing char; cap 3.1 gave only 3.1pt → "お" orphaned
-            // → +1×15 page drift) AND the 10.5pt canaries (model/3a4f para301 fit 38 /
-            // Word 39 — no page drift, so the pagination gate never saw it, but a real
-            // render under-pack). Word render-truth (PDF per-char): solo 約物 compress
-            // median 3.36 / p90 6.0pt @12pt (nedocontract). cap 3.4 = the MINIMAL value
-            // (sweep: 3.35 → still 34, 3.4 → 35) that reproduces Word's char counts on
-            // both the 12pt and 10.5pt measured paras. nedocontract 0.9688 → 0.9938
-            // (+1×15 → −1×3; the residual 3 over-fits = the oikomi/oidashi wall, Word
-            // oidashi where cap-3.4 greedy oikomi's). Phase-1 76/84 unchanged, 0
-            // PASS→FAIL (only nedocontract's pagination changes). SSIM A/B (DWrite, 235
-            // word_png bases): only 3a4f/kyodokenkyuyoushiki05/c7b923 byte-change, ALL
-            // net +0.0000 (the ~0.5–1pt intra-page 約物 redistribution is below page-SSIM
-            // granularity). The S604 −1 page cascade that once blocked cap raises is
-            // fixed by S603. Opt-out via OXI_S575_CAP (env override). The LRPB branch
-            // stays 2.5 (the S575 redistribution gate) and aux/cell stays 2.5.
+            // S607 (2026-06-18, ATTEMPTED 3.1→3.4, REVERTED to 3.1): the body solo 約物
+            // break cap 3.1 (= 0.258em, scaled by fs/12 in s475_max_compress) under-packs
+            // 約物 lines vs Word on the MEASURED paras — nedocontract (all-12pt regulation
+            // doc) para41 fits 34/Word 35 (Word compresses each mid-line 、 by 3.36pt to
+            // fit the trailing char; cap 3.1 gives 3.1pt → "お" orphaned → +1×15) AND
+            // model/3a4f para301 fit 38/Word 39. cap 3.4 = the minimal value reproducing
+            // Word's char counts there (nedocontract 0.9688→0.9938, +1×15→−1×3). ★BUT the
+            // raise NET-REGRESSES SSIM: the correct ssim_ab.py A/B (cap 3.1 vs 3.4, DWrite
+            // 235 bases) = net −0.0261, kyodokenkyuyoushiki05 −0.0252 (the 約物 redistribute
+            // OIKOMI where Word OIDASHI'd — the same oikomi/oidashi wall as nedocontract's
+            // own residual −1×3). nedocontract has NO word_png so its pagination gain is
+            // SSIM-untracked, and it does NOT pass either way → the trade is a tuned-doc
+            // SSIM loss for a non-passing pagination gain. ★The original S607 commit
+            // (e71add4c) claimed "SSIM net +0.0000" but that was measured with a BROKEN
+            // ssim_ab tool (calculate_ssim called with the wrong signature → every call
+            // errored → false 0.0000); the corrected tool exposed the real −0.0261. So
+            // the default reverts to 3.1; cap 3.4 stays reachable via OXI_S575_CAP=3.4 for
+            // the nedocontract/model case. Matching Word's per-line oikomi/oidashi (not a
+            // single cap) is the char-budget wall. The S604 default 3.0→3.1 stands.
             let s575_body_cap: f32 = std::env::var("OXI_S575_CAP").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(3.4);
+                .and_then(|v| v.parse().ok()).unwrap_or(3.1);
             let s475_solo_default = if s590_legacy_just_cap { 1.5 }
                 else if s476_body && !para_has_lrpb
                 && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
@@ -8528,6 +8547,17 @@ impl LayoutEngine {
         // COM-confirmed (2026-04-06): LayoutMode=0 uses floor(win_sum*fontSize*20/10)*10/20
         // without GDI pixel rounding. The ascent+descent formula uses pixel_round which
         // overshoots by 0.5pt (e.g. Calibri 11pt: 13.5 vs actual 13.0).
+        // S609 (2026-06-18): a NO-TYPE docGrid SINGLE-spaced line is NOT floored to
+        // the linePitch — Word uses the NATURAL height (minimal repro: Cambria 11pt
+        // 1.0x = 12.96, MS Mincho 11pt = 14.28, NONE is the 18pt pitch). Scope is the
+        // SINGLE-spacing return only (see grid_no_type branch below): the MULTIPLE-
+        // spacing path (1.15x/1.5x/2.0x) already matched Word via run_base × factor —
+        // the first cut also routed `base` through the no-grid path, which CHANGED the
+        // multiple-spacing CJK base (no-grid ≠ run_base CJK 83/64) and REGRESSED 40
+        // gen2_ docs (SSIM −0.58); so `base` is left as run_base for no-type and only
+        // the single-spacing pitch floor is dropped.
+        let s609_no_type_natural = grid_no_type
+            && std::env::var("OXI_S609_DISABLE").is_err();
         let base = if grid_pitch.is_none() && !in_table_cell {
             // LayoutMode=0: use no-grid formula for each fragment.
             // Round 9 (2026-04-08): per-(font,size) lookup table from
@@ -8621,8 +8651,16 @@ impl LayoutEngine {
                             if grid_no_type {
                                 // S571: no-type docGrid uses device-snapped natural,
                                 // not whole-cell ceil (see `_` arm below).
+                                // S609 (2026-06-18): drop the pitch floor (Word uses the
+                                // device-snapped natural, not the linePitch); the outer
+                                // .max(val) keeps the atLeast minimum. Use `dev` (not raw
+                                // base) so large headings match the old pitch.max(dev).
                                 let dev = (base / 0.75).floor() * 0.75;
-                                pitch.max(dev)
+                                if s609_no_type_natural {
+                                    dev
+                                } else {
+                                    pitch.max(dev)
+                                }
                             } else {
                             // S195: narrower grid-snap tolerance (see the `_` arm
                             // below for the full S195/S580b rationale — kept until the
@@ -8667,7 +8705,21 @@ impl LayoutEngine {
                             // Single-height table (grid288=16.5) was measured in a
                             // TYPED-grid context and does NOT match the no-type render.
                             if grid_no_type {
+                                // S609 (2026-06-18): drop ONLY the `pitch.max()` floor —
+                                // Word does not floor a no-type docGrid SINGLE-spaced line
+                                // up to the linePitch (minimal repro: Cambria 11pt 1.0x =
+                                // 12.96, NOT pitch 18). Keep the device-snap: return `dev`,
+                                // which is IDENTICAL to the old pitch.max(dev) whenever
+                                // dev >= pitch (large headings like gen2's 26pt title —
+                                // returning raw `spaced` there made them 0.5pt too tall and
+                                // regressed 40 gen2_ docs), and only changes the dev<pitch
+                                // case (small body fonts that were wrongly floored to 18).
+                                // S571b's max(pitch,dev) only looked right on ikujidetail
+                                // because its pitch (14.3) ≈ its CJK natural (14.28).
                                 let dev = (spaced / 0.75).floor() * 0.75;
+                                if s609_no_type_natural {
+                                    return dev;
+                                }
                                 return pitch.max(dev);
                             }
                             // S195: narrower grid-snap tolerance — empty paragraph
