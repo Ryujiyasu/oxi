@@ -8505,6 +8505,13 @@ impl LayoutEngine {
 
         let mut max_ascent: f32 = 0.0;
         let mut max_descent: f32 = 0.0;
+        // S611 (2026-06-18): track whether the line's HEIGHT is driven by a CJK
+        // 83/64 font. The tallest (asc+des) fragment determines the line height; if
+        // it is a CJK 83/64 font, the no-type-grid multiple-spacing line uses ROUND
+        // (Word's natural-height behaviour), else CEIL (which compensates the grid
+        // path's smaller Latin run_base — see the rounding site below).
+        let mut max_combined: f32 = 0.0;
+        let mut dominant_cjk_83_64 = false;
 
         // adjustLineHeightInTable=true: use standard height without CJK 83/64
         let use_standard = in_table_cell && self.adjust_line_height_in_table;
@@ -8518,6 +8525,7 @@ impl LayoutEngine {
                 .unwrap_or(para_font_size);
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
             let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+            dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -8538,6 +8546,10 @@ impl LayoutEngine {
                 };
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
+                if asc + des >= max_combined {
+                    max_combined = asc + des;
+                    dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
+                }
             }
         }
 
@@ -8790,8 +8802,35 @@ impl LayoutEngine {
                 //   ＭＳ 明朝 14 LM=0:  18.125*1.15=20.84 → round 21.0pt (Word: 21.0pt)
                 // LayoutMode≥1 uses CEIL.
                 //   Meiryo 10.5: CJK 83/64=20.375pt → ceil 20.5pt for both.
+                // S611 (2026-06-18, default ON, opt-out OXI_S611_DISABLE): a
+                // NO-TYPE docGrid MULTIPLE-spacing line uses ROUND (like no-grid),
+                // NOT the TYPED-grid CEIL. The CEIL snaps each multiplied line UP
+                // to the next 0.5pt, which on a single-line paragraph (the common
+                // gen2 body case, where the cursor's LAST-line advance uses this
+                // value, not the cumulative ROUND model) makes the line ~0.5pt too
+                // tall and accumulates downward over the page. Word does NOT ceil a
+                // no-type grid line — it uses natural × factor with fine (sub-0.5pt)
+                // precision, which ROUND approximates. COM-confirmed (gen2_lineheight
+                // repros, MS Mincho 11pt 1.15x grid360): Word=16.385; Oxi CEIL=17.000
+                // (+0.615), ROUND=16.5 (+0.115). This is the S571/S609 thesis (no-type
+                // grid behaves like no-grid for line height) extended from single to
+                // multiple spacing. TYPED grids keep CEIL (whole-cell snap, S584). The
+                // residual +0.115 is the run_base 83/64 precision (Error A, per-font,
+                // mod.rs:6224 — Oxi MS Mincho run_base 14.48 vs Word natural 14.25).
                 let tw = spaced * 20.0;
-                if grid_pitch.is_none() {
+                // S611 is scoped to CJK-83/64-driven lines: a Latin (Cambria/Calibri)
+                // body line in a no-type grid keeps CEIL because the grid path's
+                // run_base is SMALLER than the no-grid natural for Latin, and CEIL
+                // compensates it (Cambria 11pt 1.15x: Word≈14.84, Oxi grid base→14.5,
+                // CEIL 15.0 ≈ Word; ROUND 14.5 regresses). A CJK 83/64 line's grid
+                // run_base is slightly LARGER than Word's natural, so CEIL over-shoots
+                // (MS Mincho 11pt: Word 16.385, CEIL 17.0, ROUND 16.5 ≈ Word). Verified
+                // on the gen2 cohort: ROUND improves the 29 CJK-body docs (+0.06 max)
+                // and regresses the Latin-body docs — gating on dominant_cjk_83_64
+                // keeps only the CJK gains.
+                let s611_no_type_round = grid_no_type && dominant_cjk_83_64
+                    && std::env::var("OXI_S611_DISABLE").is_err();
+                if grid_pitch.is_none() || s611_no_type_round {
                     (tw / 10.0).round() * 10.0 / 20.0
                 } else {
                     (tw / 10.0).ceil() * 10.0 / 20.0
