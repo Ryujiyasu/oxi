@@ -4320,6 +4320,18 @@ impl LayoutEngine {
         // (line+spacing) position; Oxi's 10tw line-round + exact-spacing model is the
         // wrong granularity/phase, causing the gen2 list-boundary drift.
         let s467_vsnap = std::env::var("OXI_S467_VSNAP").is_ok();
+        // S617 (2026-06-19) — cumulative-position-snap fully explored on gen2, NO win.
+        // The "縦スタック累積位置スナップ" task. OXI_S467_VSNAP already implements Word's
+        // model (visual_y accumulates EXACT line+spacing raw, emit = snap075). gen2 word_png
+        // A/B: VSNAP+snap = net −0.0664 vs OFF (worse — snap075 injects ±0.375pt phase
+        // noise); a NOSNAP variant (exact-raw, no 0.75pt snap) = ≈break-even with OFF. So
+        // neither the snapped nor the exact-raw cumulative beats the current floor/round
+        // model. The residual (title-block deficit −1.26 + body slope +0.106/line) is NOT a
+        // snap-model issue — it is the 83/64 per-font RAW line-height precision (Oxi 83/64 ≈
+        // Word's raw to ~0.006pt but the body's ROUND-to-0.5pt = +0.11/line, and the title
+        // FLOOR compensates the glyph-anchor offset S615 exposed) — the deepest most-reverted
+        // lever (S510/S612). A clean win needs per-font sub-0.02pt raw precision + the
+        // cumulative model TOGETHER, co-gated on word_png pixels.
         let snap075 = |y: f32| -> f32 { (y / 0.75).round() * 0.75 };
 
         // Apply paragraph spacing (space_before).
