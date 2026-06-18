@@ -6798,8 +6798,27 @@ impl LayoutEngine {
             // under-fit by 1 line each). The cap-3.1 −1 it once caused on 3a4f/model
             // (a typed-grid page-bottom compensating error at para278) is now fixed by
             // S603 (page-bottom full-cell before a table). Phase-1 73→75, 0 PASS→FAIL.
+            // S607 (2026-06-18): default 3.1 → 3.4. The body solo 約物 break cap 3.1
+            // (= 0.258em, scaled by fs/12 in s475_max_compress) UNDER-packed 約物 lines
+            // vs Word on BOTH font sizes: nedocontract (12pt, all-12pt regulation doc)
+            // para41 fit 34 chars / Word 35 (Word compresses each mid-line 、 by 3.36pt
+            // = 0.28em to fit the trailing char; cap 3.1 gave only 3.1pt → "お" orphaned
+            // → +1×15 page drift) AND the 10.5pt canaries (model/3a4f para301 fit 38 /
+            // Word 39 — no page drift, so the pagination gate never saw it, but a real
+            // render under-pack). Word render-truth (PDF per-char): solo 約物 compress
+            // median 3.36 / p90 6.0pt @12pt (nedocontract). cap 3.4 = the MINIMAL value
+            // (sweep: 3.35 → still 34, 3.4 → 35) that reproduces Word's char counts on
+            // both the 12pt and 10.5pt measured paras. nedocontract 0.9688 → 0.9938
+            // (+1×15 → −1×3; the residual 3 over-fits = the oikomi/oidashi wall, Word
+            // oidashi where cap-3.4 greedy oikomi's). Phase-1 76/84 unchanged, 0
+            // PASS→FAIL (only nedocontract's pagination changes). SSIM A/B (DWrite, 235
+            // word_png bases): only 3a4f/kyodokenkyuyoushiki05/c7b923 byte-change, ALL
+            // net +0.0000 (the ~0.5–1pt intra-page 約物 redistribution is below page-SSIM
+            // granularity). The S604 −1 page cascade that once blocked cap raises is
+            // fixed by S603. Opt-out via OXI_S575_CAP (env override). The LRPB branch
+            // stays 2.5 (the S575 redistribution gate) and aux/cell stays 2.5.
             let s575_body_cap: f32 = std::env::var("OXI_S575_CAP").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(3.1);
+                .and_then(|v| v.parse().ok()).unwrap_or(3.4);
             let s475_solo_default = if s590_legacy_just_cap { 1.5 }
                 else if s476_body && !para_has_lrpb
                 && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
