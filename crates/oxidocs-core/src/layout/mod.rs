@@ -5145,19 +5145,63 @@ impl LayoutEngine {
             let force_widow = std::env::var("OXI_FORCE_WIDOW").is_ok();
             let widow_effective = para.style.widow_control
                 || (force_widow && lines.len() >= 5);
+            // S608 (2026-06-18, default ON, opt-out OXI_S608_DISABLE): the
+            // widow/orphan page-fit LOOK-AHEAD measures the paragraph's LAST line by
+            // its NATURAL height (ascent+descent), NOT the full multiplied line box.
+            // Word lets the last line's line-spacing LEADING hang into the bottom
+            // margin and keeps a 2-line para on the page when its last line's
+            // natural box fits — test_line_heights Calibri 14pt x2.0 (natural 17.25,
+            // full box 34.5) is KEPT; Oxi's full-box look-ahead widow-pushed it → a
+            // per-page accumulating offset down the document. SCOPE: only fires when
+            // widow_control is ON (Word default); the CJK Phase-1 corpus has
+            // widowControl=0 → byte-identical, gate 76/84 unchanged. RESULT (correct
+            // same-binary A/B, OXI_S608 OFF vs ON over 173 widowControl=ON cohort
+            // pages): net +0.0006; the gen2_* cohort is BYTE-IDENTICAL (Δ=0.0000,
+            // never fires); the whole change is test_line_heights — 6 pages = Word
+            // (was 6) with page-mismatches 6→0 (pages 3/4/5 +0.018/+0.021/+0.060,
+            // p6 +0.003, only p2 −0.003). ★An earlier ink-based variant over-compacted
+            // the doc end (MS Gothic 14 x2.0 fit on p5, losing Word's p6, −0.985);
+            // and an earlier "net −0.0144 / gen2 regressions" reading was a
+            // MEASUREMENT ARTIFACT (compared against a STALE ssim_baseline.json from
+            // an older binary). natural (not ink) is the structural keep/push measure.
+            let s608 = std::env::var("OXI_S608_DISABLE").is_err();
+            // The widow/orphan STRUCTURAL look-ahead (keep a 2-line para together
+            // or push it whole) measures the last line by its NATURAL height
+            // (ascent+descent) — NOT the full multiplied box, and NOT the glyph ink.
+            // DERIVED from test_line_heights' p5/p6 boundary (last line at cursor
+            // 702.5, content bottom 720):
+            //   MS Gothic 14 x2.0: natural 18.125 → 720.6 > 720 → PUSH (= Word p6)
+            //   Calibri  14 x2.0: natural 17.25  → 713.6 < 720 → KEEP (= Word p2)
+            // The per-line RENDER break uses ink (S576, leading hangs into the
+            // margin); but the structural keep/push uses the natural line box, so
+            // a CJK 83/64 last line (natural ≈ 1.297·em) is pushed where ink (= em)
+            // would wrongly fit it. (Using ink here over-compacted test_line_heights
+            // to 5 pages, losing Word's page 6 — the −0.985 in the first A/B.)
+            let last_line_fit_h = |idx: usize| -> f32 {
+                let full = line_heights.get(idx).copied().unwrap_or(0.0);
+                if !s608 {
+                    return full;
+                }
+                natural_line_heights.get(idx).copied().unwrap_or(full).min(full)
+            };
             let widow_orphan_break = if !in_textbox && widow_effective && lines.len() >= 2 {
                 if line_idx == 0 && !needs_page_break {
                     // Orphan: check if the next line would overflow — that would leave
                     // only 1 line on this page. Push entire paragraph to next page.
-                    // Orphan: check if the next line would overflow — that would leave
-                    // only 1 line on this page. Push entire paragraph to next page.
-                    let next_h = line_heights.get(1).copied().unwrap_or(0.0);
+                    // The next line is the LAST line only for a 2-line para; use the
+                    // page-bottom fit height for it (S608), full box otherwise.
+                    let next_h = if lines.len() == 2 {
+                        last_line_fit_h(1)
+                    } else {
+                        line_heights.get(1).copied().unwrap_or(0.0)
+                    };
                     cursor.cursor_y + line_height + next_h > page_top + content_height
                         && !current_elements.is_empty()
                 } else if line_idx == lines.len() - 2 && !needs_page_break {
                     // Widow: if the last line would overflow to the next page alone,
                     // break BEFORE this line so at least 2 lines go to the next page.
-                    let next_h = line_heights.get(line_idx + 1).copied().unwrap_or(0.0);
+                    // next line (line_idx+1) is the paragraph's LAST line → S608.
+                    let next_h = last_line_fit_h(line_idx + 1);
                     cursor.cursor_y + line_height + next_h > page_top + content_height
                 } else {
                     false
