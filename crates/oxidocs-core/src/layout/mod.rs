@@ -4924,7 +4924,31 @@ impl LayoutEngine {
                 && std::env::var("OXI_S603_DISABLE").is_err()
                 && !page.doc_grid_no_type
                 && !s548b_exact_full && !s562b_empty_full;
-            let break_threshold = if s548b_exact_full || s562b_empty_full || s603_typed_fullbox {
+            // S605 (2026-06-18, default ON, opt-out OXI_S605_DISABLE): the FIRST line
+            // of a TWO-line typed-grid paragraph uses the FULL grid cell (no natural_lh
+            // leniency) — but ONLY when line0's cell-bottom OVERFLOWS the content bottom
+            // (line0 fits the page bottom only via the leniency hang). Word does not let
+            // a 2-line para's first line hang its grid leading into the bottom margin:
+            // that would split the para 1+1 (the last line alone at the top of the next
+            // page = a WIDOW, and the first alone at the bottom = an ORPHAN). It uses the
+            // full cell, so the whole 2-line para moves down. ohnoshugyo pidx=203 (第３３
+            // 条…, 2-line, MS Mincho 10.5, type=lines): line0 cursor 743 + cell 18 = 761
+            // > content_bottom 756.85 → Word puts the whole para on page 9; Oxi's
+            // natural_lh 13.6 → 756.6 leniency wrongly fit it on page 8 (1+1) → the −1.
+            // ★DISCRIMINATOR = line0's FULL CELL OVERFLOWS (a leniency over-fit). The
+            // BROADER widow_effective "a 2-line para is never split 1+1" was FALSIFIED on
+            // the gate (−9, 10 PASS→FAIL incl ikujikaigo/kojin/model): Word DOES split
+            // most 2-line paras 1+1 when line0 fits the page bottom by the FULL cell
+            // (a legitimate fit). Only the leniency-over-fit line0 is pushed. Single-line
+            // paras and continuation/last lines keep the leniency (S603 covers the
+            // last-line-before-a-table case separately). Phase-1 75→76 (ohnoshugyo
+            // FAIL→PASS), 0 PASS→FAIL.
+            let s605_line0_2 = std::env::var("OXI_S605_DISABLE").is_err()
+                && line_idx == 0 && lines.len() == 2
+                && !page.doc_grid_no_type
+                && !s548b_exact_full && !s562b_empty_full;
+            let break_threshold = if s548b_exact_full || s562b_empty_full
+                || s603_typed_fullbox || s605_line0_2 {
                 effective_lh
             } else {
                 ink_lh.min(effective_lh)
