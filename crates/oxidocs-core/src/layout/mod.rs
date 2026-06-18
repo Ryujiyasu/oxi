@@ -4657,6 +4657,19 @@ impl LayoutEngine {
         } else { vec![0.0; lines.len()] };
 
         // Widow/orphan control: pre-compute line heights for lookahead
+        // ★ohnoikuji −1×3 finding (2026-06-18, S606 ATTEMPTED+REVERTED): the −1 paras
+        // are pushed by a4-style (name "header") snapToGrid=0 list items 「（１）（２）（３）」
+        // (MS Mincho 10.5, type=lines) that Word renders at the GRID pitch 18.0pt but
+        // Oxi renders at NATURAL 13.5pt (line_height_inner passes None grid_pitch when
+        // snap_to_grid=false) → Oxi over-fills the page by 3×4.5pt → the next para −1.
+        // FIX (snapToGrid=0 body line height = grid pitch) was FALSIFIED on the gate:
+        // it fixed ohnoikuji but REGRESSED 9a8e (1pg→2pg, 1.0→0.74)/bd90b00/roudoujoken
+        // (−2 net) — Word does NOT grid-snap ALL body snapToGrid=0 paras. A
+        // lines.len()==1 gate fixed roudoujoken (multi-line sg0) but 9a8e/bd90b00 STILL
+        // regressed (single-line sg0 paras Word natural-izes). The discriminator (Word
+        // grids ohnoikuji's SHORT EMBEDDED a4 sg0 run between gridded paras but
+        // natural-izes 9a8e's large sg0 BLOCK) is the snapToGrid line-height precision
+        // wall — deferred. line_height_inner:8218 is the natural-vs-grid site.
         let line_heights: Vec<f32> = lines.iter().map(|line| {
             self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch, page.doc_grid_no_type)
         }).collect();
