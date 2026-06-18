@@ -5734,7 +5734,7 @@ impl LayoutEngine {
             // Extra space goes above text (ascent increased, descent unchanged).
             // Session 76 Mech A fix: pass in_textbox so the function can distinguish
             // body/cell (top-align for exact) from shape (bottom-align).
-            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox);
+            let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox, page.doc_grid_no_type);
 
             // S517 (2026-06-09): the body list-marker element was emitted before
             // this loop with the default text_y_off=0.0 (never set), so for wide
@@ -8903,6 +8903,12 @@ impl LayoutEngine {
         line_height: f32,
         grid_pitch: Option<f32>,
         in_shape_context: bool,
+        // S614 (2026-06-18): the page uses a NO-TYPE docGrid (linePitch but no
+        // w:type). Such a line's height is the device-snapped NATURAL height
+        // (S609/S611), not a whole grid cell, so it carries no centering slack —
+        // the tc-centering below reduces to ~0 and only the s457 constant applies,
+        // which under-places LARGE CJK glyphs. See the grid branch.
+        doc_grid_no_type: bool,
     ) -> f32 {
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
@@ -9126,6 +9132,80 @@ impl LayoutEngine {
                     };
                     let pitch = grid_pitch.unwrap_or(0.0);
                     if pitch > 0.0 {
+                        // S614 (2026-06-18) ★ — no-type docGrid LARGE-CJK title
+                        // centering. A no-type docGrid line is sized to the
+                        // device-snapped NATURAL height (S609/S611), so it has no
+                        // grid-cell slack: (line_height − tc)/2 ≈ 0 and only the
+                        // s457 constant (+2.5, calibrated for 10.5pt BODY) applies —
+                        // which under-places LARGE CJK glyphs (the gen2 title −5px /
+                        // 2.4pt-too-high bug, [[gen2_vertical_drift]] #3). Word's
+                        // measured law for these lines (Word PDF baselines vs COM
+                        // line-box tops, MS Mincho/Gothic sweep 11..36pt via
+                        // title_law.py): the glyph BASELINE sits at box_top +
+                        // fontSize (Wbase−Wbox ≈ 1.00×fs across all sizes). The
+                        // DWrite renderer draws baseline = box + text_y_off − 1.0 +
+                        // dwrite_ascent, where dwrite_ascent = win_ascent×fs (the
+                        // RAW win ascent, NOT the 83/64-inflated word_ascent_pt —
+                        // verified: MS Mincho 26pt dwrite_ascent 22.34 = 220/256×26).
+                        // ⇒ text_y_off = fs − win_ascent×fs + COMP = fs×(1−win_ascent)
+                        // + COMP places the baseline at box+fs+(COMP−1). COMP default
+                        // 1.2 = 1.0 (cancels the DWrite renderer −1.0 origin shift,
+                        // landing baseline at box+fs) + 0.2 (Word's measured small
+                        // downward bias: Wbase−Wbox ≈ fs+0.2 at title sizes, per the
+                        // size-sweep residual). SSIM-δ-swept on the gen/gen2 word_png
+                        // corpus: COMP 1.0 → net +0.1324 (1 regress −0.0009), COMP 1.2
+                        // → +0.1424 (44 improve / 1 negligible regress) = peak. SCOPED: (a) no-type
+                        // grid only (typed grids snap to n×pitch and DO center the
+                        // natural cell — verify_lm2_multicell confirms tc-centering
+                        // there); (b) CJK 83/64; (c) win_sum≈1em (MS Mincho/Gothic/
+                        // PGothic/HGP — Yu Mincho's win_sum 1.287 has a DIFFERENT
+                        // law, Wbase≈1.19×fs, measured-different → EXCLUDED until
+                        // separately derived); (d) natural height > pitch (a LARGE
+                        // font) so the well-tuned 10.5pt body stays byte-identical.
+                        // Override OXI_S614_COMP (default 1.2), opt-out
+                        // OXI_S614_DISABLE. Render-only (text_y_off) → element.y /
+                        // pagination unchanged (Phase-1 sentinel preserved by
+                        // construction; verified element.y byte-identical ON/OFF).
+                        // The 11/12pt BODY (natural < pitch) is untouched (byte-
+                        // identical) — only LARGE headings/titles move.
+                        if doc_grid_no_type && std::env::var("OXI_S614_DISABLE").is_err() {
+                            let mut best: Option<(f32, f32, f32)> = None; // (fs, win_ascent, natural)
+                            if !line.fragments.is_empty() {
+                                for f in &line.fragments {
+                                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                                    let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                    if m.is_cjk_83_64_font() {
+                                        let win_sum = m.win_ascent + m.win_descent;
+                                        if (win_sum - 1.0).abs() < 0.05 {
+                                            let natural = m.word_ascent_pt(fs) + m.word_descent_pt(fs);
+                                            if best.map_or(true, |(_, _, n)| natural > n) {
+                                                best = Some((fs, m.win_ascent, natural));
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                                if m.is_cjk_83_64_font() {
+                                    let win_sum = m.win_ascent + m.win_descent;
+                                    if (win_sum - 1.0).abs() < 0.05 {
+                                        let natural = m.word_ascent_pt(para_font_size)
+                                            + m.word_descent_pt(para_font_size);
+                                        best = Some((para_font_size, m.win_ascent, natural));
+                                    }
+                                }
+                            }
+                            if let Some((fs, win_ascent, natural)) = best {
+                                if natural > pitch {
+                                    let comp = std::env::var("OXI_S614_COMP")
+                                        .ok()
+                                        .and_then(|v| v.parse::<f32>().ok())
+                                        .unwrap_or(1.2);
+                                    return (fs * (1.0 - win_ascent) + comp).max(0.0);
+                                }
+                            }
+                        }
                         let raw = (line_height - centering_height).max(0.0) / 2.0;
                         // S328 (2026-05-26) — env-gated FLOOR variant.
                         // Default formula `(raw*2 + 0.5).floor() / 2` is
