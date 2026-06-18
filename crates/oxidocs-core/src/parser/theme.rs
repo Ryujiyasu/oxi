@@ -303,10 +303,30 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     } else {
         "Meiryo"
     };
+    // S613 (2026-06-18, HELD opt-in OXI_S613=1, default OFF): the empty-majorEastAsia
+    // default is MS GOTHIC, not MS Mincho — Word's standard Japanese theme uses Gothic
+    // for the MAJOR (heading) font (sans-serif) and the per-doc minor fallback (MS
+    // Mincho / Meiryo) for the body. Oxi filled BOTH with ea_empty_fallback, so every
+    // heading rendered in the body font where Word uses MS-Gothic. Word PDF render-truth
+    // confirmed UNIVERSAL on gen2_000/001/003/005 (headings sz>=13 = MS-Gothic, body =
+    // MS-Mincho) AND e3c545_LOD_Handbook (majorEastAsia pages 6-9 = MS-Gothic, body =
+    // Meiryo). ★HELD opt-in: the font CHOICE is correct but Oxi's MS Gothic RENDERING is
+    // WORSE than its MS Mincho rendering vs Word's MS-Gothic word_png (e3c545 per-page
+    // ON−OFF = −0.006/−0.006/−0.011; full-corpus ssim_ab net −0.0107: gen2 gains are a
+    // negligible +0.0006/doc — the title's −5px VERTICAL offset, not the font, is the
+    // gen2 SSIM cost — while e3c545's many Gothic body pages regress −0.0232). The
+    // blocker is a MS-Gothic render-layer issue (likely a GDI width-table horizontal
+    // mis-positioning — a position shift hurts SSIM more than Mincho's shape mismatch);
+    // flip default-ON once that is fixed. See [[gen2_vertical_drift]].
+    let major_ea_empty_fallback = if std::env::var("OXI_S613").is_ok() {
+        "MS Gothic"
+    } else {
+        ea_empty_fallback
+    };
     if theme.major_font_ea.is_none() {
         theme.major_font_ea = Some(
             if suppress_jpan_when_empty_ea && ea_empty_major {
-                ea_empty_fallback
+                major_ea_empty_fallback
             } else {
                 "Meiryo"
             }.to_string()
