@@ -1653,7 +1653,7 @@ impl LayoutEngine {
         let default_font_size = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_size)
-            // S608 (2026-06-18, OPT-IN OXI_S608=1, default OFF): when docDefaults has
+            // S610 (2026-06-18, OPT-IN OXI_S610=1, default OFF): when docDefaults has
             // NO sz, fall to the DEFAULT PARAGRAPH STYLE (Normal) sz before the flat
             // app-default — the next link in the OOXML resolution chain that
             // for_document otherwise SKIPS. COM-measured (Font.Size): atimesresume
@@ -1672,13 +1672,13 @@ impl LayoutEngine {
             // for non-styled line heights) — a focused follow-up. Until then, default
             // OFF to avoid the tuned-doc SSIM regression. See ssim_ab.py A/B evidence.
             .or_else(|| {
-                if std::env::var("OXI_S608").ok().as_deref() != Some("1") { return None; }
+                if std::env::var("OXI_S610").ok().as_deref() != Some("1") { return None; }
                 doc.styles.default_paragraph_style_id.as_ref()
                     .and_then(|id| doc.styles.styles.get(id))
                     .and_then(|sd| sd.paragraph.default_run_style.as_ref())
                     .and_then(|rs| rs.font_size)
             })
-            .unwrap_or(if std::env::var("OXI_S608").ok().as_deref() == Some("1") { 10.0 } else { 11.0 });
+            .unwrap_or(if std::env::var("OXI_S610").ok().as_deref() == Some("1") { 10.0 } else { 11.0 });
         let default_font_family = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family.clone());
