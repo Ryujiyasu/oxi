@@ -5760,16 +5760,20 @@ impl LayoutEngine {
             // Extra space goes above text (ascent increased, descent unchanged).
             // Session 76 Mech A fix: pass in_textbox so the function can distinguish
             // body/cell (top-align for exact) from shape (bottom-align).
-            // S619 (2026-06-19) — uniform render-only global vertical downshift TESTED on
-            // gen2 word_png SSIM (OXI_GLOBAL_DY, since reverted): +0.5pt down = net **+1.2016
-            // WORSE** (74 pages worse / 5 better). DEFINITIVE: the post-S614 reg-sweep SSE
-            // gain (~+1px down) does NOT realize as an SSIM gain — SSE/COM/PDF all MISLEAD in
-            // this vertical regime (box-top ≠ render anchor). Oxi's current vertical positions
-            // are at the word_png SSIM OPTIMUM; every box-position lever (PBDR title +0.86,
-            // S615 floor→round −0.57, VSNAP cumulative −0.07) and uniform shift REGRESSES the
-            // SSIM. The gen2 vertical stack is EXHAUSTED for SSIM wins; S614 (glyph centering,
-            // +0.1424) captured the real available gain. The remaining COM/PDF "deficit" is a
-            // measurement artifact, not a fixable pixel error.
+            // S619/S620 (2026-06-19) — the gen2 residual is a REAL downward vertical DRIFT,
+            // NOT "the SSIM optimum" (an earlier wrong conclusion, corrected). word_png 2D
+            // per-band best-shift (gen2_005 p1): the top body is aligned (dy=0) but lower
+            // bands are 1-2px TOO LOW and recover **+0.03..+0.10 SSIM each** with a 1-2px
+            // UP-shift (e.g. rows 1410-1530: 0.910→0.987 @ dy=-2). So content accumulates
+            // ~2px (1pt) too low by the page bottom = a real slope, recoverable per-band. It
+            // is NOT a UNIFORM offset (top aligned → uniform shift regresses, OXI_GLOBAL_DY
+            // +0.5=+1.2 worse) and NOT the body line-height (VSNAP-nosnap == OFF, byte-
+            // identical). The drift SOURCE is untraced (NOT body lines/spacing-fold; candidate:
+            // title-block/heading height, or a per-line 96dpi snap-phase the body lines don't
+            // carry). Plus the TABLE band (rows ~930) is structurally misaligned (no shift
+            // helps = horizontal/layout). gen2 p1 absolute SSIM ≈ 0.91. S614 (+0.1424) was a
+            // real win but the vertical stack is NOT exhausted — the drift is a real fixable
+            // error whose source must be isolated per-element (each block's height vs Word).
             let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox, page.doc_grid_no_type);
 
             // S517 (2026-06-09): the body list-marker element was emitted before
