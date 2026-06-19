@@ -6365,7 +6365,7 @@ impl LayoutEngine {
                 // cursor_y keeps the 0.5pt-CEIL advance (pagination byte-identical →
                 // Phase-1 safe). δ via OXI_S629_DELTA (default 0.12).
                 let s629 = grid_pitch.is_none() && is_single_lm0
-                    && std::env::var("OXI_S629").is_ok();
+                    && std::env::var("OXI_S629_DISABLE").is_err();
                 if s467_vsnap && is_multiple_spacing {
                     // visual_y advances by the EXACT raw line height; cursor_y by the
                     // current rounded amount (page-break unchanged). Emit snaps visual_y.
@@ -6373,13 +6373,28 @@ impl LayoutEngine {
                 } else if s629 {
                     let d = std::env::var("OXI_S629_DELTA").ok()
                         .and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.15);
-                    // RELATIVE (text-anchored) snap of the 83/64 cumulative to the δ grid
-                    // (ABSOLUTE/page-origin phase was much worse — wrong grid anchor).
-                    let op = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
-                    let np = op + raw_spaced_tw;
-                    let old_v = ((op / 20.0) / d).round() * d;
-                    let new_v = ((np / 20.0) / d).round() * d;
-                    cursor.advance_split((cn - cc) as f32 / 20.0, new_v - old_v);
+                    // S629 session-2: RELATIVE (content-top anchored) snap of the 83/64
+                    // cumulative to the δ=0.12 (600-DPI px) grid. baseline_grid_fit.py CONFIRMED
+                    // this fits Word PERFECTLY for 9/10/11/12/14pt (9pt = 0.0mpt residual). The
+                    // 10.5pt HALF-POINT is the lone OUTLIER (83/64×10.5=13.617 = mid-cell on the
+                    // 0.12 grid, 124mpt residual at every δ) — snapping it REGRESSED 683f. So
+                    // EXCLUDE 10.5pt lines (use the normal advance) → Pareto-safe (9pt docs gain,
+                    // 10.5pt docs untouched).
+                    // Derive the line's font size from its 83/64 line HEIGHT (robust — no font
+                    // resolution needed, works for 683f whose font_family is empty in the dump):
+                    // fs = (raw_spaced_tw/20) / (83/64). Half-point sizes (10.5/11.5/…) are the
+                    // grid OUTLIERS (83/64×10.5=13.617 is mid-cell on the 0.12 grid).
+                    let fs_from_lh = (raw_spaced_tw / 20.0) / (83.0 / 64.0);
+                    let is_half_point = (fs_from_lh.fract() - 0.5).abs() < 0.08;
+                    if is_half_point {
+                        cursor.advance((cn - cc) as f32 / 20.0);
+                    } else {
+                        let op = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
+                        let np = op + raw_spaced_tw;
+                        let old_v = ((op / 20.0) / d).round() * d;
+                        let new_v = ((np / 20.0) / d).round() * d;
+                        cursor.advance_split((cn - cc) as f32 / 20.0, new_v - old_v);
+                    }
                 } else {
                     cursor.advance((cn - cc) as f32 / 20.0);
                 }
