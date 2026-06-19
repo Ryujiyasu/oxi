@@ -6354,10 +6354,32 @@ impl LayoutEngine {
                 // (tallest-glyph height per line, device-snapped); NO constant/table/finer-
                 // quant model captures it. The Y-jitter needs Word's EXACT per-content-line
                 // baseline — the deepest precision wall. See memory.
+                // S629 (2026-06-19, opt-in OXI_S629): Y-jitter fix via DEVICE-SNAP to
+                // δ≈0.12pt of the 83/64 cumulative. NEW measurement: Word's per-line
+                // 9pt baselines are 11.64 (dominant) + periodic 11.76, differing by
+                // EXACTLY 0.12pt (diffs from 11.64 = multiples of 0.12) = the device-snap
+                // of a CONSTANT 83/64 height (11.672) to a 0.12pt grid, NOT content-
+                // dependent (correcting the S628 conclusion). S626 failed using δ=1tw
+                // (0.05, too fine) + CEIL; the correct model is ROUND-to-0.12 of the
+                // 83/64 cumulative. visual_y (glyph track) snaps the cumulative to δ;
+                // cursor_y keeps the 0.5pt-CEIL advance (pagination byte-identical →
+                // Phase-1 safe). δ via OXI_S629_DELTA (default 0.12).
+                let s629 = grid_pitch.is_none() && is_single_lm0
+                    && std::env::var("OXI_S629").is_ok();
                 if s467_vsnap && is_multiple_spacing {
                     // visual_y advances by the EXACT raw line height; cursor_y by the
                     // current rounded amount (page-break unchanged). Emit snaps visual_y.
                     cursor.advance_split((cn - cc) as f32 / 20.0, raw_spaced_tw / 20.0);
+                } else if s629 {
+                    let d = std::env::var("OXI_S629_DELTA").ok()
+                        .and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.15);
+                    // RELATIVE (text-anchored) snap of the 83/64 cumulative to the δ grid
+                    // (ABSOLUTE/page-origin phase was much worse — wrong grid anchor).
+                    let op = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
+                    let np = op + raw_spaced_tw;
+                    let old_v = ((op / 20.0) / d).round() * d;
+                    let new_v = ((np / 20.0) / d).round() * d;
+                    cursor.advance_split((cn - cc) as f32 / 20.0, new_v - old_v);
                 } else {
                     cursor.advance((cn - cc) as f32 / 20.0);
                 }
