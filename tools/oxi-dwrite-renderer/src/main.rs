@@ -52,7 +52,10 @@ fn main() {
     // verify-pipeline-only (browser product renders at native res, unaffected). COST: 9x
     // render (vs ss2 4x) -> every verify/gate run ~3x (full baseline refresh ~90 min);
     // accepted. --supersample=1/2 overrides for a fast verify.
-    let mut supersample: u32 = 3;
+    // S622 (2026-06-19): env override OXI_SUPERSAMPLE for A/B testing (the
+    // --supersample flag still wins if given). Default 3 (S501).
+    let mut supersample: u32 = std::env::var("OXI_SUPERSAMPLE")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(3);
     let mut dump_layout: Option<String> = None;
     // S494: --dump-glyphs=PATH emits each glyph's EXACT per-char position from
     // DirectWrite (IDWriteTextLayout::HitTestTextPosition), which includes DWrite's
