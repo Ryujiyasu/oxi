@@ -894,6 +894,12 @@ unsafe fn render_text(
     // trailing matches GDI.
     if character_spacing_pt.abs() > 0.001 {
         if let Ok(layout1) = layout.cast::<IDWriteTextLayout1>() {
+            // S627 (2026-06-19) FALSIFIED+REVERTED: a renderer-side discrete
+            // error-diffused justify here was INERT (justified CJK lines are
+            // ~1-char-per-fragment with character_spacing=0; the justify expansion
+            // lives in the layout's frag_spacing_after, not here). The layout-side
+            // version (mod.rs ~5716) was then tried and also regressed — Word's exact
+            // justify bump PLACEMENT differs from error-diffusion. See mod.rs.
             let trailing = character_spacing_pt * PT_TO_DIP;
             let range = DWRITE_TEXT_RANGE { startPosition: 0, length: text_wide.len() as u32 };
             let _ = layout1.SetCharacterSpacing(0.0, trailing, 0.0, range);

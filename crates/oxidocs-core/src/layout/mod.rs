@@ -5710,6 +5710,21 @@ impl LayoutEngine {
                         if has_cjk && total_chars > 1 {
                             let char_gap_count = total_chars - 1;
                             let per_char_gap = slack / char_gap_count as f32;
+                            // S627 (2026-06-19) ATTEMPTED + FALSIFIED + REVERTED: DISCRETE
+                            // error-diffused justify. Word distributes justify slack as discrete
+                            // δ≈0.11pt bumps on ~16% of chars (measured), NOT the uniform
+                            // per_char_gap Oxi spreads on every inter-char gap — the +0.039
+                            // "X-jitter" (fitz-position metric: WORD-x recovers it). Implemented
+                            // here (justified CJK lines are ~1-char-per-fragment, so the expansion
+                            // lives in frag_spacing_after) by error-diffusing the cumulative gap to
+                            // a δ grid. RESULT: DWrite-gate slightly REGRESSED across all δ
+                            // (0e7af −0.0003..−0.0007, 683f −0.0001..−0.0013). ROOT: cumulative-
+                            // round error-diffusion produces A discrete pattern but NOT Word's
+                            // EXACT bump PLACEMENT (which specific gap gets each δ) — so the
+                            // per-char positions still differ from Word, just differently than
+                            // uniform → no match. The X-jitter needs Word's exact justify
+                            // distribution ALGORITHM (gap selection), not generic error-diffusion.
+                            // The deep reverse-engineering wall (convergent with char_budget_wall).
                             // Distribute: fragment-boundary gaps via frag_spacing_after,
                             // internal gaps via frag_width_adjustments (for layout width),
                             // AND set justify_char_spacing for renderer to apply letterSpacing.
