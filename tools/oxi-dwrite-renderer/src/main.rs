@@ -1184,13 +1184,23 @@ unsafe fn save_wic_bitmap_as_png(
     let mut src_h: u32 = 0;
     src_bitmap.GetSize(&mut src_w, &mut src_h)?;
 
+    // S623 (2026-06-19): downscale filter knob. Fant (default) is area-averaging =
+    // SOFT (spreads glyph ink ~8% wider than Word's MuPDF analytic rasterization).
+    // OXI_DOWNSCALE={fant|cubic|hqcubic|linear} to test a sharper downscale toward
+    // MuPDF's crisper coverage. Gated on full-corpus ssim_ab.
+    let interp = match std::env::var("OXI_DOWNSCALE").ok().as_deref() {
+        Some("cubic") => WICBitmapInterpolationModeCubic,
+        Some("hqcubic") => WICBitmapInterpolationModeHighQualityCubic,
+        Some("linear") => WICBitmapInterpolationModeLinear,
+        _ => WICBitmapInterpolationModeFant,
+    };
     let source: IWICBitmapSource = if src_w != out_w || src_h != out_h {
         let scaler = wic_factory.CreateBitmapScaler()?;
         scaler.Initialize(
             src_bitmap,
             out_w,
             out_h,
-            WICBitmapInterpolationModeFant,
+            interp,
         )?;
         scaler.cast()?
     } else {
