@@ -9566,14 +9566,26 @@ impl LayoutEngine {
             // leading-edge column cell shifts left by its margin), NOT as a table_x translate.
             // See the cell loop below (OXI_S494B_TBLIND_ENABLE). A whole-table table_x shift
             // moved the BORDERS too, which regressed border-visible docs (15076df).
+            // S621 (2026-06-19): the leading-cell margin absorption (table border
+            // outsets left by cellMar so the cell CONTENT aligns with the text margin)
+            // is a Word **compatibilityMode ≤ 14** behavior (S496-confirmed), NOT a
+            // border-visibility one. The old gate used `!explicit_borders` as a proxy,
+            // which WRONGLY excluded gen2 (mode 14, VISIBLE borders, no tblInd): word_png
+            // measured all 5 table borders uniformly +5.28pt right of Word = exactly the
+            // default cell left margin. FIX: gate on compat_mode ≤ 14 && indent≈0 (incl.
+            // tblInd absent = None), and shift the WHOLE table (border_offset > 0 →
+            // table_x -= cellMar+border/2). Mode ≥ 15 still does NOT shift (3a4f etc.).
+            // Opt-out OXI_S621_DISABLE restores the old !explicit_borders gate.
             let border_offset = {
                 let border_w = table.style.border_width.unwrap_or(0.5);
-                match table.style.indent {
-                    Some(v) if v.abs() < 0.01 && !table.style.explicit_borders => {
-                        pad_l_default + border_w / 2.0
-                    }
-                    _ => 0.0,
-                }
+                let indent_zero = table.style.indent.map_or(true, |v| v.abs() < 0.01);
+                let absorb = if std::env::var("OXI_S621_DISABLE").is_err() {
+                    indent_zero && self.compat_mode <= 14
+                } else {
+                    matches!(table.style.indent, Some(v) if v.abs() < 0.01)
+                        && !table.style.explicit_borders
+                };
+                if absorb { pad_l_default + border_w / 2.0 } else { 0.0 }
             };
             match table.style.alignment.as_deref() {
                 Some("center") => start_x + (content_width - table_width) / 2.0,
