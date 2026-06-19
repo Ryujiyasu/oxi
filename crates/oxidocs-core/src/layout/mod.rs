@@ -5725,6 +5725,25 @@ impl LayoutEngine {
                             // uniform → no match. The X-jitter needs Word's exact justify
                             // distribution ALGORITHM (gap selection), not generic error-diffusion.
                             // The deep reverse-engineering wall (convergent with char_budget_wall).
+                            // S627 (2026-06-19) ATTEMPTED 3 WAYS + ALL FALSIFIED + REVERTED.
+                            // The X-jitter (+0.039): Word distributes justify slack as discrete
+                            // δ≈0.11pt bumps (cumulative-round-to-δ staircase, even-distributed,
+                            // EXCLUDING 約物 gaps — the [3,7,11,16,20,24,29,33] / [4,4,5] pattern),
+                            // vs Oxi's uniform per_char_gap on every gap. Tried: (a) renderer
+                            // character_spacing error-diffusion (INERT — justified CJK lines are
+                            // ~1-char-per-fragment, expansion lives in frag_spacing_after, not
+                            // character_spacing); (b) layout cumulative-round-to-δ (regressed
+                            // −0.0003..−0.0013: a +0.02pt base offset from 約物/char-width
+                            // precision shifts the round-crossings by ~1 near δ-boundaries); (c)
+                            // layout even-distribution Bresenham-round (regressed −0.0005..−0.0011:
+                            // includes 約物 gaps which Word EXCLUDES, + phase off). Each produces
+                            // A discrete pattern but NOT Word's EXACT per-char positions → no
+                            // closer than uniform, slight regression. ⇒ the X-jitter needs Word's
+                            // EXACT justify algorithm (even-distribute n=round(slack/δ) bumps over
+                            // the NON-約物 expandable gaps, exact phase) AND per-char base-width
+                            // precision (<0.02pt). Unified with the Y-jitter: both = cumulative-
+                            // device-snap(δ≈0.11pt) limited by base precision (char-width X /
+                            // line-height Y). The deep per-font wall; see memory.
                             // Distribute: fragment-boundary gaps via frag_spacing_after,
                             // internal gaps via frag_width_adjustments (for layout width),
                             // AND set justify_char_spacing for renderer to apply letterSpacing.
