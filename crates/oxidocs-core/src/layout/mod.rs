@@ -5760,6 +5760,16 @@ impl LayoutEngine {
             // Extra space goes above text (ascent increased, descent unchanged).
             // Session 76 Mech A fix: pass in_textbox so the function can distinguish
             // body/cell (top-align for exact) from shape (bottom-align).
+            // S619 (2026-06-19) — uniform render-only global vertical downshift TESTED on
+            // gen2 word_png SSIM (OXI_GLOBAL_DY, since reverted): +0.5pt down = net **+1.2016
+            // WORSE** (74 pages worse / 5 better). DEFINITIVE: the post-S614 reg-sweep SSE
+            // gain (~+1px down) does NOT realize as an SSIM gain — SSE/COM/PDF all MISLEAD in
+            // this vertical regime (box-top ≠ render anchor). Oxi's current vertical positions
+            // are at the word_png SSIM OPTIMUM; every box-position lever (PBDR title +0.86,
+            // S615 floor→round −0.57, VSNAP cumulative −0.07) and uniform shift REGRESSES the
+            // SSIM. The gen2 vertical stack is EXHAUSTED for SSIM wins; S614 (glyph centering,
+            // +0.1424) captured the real available gain. The remaining COM/PDF "deficit" is a
+            // measurement artifact, not a fixable pixel error.
             let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox, page.doc_grid_no_type);
 
             // S517 (2026-06-09): the body list-marker element was emitted before
