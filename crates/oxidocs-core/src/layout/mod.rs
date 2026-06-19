@@ -4320,6 +4320,20 @@ impl LayoutEngine {
         // (line+spacing) position; Oxi's 10tw line-round + exact-spacing model is the
         // wrong granularity/phase, causing the gen2 list-boundary drift.
         let s467_vsnap = std::env::var("OXI_S467_VSNAP").is_ok();
+        // S618 (2026-06-19) — MULTI-LEVER joint search (the "壁を多レバー同時で崩す" task):
+        // tried combining the body cumulative-snap (VSNAP) with a TITLE_EXACT lever
+        // (advance the single-spacing title's visual_y by its 83/64 raw via advance_split in
+        // the use_cumulative=false else branch). RESULT: gen2 A/B = 0 bytes changed — the
+        // lever had NO effect even though the title line h=33.0 (floor) < natural 33.6 should
+        // satisfy the gate. So the title's SUBSEQUENT-line phase is NOT advanced at that
+        // else branch — the title para (a single line followed by a pBdr `shading` element
+        // at y=109, the S467 "title pBdr −0.75" note, mod.rs:5539) routes its vertical
+        // advance through the pBdr/border + after-spacing sub-system, NOT the plain
+        // cursor.advance(line_height). ⇒ the title component of the −1.26 deficit lives in
+        // that pBdr/spacing path, a SEPARATE sub-system the line-height lever can't reach.
+        // Combined with VSNAP=break-even and S457=optimal, NO multi-lever win was found this
+        // session; the deep sub-systems (body 83/64 precision, title pBdr/spacing advance,
+        // snap phase) each need separate work. Experimental knobs reverted.
         // S617 (2026-06-19) — cumulative-position-snap fully explored on gen2, NO win.
         // The "縦スタック累積位置スナップ" task. OXI_S467_VSNAP already implements Word's
         // model (visual_y accumulates EXACT line+spacing raw, emit = snap075). gen2 word_png
