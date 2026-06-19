@@ -6293,6 +6293,21 @@ impl LayoutEngine {
                     let cc = ((j as f32 * raw_spaced_tw / 10.0).round() * 10.0) as i32;
                     (cn, cc)
                 };
+                // S626 (2026-06-19) ATTEMPTED + FALSIFIED + REVERTED: LM0-single CJK
+                // glyph baseline FINER-quant (advance visual_y by the CEIL cumul at 1tw
+                // vs the 10tw cursor advance, KEEPING CEIL so it differs from S510's
+                // CEIL→ROUND). Hypothesis: the 0.5pt snap causes ±0.12pt per-line jitter
+                // (+0.058 SSIM cost, fitz-position metric) that finer-quant would remove.
+                // RESULT: DWrite-gate REGRESSED (0e7af mean 0.9082→0.8701 −0.0381, 683f
+                // −0.0097) with the regression GROWING down the document = a cumulative
+                // DRIFT. ROOT (confirms S510): the 0.5pt CEIL-10tw snap lands CLOSER to
+                // Word's baselines than the fine CEIL-1tw, because Word's per-line CJK
+                // height is CONTENT-dependent (11.64/11.66/11.76/11.88 — taller glyphs on
+                // some lines), NOT a uniform raw — so finer-quant of ANY uniform value
+                // (83/64 OR the measured per-size table) drifts from Word's varying
+                // per-line; and CEIL-10tw quantizes away the table's ±0.015pt correction.
+                // ⇒ the Y-jitter is NOT a quantization fix — it needs Word's EXACT
+                // per-LINE content-dependent baseline algorithm (the deep precision wall).
                 if s467_vsnap && is_multiple_spacing {
                     // visual_y advances by the EXACT raw line height; cursor_y by the
                     // current rounded amount (page-break unchanged). Emit snaps visual_y.
