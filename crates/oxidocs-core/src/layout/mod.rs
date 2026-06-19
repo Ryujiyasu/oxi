@@ -8934,6 +8934,21 @@ impl LayoutEngine {
                 // keeps only the CJK gains.
                 let s611_no_type_round = grid_no_type && dominant_cjk_83_64
                     && std::env::var("OXI_S611_DISABLE").is_err();
+                // S620 (2026-06-19) ATTEMPTED + FALSIFIED + REVERTED. Hypothesis: the
+                // gen2 body para pitch is 26.5 but should be 26.4 (a +0.1pt/para drift),
+                // because run_base = max_ascent+max_descent MIXES the CJK ascent with the
+                // Latin (Cambria digit) descent (14.48 vs the dominant CJK fragment's own
+                // natural max_combined 14.266) AND round-to-0.5pt forces 16.5. FIX tried:
+                // max_combined × factor rounded to 1tw → body pitch 26.5→26.4 (verified
+                // in the rendered dump-glyphs). BUT the gen2 word_png SSIM A/B = net
+                // +1.5240 WORSE (36 docs regress; gen2_005 per-band body2 −0.086). ⇒ the
+                // word_png ink-BAND-BOTTOM pitch measurement (26.4) was WRONG — band
+                // bottom ≠ baseline, the per-line descent variation (lines with vs without
+                // a trailing 。) fooled it; the SSIM proves the body pitch IS ~26.5
+                // (Oxi already correct). The body pitch is NOT the drift source. The
+                // apparent per-band-shift "drift" is partly best-shift over-fit + the
+                // rasterizer AA floor (body-aligned bands ~0.96, not 0.99). EVERY
+                // non-SSIM vertical measurement (COM/PDF/SSE/band-pitch) has misled here.
                 if grid_pitch.is_none() || s611_no_type_round {
                     (tw / 10.0).round() * 10.0 / 20.0
                 } else {
