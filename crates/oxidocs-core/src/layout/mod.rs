@@ -6342,6 +6342,18 @@ impl LayoutEngine {
                 // per-line; and CEIL-10tw quantizes away the table's ±0.015pt correction.
                 // ⇒ the Y-jitter is NOT a quantization fix — it needs Word's EXACT
                 // per-LINE content-dependent baseline algorithm (the deep precision wall).
+                // S628 (2026-06-19) ATTEMPTED + FALSIFIED + REVERTED: Y-jitter fix via
+                // the MEASURED per-size table as the visual_y base (advance visual_y by the
+                // exact measured MS Mincho/Gothic line height, cursor_y by 83/64 CEIL-10tw).
+                // RESULT: REGRESSED BADLY (0e7af −0.1208, 683f −0.0090). ROOT: the constant
+                // per-SIZE table (11.640@9pt) IGNORES Word's CONTENT-dependent per-LINE
+                // variation (11.64/11.66/11.76/11.88 — taller glyphs on some lines), which
+                // the 83/64 CEIL model actually CAPTURES via content-aware raw_spaced_tw. So
+                // the table-base drifts WORSE than the jitter on content-varying lines. ⇒
+                // (5th falsified jitter fix) Word's per-line baseline is CONTENT-dependent
+                // (tallest-glyph height per line, device-snapped); NO constant/table/finer-
+                // quant model captures it. The Y-jitter needs Word's EXACT per-content-line
+                // baseline — the deepest precision wall. See memory.
                 if s467_vsnap && is_multiple_spacing {
                     // visual_y advances by the EXACT raw line height; cursor_y by the
                     // current rounded amount (page-break unchanged). Emit snaps visual_y.
