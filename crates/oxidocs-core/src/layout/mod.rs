@@ -9483,11 +9483,29 @@ impl LayoutEngine {
                     // the principled peak. Per-doc optima don't fit a clean
                     // size-proportional law (683f and gen_jp_report both 10.5pt
                     // want 2.25 vs 1.0), so a constant is the right model.
+                    // S625 (2026-06-19) — 1.75 -> 1.88. The S456 sweep tested
+                    // {1.5, 1.75, 2.0} and rejected 2.0 (28 regressions) but MISSED
+                    // 1.88, the actual peak. Re-derived via the fitz-MuPDF PURE-
+                    // POSITION metric (render Oxi's --dump-glyphs positions through
+                    // fitz/MuPDF = Word's OWN rasterizer, vs word_png — REMOVES the
+                    // DWrite-vs-MuPDF AA confound that biased the S456 DWrite-gate
+                    // sweep). That metric proves the contract residual is NOT AA
+                    // (Word's exact positions via fitz-MuPDF = 0.9989 on every dense-
+                    // CJK page) but sub-pixel POSITION: Oxi's LM0 CJK baseline is a
+                    // SYSTEMATIC ~0.13pt too HIGH (per-glyph dy mean −0.175px vs Word
+                    // PDF baselines); pure-position sweep peaks +0.12-0.15pt down =
+                    // 1.75+0.13 = 1.88. DWrite-gate ssim_ab (the SHIP gate) 1.75→1.88:
+                    // net +0.1127 over 22 changed docs, 10 improve / 0 regress (0e7af
+                    // +0.052, 683f +0.048, b837 +0.005, …). 0e7af PEAKS at 1.88 and
+                    // regresses below the 1.75 baseline at 2.0 (0.8987<0.9030) = why
+                    // 2.0 had the S456 regressions; 1.88 is Pareto-safe (every changed
+                    // doc ≥ its 1.75 value). Render-only → element.y/pagination
+                    // unchanged → Phase-1 preserved. See [[ssim_residual_is_subpixel_position]].
                     let s455_dy = if line_is_cjk_8364 {
                         std::env::var("OXI_S455_CJK_GLYPH_DY")
                             .ok()
                             .and_then(|v| v.parse::<f32>().ok())
-                            .unwrap_or(1.75)
+                            .unwrap_or(1.88) // S625 2026-06-19: 1.75->1.88, see below
                     } else {
                         0.0
                     };
