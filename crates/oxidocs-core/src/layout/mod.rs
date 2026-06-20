@@ -1653,32 +1653,34 @@ impl LayoutEngine {
         let default_font_size = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_size)
-            // S610 (2026-06-18, OPT-IN OXI_S610=1, default OFF): when docDefaults has
-            // NO sz, fall to the DEFAULT PARAGRAPH STYLE (Normal) sz before the flat
-            // app-default — the next link in the OOXML resolution chain that
-            // for_document otherwise SKIPS. COM-measured (Font.Size): atimesresume
-            // (Normal NO sz) body = 10.0pt, kyodokenkyuyoushiki01 (Normal sz=21) body
-            // = 10.5pt — so the flat 11.0 mis-sizes the BODY of no-docDefaults-sz docs.
-            // ★HELD OPT-IN: enabling it fixes atimesresume (FAIL→PASS, body 10pt) and
-            // kyotei36spec (+0.11 pagination, Normal sz=16→8pt engine default) BUT the
-            // for_document value is ALSO the line-height fallback for NON-styled
-            // contexts (empty paras), and there Word uses 11 even when Normal sz=21 →
-            // SSIM A/B regressed kyodoken08/11 + tokumei_08_07 + order_09/12 (net
-            // −0.0508; their bodies are byte-identical = 10.5 via STYLE resolution, only
-            // the empty-para line heights shift). No clean discriminator separates "body
-            // wants Normal sz" from "empty-para wants 11" via the single engine default
-            // (the S600 environment-dependent-default wall). Needs a BODY-SCOPED size
-            // resolution (apply Normal sz to body runs, leave the engine default at 11
-            // for non-styled line heights) — a focused follow-up. Until then, default
-            // OFF to avoid the tuned-doc SSIM regression. See ssim_ab.py A/B evidence.
-            .or_else(|| {
-                if std::env::var("OXI_S610").ok().as_deref() != Some("1") { return None; }
-                doc.styles.default_paragraph_style_id.as_ref()
+            // S636 (2026-06-20, default ON, opt-out OXI_S636_DISABLE): the CLEAN
+            // resolution of the S610/S600 "environment-default wall". When
+            // docDefaults has NO sz, the engine app-default (the body-run fallback
+            // AND the non-styled empty-para line-height fallback) is normally 11.0,
+            // EXCEPT when the doc carries NO size info ANYWHERE — i.e. the default
+            // paragraph style (Normal) ALSO lacks sz. Such a doc renders entirely at
+            // the OOXML app default 10pt (atimesresume: docDefaults none + Normal
+            // none, COM Font.Size=10.0 body+cells; its +1 = cell line height
+            // 13.5→15.0 from 10→11pt, S600). atimesresume is the corpus's UNIQUE
+            // zero-sz doc (scan of 1962 docx: only it + self-authored repros, none
+            // gated/word_png). ★The S610 mistake was using the Normal sz as the VALUE
+            // — that shifted kyodoken08/11 empty-para line heights 11.0→10.5 (their
+            // bodies are 10.5 via STYLE resolution regardless; only the engine default
+            // moved). S636 uses Normal-sz PRESENCE as the discriminator ONLY: a doc
+            // WITH a Normal sz (kyodoken sz=21) keeps 11.0 here (body 10.5 via style,
+            // empty paras 11.0 = unchanged); a doc with NONE drops to 10.0. So the
+            // ONLY doc this changes is atimesresume.
+            .unwrap_or_else(|| {
+                if std::env::var("OXI_S636_DISABLE").ok().as_deref() == Some("1") {
+                    return 11.0;
+                }
+                let normal_has_sz = doc.styles.default_paragraph_style_id.as_ref()
                     .and_then(|id| doc.styles.styles.get(id))
                     .and_then(|sd| sd.paragraph.default_run_style.as_ref())
                     .and_then(|rs| rs.font_size)
-            })
-            .unwrap_or(if std::env::var("OXI_S610").ok().as_deref() == Some("1") { 10.0 } else { 11.0 });
+                    .is_some();
+                if normal_has_sz { 11.0 } else { 10.0 }
+            });
         let default_font_family = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family.clone());
