@@ -311,6 +311,20 @@ impl FontMetrics {
         if self.family.as_str() == "HGPGothicM" {
             return std::env::var("OXI_S580_DISABLE").is_err();
         }
+        // S612z (2026-06-20): Zen Old Mincho is NOT installed on the runner; Word
+        // renders it at its OWN natural line height 19.5pt@12pt (1.625×, the embedded
+        // subset's metrics with Yu Mincho glyphs), NOT the Western fallback 1.2× (~14.5pt)
+        // Oxi defaulted to → Oxi packed ~5pt/line tighter → aiguideline_komon's body
+        // crept 3 paras one page early (Phase-1 −1×3, the sole remaining cause after the
+        // S597 pageBreakBefore fix). The synthesized "Zen Old Mincho" metric (font_metrics
+        // .json, win_sum 1.2539 = 321/256) hits 19.5 via this 83/64 path (1.2539×83/64 =
+        // 1.625) AND the UPM-256 fullwidth advance path. Only aiguideline_komon uses the
+        // font corpus-wide (canary-safe). Render glyphs are the DWrite fallback (line
+        // height/pagination is the Phase-1 fix; glyph fidelity is a separate font-install
+        // task). Opt-out OXI_S612Z_DISABLE. See [[corpus_collection_wheel_a]].
+        if self.family.as_str() == "Zen Old Mincho" {
+            return std::env::var("OXI_S612Z_DISABLE").is_err();
+        }
         if exclude_yu {
             matches!(
                 self.family.as_str(),
