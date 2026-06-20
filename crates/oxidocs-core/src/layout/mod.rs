@@ -1889,7 +1889,9 @@ impl LayoutEngine {
         if has_cjk {
             // Prefer East Asian font for CJK text: run → paragraph → docDefaults
             if let Some(ref ff) = run_style.font_family_east_asia {
-                return Some(ff.as_str());
+                // S634: substitute MS Mincho when the explicit eastAsia font is
+                // Latin-only (no CJK glyphs) — matches Word's font-linking.
+                return Some(self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia));
             }
             if let Some(ref drs) = para_style.default_run_style {
                 if let Some(ref ff) = drs.font_family_east_asia {
@@ -1943,9 +1945,26 @@ impl LayoutEngine {
 
     /// Get East Asian font metrics if an east-asia font family is specified.
     /// Returns None if no east-asia font is set (caller should fall back to latin metrics).
+    /// S634: an EXPLICIT Latin-only East Asian font (Cambria etc.) has no CJK
+    /// glyphs — Word substitutes the OS-default CJK font (MS Mincho on the gate
+    /// baseline) for CJK text. Scoped to `has_explicit_east_asia` so theme-resolved
+    /// fonts (e3c545 majorEastAsia) and CJK-capable Unicode fonts (Arial Unicode MS)
+    /// are untouched. Opt-out OXI_S634_DISABLE.
+    fn cjk_ea_family<'a>(&self, ff: &'a str, has_explicit: bool) -> &'a str {
+        if has_explicit
+            && crate::font::is_latin_only_font(ff)
+            && std::env::var("OXI_S634_DISABLE").is_err()
+        {
+            "MS Mincho"
+        } else {
+            ff
+        }
+    }
+
     fn metrics_for_cjk(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> Option<&FontMetrics> {
         if let Some(ref ff) = run_style.font_family_east_asia {
-            return Some(self.registry.get(ff.as_str()));
+            let ff = self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia);
+            return Some(self.registry.get(ff));
         }
         if let Some(ref drs) = para_style.default_run_style {
             if let Some(ref ff) = drs.font_family_east_asia {

@@ -900,6 +900,24 @@ fn is_cjk_font_family(family: &str) -> bool {
     )
 }
 
+/// Fonts that are definitively Latin-only (no CJK glyph coverage). When such a
+/// font is set as the EAST ASIAN font for CJK text, the font has no glyphs for
+/// the CJK characters, so Word substitutes the OS-default CJK font via font
+/// linking (MS Mincho on the gate baseline). This is DISTINCT from CJK-capable
+/// Unicode fonts (e.g. "Arial Unicode MS") which DO carry CJK glyphs and are
+/// used directly — those must NOT be substituted. S634, Word COM-confirmed:
+/// ailitguide eastAsia=Cambria CJK body line = 16.5pt (MS Mincho 11pt no-grid),
+/// where Oxi used Cambria's Latin 15.0pt.
+pub(crate) fn is_latin_only_font(family: &str) -> bool {
+    matches!(family,
+        "Cambria" | "Cambria Math" | "Calibri" | "Calibri Light" |
+        "Times New Roman" | "Arial" | "Georgia" | "Verdana" | "Tahoma" |
+        "Century" | "Garamond" | "Book Antiqua" | "Courier New" |
+        "Trebuchet MS" | "Palatino Linotype" | "Constantia" | "Candara" |
+        "Corbel" | "Segoe UI" | "Century Gothic" | "Consolas"
+    )
+}
+
 /// Strip weight/style suffixes to get the base family name.
 fn base_family_name(name: &str) -> String {
     let suffixes = [
