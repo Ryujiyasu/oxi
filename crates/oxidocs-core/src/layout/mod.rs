@@ -2451,6 +2451,10 @@ impl LayoutEngine {
             }
         }
         let mut active_run_idx: usize = 0;
+        if std::env::var("OXI_DBG_COL").is_ok() {
+            let runs: Vec<(usize, usize)> = col_runs.iter().map(|r| (r.0, r.1)).collect();
+            eprintln!("[COL] heterogeneous={} col_runs(start,ncol)={:?} blocks={}", heterogeneous, runs, page.blocks.len());
+        }
 
         let mut current_column: usize = 0;
         let mut start_x = col_x_positions[0];
@@ -2557,6 +2561,9 @@ impl LayoutEngine {
                     start_x = col_x_positions[0];
                     content_width = col_widths[0];
                     section_max_y = cursor.cursor_y;
+                    if std::env::var("OXI_DBG_COL").is_ok() {
+                        eprintln!("[COL] SWITCH block_idx={} -> ncol={} at page={} cursor_y={:.1}", block_idx, num_columns, current_page_idx, cursor.cursor_y);
+                    }
                 }
             }
             // S469: the wrap-below anchor offset is page-local. Reset it when the
@@ -2863,6 +2870,9 @@ impl LayoutEngine {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                         let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
+                            if std::env::var("OXI_DBG_COL").is_ok() {
+                                eprintln!("[COL] precheck block_idx={} col {}->{} (est_h={:.1} rem={:.1}) page={}", block_idx, current_column, if current_column+1<num_columns {current_column+1} else {0}, est_h, remaining, current_page_idx);
+                            }
                             if current_column + 1 < num_columns {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
