@@ -5893,7 +5893,30 @@ impl LayoutEngine {
                 // text_y_off + baseline_adjust + vert_offset at draw time. See
                 // memory/session71_y_convention_refactor_design.md.
                 // S467: snap the emitted line top to the 0.75pt grid (Word's model).
-                let emit_y = if s467_vsnap { snap075(cursor.visual_y) } else { cursor.visual_y };
+                // S631 (2026-06-20, opt-in OXI_S631) ATTEMPTED + FALSIFIED: extend the S629
+                // device-snap to the gen2-family NO-TYPE docGrid path (doc_grid_no_type) by
+                // snapping the emit box-top to the 0.12pt grid anchored at page_top. gen2 body
+                // is line=240 SINGLE-spacing in a no-type grid (NOT is_single_lm0 — needs no-grid;
+                // NOT is_multiple_spacing). RESULT: gen2 family SSIM A/B net +0.0183 (13 docs
+                // WORSE, 2 better) = REGRESSION. ROOT (measured g5_oxi_g vs g5_word per-line): the
+                // gen2 residual is the run_base DRIFT (title aligned −0.02, bottom −0.7..−0.96 =
+                // Oxi too LOW, ~0.09pt/line CJK line-height EXCESS = gen2 memory's "Error A +0.115
+                // MS Mincho"), NOT quantization. The emit-snap refines quantization (±0.06pt) but
+                // CANNOT fix a systematic 0.8pt cumulative excess, and the page_top-anchored
+                // ABSOLUTE snap mis-phases most lines (Word's grid has a non-page_top phase). ⇒
+                // the gen2 lever is the per-line CJK run_base PRECISION (line height ~0.09pt too
+                // tall vs Word), the Phase-1-critical 83/64 wall — NOT the device-snap. Kept
+                // opt-in/default-OFF so it never ships. See [[gen2_vertical_drift]].
+                let emit_y = if s467_vsnap {
+                    snap075(cursor.visual_y)
+                } else if page.doc_grid_no_type && !is_single_lm0
+                    && std::env::var("OXI_S631").is_ok() {
+                    let d = std::env::var("OXI_S631_DELTA").ok()
+                        .and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.12);
+                    page_top + ((cursor.visual_y - page_top) / d).round() * d
+                } else {
+                    cursor.visual_y
+                };
                 let mut el = LayoutElement::new(x, emit_y, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
@@ -6386,13 +6409,33 @@ impl LayoutEngine {
                     // grid OUTLIERS (83/64×10.5=13.617 is mid-cell on the 0.12 grid).
                     let fs_from_lh = (raw_spaced_tw / 20.0) / (83.0 / 64.0);
                     let is_half_point = (fs_from_lh.fract() - 0.5).abs() < 0.08;
-                    if is_half_point {
+                    if is_half_point && std::env::var("OXI_S632").is_err() {
                         cursor.advance((cn - cc) as f32 / 20.0);
                     } else {
                         let op = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
                         let np = op + raw_spaced_tw;
-                        let old_v = ((op / 20.0) / d).round() * d;
-                        let new_v = ((np / 20.0) / d).round() * d;
+                        // S632 (2026-06-20, opt-in OXI_S632) ATTEMPTED + FALSIFIED: 10.5pt (and
+                        // other half-points) ARE on the 0.12 grid (683f GAPS fit δ=0.12 to 2mpt,
+                        // alternating 13.68/13.56 = device-snap of 83/64×10.5=13.617 which is
+                        // MID-cell, 0.057 sub-cell remainder). A standalone-gap analysis matched
+                        // Word's per-line pattern 92% at start-phase 0.05. BUT applying φ=raw mod δ
+                        // (0.057) in the real code REGRESSED 683f −0.0766 (ssim_ab), and φ=0 (the
+                        // S629 no-exclusion variant) also regressed. ROOT: the absolute phase is
+                        // mult_cumul_raw(body) mod δ — i.e. the PREAMBLE's accumulated height — and
+                        // because 10.5pt is mid-cell, a sub-0.06pt preamble error FLIPS the snap
+                        // anti-phase. Oxi's preamble (title/headings at non-10.5pt) accumulates a
+                        // height that differs from Word's by the per-line run_base error → wrong
+                        // phase. ⇒ the 10.5pt phase is NOT independently fixable; it ⊂ the SAME
+                        // per-line CJK run_base PRECISION wall as gen2's drift (S631). 9pt is
+                        // robust (near cell-edge); 10.5pt mid-cell is phase-fragile. The S629
+                        // exclusion stands. Sweepable OXI_S632_PHI. See [[gen2_vertical_drift]].
+                        let phi = if is_half_point {
+                            std::env::var("OXI_S632_PHI").ok().and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or_else(|| (raw_spaced_tw / 20.0).rem_euclid(d))
+                        } else { 0.0 };
+                        let snap = |x: f32| (((x + phi) / d).round() * d) - phi;
+                        let old_v = snap(op / 20.0);
+                        let new_v = snap(np / 20.0);
                         cursor.advance_split((cn - cc) as f32 / 20.0, new_v - old_v);
                     }
                 } else {
