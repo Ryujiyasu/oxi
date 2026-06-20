@@ -1018,6 +1018,12 @@ pub struct ParagraphStyle {
     /// Whether this paragraph snaps to the document grid (default: true).
     #[serde(default = "default_true")]
     pub snap_to_grid: bool,
+    /// Whether snapToGrid was explicitly set in the paragraph's direct pPr.
+    /// A direct `<w:snapToGrid/>` (CT_OnOff, no val = true) overrides a style's
+    /// snapToGrid=0 — Word COM-confirmed (S606b: ohnoikuji a4 "header"-style
+    /// list items carry a direct no-val snapToGrid re-enabling grid snap).
+    #[serde(default, skip_serializing)]
+    pub has_explicit_snap_to_grid: bool,
     /// w:contextualSpacing: suppress space_before/after between paragraphs of the same style.
     #[serde(default)]
     pub contextual_spacing: bool,
@@ -1149,6 +1155,7 @@ impl Default for ParagraphStyle {
             list_suff: None,
             list_tab_stop: None,
             snap_to_grid: true,
+            has_explicit_snap_to_grid: false,
             contextual_spacing: false,
             style_id: None,
             tab_stops: Vec::new(),

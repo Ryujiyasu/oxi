@@ -1635,7 +1635,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // Round 29: footnote text style "a8" sets snapToGrid=0; without this
             // inheritance, footnote paragraphs were grid-snapped to body line
             // pitch, causing wide line spacing in the footnote area.
-            if !ds.snap_to_grid {
+            // S606b (2026-06-20, Word COM-confirmed): a DIRECT paragraph
+            // snapToGrid (has_explicit_snap_to_grid) overrides the style — a
+            // no-val `<w:snapToGrid/>` (CT_OnOff = true) re-enables grid snap
+            // despite the style's snapToGrid=0 (ohnoikuji a4 "header" list items).
+            let s606b = std::env::var("OXI_S606B_DISABLE").is_err();
+            if !ds.snap_to_grid && !(s606b && style.has_explicit_snap_to_grid) {
                 style.snap_to_grid = false;
             }
             // Session 85 fix: inherit auto_space_de from style (false overrides
@@ -1912,6 +1917,7 @@ fn parse_paragraph_properties(
     let mut ppr_change: Option<PropertyChange> = None;
     let mut paragraph_mark_revision: Option<TrackedChange> = None;
     let mut has_explicit_widow_control = false;
+    let mut has_explicit_snap_to_grid = false;
     let mut depth = 0;
 
     loop {
@@ -2193,12 +2199,20 @@ fn parse_paragraph_properties(
                         style.frame_pr = Some(fp);
                     }
                     "snapToGrid" => {
+                        // CT_OnOff: presence alone (no val) = true. A direct
+                        // no-val `<w:snapToGrid/>` re-enables grid snap, overriding
+                        // a style's snapToGrid=0 (S606b, Word COM-confirmed).
+                        let mut enabled = true;
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                style.snap_to_grid = val.as_ref() != "0" && val.as_ref() != "false";
+                                enabled = val.as_ref() != "0"
+                                    && val.as_ref() != "false"
+                                    && val.as_ref() != "off";
                             }
                         }
+                        style.snap_to_grid = enabled;
+                        has_explicit_snap_to_grid = true;
                     }
                     "contextualSpacing" => {
                         // w:contextualSpacing: presence alone means true,
@@ -2474,6 +2488,7 @@ fn parse_paragraph_properties(
     }
 
     style.has_explicit_widow_control = has_explicit_widow_control;
+    style.has_explicit_snap_to_grid = has_explicit_snap_to_grid;
     Ok((style, alignment, style_id, num_pr, sect_pr, ppr_change, paragraph_mark_revision))
 }
 
