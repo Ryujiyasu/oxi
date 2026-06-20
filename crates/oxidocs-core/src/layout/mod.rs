@@ -2523,6 +2523,17 @@ impl LayoutEngine {
         // co-locate with body content normally.
         let mut floating_tables_per_page: Vec<Vec<(f32, f32)>> = vec![Vec::new()];
 
+        if std::env::var("OXI_DBG_BLOCKS").is_ok() {
+            for (bi, block) in page.blocks.iter().enumerate() {
+                let (kind, txt) = match block {
+                    Block::Paragraph(p) => ("P", p.runs.iter().flat_map(|r| r.text.chars()).take(16).collect::<String>()),
+                    Block::Table(t) => ("T", t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| if let Block::Paragraph(p)=b { Some(p.runs.iter().flat_map(|r| r.text.chars()).take(16).collect::<String>()) } else { None }).unwrap_or_default()),
+                    _ => ("?", String::new()),
+                };
+                eprintln!("[BLOCKS] {} {} {:?}", bi, kind, txt);
+            }
+        }
+
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // S560: on a fresh page the section-bottom tracker resets to the
             // top content origin (the deep value belongs to the prior page).
