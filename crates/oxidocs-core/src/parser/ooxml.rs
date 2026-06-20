@@ -2388,10 +2388,31 @@ fn parse_paragraph_properties(
                         style.page_break_before = enabled;
                     }
                     "keepNext" => {
-                        style.keep_next = true;
+                        // CT_OnOff: presence alone = true; val="0"/"false"/"off"
+                        // = false (S633, Word-confirmed: ailitguide/mysignaiguide
+                        // headings ship `<w:keepNext w:val="0"/>` to disable keep).
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0"
+                                    && val.as_ref() != "false"
+                                    && val.as_ref() != "off";
+                            }
+                        }
+                        style.keep_next = enabled;
                     }
                     "keepLines" => {
-                        style.keep_lines = true;
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                enabled = val.as_ref() != "0"
+                                    && val.as_ref() != "false"
+                                    && val.as_ref() != "off";
+                            }
+                        }
+                        style.keep_lines = enabled;
                     }
                     "widowControl" => {
                         let mut enabled = true;

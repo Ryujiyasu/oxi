@@ -842,8 +842,27 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
             }
             style.contextual_spacing = enabled;
         }
-        "keepNext" => style.keep_next = true,
-        "keepLines" => style.keep_lines = true,
+        "keepNext" => {
+            // CT_OnOff: val="0"/"false"/"off" disables (S633).
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                }
+            }
+            style.keep_next = enabled;
+        }
+        "keepLines" => {
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                }
+            }
+            style.keep_lines = enabled;
+        }
         "widowControl" => {
             let mut enabled = true;
             for attr in e.attributes().flatten() {
@@ -1360,8 +1379,26 @@ fn parse_style_definition(
                             }
                             style.page_break_before = enabled;
                         }
-                        "keepNext" => style.keep_next = true,
-                        "keepLines" => style.keep_lines = true,
+                        "keepNext" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                                }
+                            }
+                            style.keep_next = enabled;
+                        }
+                        "keepLines" => {
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                                }
+                            }
+                            style.keep_lines = enabled;
+                        }
                         "widowControl" => {
                             let mut enabled = true;
                             for attr in e.attributes().flatten() {
