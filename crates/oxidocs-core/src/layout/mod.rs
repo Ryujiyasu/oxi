@@ -2935,7 +2935,7 @@ impl LayoutEngine {
                     // Step 0: bucket for per-page fn refs actually rendered by this
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
                     let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
-                    let (para_elements, sa) = self.layout_paragraph(
+                    let (para_elements, sa, final_col) = self.layout_paragraph(
                         para,
                         start_x,
                         &mut cursor,
@@ -2960,8 +2960,21 @@ impl LayoutEngine {
                         delta_if_current,
                         // S168: per-fn heights for per-line lenient calculation.
                         &para_fn_heights_map,
+                        // S637: multi-column column-flow state (num_columns==1 off
+                        // the heterogeneous path → no-op, byte-identical).
+                        num_columns,
+                        current_column,
+                        &col_x_positions,
                     );
                     prev_space_after = sa;
+                    // S637: layout_paragraph may have advanced the column (flowing
+                    // an overflowing line into the next column on the same page)
+                    // or page-pushed (resetting to column 0). Sync the loop state.
+                    if num_columns > 1 && final_col != current_column {
+                        current_column = final_col;
+                        start_x = col_x_positions[current_column];
+                        content_width = col_widths[current_column];
+                    }
                     elements.extend(para_elements);
                     if std::env::var("OXI_FN_PROBE").is_ok() && !para_fn_refs_per_page.is_empty() {
                         let any_ref = para_fn_refs_per_page.iter().any(|v| !v.is_empty());
@@ -2973,6 +2986,11 @@ impl LayoutEngine {
 
                     // Track page/column breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
+                    if std::env::var("OXI_DBG_COL").is_ok() && num_columns > 1 {
+                        let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(12).collect();
+                        eprintln!("[COL] para block_idx={} col={} pages_added={} page={} cursor_y={:.1} cw={:.1} txt={:?}",
+                            block_idx, current_column, pages_added, current_page_idx, cursor.cursor_y, content_width, txt);
+                    }
                     // Step 1 partial: attribute per-line fn refs to the page each
                     // line actually rendered on. para_fn_refs_per_page[i] holds
                     // the ids on the (start_page + i)-th page. Always runs —
@@ -2988,24 +3006,15 @@ impl LayoutEngine {
                         }
                     }
                     if pages_added > 0 {
-                        // Multi-column: a "page break" inside layout_paragraph may actually
-                        // be a column break. Check if we can advance to the next column.
-                        if num_columns > 1 && current_column < num_columns - 1 {
-                            // Move to next column instead of creating a new page.
-                            // The page was already pushed by layout_paragraph — undo it
-                            // by popping and re-merging elements.
-                            // Actually, layout_paragraph already pushed the page.
-                            // We update column state for subsequent blocks.
-                            current_column += 1;
-                            start_x = col_x_positions[current_column];
-                            content_width = col_widths[current_column];
-                            // cursor_y was already reset to start_y by layout_paragraph
-                        } else if num_columns > 1 {
-                            // All columns exhausted: reset to column 0 for new page
-                            current_column = 0;
-                            start_x = col_x_positions[0];
-                            content_width = col_widths[0];
-                        }
+                        // S637: column state is now handled INSIDE layout_paragraph
+                        // (it flows overflow into the next column when one exists,
+                        // and only page-pushes — resetting to column 0 — when all
+                        // columns are exhausted). The `final_col` sync right after
+                        // the call already updated current_column/start_x/content_width.
+                        // The former half-baked column-advance here (which advanced
+                        // AFTER layout_paragraph had already placed overflow on a new
+                        // page's column 0) is removed; only the page-index advance
+                        // and footnote bookkeeping remain.
                         current_page_idx += pages_added;
                         // Update block_page_index: if the paragraph moved entirely
                         // to the new page (no elements left on the old page), update
@@ -3501,7 +3510,7 @@ impl LayoutEngine {
                 for block in &page.header {
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_hdr = std::collections::HashMap::new();
-                        let (hdr_elements, _) = self.layout_paragraph(
+                        let (hdr_elements, _, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
@@ -3509,6 +3518,7 @@ impl LayoutEngine {
                             false, false, None,
                             0.0,
                             &empty_fn_h_hdr,
+                            1, 0, &[],
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -3531,7 +3541,7 @@ impl LayoutEngine {
                 for block in &page.footer {
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_ftr = std::collections::HashMap::new();
-                        let (ftr_elements, _) = self.layout_paragraph(
+                        let (ftr_elements, _, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
@@ -3539,6 +3549,7 @@ impl LayoutEngine {
                             false, false, None,
                             0.0,
                             &empty_fn_h_ftr,
+                            1, 0, &[],
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -3845,7 +3856,7 @@ impl LayoutEngine {
                                     // can be smaller than the full body area.
                                     let footnote_width = page.size.width - page.margin.left - page.margin.right;
                                     let empty_fn_h_note = std::collections::HashMap::new();
-                                    let (note_elements, _) = self.layout_paragraph(
+                                    let (note_elements, _, _) = self.layout_paragraph(
                                         &para_to_render, page.margin.left, &mut cy, footnote_width, footnote_page_height_huge,
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
@@ -3854,6 +3865,7 @@ impl LayoutEngine {
                                         false, false, None,
                                         0.0,
                                         &empty_fn_h_note,
+                                        1, 0, &[],
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -4124,7 +4136,7 @@ impl LayoutEngine {
                     // Used below to anchor inner-paragraph shapes at their declared offset.
                     let para_start_y = cursor.cursor_y;
                     let empty_fn_h_txbx = std::collections::HashMap::new();
-                    let (para_elements, _) = self.layout_paragraph(
+                    let (para_elements, _, _) = self.layout_paragraph(
                         para,
                         inner_x,
                         &mut cursor,
@@ -4142,6 +4154,7 @@ impl LayoutEngine {
                         false, false, None,
                         0.0,
                         &empty_fn_h_txbx,
+                        1, 0, &[],
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -4325,7 +4338,7 @@ impl LayoutEngine {
     fn layout_paragraph(
         &self,
         para: &Paragraph,
-        start_x: f32,
+        mut start_x: f32,
         cursor: &mut LayoutCursor,
         content_width: f32,
         content_height: f32,
@@ -4365,10 +4378,25 @@ impl LayoutEngine {
         first_line_extra_content_h: f32,
         // S168 (2026-05-22) Phase B-2: per-fn heights for per-line lenient.
         para_fn_heights: &std::collections::HashMap<u32, f32>,
-    ) -> (Vec<LayoutElement>, f32) {
+        // S637 (2026-06-21): multi-column column-flow. When a line overflows the
+        // current column and a NEXT column is available on the same page, flow
+        // into it (shift start_x to that column's x, reset cursor to the column
+        // top) instead of pushing a new page. `num_columns` is >1 ONLY on the
+        // heterogeneous multi-column path (kyotei36spec's continuous 2-col
+        // 記載心得 sections); it is 1 everywhere else, so the new branch never
+        // fires and behavior is byte-identical for the whole 1-col corpus. The
+        // final column the paragraph ended in is returned (3rd tuple element) so
+        // the caller can keep its column state in sync. col_x_positions holds the
+        // per-column left-x; columns are equal-width so content_width is unchanged.
+        num_columns: usize,
+        start_column: usize,
+        col_x_positions: &[f32],
+    ) -> (Vec<LayoutElement>, f32, usize) {
         if let Some(v) = line_fn_refs_out.as_deref_mut() {
             if v.is_empty() { v.push(Vec::new()); }
         }
+        // S637: current column within a multi-column section (see signature doc).
+        let mut cur_col = start_column;
         let mut elements = Vec::new();
         // S467 (2026-05-31, env-gated OFF, OXI_S467_VSNAP): match Word's vertical
         // layout model on the VISUAL track — advance visual_y by the EXACT (un-rounded)
@@ -5346,6 +5374,20 @@ impl LayoutEngine {
                     v.push(carry);       // NEW page — earlier lines' refs move here
                 }
             } else if needs_page_break {
+                // S637: multi-column — when a line overflows the current column
+                // and a NEXT column exists on this page, flow into it (Word's
+                // newspaper column fill) instead of pushing a new page. Keep the
+                // already-laid lines in `elements` (same page) and shift start_x
+                // to the next column; subsequent lines emit at the new column x.
+                // Fires only on the heterogeneous multi-col path (kyotei), so the
+                // 1-col corpus is byte-identical (num_columns==1 → else branch).
+                // Opt-out OXI_S637_DISABLE for SSIM A/B verification.
+                if num_columns > 1 && cur_col + 1 < num_columns
+                    && std::env::var("OXI_S637_DISABLE").is_err() {
+                    cur_col += 1;
+                    start_x = col_x_positions[cur_col];
+                    cursor.set(page_top);
+                } else {
                 // Phantom-blank-page fix (2026-04-23): when an empty paragraph
                 // with page_break_after overflows and would produce an empty
                 // stub alone on a new page, followed by ANOTHER page break,
@@ -5362,7 +5404,7 @@ impl LayoutEngine {
                         elements: std::mem::take(current_elements),
                     });
                     cursor.set(page_top);
-                    return (Vec::new(), 0.0);
+                    return (Vec::new(), 0.0, 0);
                 }
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
                 // only the overflowing line (and subsequent) go to the next page.
@@ -5373,6 +5415,8 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
                 cursor.set(page_top);
+                // S637: a real page push lands on column 0 of the new page.
+                cur_col = 0;
                 // Session 107 (2026-05-18): apply half-leading at page top for
                 // grid-snapped lines that are CONTINUATIONS of a paragraph
                 // spilling across page breaks. Word's continuation first line
@@ -5430,6 +5474,7 @@ impl LayoutEngine {
                 if let Some(v) = line_fn_refs_out.as_deref_mut() {
                     v.push(Vec::new());
                 }
+                } // S637: end multi-column else (page-push path)
             }
 
             // Step 0: record fn refs rendered on this line's final page
@@ -6640,7 +6685,7 @@ impl LayoutEngine {
             **cells = cumul_line_idx;
         }
 
-        (elements, space_after)
+        (elements, space_after, cur_col)
     }
 
     #[allow(unused_assignments)]
