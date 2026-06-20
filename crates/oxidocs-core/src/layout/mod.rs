@@ -2801,7 +2801,35 @@ impl LayoutEngine {
                             let this_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                             let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None, false, None, None);
                             let remaining = (start_y + effective_content_h) - cursor.cursor_y;
-                            if this_h + next_h > remaining && this_h > remaining && this_h + next_h <= effective_content_h {
+                            // S635: a keepNext heading is pushed WITH its follower when the
+                            // follower would move WHOLLY to the next page. A ≤3-line para
+                            // can't split (any break leaves <2 lines on one side =
+                            // widow/orphan) → it moves wholly, dragging the keepNext heading
+                            // (ailitguide "10."+3-line follower). A ≥4-line follower splits
+                            // (≥2 each side) → the heading stays. Line count uses a 1-line
+                            // estimate at huge width (consistent with estimate_para_height —
+                            // word_line_height_no_grid gives a DIFFERENT, smaller value).
+                            // Follower line count via a 1-line estimate at huge width
+                            // (consistent with estimate_para_height; word_line_height_no_grid
+                            // gives a different, smaller value → over-counts).
+                            let one_line_h = self.estimate_para_height(next_para, 1.0e6, grid_pitch, None, false, None, None);
+                            let next_lines = ((next_h / one_line_h.max(0.01)).round() as usize).max(1);
+                            // ★The follower moves WHOLLY only when WIDOW/ORPHAN control is
+                            // ON for it: a ≤3-line para can't split without leaving <2 lines
+                            // on a side. With widowControl OFF (0e7af/digitalcontract docDefaults
+                            // val=0) Word splits even a 3-line follower (1+2), so the heading
+                            // STAYS — exactly the old gate. Discriminator = next_para widow_control.
+                            let s635 = std::env::var("OXI_S635_DISABLE").is_err();
+                            let pair_overflows = this_h + next_h > remaining
+                                && this_h + next_h <= effective_content_h;
+                            let follower_moves_wholly =
+                                next_para.style.widow_control && next_lines <= 3;
+                            let do_push = if s635 {
+                                pair_overflows && (this_h > remaining || follower_moves_wholly)
+                            } else {
+                                pair_overflows && this_h > remaining
+                            };
+                            if do_push {
                                 if num_columns > 1 && current_column + 1 < num_columns {
                                     current_column += 1;
                                     start_x = col_x_positions[current_column];
