@@ -7758,6 +7758,15 @@ impl LayoutEngine {
                     } else {
                         current_width_tw + pt_to_tw(char_width) - available_tw
                     };
+                    // HALF-EM 二分 oikomi cap ATTEMPTED + REVERTED (2026-06-22, OXI_HALFEM): the
+                    // best-fit "oikomi iff boundary natural-overflow ≤ half-em" matched the 2
+                    // decisive fail lines (nedo 子 3.4<6 OIKOMI, tks 務 5.4>5.25 OIDASHI) and
+                    // held on 72-86% of the tokyoshugyo dataset, BUT a hard cap OVER-CORRECTS:
+                    // nedocontract 0.9979→0.9522 (+1→+23 — Word oikomi's MANY 12pt lines with
+                    // overflow > half-em, the 28% the dataset flagged), 3a4f/model 1.0→0.9994.
+                    // So half-em is a strong TENDENCY, not the exact rule; the 28% over-half-em
+                    // oikomi (multi-約物 lines / 約物 boundary units) carry an additional factor.
+                    // See [[char_budget_wall]] / tokyoshugyo memory. Reverted (env-gate removed).
                     // 82de3fa REVERTED 2026-05-03 (independently confirmed by
                     // Session 52 + Session 51 oxi-3 branch). The trailing-U+3000
                     // immune-from-wrap rule (originally added for ed025 p.1 +0.042)
