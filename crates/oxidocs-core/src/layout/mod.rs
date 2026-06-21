@@ -7234,13 +7234,33 @@ impl LayoutEngine {
             // the default reverts to 3.1; cap 3.4 stays reachable via OXI_S575_CAP=3.4 for
             // the nedocontract/model case. Matching Word's per-line oikomi/oidashi (not a
             // single cap) is the char-budget wall. The S604 default 3.0→3.1 stands.
+            // S639 (2026-06-21, OPT-IN OXI_S639=1, default OFF = byte-identical):
+            // body solo 約物 cap 3.1→3.4 + OPENING-bracket cap 3.0 (< solo). The cap
+            // 3.1 UNDER-compressed marks (、。) → nedocontract +1×15; cap 3.4 fixes it,
+            // BUT a bare 3.4 over-credited OPENING brackets on 約物-dense lines → −3
+            // over-fit + the S607 kyodoken05 −0.0261. The s475_open=3.0 cap removes the
+            // OPENING over-credit: nedocontract pagination 0.9688→0.9979 (0 PASS→FAIL,
+            // n_pass 81→81) AND kyodoken05 SSIM 0.9705→0.9845 (+0.0140). ★HELD OPT-IN:
+            // the verified SSIM A/B (ssim_ab.py OXI_S639) shows 3a4f −0.0057 (a passing
+            // canary's RENDER regresses — pagination unchanged) because cap 3.4 also
+            // OVER-compresses 3a4f's MARKS, where Word's per-line demand is <3.4 (the
+            // demand-proportional wall; the opening fix addresses opening over-credit,
+            // NOT mark over-compression on lower-demand docs). Net SSIM +0.0080 but a
+            // canary regresses → default OFF until the demand-proportional break (compress
+            // only as NEEDED) replaces the flat cap. OXI_S575_CAP / OXI_S475_OPEN override.
+            let s639 = std::env::var("OXI_S639").is_ok();
             let s575_body_cap: f32 = std::env::var("OXI_S575_CAP").ok()
-                .and_then(|v| v.parse().ok()).unwrap_or(3.1);
+                .and_then(|v| v.parse().ok()).unwrap_or(if s639 { 3.4 } else { 3.1 });
             let s475_solo_default = if s590_legacy_just_cap { 1.5 }
                 else if s476_body && !para_has_lrpb
                 && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo_default) };
+            // S639: opening-bracket break cap (< solo). Default 3.0 when enabled, else
+            // = solo (old byte-identical behaviour). OXI_S475_OPEN overrides.
+            let s475_open: f32 = std::env::var("OXI_S475_OPEN").ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(if s639 { 3.0 } else { s475_solo });
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
@@ -7674,7 +7694,7 @@ impl LayoutEngine {
                     let s475_capinc = if s475_break {
                         pt_to_tw(pre_yakumono_width
                             - kinsoku::s475_max_compress(ch, chars_vec.get(char_index + 1).copied(),
-                                s475_pair, s475_solo, font_size))
+                                s475_pair, s475_solo, s475_open, font_size))
                     } else { 0 };
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
@@ -8250,7 +8270,7 @@ impl LayoutEngine {
                                 let fc = f.text.chars().next().unwrap_or(' ');
                                 let fnext = f.text.chars().nth(1);
                                 current_capw_tw += pt_to_tw(f.natural_width
-                                    - kinsoku::s475_max_compress(fc, fnext, s475_pair, s475_solo, font_size));
+                                    - kinsoku::s475_max_compress(fc, fnext, s475_pair, s475_solo, s475_open, font_size));
                             } else {
                                 current_capw_tw += pt_to_tw(f.width);
                             }

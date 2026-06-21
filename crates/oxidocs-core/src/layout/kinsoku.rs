@@ -160,7 +160,7 @@ pub fn is_s473_compressible(ch: char) -> bool {
 /// trims lightly (SOLO ≈ 1.5pt, demand-variable 0–2.25 at render). The greedy
 /// break accepts a char iff (Σ natural − Σ this capacity) ≤ avail. Returns pt,
 /// scaled by fs/12. `pair_pt`/`solo_pt` are env-tunable (flat-K = pass equal).
-pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32, fs: f32) -> f32 {
+pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32, open_pt: f32, fs: f32) -> f32 {
     let scale = fs / 12.0;
     let next_is_bracket = next.map_or(false, |n| {
         YAKUMONO_OPENING.contains(&n) || YAKUMONO_CLOSING.contains(&n)
@@ -186,6 +186,15 @@ pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32
         if YAKUMONO_CLOSING.contains(&c) {
             return pair_pt * scale;
         }
+    }
+    // S639 (2026-06-21): OPENING brackets （「『〔【 compress LESS than closing/。、
+    // at break — Word trims their LEFT aki only (~3.0pt @12), NOT the same as a
+    // closing/。、 (~3.4 solo). Oxi credited opening = solo_pt → on 約物-DENSE lines
+    // (the nedocontract preamble «（以下「…」» pattern: opening-bracket count ≫ avg)
+    // the per-約物 cap OVER-credits total compression → over-fits 2-3 chars Word
+    // WRAPS. open_pt (< solo_pt) is the caller-computed opening cap.
+    if YAKUMONO_OPENING.contains(&c) {
+        return open_pt * scale;
     }
     // solo light trim: any compressible punct/bracket + nakaguro.
     if is_s473_compressible(c) || c == '・' {
