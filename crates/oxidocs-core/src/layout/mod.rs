@@ -2464,6 +2464,11 @@ impl LayoutEngine {
         // succeeds. Only read on the heterogeneous (per-section column) path.
         let mut section_max_y = start_y;
         let mut section_prev_page = 0usize;
+        // S638 (kyotei): vertAnchor="text" full-page float — the body flows in
+        // the GAP above the float, then SKIPS the float's region. Records
+        // (top, bottom, page) of the active float; a following block whose
+        // cursor lands inside [top, bottom) on that page is bumped to bottom.
+        let mut text_float_region: Option<(f32, f32, usize)> = None;
 
         let grid_pitch = page.grid_line_pitch;
         let mut mult_cumul_raw: f32 = 0.0;
@@ -2535,6 +2540,21 @@ impl LayoutEngine {
         }
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            // S638 (kyotei): if a vertAnchor="text" full-page float is active and
+            // this block's cursor has reached the float's region (the gap above it
+            // is now consumed), skip the cursor past the float (body wraps below).
+            if let Some((ft_top, ft_bot, ft_page)) = text_float_region {
+                if current_page_idx == ft_page {
+                    if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
+                        cursor.set(ft_bot);
+                        text_float_region = None;
+                    } else if cursor.cursor_y >= ft_bot {
+                        text_float_region = None;
+                    }
+                } else {
+                    text_float_region = None;
+                }
+            }
             // S560: on a fresh page the section-bottom tracker resets to the
             // top content origin (the deep value belongs to the prior page).
             if heterogeneous && current_page_idx != section_prev_page {
@@ -3255,6 +3275,23 @@ impl LayoutEngine {
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             cursor.set(candidate_y_bottom + 1.5);
                             *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                        } else if needs_wrap_below && std::env::var("OXI_S638_DISABLE").is_err()
+                            && (candidate_y_top - saved_cursor_y) > 6.0
+                            && (candidate_y_bottom - candidate_y_top) > 250.0 {
+                            // S638 (kyotei): the float leaves a GAP above it
+                            // (>250pt height = a FULL-PAGE form float, the kyotei
+                            // case; excludes 2ea81a's shorter multi-float forms whose
+                            // body should keep the original wrap-below — gap-flow
+                            // regressed 2ea81a SSIM −0.0139).
+                            // [saved_cursor_y, candidate_y_top]; the immediately-
+                            // following short body (the form header label) flows
+                            // INTO that gap, then later body SKIPS the float region.
+                            // Record the region; the block-loop snap bumps any block
+                            // landing inside it to candidate_y_bottom. Gated on a
+                            // real gap (>6pt) so it only fires for anchor+tblpY floats
+                            // (kyotei tblpY=13.4) not zero-offset ones (3a4f/ed025c).
+                            cursor.set(saved_cursor_y);
+                            text_float_region = Some((candidate_y_top, candidate_y_bottom + 1.5, current_page_idx));
                         } else if needs_wrap_below {
                             // S469: the cursor advances below the table so body
                             // TEXT wraps under it, but objects anchored to the
