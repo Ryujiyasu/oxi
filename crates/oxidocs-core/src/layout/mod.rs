@@ -7248,7 +7248,26 @@ impl LayoutEngine {
             // NOT mark over-compression on lower-demand docs). Net SSIM +0.0080 but a
             // canary regresses → default OFF until the demand-proportional break (compress
             // only as NEEDED) replaces the flat cap. OXI_S575_CAP / OXI_S475_OPEN override.
-            let s639 = std::env::var("OXI_S639").is_ok();
+            // S639b (2026-06-22, default ON, opt-out OXI_S639_DISABLE): the body
+            // oikomi break DECOUPLES the 、。/closing cap (3.4) from the opening-bracket
+            // cap (3.1). The body solo 、。/closing cap 3.1 (S604) UNDER-compressed marks
+            // → nedocontract +1×15 (Word fits a trailing char by compressing each mid-
+            // line 、 ~3.4pt @12pt = its render demand p10; cap 3.1 under-credited →
+            // orphaned char → +1). Raising it to 3.4 fixes nedo (0.9688→0.9979) AND
+            // CLEARS the S607 kyodoken05 cap-3.4 regression (+0.0140 — the −0.0252 S607
+            // saw was the OPENING over-credit, not the mark cap). The opening-bracket
+            // cap stays at the pre-S639 body value 3.1 (Word trims an opening bracket's
+            // LEFT aki only, ~3.1pt — LESS than 、。/closing which have full right aki).
+            // ★The original S639 (opt-in) set opening 3.0, which was too LOW: 3a4f p4
+            // para28 L0 «…昭和２２年厚生省令» (2 opening （, overflow ~5.3pt @10.5)
+            // needs 2.65pt/（ to fit 令 like Word; open 3.0 scaled (2.625@10.5) dropped
+            // 令 → a 41→40 over-WRAP that regressed 3a4f p4 SSIM −0.0057. open=3.1 fits
+            // 41 (=Word) AND keeps nedo's −3 fixed (nedo's −3 over-fit only reappears at
+            // open≥3.4=solo; the clean window is open∈[3.04,3.3]). So 3a4f recovers to
+            // +0.0000 while nedo stays 0.9979 + kyodoken05 +0.0140. Scoped to the
+            // body-oikomi context (solo=3.4): non-body/LRPB/grid/legacy paras keep
+            // opening = s475_solo (unchanged). OXI_S575_CAP / OXI_S475_OPEN override.
+            let s639 = std::env::var("OXI_S639_DISABLE").is_err();
             let s575_body_cap: f32 = std::env::var("OXI_S575_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(if s639 { 3.4 } else { 3.1 });
             let s475_solo_default = if s590_legacy_just_cap { 1.5 }
@@ -7256,11 +7275,14 @@ impl LayoutEngine {
                 && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo_default) };
-            // S639: opening-bracket break cap (< solo). Default 3.0 when enabled, else
-            // = solo (old byte-identical behaviour). OXI_S475_OPEN overrides.
+            // S639b: opening-bracket break cap (< solo) in the body-oikomi context only
+            // (where solo=3.4). Elsewhere = s475_solo (byte-identical to pre-S639b).
+            let s639_body_oikomi = s639 && s476_body && !para_has_lrpb && !s476_grid
+                && !s590_legacy_just_cap
+                && std::env::var("OXI_S575_DISABLE").is_err();
             let s475_open: f32 = std::env::var("OXI_S475_OPEN").ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(if s639 { 3.0 } else { s475_solo });
+                .unwrap_or(if s639_body_oikomi { 3.1 } else { s475_solo });
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
