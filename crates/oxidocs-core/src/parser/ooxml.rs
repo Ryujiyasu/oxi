@@ -4386,15 +4386,14 @@ fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, style
                     "drawing" if in_choice && depth == 1 => {
                         let dr = parse_drawing(reader, ctx, styles)?;
                         if std::env::var("OXI_DEBUG_AC").is_ok() {
-                            let firsttxt = dr.text_box.as_ref().and_then(|t| t.blocks.first())
-                                .or_else(|| dr.shape.as_ref().and_then(|s| s.text_blocks.first()))
-                                .and_then(|b| if let crate::ir::Block::Paragraph(p)=b { Some(p.runs.iter().flat_map(|r| r.text.chars()).take(14).collect::<String>()) } else { None }).unwrap_or_default();
+                            let alltxt: String = dr.text_box.as_ref().map(|t| t.blocks.iter()
+                                .filter_map(|b| if let crate::ir::Block::Paragraph(p)=b { Some(p.runs.iter().flat_map(|r| r.text.chars()).collect::<String>()) } else { None })
+                                .collect::<Vec<_>>().join("|")).unwrap_or_default();
                             let pos = dr.text_box.as_ref().map(|t| t.position.is_some()).unwrap_or(false);
-                            eprintln!("[AC] Choice drawing: img={} shape={} tb={} shape_blocks={} tb_paras={} tb_pos={} txt={:?}",
-                                dr.image.is_some(), dr.shape.is_some(), dr.text_box.is_some(),
-                                dr.shape.as_ref().map(|s| s.text_blocks.len()).unwrap_or(0),
+                            eprintln!("[AC] Choice drawing: tb={} tb_paras={} tb_pos={} alltxt={:?}",
+                                dr.text_box.is_some(),
                                 dr.text_box.as_ref().map(|t| t.blocks.len()).unwrap_or(0),
-                                pos, firsttxt);
+                                pos, alltxt.chars().take(40).collect::<String>());
                         }
                         // Only keep if it produced something useful (image, shape, or text box)
                         if result.is_none() && dr.has_content() {
