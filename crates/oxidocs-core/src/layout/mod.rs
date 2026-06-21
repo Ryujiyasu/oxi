@@ -2379,6 +2379,46 @@ impl LayoutEngine {
             }
         };
 
+        // S596b (2026-06-21): footnote separator reservation.
+        // Word renders the footnote separator as a paragraph that occupies a
+        // full footnote-text line (~18pt for 10pt Yu Gothic), but Oxi reserved
+        // only 6pt (separator line 2pt + padding 4pt) + OXI_FN_SEP_GAP_EXTRA
+        // (6pt). For NO-DOCGRID docs this ~12pt under-reservation lets one extra
+        // body line over-pack the page bottom on every footnote page
+        // (bunkacontract: the first para of pages 3/5/7 was packed onto the
+        // previous page = -1 x3). Reserving one footnote line for the separator
+        // pushes those breaks to match Word. GRID footnote docs (b837 grid300,
+        // kojin linesAndChars, etc.) snap body+footnote to the grid and the
+        // small 12pt base is correct there (S160 calibration: sep_extra>=10
+        // regressed b837); bunkacontract is the corpus's ONLY no-docGrid
+        // footnote doc, so gating on grid_pitch.is_none() scopes this to it.
+        // Default ON, opt-out OXI_S596B_DISABLE.
+        let footnote_sep_alloc = |first_id: u32| -> f32 {
+            let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
+            let base = 6.0 + sep_extra;
+            if page.grid_line_pitch.is_none() && std::env::var("OXI_S596B_DISABLE").is_err() {
+                if let Some(note) = page.footnotes.iter().find(|n| n.number == first_id) {
+                    if let Some(Block::Paragraph(p)) = note.blocks.first() {
+                        let fs = self.resolve_font_size(
+                            p.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                            &p.style,
+                        );
+                        let metrics = p.runs.first()
+                            .map(|r| self.metrics_for_text(&r.text, &r.style, &p.style))
+                            .unwrap_or_else(|| {
+                                let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                self.metrics_for_para_mark(&rpr, &p.style)
+                            });
+                        // Separator paragraph = one footnote text line. Never
+                        // reserve LESS than the legacy base.
+                        return metrics.word_line_height_no_grid(fs).max(base);
+                    }
+                }
+            }
+            base
+        };
+
         // Multi-column layout: compute column X positions and widths
         // COM-confirmed: col_x = margin + Σ(prev_width + prev_spacing)
         // S560 (2026-06-13): factored into a closure so per-section column
@@ -2675,12 +2715,11 @@ impl LayoutEngine {
                                         // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
                                         // legacy env-var fallback during hardening pass.
                                         // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
-                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                            .ok()
-                                            .and_then(|v| v.parse().ok())
-                                            .unwrap_or(6.0);
-                                        full += 6.0 + sep_extra;
-                                        delta += 6.0 + sep_extra;
+                                        // S596b: no-docGrid docs reserve one footnote
+                                        // line for the separator (see footnote_sep_alloc).
+                                        let sep = footnote_sep_alloc(id);
+                                        full += sep;
+                                        delta += sep;
                                     }
                                     full += h;
                                     if !footnote_ids_current_page.contains(&id) {
@@ -2708,14 +2747,8 @@ impl LayoutEngine {
                                     // above separator (Word measurement: ~21pt missing).
                                     if ids.is_empty() {
                                         // S160: see estimate-path comment near line 1934.
-                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
-                                        // legacy env-var fallback during hardening pass.
-                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
-                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                            .ok()
-                                            .and_then(|v| v.parse().ok())
-                                            .unwrap_or(6.0);
-                                        *reserve += 6.0 + sep_extra;
+                                        // S596b: no-docGrid separator = one footnote line.
+                                        *reserve += footnote_sep_alloc(id);
                                     }
                                     ids.push(id);
                                     // estimate + per-note rendering overhead
@@ -3071,14 +3104,8 @@ impl LayoutEngine {
                                 if !footnote_ids_current_page.contains(id) {
                                     if footnote_ids_current_page.is_empty() {
                                         // S160: see estimate-path comment near line 1934.
-                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
-                                        // legacy env-var fallback during hardening pass.
-                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
-                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                            .ok()
-                                            .and_then(|v| v.parse().ok())
-                                            .unwrap_or(6.0);
-                                        footnote_reserve_current += 6.0 + sep_extra;
+                                        // S596b: no-docGrid separator = one footnote line.
+                                        footnote_reserve_current += footnote_sep_alloc(*id);
                                     }
                                     footnote_ids_current_page.push(*id);
                                     footnote_reserve_current += estimate_footnote_h(*id);
@@ -3096,14 +3123,8 @@ impl LayoutEngine {
                                 if !footnote_ids_current_page.contains(id) {
                                     if footnote_ids_current_page.is_empty() {
                                         // S160: see estimate-path comment near line 1934.
-                                        // S240 (2026-05-23): removed OXI_LEGACY_FN_SEP_GAP
-                                        // legacy env-var fallback during hardening pass.
-                                        // OXI_FN_SEP_GAP_EXTRA tuning knob preserved.
-                                        let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
-                                            .ok()
-                                            .and_then(|v| v.parse().ok())
-                                            .unwrap_or(6.0);
-                                        footnote_reserve_current += 6.0 + sep_extra;
+                                        // S596b: no-docGrid separator = one footnote line.
+                                        footnote_reserve_current += footnote_sep_alloc(*id);
                                     }
                                     footnote_ids_current_page.push(*id);
                                     footnote_reserve_current += estimate_footnote_h(*id);
