@@ -11266,6 +11266,17 @@ impl LayoutEngine {
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
+                        // ★tokyoshugyo #2c COUPLING PROVEN (2026-06-22, OXI_PGCAP experiment,
+                        // reverted): capping the cell wrap at the page text-margin (start_x+
+                        // content_width = x510, = Word's 第３２条 fill) narrows 条文 cells to Word's
+                        // wrap-right BUT over-corrects massively (oxi 91>90, +1×645) — at the SAME
+                        // wrap-width as Word, Oxi produces MORE lines (packs FEWER chars/line)
+                        // because Oxi does NOT compress 約物 in cells where Word does. ⇒ #2c is
+                        // wrap-width ⊕ cell-約物-compression, MUTUALLY COMPENSATING (the 90pg
+                        // baseline is the S559/S585c balance: over-wide cells compensate the
+                        // missing compression). The fix needs BOTH together — narrow the wrap
+                        // (PGCAP/S594) AND add Word's cell 約物 compression (the 6de22246 char-
+                        // budget cell-wrapper wall). See [[tokyoshugyo_wrap_not_cellheight]].
                         if std::env::var("OXI_DUMP_CELLX").is_ok() {
                             let preview: String = para.runs.iter().flat_map(|r| r.text.chars()).take(8).collect();
                             eprintln!(
