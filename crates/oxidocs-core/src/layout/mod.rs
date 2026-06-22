@@ -11271,7 +11271,13 @@ impl LayoutEngine {
                         // the over-wide cell border (S585c +1-cellMar over). Must be paired with
                         // OXI_CELLCOMP (cell 約物 compression) — alone it over-corrects (exposes
                         // the missing compression). See [[tokyoshugyo_wrap_not_cellheight]].
-                        if std::env::var("OXI_PGCAP").ok().as_deref() == Some("1") {
+                        // S585c-FIX: gate PGCAP to FULL-WIDTH SINGLE-cell boxes (the 条文/解説 cells).
+                        // BUG found 2026-06-22: PGCAP fired on NARROW multi-column cells positioned
+                        // near the right edge (their content_right > margin because they're far-right,
+                        // even though narrow) → spuriously wrapped them (e.g. schedule «41:33»→«41:3»+«3»).
+                        // row.cells.len()==1 excludes the multi-column schedule/calc cells.
+                        if std::env::var("OXI_PGCAP").ok().as_deref() == Some("1")
+                            && row.cells.len() == 1 {
                             let pg_off: f32 = std::env::var("OXI_PGCAP_OFF").ok()
                                 .and_then(|v| v.parse().ok()).unwrap_or(0.0);
                             let pg_right = start_x + content_width + pg_off;
