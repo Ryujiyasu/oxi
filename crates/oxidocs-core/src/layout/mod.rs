@@ -11696,7 +11696,23 @@ impl LayoutEngine {
                                 // [[tokyoshugyo_wrap_not_cellheight]].
                                 let cell_comp_active = std::env::var("OXI_CELLCOMP").ok().as_deref() == Some("1")
                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
-                                let would_overflow = if s586_overflow_fixed {
+                                // OXI_CELLBURA (tokyoshugyo #2c): cell line-end 約物 ぶら下げ
+                                // (mirrors the body S601). A hangable line-end 約物 (。、，．・ +
+                                // closing brackets) hangs PAST the wrap when the preceding content
+                                // fits (line_x+buf_w ≤ wrap) — its width is not counted, so the
+                                // line is not broken before it. Required to pair with OXI_PGCAP:
+                                // PGCAP caps content at the margin, and Word HANGS the trailing
+                                // 約物 past it (de-ぶら下げ content wrap is uniformly the margin).
+                                // Without it PGCAP wraps the trailing 約物 → +1 line/sentence-cell.
+                                let cell_bura_active = std::env::var("OXI_CELLBURA").ok().as_deref() == Some("1")
+                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                                let is_cell_hangable = matches!(ch,
+                                    '。' | '、' | '，' | '．' | '・'
+                                    | '）' | '」' | '』' | '】' | '〕' | '］' | '｝');
+                                let would_overflow = if cell_bura_active && is_cell_hangable
+                                    && (line_x + buf_w) <= effective_wrap && !(current_line.is_empty() && buf.is_empty()) {
+                                    false
+                                } else if s586_overflow_fixed {
                                     false
                                 } else if jc_gate_active && (run_has_neg_cs || cell_comp_active) && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
