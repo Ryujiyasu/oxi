@@ -11204,9 +11204,29 @@ impl LayoutEngine {
                             // tunable extra narrowing (pt) for the cell wrap_base sweep
                             k.parse::<f32>().unwrap_or(0.0)
                         } else if std::env::var("OXI_S594").ok().as_deref() == Some("1") { pad_l } else { 0.0 };
+                        // S585N (SCAFFOLD, OXI_S585N=1, default OFF=byte-identical): a
+                        // NESTED-table cell (is_nested) with an explicit tcW subtracts its OWN
+                        // cellMar from wrap_base. The 賃金 参考 box's innermost cell (tcW=423.55)
+                        // OVERFLOWS its nested container (≈416.85), so the s585b/s531/s559 gates
+                        // (all require cell_w≤content_width or autofit-squeeze) miss it → Oxi
+                        // wraps at full cell_w, ~10.6pt wider than Word (content x84.55 vs x90.7).
+                        // S585N → wrap_base 413.65 ≈ Word 412.9 (CELLX-verified). ★HELD: this is
+                        // a RENDER-correct fix but PAGINATION-NEUTRAL on tokyoshugyo (gate
+                        // byte-identical with/without, S586 on or off) — the 参考-box ~1-char/line
+                        // over-fit is render-real but NON-OPERATIVE (the S562/r7-cell pattern; the
+                        // box is in a row that splits across the page, so internal line-count
+                        // shifts don't move the row-split page break). The OPERATIVE #2 −1 cause
+                        // (what makes oxi 89 vs Word 90 under S586) is the table ROW-SPLIT /
+                        // nested-table page-break logic, still to be pinned. Shipping S585N
+                        // default-ON needs corpus SSIM/IoU A/B over nested-table docs (deferred).
+                        // Gated to is_nested (rare → low canary surface; 3a4f p19 is top-level).
+                        let s585n_nested = std::env::var("OXI_S585N").ok().as_deref() == Some("1")
+                            && is_nested
+                            && cell.width.is_some()
+                            && !matches!(para.alignment, Alignment::Right | Alignment::Center);
                         let wrap_base = if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
-                        } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar {
+                        } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
@@ -11310,13 +11330,29 @@ impl LayoutEngine {
                         // lines, ONLY page-44 «…については、「育児…» has 、 before an opener (Word
                         // collapses=oikomi); the 3 with 、 before a KANJI are Word OIDASHI. Fires on
                         // EXACTLY 1 corpus line and eliminates region-2 +1×282 (the SOLE region-2
-                        // root). ★HELD default-OFF: page-44 alone exposes sub-bug #2 (the 賃金
-                        // chapter is a real ~1-page over-fit, Word p46-64=19pg vs Oxi 18pg; Oxi
-                        // fits more chars/line in its cells = the char-budget OIDASHI side, same
-                        // wall as #1, NOT separately pinnable — per-element localization blocked by
-                        // the doc's repeated-phrase text + table-dense fitz). Ship BOTH when #2/the
-                        // wall lands (cf. the S506 OIDASHI scaffold pattern). See
-                        // [[tokyoshugyo_wrap_not_cellheight]], [[char_budget_wall]].
+                        // root). ★HELD default-OFF: page-44 alone (OXI_S586=1) flips region-2
+                        // +283→−1×417, oxi 90→89pg (gate-verified 2026-06-22), exposing #2.
+                        // ★#2 ROOT (CORRECTED 2026-06-22, supersedes the "page-bottom over-fit /
+                        // NOT separately pinnable" framing): it is a CELL wrap_base OVER-WIDTH.
+                        // Oxi wraps the 賃金-chapter regulation / 参考 box cells at the full cell_w
+                        // where Word reserves cellMar. PINNED on the 配偶者手当 参考 box (depth-2
+                        // NESTED table, innermost cell explicit tcW=8471=423.55pt): Oxi places
+                        // content at x84.55 / wrap_base=423.55 (CELLX), Word at x90.7 / wrap≈412.9
+                        // (PDF, 3 nested borders 79.6/85.3/91.9) → Oxi over-fits ~1 char/line
+                        // («要因とな» vs Word «要因と») → packs the chapter 1pg tight. It falls
+                        // through EVERY cellMar-subtract gate: s531 needs default_cell_margins
+                        // .is_some() (this is None=4.95 fallback); s559 needs autofit-squeezed
+                        // (tcW−cell_w≥8; here tcW==cell_w) + justified; S585b needs cell_w > PAGE
+                        // content (here cell_w<page content); OXI_S559_CELLMAR=all ALSO misses it
+                        // (the nested cell_w 423.55 > its nested container ≈416.85 → cell_w≤
+                        // content_width fails). DISTRIBUTED (region-1 −17 baseline + region-2
+                        // masked); the page-44 over-wrap COMPENSATES the cumulative over-width →
+                        // 90=90 by accident. The blanket subtract-pads regressed Phase-1 53→49
+                        // (line 10874) and S559's broad form cascaded {1:1323} on 3a4f p19 → the
+                        // FIX is correct nested-table width/position resolution (the explicit tcW
+                        // exceeds its nested container; Oxi lays the cell at the outer-table x not
+                        // the nested-inset x), a focused canary-gated session. Ship #1+#2 together.
+                        // See [[tokyoshugyo_wrap_not_cellheight]], [[char_budget_wall]].
                         let s586_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).collect();
                         let s586_orphan = std::env::var("OXI_S586").ok().as_deref() == Some("1")
                             && self.compat_mode < 15 && self.compress_punctuation;
