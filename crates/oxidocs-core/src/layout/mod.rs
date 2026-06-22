@@ -9260,6 +9260,19 @@ impl LayoutEngine {
                                         .cloned().unwrap_or_default();
                                     self.metrics_for(&rpr_ref, para_style).is_cjk_83_64_font()
                                 };
+                            // ★FALSIFIED EXPERIMENT (2026-06-23): the non-empty 14pt heading
+                            // DOES render at 29.25 in Word (COM: kojin 第N章 + tokyoshugyo 賃金
+                            // all next-gap=29.25; S584 comment "14pt is flat 29.25"), and Oxi
+                            // 2-cell-snaps it to 36 (+6.75pt) — BUT forcing 29.25 here
+                            // REGRESSED tokyoshugyo (0.9746→0.9689) AND broke 3a4f/model
+                            // PASS→FAIL. The heading-region over-reservation (36) is a
+                            // COMPENSATING error (S559): the real bug is the heading-START
+                            // placement (Oxi box-top 99.5 vs Word COM-y 108.0; −8.5 makes Oxi
+                            // HIGHER), and the +6.75 region over partially cancels it (net
+                            // −1.7). Reducing the region exposes the −8.5 start → worse. The
+                            // START offset is reference-frame-confounded (COM-Info6 ≠ dump
+                            // box-top). So the lever is the typed-grid first-line-on-page
+                            // heading START, not the region. Left as a comment (not gated).
                             let apply_tol = is_empty && just_over_pitch && !ascii_is_cjk;
                             let tol = if apply_tol { 0.5 } else { 0.0 };
                             return (((spaced - tol + pitch * 0.5) / pitch) + 0.5).floor().max(1.0) * pitch;
