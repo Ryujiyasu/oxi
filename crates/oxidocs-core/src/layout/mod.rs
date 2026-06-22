@@ -11618,6 +11618,17 @@ impl LayoutEngine {
                                     );
                                     !r.fits
                                 } else {
+                                    // CELL half-em best-fit oikomi for cs=0 justified cells
+                                    // ATTEMPTED + REVERTED (2026-06-22, OXI_CELLHE): tokyoshugyo's
+                                    // 条文 boxes are align=Justify cs=0 → no 約物 compression →
+                                    // over-wrap (+283 root). Half-em best-fit (oikomi iff overflow ≤
+                                    // half-em + compute_compression.fits) gained tokyoshugyo
+                                    // 0.8077→0.8141 (fixed only 14/283 — the rest are page-44-style
+                                    // HEAVY 約物→opener over-wraps = S586 domain, not half-em) AND
+                                    // preserved b837/b35/1636/ed025/1ec1/29dc6e but REGRESSED a1d6
+                                    // 1.0→0.9930 (PASS→FAIL). Net negative + no n_pass gain (tks
+                                    // stays FAIL). The cell +283 needs page-44 heavy compression +
+                                    // per-line best-fit + a1d6-safe gate = multi-session. Reverted.
                                     would_overflow_natural
                                 };
                                 if !is_space && would_overflow && !(current_line.is_empty() && buf.is_empty()) {
