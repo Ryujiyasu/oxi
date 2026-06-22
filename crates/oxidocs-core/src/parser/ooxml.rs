@@ -6254,9 +6254,24 @@ fn parse_section_properties(
                             // doc_grid_no_type flag was DEAD (set but never consumed in
                             // layout) so the linePitch was simply dropped. Treat a no-type
                             // docGrid with linePitch as a LINE grid (use its linePitch).
-                            // Opt-out OXI_S571_DISABLE.
                             doc_grid_no_type = true;
-                            if std::env::var("OXI_S571_DISABLE").is_err() {
+                            // ★S571 REFINED (2026-06-23): apply the no-type docGrid linePitch
+                            // ONLY when it is NON-DEFAULT (≠360). linePitch=360 (18pt) is
+                            // Word's AUTOMATIC default no-type docGrid (= "no real grid") —
+                            // Word uses the NATURAL line height, NOT the 18pt pitch. The
+                            // original S571 applied to ALL no-type linePitch, inflating the
+                            // ~14pt natural body of every default-360 doc to 18pt → regressed
+                            // ALL 112 word_png no-type-docGrid docs (the gen2 family) by
+                            // -0.05..-0.08 SSIM (the corpus "mole-whacking", masked by the
+                            // broken ssim_ab tool — git-bisect pinned b589873b; see
+                            // [[ssim_ab_tool_was_broken]]). A CUSTOM linePitch (ikujidetail
+                            // 286=14.3pt ≈ its MS Mincho natural) IS a real grid Word honors
+                            // (needed for its Phase-1 pagination — full disable = ikujidetail
+                            // PASS→FAIL). Opt-out OXI_S571_DISABLE; force-all OXI_S571_ALL=1.
+                            if std::env::var("OXI_S571_DISABLE").is_err()
+                                && (line_pitch != 360
+                                    || std::env::var("OXI_S571_ALL").ok().as_deref() == Some("1"))
+                            {
                                 grid_line_pitch = Some(line_pitch as f32 / 20.0);
                             }
                         }
