@@ -70,7 +70,15 @@ pub fn snap_15tw(pt: f32) -> f32 {
 /// (extended grid fs=9 cw=2500 tl=16). For fs=10.5/12, fs/2 floor of
 /// 5.25/6.0 ≈ matches observation. For fs=14+, fs/2 would dominate.
 pub fn yakumono_max_savings(natural: f32, font_size: f32) -> f32 {
-    let floor = (font_size / 2.0).max(6.0);
+    // OXI_CELL_YAKFLOOR (tokyoshugyo #2c experiment): the body floor is max(fs/2,6.0)
+    // (S120 COM: Word's body min '．' ≈ 6.0pt). But the 賃金 CELL 約物 reach half-width
+    // ~fs/2 (5.16 measured, PDF) — tighter than 6.0. Lower the cell floor to fs/2 so
+    // the cell compression (CELLCOMP) matches Word's tight-line cells.
+    let floor = if std::env::var("OXI_CELL_YAKFLOOR").ok().as_deref() == Some("1") {
+        font_size / 2.0
+    } else {
+        (font_size / 2.0).max(6.0)
+    };
     (natural - floor).max(0.0)
 }
 
