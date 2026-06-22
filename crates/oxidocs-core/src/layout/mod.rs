@@ -11414,7 +11414,16 @@ impl LayoutEngine {
                         // the nested-inset x), a focused canary-gated session. Ship #1+#2 together.
                         // See [[tokyoshugyo_wrap_not_cellheight]], [[char_budget_wall]].
                         let s586_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).collect();
-                        let s586_orphan = std::env::var("OXI_S586").ok().as_deref() == Some("1")
+                        // S586 (2026-06-22, flipped DEFAULT ON, opt-out OXI_S586_DISABLE):
+                        // the page-44 約物→opening-bracket cell oikomi. Held opt-in for
+                        // 16+ sessions pending "#2" (the chapter under-count) — now found:
+                        // #2 = the dropped VML canvas figures (S640/VMLCANVAS), NOT the
+                        // char-budget wall. S586 (remove the compensating page-44 over-wrap)
+                        // + VMLCANVAS (add the dropped figure height) ship TOGETHER:
+                        // tokyoshugyo 0.8077→0.9638, full Phase-1 gate 0 PASS→FAIL (only
+                        // tokyoshugyo changes). The baseline 90=90 was a COMPENSATING balance
+                        // (page-44 +1 ⊕ figures −1). See [[tokyoshugyo_wrap_not_cellheight]].
+                        let s586_orphan = std::env::var("OXI_S586_DISABLE").is_err()
                             && self.compat_mode < 15 && self.compress_punctuation;
                         let s586_cap: f32 = std::env::var("OXI_S586_CAP").ok()
                             .and_then(|v| v.parse().ok()).unwrap_or(3.5);

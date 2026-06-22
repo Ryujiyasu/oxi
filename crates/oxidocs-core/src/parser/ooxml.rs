@@ -4057,6 +4057,16 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut margin_left: f32 = 0.0;
     let mut margin_top: f32 = 0.0;
     let mut is_absolute = false;
+    // VML drawing canvas (<v:group editas="canvas">). Word reserves the
+    // group's DECLARED height (style height:Npt) in the inline text flow; the
+    // inner position:absolute shapes are canvas-internal (relative to the
+    // canvas coordinate system), NOT page-absolute. parse_vml_pict previously
+    // had no "group" arm, so the canvas dims were lost and the inner shapes
+    // overwrote width/height (with canvas-unit coords) -> the figure reserved
+    // ZERO flow height (tokyoshugyo 図２ 代替休暇 flowchart, 136.7pt, dropped).
+    let mut group_width: f32 = 0.0;
+    let mut group_height: f32 = 0.0;
+    let mut is_canvas_group = false;
     let mut depth = 0;
 
     loop {
@@ -4086,6 +4096,33 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             }
                         }
                         depth -= 1; // consumed the txbxContent end tag
+                    }
+                    // VML drawing canvas group — capture its declared pt dims so
+                    // the figure reserves height in the inline flow (see field decls).
+                    // Inline canvas only (mso-position-*-relative:line/char); a
+                    // position:absolute group floats (handled by is_absolute, S566).
+                    "group" => {
+                        let mut g_abs = false;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "style" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                for part in val.split(';') {
+                                    let part = part.trim();
+                                    if let Some(w) = part.strip_prefix("width:") {
+                                        group_width = parse_css_length(w.trim());
+                                    } else if let Some(h) = part.strip_prefix("height:") {
+                                        group_height = parse_css_length(h.trim());
+                                    } else if part.starts_with("position:absolute") {
+                                        g_abs = true;
+                                    }
+                                }
+                            }
+                        }
+                        if g_abs {
+                            is_absolute = true;
+                        } else if group_height > 0.0 {
+                            is_canvas_group = true;
+                        }
                     }
                     // VML shape types
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
@@ -4184,6 +4221,36 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             Event::Eof => break,
             _ => {}
         }
+    }
+
+    // Inline VML drawing canvas (<v:group editas="canvas">): reserve the
+    // group's declared height in the body flow as an inline (position:None)
+    // height-only Image. The inner vector shapes/textboxes are not yet
+    // rendered (Phase-3) but Word reserves the full canvas height (tokyoshugyo
+    // 図２ 136.7pt was being dropped, cascading the 賃金 chapter -1 page).
+    // S640 (2026-06-22, default ON, opt-out OXI_VMLCANVAS_DISABLE): legacy-VML
+    // canvas figures reserve their declared height. 3a4f/model are
+    // template-twins but render their canvases via the DrawingML (w:drawing)
+    // path, so this VML-only fix leaves them byte-identical (canary-verified).
+    if is_canvas_group
+        && group_height > 0.0
+        && std::env::var("OXI_VMLCANVAS_DISABLE").is_err()
+    {
+        return Ok(DrawingResult {
+            image: Some(Image {
+                data: Vec::new(),
+                width: group_width,
+                height: group_height,
+                alt_text: None,
+                content_type: None,
+                position: None,
+                wrap_type: None,
+                crop: None,
+                anchor_block_index: 0,
+            }),
+            shape: None,
+            text_box: None,
+        });
     }
 
     // VML absolute-positioned shapes get a FloatingPosition. Computed BEFORE
