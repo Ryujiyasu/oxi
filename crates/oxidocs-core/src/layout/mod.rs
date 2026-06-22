@@ -5172,17 +5172,16 @@ impl LayoutEngine {
                 && line_idx == 0 && lines.len() == 2
                 && !page.doc_grid_no_type
                 && !s548b_exact_full && !s562b_empty_full;
-            // ★tokyoshugyo #2 (2026-06-22 s3): a typed-grid full-cell break experiment
-            // (OXI_S_TGFULL, forcing effective_lh when the cell snaps > natural) was
-            // TESTED+REVERTED — under S586 it gained only 11 of the ~417 over-fit lines
-            // (0.7316→0.7386, oxi still 89pg, still FAIL) and was canary-clean on
-            // ikujikaigo/model/3a4f/ikujidetail (byte-identical). ⇒ the page-bottom
-            // natural-leniency is a MINOR contributor; the BULK of #2 is the WRAP
-            // over-fit (Oxi fits ~1 char/line more in the 賃金-chapter cells → ~45 fewer
-            // lines → 1 page shorter), i.e. the cell-wrap-width / char-budget wall, not
-            // the break threshold. See [[tokyoshugyo_wrap_not_cellheight]].
+            // ★tokyoshugyo #2 (2026-06-22 s3): typed-grid full-cell break — one of the
+            // ~3 stackable #2 components (page-bottom natural-leniency ~11 lines). Forces
+            // effective_lh when the cell snaps > natural. Canary-clean on ikujikaigo/
+            // model/3a4f/ikujidetail (their page-bottom paras don't hit the snapped-larger
+            // gate). OXI_S_TGFULL. See [[tokyoshugyo_wrap_not_cellheight]].
+            let s_tgfull = std::env::var("OXI_S_TGFULL").ok().as_deref() == Some("1")
+                && !page.doc_grid_no_type
+                && effective_lh > natural_lh + 0.1;
             let break_threshold = if s548b_exact_full || s562b_empty_full
-                || s603_typed_fullbox || s605_line0_2 {
+                || s603_typed_fullbox || s605_line0_2 || s_tgfull {
                 effective_lh
             } else {
                 ink_lh.min(effective_lh)
