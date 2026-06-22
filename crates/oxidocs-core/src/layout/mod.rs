@@ -11321,17 +11321,23 @@ impl LayoutEngine {
                                 .sum();
                             (marker.clone(), marker_fs, marker_width)
                         });
-                        // S592 (2026-06-17, opt-IN OXI_S592=1): a SPACE-suffix numbered CELL
-                        // paragraph (the 賃金 regulation 第N条 boxes) renders its number INLINE at
-                        // the cell-left indent (NOT outdented), body flowing AFTER it. Word does
-                        // not outdent a space-suffix number (no tab). Oxi outdented the marker
-                        // (marker_x −list_indent) AND did not reserve marker width on line-1 →
-                        // body over-fit + overlapped the marker. FIX: reserve marker width on
-                        // line-1 (wrap), place the marker at cell-left, start the body after it.
-                        // Cross-doc PDF: tokyoshugyo 第４条 x97.6, 3a4f 第２条 x95.7 = cell-left.
-                        let s592_cell_space = std::env::var("OXI_S592").ok().as_deref() == Some("1")
+                        // S592→S641 (2026-06-17 found, flipped DEFAULT ON 2026-06-22, opt-out
+                        // OXI_S641_DISABLE): a SPACE-suffix numbered CELL paragraph (the 賃金
+                        // regulation 第N条 boxes) renders its number INLINE at the cell-left
+                        // indent (NOT outdented), body flowing AFTER it. Word does not outdent a
+                        // space-suffix number (no tab). Oxi outdented the marker (marker_x
+                        // −list_indent) AND did not reserve marker width on line-1 → body over-fit
+                        // + overlapped the marker. FIX: reserve marker width on line-1 (wrap),
+                        // place the marker at cell-left, start the body after it. Cross-doc PDF:
+                        // tokyoshugyo 第４条 x97.6, 3a4f 第２条 x95.7 = cell-left (validated on BOTH).
+                        // GATE: tokyoshugyo 0.9638→0.9746 (the 第３２条 cell 1→2 lines = Word), full
+                        // Phase-1 81/84 0 PASS→FAIL (only tokyoshugyo's pagination changes; 3a4f's
+                        // marker render shifts to cell-left = Word but pagination byte-identical).
+                        // See [[tokyoshugyo_wrap_not_cellheight]].
+                        let s641_cell_space = std::env::var("OXI_S641_DISABLE").is_err()
                             && matches!(para.style.list_suff.as_deref(), Some("space"))
                             && para.style.list_indent.unwrap_or(0.0) > 0.5;
+                        let s592_cell_space = s641_cell_space;
                         let s592_marker_reserve = if s592_cell_space {
                             list_marker_info.as_ref().map(|(_, fs, w)| w + fs * 0.25).unwrap_or(0.0)
                         } else { 0.0 };
