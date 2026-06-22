@@ -57,8 +57,16 @@ pub fn snap_15tw(pt: f32) -> f32 {
     if pt <= 0.0 {
         return 0.0;
     }
+    // OXI_CELL_FINESNAP (tokyoshugyo #2c experiment): the default 15tw (0.75pt) snap is
+    // coarser than Word's 0.24pt device grid (S629). Test whether a finer snap reduces
+    // the en-masse fit/wrap flipping (step function) at the cell wrap boundary.
+    let grid_tw = if std::env::var("OXI_CELL_FINESNAP").ok().as_deref() == Some("1") {
+        4.8 // 0.24pt = 600dpi device px (S629)
+    } else {
+        15.0
+    };
     let tw = pt * 20.0;
-    let snapped_tw = (tw / 15.0).round() * 15.0;
+    let snapped_tw = (tw / grid_tw).round() * grid_tw;
     snapped_tw / 20.0
 }
 
