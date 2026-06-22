@@ -5045,6 +5045,17 @@ impl LayoutEngine {
         for (line_idx, line) in lines.iter().enumerate() {
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
+            // BODYLINE instrument: reliable per-LINE body text + char count + cursor_y
+            // (the GDI --dump-layout emits per-RUN for body, hiding line breaks). Use to
+            // localize per-line body over-fit (Oxi chars/line vs Word PDF). OXI_DUMP_BODYLINE.
+            if std::env::var("OXI_DUMP_BODYLINE").is_ok() {
+                let lt: String = line.fragments.iter().map(|f| f.text.as_str()).collect();
+                let nc = lt.chars().count();
+                let pi = body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+                eprintln!("[BODYLINE] pi={} li={} cy={:.1} lh={:.1} nc={} «{}»",
+                    pi, line_idx, cursor.cursor_y, line_height, nc,
+                    lt.chars().take(44).collect::<String>());
+            }
 
             // Page break check with widow/orphan control
             // TextBox content: no page breaks, no widow/orphan. Overflow is clipped.
@@ -11953,6 +11964,17 @@ impl LayoutEngine {
 
                         let total_lines = lines.len();
                         for (line_idx, line) in lines.iter().enumerate() {
+                            // CELLLINE instrument: reliable per-LINE cell text + char count.
+                            // OXI_DUMP_CELLLINE. Localizes cell wrap over-fit (Oxi chars/line
+                            // vs Word PDF) — the GDI dump is per-RUN for these cells.
+                            if std::env::var("OXI_DUMP_CELLLINE").is_ok() {
+                                let lt: String = line.iter().map(|t| t.0.as_str()).collect();
+                                if !lt.trim().is_empty() {
+                                    eprintln!("[CELLLINE] li={} cy={:.1} nc={} wrapw={:.1} «{}»",
+                                        line_idx, content_h, lt.chars().count(), wrap_w,
+                                        lt.chars().take(44).collect::<String>());
+                                }
+                            }
                             // Clip content that overflows exact row height
                             if is_exact && content_h + pad_t >= row_height {
                                 break;
