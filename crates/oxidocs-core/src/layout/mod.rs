@@ -11260,12 +11260,24 @@ impl LayoutEngine {
                         } else {
                             cell_w
                         };
-                        let wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
+                        let mut wrap_w = (wrap_base - p_indent_left - p_indent_right).max(0.0);
                         let mut first_line_wrap_w = if p_first_line_indent < 0.0 {
                             (wrap_base - (p_indent_left + p_first_line_indent).max(0.0) - p_indent_right).max(0.0)
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
+                        // OXI_PGCAP (tokyoshugyo #2c, half of the coupled fix): cap the cell
+                        // content wrap at the PAGE TEXT-MARGIN right (start_x+content_width), not
+                        // the over-wide cell border (S585c +1-cellMar over). Must be paired with
+                        // OXI_CELLCOMP (cell 約物 compression) — alone it over-corrects (exposes
+                        // the missing compression). See [[tokyoshugyo_wrap_not_cellheight]].
+                        if std::env::var("OXI_PGCAP").ok().as_deref() == Some("1") {
+                            let pg_right = start_x + content_width;
+                            let cont_left = cell_x + pad_l + p_indent_left;
+                            wrap_w = wrap_w.min((pg_right - cont_left).max(0.0));
+                            let fl_left = cell_x + pad_l + (p_indent_left + p_first_line_indent).max(0.0);
+                            first_line_wrap_w = first_line_wrap_w.min((pg_right - fl_left).max(0.0));
+                        }
                         // ★tokyoshugyo #2c COUPLING PROVEN (2026-06-22, OXI_PGCAP experiment,
                         // reverted): capping the cell wrap at the page text-margin (start_x+
                         // content_width = x510, = Word's 第３２条 fill) narrows 条文 cells to Word's
@@ -11676,9 +11688,17 @@ impl LayoutEngine {
                                         }
                                     } else { false }
                                 } else { false };
+                                // OXI_CELLCOMP (tokyoshugyo #2c, the other half): enable
+                                // compute_compression for cs=0 JUSTIFIED cells (the 条文 boxes are
+                                // align=Justify cs=0 → no 約物 compression by default → over-wrap).
+                                // Paired with OXI_PGCAP (wrap-to-margin): narrow wrap + 約物
+                                // compression together = Word's cell rendering. See
+                                // [[tokyoshugyo_wrap_not_cellheight]].
+                                let cell_comp_active = std::env::var("OXI_CELLCOMP").ok().as_deref() == Some("1")
+                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
                                 let would_overflow = if s586_overflow_fixed {
                                     false
-                                } else if jc_gate_active && run_has_neg_cs && would_overflow_natural {
+                                } else if jc_gate_active && (run_has_neg_cs || cell_comp_active) && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                                         ch,
                                         natural_advance: cw,
