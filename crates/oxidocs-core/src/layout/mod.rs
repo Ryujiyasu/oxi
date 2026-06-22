@@ -11213,13 +11213,23 @@ impl LayoutEngine {
                         // S585N → wrap_base 413.65 ≈ Word 412.9 (CELLX-verified). ★HELD: this is
                         // a RENDER-correct fix but PAGINATION-NEUTRAL on tokyoshugyo (gate
                         // byte-identical with/without, S586 on or off) — the 参考-box ~1-char/line
-                        // over-fit is render-real but NON-OPERATIVE (the S562/r7-cell pattern; the
-                        // box is in a row that splits across the page, so internal line-count
-                        // shifts don't move the row-split page break). The OPERATIVE #2 −1 cause
-                        // (what makes oxi 89 vs Word 90 under S586) is the table ROW-SPLIT /
-                        // nested-table page-break logic, still to be pinned. Shipping S585N
-                        // default-ON needs corpus SSIM/IoU A/B over nested-table docs (deferred).
-                        // Gated to is_nested (rare → low canary surface; 3a4f p19 is top-level).
+                        // over-fit is render-real but NON-OPERATIVE (the S562/r7-cell pattern).
+                        // Shipping S585N default-ON needs corpus SSIM/IoU A/B over nested-table
+                        // docs (deferred). Gated to is_nested (3a4f p19 is top-level, untouched).
+                        // ★OPERATIVE #2 cause (CORRECTED 2026-06-22 s2 — NOT a row-split): a
+                        // DISTRIBUTED BODY sub-pt over-fit in the 賃金 chapter. Under S586 the −1
+                        // onsets at Oxi p47, but p47's content tracks Word at a CONSTANT −39pt
+                        // offset (no internal drift, landmark-Y verified) ⇒ the ~2 over-fit lines
+                        // are inherited from p46/earlier, where the over-fit lines are BODY 解説
+                        // paragraphs (no CELLX). Components: (a) body page-bottom leniency (Oxi
+                        // fits «給月給»/«し引く» at p46 bottom, last-line bottom ~761 > content
+                        // 756.85, the S603/S576 typed-grid mid-para leniency wall); (b) per-line
+                        // body wrapping; (c) small ~1.3pt/解説-box spacing (Word 37.3 vs Oxi 36.0
+                        // ×~20 boxes ≈ 26pt). No single dominant lever. Per-line localization is
+                        // LIMITED by the GDI dump being per-RUN for body (not per-glyph) — needs
+                        // glyph-level Oxi instrumentation. The fix is a chapter-wide vertical-
+                        // fidelity pass + #1(S586), convergent with the sub-pt spacing/leniency
+                        // walls. See [[tokyoshugyo_wrap_not_cellheight]].
                         let s585n_nested = std::env::var("OXI_S585N").ok().as_deref() == Some("1")
                             && is_nested
                             && cell.width.is_some()
