@@ -5287,12 +5287,22 @@ impl LayoutEngine {
                 // (over=-1.75, line at the bottom, next line overflows) are REAL.
                 // b837 pi=89 (over=-22.35) is also stale (b837 PASSES without S391).
                 // The reals measured: d77a -0.50, 3a4f -0.85, ikujidetail -1.75 — all
-                // within 1 line of the bottom. Opt-out OXI_S581_DISABLE.
-                let s581_stale = if std::env::var("OXI_S581_DISABLE").is_ok() {
-                    false
-                } else {
+                // within 1 line of the bottom.
+                // ★REVERTED to DEFAULT-OFF (2026-06-23, git-bisect f5cd4b13): S581 is a
+                // pagination NO-OP now (full gate CHANGED 0 with it off — S595 made
+                // ikujidetail's LRPBs redundant) but it WRONGLY classified b837 pi=89's
+                // REAL page-bottom LRPB as "stale" and ignored it → the p5/p6 line-split
+                // diverged from Word → SSIM A/B b837 net **-0.2547** (the ONLY doc affected
+                // among 238 word_png). The `over` discriminator cannot separate b837 pi=89
+                // (Word HONORS, render-real) from ikujidetail pi=24 (Word ignores) — both
+                // over≈-22 — so the gate mis-fires on b837. S581 shipped 2026-06-15 with a
+                // FALSE "+0.0000" from the broken ssim_ab tool (fixed 2026-06-18) — see
+                // [[ssim_ab_tool_was_broken]]. Default OFF; opt-in OXI_S581=1.
+                let s581_stale = if std::env::var("OXI_S581").ok().as_deref() == Some("1") {
                     let over = cursor.cursor_y + break_threshold - effective_break_bottom;
                     over < -effective_lh
+                } else {
+                    false
                 };
                 has_lrpb_here && page.total_lrpb_count <= s394_max && s563_full && !s581_stale
             } else {
