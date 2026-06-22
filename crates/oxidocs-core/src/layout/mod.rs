@@ -11272,7 +11272,9 @@ impl LayoutEngine {
                         // OXI_CELLCOMP (cell 約物 compression) — alone it over-corrects (exposes
                         // the missing compression). See [[tokyoshugyo_wrap_not_cellheight]].
                         if std::env::var("OXI_PGCAP").ok().as_deref() == Some("1") {
-                            let pg_right = start_x + content_width;
+                            let pg_off: f32 = std::env::var("OXI_PGCAP_OFF").ok()
+                                .and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                            let pg_right = start_x + content_width + pg_off;
                             let cont_left = cell_x + pad_l + p_indent_left;
                             wrap_w = wrap_w.min((pg_right - cont_left).max(0.0));
                             let fl_left = cell_x + pad_l + (p_indent_left + p_first_line_indent).max(0.0);
