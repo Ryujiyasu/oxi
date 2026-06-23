@@ -13020,6 +13020,11 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // S647 (2026-06-23) tested+reverted: a vAlign=center glyph-vs-line-box
+                // correction (Word centers the glyph cell ~1.06×fs, Oxi centers content_h
+                // = line box ~1.29×fs) gained tokumei only +0.0014 (peak LEAD=0.05) — most
+                // form content is vAlign=TOP, not center, so this is a tiny component, not
+                // the form-family ~1pt drift. See [[tokumei_form_family_ssim]].
                 let v_offset = match cell.v_align.as_deref() {
                     Some("center") => ((effective_row_h - pad_t - pad_b - content_h) / 2.0).max(0.0),
                     Some("bottom") => (effective_row_h - pad_t - pad_b - content_h).max(0.0),
