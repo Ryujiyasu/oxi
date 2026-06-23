@@ -13213,6 +13213,20 @@ impl LayoutEngine {
                         LayoutContent::TableBorder { y1, y2, .. } => {
                             if (*y1 - old_bottom).abs() < 0.5 { *y1 = new_bottom; }
                             if (*y2 - old_bottom).abs() < 0.5 { *y2 = new_bottom; }
+                            // S648 (2026-06-23): keep elem.y / elem.height in sync
+                            // with the corrected content y1/y2. Both renderers draw
+                            // borders from y1/y2 (GDI main.rs:393, DWrite main.rs:387),
+                            // so the RENDER was already correct — but elem.y was left
+                            // STALE at the pre-correction row bottom. The --dump-layout
+                            // JSON emits elem.y, so any border-position diagnostic read
+                            // the stale value and mis-concluded "rows render too short"
+                            // (the row-height correction had in fact moved the rendered
+                            // border to the right place). Render-neutral (renderers use
+                            // y1/y2); pagination uses text elements only; element_iou
+                            // is paragraph-derived — so this fixes the dump diagnostic
+                            // ONLY, with zero gate impact.
+                            elem.y = (*y1).min(*y2);
+                            elem.height = (*y2 - *y1).abs();
                         }
                         LayoutContent::CellShading { .. } => {
                             if (elem.height - old_h).abs() < 0.5 {
