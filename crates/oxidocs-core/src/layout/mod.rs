@@ -6907,9 +6907,26 @@ impl LayoutEngine {
         // charGrid family +0.0019, bottom-N floor up (tokumei p4/p5), only
         // tokumei p7 ×4 regress (above the floor); Phase-1 54/55 preserved.
         let s466_grid_expand = std::env::var("OXI_S466_DISABLE").is_err();
+        // ORPHAN-OIKOMI experiment config, hoisted once (default OFF = byte-identical,
+        // zero hot-path cost — the per-fragment char-count precompute below only runs
+        // when enabled). Validated mechanism (fixes nedo para 333 «…規定する子» 2→1
+        // line = Word) but not yet shippable: fixing 333 EXPOSES a compensating
+        // downstream under-count (-1×3 at 400/434/465, 0.9979→0.9938). See
+        // [[char_budget_wall]]. OXI_ORPHAN_OPEN / OXI_ORPHAN_LINEMULT tune.
+        let orphan_oikomi_on = std::env::var("OXI_ORPHAN_OIKOMI").ok().as_deref() == Some("1");
+        let orphan_open_cap: f32 = std::env::var("OXI_ORPHAN_OPEN").ok()
+            .and_then(|v| v.parse().ok()).unwrap_or(3.34);
+        let orphan_line_mult: f32 = std::env::var("OXI_ORPHAN_LINEMULT").ok()
+            .and_then(|v| v.parse().ok()).unwrap_or(1.3);
         for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
+            // Char counts in PRECEDING / SUBSEQUENT fragments (paragraph-level total/
+            // remaining lookahead for the short-para oikomi gate). Only when enabled.
+            let (chars_before_frag, chars_after_frag) = if orphan_oikomi_on {
+                (fragments[..frag_outer_idx].iter().map(|f| f.0.chars().count()).sum::<usize>(),
+                 fragments[frag_outer_idx + 1..].iter().map(|f| f.0.chars().count()).sum::<usize>())
+            } else { (0, 0) };
 
             // fitText runs: skip GDI snap to preserve exact target width
             let cs = if style.fit_text.is_some() {
@@ -7742,10 +7759,34 @@ impl LayoutEngine {
                         current_capw_tw += pt_to_tw(extra); // S475: autoSpace, no punct capacity
                     }
 
+                    // ORPHAN-OIKOMI gate (OXI_ORPHAN_OIKOMI=1, experiment, default OFF =
+                    // byte-identical): on a paragraph's LAST line Word compresses 約物
+                    // HARDER (raises the opening-bracket cap) to avoid orphaning the tail.
+                    // nedo para 333 «…その子会社（…規定する子» is a ~1-line para ending «子»;
+                    // Word fits «子» by compressing «、»(3.36)+«（»(3.31), while the
+                    // MIDDLE-line wraps of 400/434/465 get NO extra compression (oidashi).
+                    // Discriminator = paragraph-remaining-chars ≤ one line (last-line
+                    // context): fires on «（» when it sits in the para's final line, not on
+                    // a middle-line «、». OXI_ORPHAN_OPEN / OXI_ORPHAN_LINEMULT tune.
+                    let s475_open_eff = if s475_break && orphan_oikomi_on {
+                        // SHORT-PARA discriminator: para 333 is a ~1-line para ending «子»;
+                        // Word compresses 約物 to KEEP it 1 line (high value). The over-fit
+                        // {400,434,465} cascade from a MULTI-line para's compression Word
+                        // does NOT apply (losing a line there is fine). Gate the higher
+                        // open cap to SHORT paragraphs (total ≤ ~1.x lines).
+                        let para_total = chars_before_frag + chars_vec.len() + chars_after_frag;
+                        let fw_tw = (font_size * 20.0) as i32;
+                        let line_cap = if fw_tw > 0 {
+                            ((available_tw as f32 / fw_tw as f32) * orphan_line_mult) as usize
+                        } else { 0 };
+                        if para_total <= line_cap.max(1) {
+                            s475_open.max(orphan_open_cap)
+                        } else { s475_open }
+                    } else { s475_open };
                     let s475_capinc = if s475_break {
                         pt_to_tw(pre_yakumono_width
                             - kinsoku::s475_max_compress(ch, chars_vec.get(char_index + 1).copied(),
-                                s475_pair, s475_solo, s475_open, font_size))
+                                s475_pair, s475_solo, s475_open_eff, font_size))
                     } else { 0 };
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
