@@ -4976,10 +4976,23 @@ impl LayoutEngine {
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
-                        let h = m.word_line_height_no_grid(fs);
-                        if h > no_grid_max { no_grid_max = h; }
+                        let mut h = m.word_line_height_no_grid(fs);
                         // Raw (un-floored) height for Multiple spacing cumulative base
-                        let raw = (m.win_ascent + m.win_descent) * fs;
+                        let mut raw = (m.win_ascent + m.win_descent) * fs;
+                        // S612z-circle (2026-06-23): embedded Zen Old Mincho renders CIRCLED
+                        // NUMBERS (①-⑳) in its deep-win-descent box (1.448em = 17.376@12pt)
+                        // while kanji fall back to MS Mincho (15.56). DERIVED from the Word
+                        // PDF (aiguideline p2 circled lines 17.40 / kanji 15.56). Scoped to
+                        // family "Zen Old Mincho" = aiguideline ONLY (canary-safe). The
+                        // cumulative single-LM0 basis uses no_grid_max → bump it for the
+                        // circled fragment. Opt-out OXI_S612ZC_DISABLE.
+                        if std::env::var("OXI_S612ZC_DISABLE").is_err()
+                            && m.family == "Zen Old Mincho"
+                            && frag.text.chars().any(|c| matches!(c as u32, 0x2460..=0x2473))
+                        {
+                            h = h.max(fs * 1448.0 / 1000.0);
+                        }
+                        if h > no_grid_max { no_grid_max = h; }
                         if raw > no_grid_raw_max { no_grid_raw_max = raw; }
                     }
                     if has_latin {
@@ -7879,7 +7892,28 @@ impl LayoutEngine {
                     // Discriminator = paragraph-remaining-chars ≤ one line (last-line
                     // context): fires on «（» when it sits in the para's final line, not on
                     // a middle-line «、». OXI_ORPHAN_OPEN / OXI_ORPHAN_LINEMULT tune.
-                    let s475_open_eff = if s475_break && orphan_oikomi_on {
+                    let s475_open_eff = if s475_break && std::env::var("OXI_NPERIOD").is_ok() {
+                        // n_period DISCRIMINATOR (2026-06-23, OXI_NPERIOD, default OFF):
+                        // Word credits OPENING-bracket demand compression only when the line
+                        // lacks cheap PERIOD (。．) half-em compression. MEASURED (nedo Word
+                        // PDF, _nedo_open_trigger.py): of 35 demand-opening-compressed lines
+                        // (aki>3.0), 31 have n_period=0, 4 have n_period=1, ZERO have
+                        // n_period≥2. Periods supply 6.0pt "free" half-em, so Word uses them
+                        // and leaves openings at baseline; with <2 periods Word dips into
+                        // opening compression. nedo W1 (2 。, fit 甲 needs 18.8) wraps; i=334/
+                        // para-333 (0 。, fit 子 needs the 社（ 3.31) compress the opening.
+                        // hi = demand opening cap (fit 子/令), lo = period-rich opening cap
+                        // (exclude → wrap, render-match). Env-tunable. See [[char_budget_wall]].
+                        let line_periods = current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars())
+                            .filter(|&c| matches!(c, '。' | '．'))
+                            .count();
+                        let hi: f32 = std::env::var("OXI_NPERIOD_HI").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(3.4);
+                        let lo: f32 = std::env::var("OXI_NPERIOD_LO").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                        if line_periods >= 2 { lo } else { hi }
+                    } else if s475_break && orphan_oikomi_on {
                         // SHORT-PARA discriminator: para 333 is a ~1-line para ending «子»;
                         // Word compresses 約物 to KEEP it 1 line (high value). The over-fit
                         // {400,434,465} cascade from a MULTI-line para's compression Word
@@ -7939,6 +7973,17 @@ impl LayoutEngine {
                     } else {
                         current_width_tw + pt_to_tw(char_width) - available_tw
                     };
+                    // PER-LINE TOTAL compression budget FALSIFIED (2026-06-23): tested
+                    // OXI_LINE_BUDGET (wrap iff nat_overflow > budget). It correctly wrapped
+                    // nedo's preamble 甲 (nat_ovf 18.8, Word compresses only 15.36 & wraps)
+                    // but (a) was pagination-NEUTRAL for nedo (the over-fit chars only
+                    // redistribute WITHIN paras, no line-count change) and (b) no fixed
+                    // budget discriminates: Word's per-line total compression reaches 26pt
+                    // (period-rich lines, each 。=6.0 half-em "free") yet wraps W1 at 15.36.
+                    // The discriminator is per-約物-TYPE cost (periods free→6.0, closings
+                    // light~0.84, openings demand-gated/"expensive") NOT a line total — the
+                    // documented "guessing exhausted" wall needing statistical derivation.
+                    // See [[char_budget_wall]].
                     // HALF-EM 二分 oikomi cap ATTEMPTED + REVERTED (2026-06-22, OXI_HALFEM): the
                     // best-fit "oikomi iff boundary natural-overflow ≤ half-em" matched the 2
                     // decisive fail lines (nedo 子 3.4<6 OIKOMI, tks 務 5.4>5.25 OIDASHI) and
@@ -9172,12 +9217,29 @@ impl LayoutEngine {
             for frag in &line.fragments {
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                let (asc, des) = if use_standard {
+                let (mut asc, mut des) = if use_standard {
                     let h = metrics.word_line_height_standard(font_size);
                     (h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent), h * metrics.win_descent / (metrics.win_ascent + metrics.win_descent))
                 } else {
                     (metrics.word_ascent_pt(font_size), metrics.word_descent_pt(font_size))
                 };
+                // S612z-circle (2026-06-23): the EMBEDDED Zen Old Mincho renders CIRCLED
+                // NUMBERS (①-⑳, U+2460-2473) in its own deep-win-descent box (win asc
+                // 1160 / desc 288, upm 1000 → 17.376@12pt = ratio 1.448), while regular
+                // KANJI fall back to MS Mincho (15.56 = 83/64). DERIVED from the Word PDF
+                // (aiguideline p2 baseline-to-baseline: circled-number lines 17.40, kanji
+                // lines 15.56 — a per-GLYPH font-linking rule, NOT non-deterministic as
+                // S612z first framed). Oxi can't load the embedded font, so give the
+                // circled-number glyphs the embedded box; the line's max-fragment height
+                // then matches Word. SCOPE: family "Zen Old Mincho" = aiguideline ONLY
+                // (canary-safe). Opt-out OXI_S612ZC_DISABLE. See [[corpus_collection_wheel_a]].
+                if std::env::var("OXI_S612ZC_DISABLE").is_err()
+                    && metrics.family == "Zen Old Mincho"
+                    && frag.text.chars().any(|c| matches!(c as u32, 0x2460..=0x2473))
+                {
+                    asc = asc.max(font_size * 1160.0 / 1000.0);
+                    des = des.max(font_size * 288.0 / 1000.0);
+                }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
                 if asc + des >= max_combined {
