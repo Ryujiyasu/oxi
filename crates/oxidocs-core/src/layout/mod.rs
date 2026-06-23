@@ -9686,14 +9686,20 @@ impl LayoutEngine {
                     // height one. For CJK this stays at max_font_size (S504 leaves CJK/mixed
                     // lines untouched); for PURE-LATIN lines max_font_cell = the glyph cell
                     // (line_height_pt ≈ 1.2×fs) which removes the ~0.2×fs Latin overshoot.
-                    // S646 (2026-06-23) tested+reverted: a CJK exact-line text-offset DY
-                    // (push glyph down to dwrite truth) only gained tokumei_08_09 +0.0028 at
-                    // the principled 0.06×fs and +0.0106 at the SSIM-peak 0.15×fs — but 0.15
-                    // pushes the glyph BELOW its exact cell (a hack), and the form's SSIM is
-                    // dominated by the TABLE STRUCTURE cumulative vertical drift (content +
-                    // borders ride ~1pt up together, per the 2D band-shift), not the cell
-                    // text offset. The clean fix is the table row/cell-margin position
-                    // precision (deeper wall), not this offset. See [[tokumei_form_family_ssim]].
+                    // S646/S649 (2026-06-24) FALSIFIED + reverted: a CJK exact-line text DY
+                    // (push the glyph DOWN by ~0.06-0.08×fs, the supposed dwrite-cell-vs-OS/2
+                    // gap). S648 proved the table BORDERS render correctly, so the form-family
+                    // residual is within-line; the 2D band-shift said tokumei_08_09 text is
+                    // ~0.96pt (≈0.08×fs) too high. BUT the DY direction is INCONSISTENT across
+                    // exact-CJK forms (gate-accurate SSIM sweep, DY as fraction of fs):
+                    // tokumei_08_09 +0.011 @0.12, but 1ec1 −0.005 and the PASSING canary 459f05
+                    // (kyodokenkyuyoushiki01, 157 exact lines) **−0.027** — net-negative
+                    // corpus-wide. 3a4f(221 exact)/29dc6e(198)/0e7af stay flat. So the
+                    // "universal dwrite-cell gap → text too high" is WRONG: only tokumei_08_09
+                    // is too high (a doc-specific drift the band-shift moved together with its
+                    // row structure); 459f05/1ec1 are NOT. A global DY fails and the no-EXCEPTION
+                    // rule forbids a tokumei-only carve-out. exact-bottom-align (S495/S504)
+                    // stays as-is. See [[tokumei_form_family_ssim]].
                     return (line_height - max_font_cell).max(0.5);
                 }
                 // Shape context: text at bottom of line box (extra space above).
