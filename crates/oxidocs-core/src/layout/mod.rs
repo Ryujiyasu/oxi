@@ -11445,6 +11445,25 @@ impl LayoutEngine {
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
+                        // LEGACYCELL wrap narrow (2026-06-23, OXI_LEGACYCELL=1): a legacy (compat≤14)
+                        // compressPunctuation justified single-cell box has its wrap ~1 cellMar TOO WIDE
+                        // (S585c: Oxi wrap_base = cell_w − 2×pad vs Word's content = cell_w − 3×cellMar).
+                        // Subtract 1 more cellMar so the wrap = Word's content-right, enabling the
+                        // derived small-cap break (the 約物 then overflows enough to wrap a kanji like
+                        // Word). Scoped to LEGACY (3a4f/model = compat15, EXCLUDED). See [[char_budget_wall]].
+                        if std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
+                            && self.compat_mode < 15 && self.compress_punctuation
+                            && row.cells.len() == 1
+                            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute) {
+                            // cap the wrap at the page text-margin (= Word's content-right for a
+                            // full-page-width 条文 box); only narrows (never widens), so a cell
+                            // already inside the margin is untouched.
+                            let pg_right = start_x + content_width;
+                            let cont_left = cell_x + pad_l + p_indent_left;
+                            wrap_w = wrap_w.min((pg_right - cont_left).max(0.0));
+                            let fl_left = cell_x + pad_l + (p_indent_left + p_first_line_indent).max(0.0);
+                            first_line_wrap_w = first_line_wrap_w.min((pg_right - fl_left).max(0.0));
+                        }
                         // PROPCELL WRAP CAP (tokyoshugyo/d77a commentary boxes, 2026-06-23, default
                         // ON, opt-out OXI_PROPCELL_DISABLE): a jc=LEFT single-cell
                         // box in a PROPORTIONAL CJK font (MS PMincho/PGothic — the 参考/ガイドライン
@@ -11935,8 +11954,24 @@ impl LayoutEngine {
                                 // PGCAP caps content at the margin, and Word HANGS the trailing
                                 // 約物 past it (de-ぶら下げ content wrap is uniformly the margin).
                                 // Without it PGCAP wraps the trailing 約物 → +1 line/sentence-cell.
-                                let cell_bura_active = std::env::var("OXI_CELLBURA").ok().as_deref() == Some("1")
+                                let cell_bura_active = (std::env::var("OXI_CELLBURA").ok().as_deref() == Some("1")
+                                    || std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1"))
                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                                // OXI_LEGACYCELL (2026-06-23): the REFINED cell break = the derived
+                                // TWO-BUDGET model. LibreOffice (guess.cxx compress-to-fit + SwHangingPortion)
+                                // + the synthetic cell dataset (_cb_derive_cell.py) showed Word's BREAK fits a
+                                // would-wrap KANJI with only ~0.235em (2.46pt@10.5) 約物 compression — NOT
+                                // half-em (the JUSTIFY budget) — + ぶら下げ for line-end 約物. compute_compression
+                                // (CELLCOMP) uses half-em for the BREAK → over-fits (fits 又 where Word wraps).
+                                // This uses the small kanji-fit cap for the break; cell_bura handles line-end
+                                // ぶら下げ; compute_compression/justify keeps half-em for the render. Scoped to
+                                // LEGACY (compat≤14) compressPunctuation justified cells (3a4f/model = compat15,
+                                // EXCLUDED → their compensating baseline preserved). See [[char_budget_wall]].
+                                let legacy_cell_break = std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
+                                    && self.compat_mode < 15 && self.compress_punctuation
+                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                                let legacy_cell_cap: f32 = std::env::var("OXI_LEGACYCELL_CAP").ok()
+                                    .and_then(|v| v.parse().ok()).unwrap_or(2.5);
                                 let is_cell_hangable = matches!(ch,
                                     '。' | '、' | '，' | '．' | '・'
                                     | '）' | '」' | '』' | '】' | '〕' | '］' | '｝');
@@ -11945,6 +11980,15 @@ impl LayoutEngine {
                                     false
                                 } else if s586_overflow_fixed {
                                     false
+                                } else if legacy_cell_break && would_overflow_natural {
+                                    // small-cap capacity: fit a (non-hangable) kanji iff its overflow ≤
+                                    // Σ(small cap per compressible mid-line 約物). cap ~2.5pt@10.5 = the
+                                    // derived kanji-fit budget, scaled by fs. Line-end 約物 hang via cell_bura.
+                                    let n_yak = current_line_chars.iter().chain(buf_chars.iter())
+                                        .filter(|c| matches!(c.ch, '、' | '。' | '，' | '．'
+                                            | '」' | '』' | '）' | '】' | '〕' | '・')).count() as f32;
+                                    let budget = n_yak * legacy_cell_cap * (font_size / 10.5);
+                                    ((line_x + buf_w + cw) - effective_wrap) > budget
                                 } else if jc_gate_active && (run_has_neg_cs || cell_comp_active) && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                                         ch,
