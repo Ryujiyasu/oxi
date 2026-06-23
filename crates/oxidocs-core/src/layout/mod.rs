@@ -9686,6 +9686,14 @@ impl LayoutEngine {
                     // height one. For CJK this stays at max_font_size (S504 leaves CJK/mixed
                     // lines untouched); for PURE-LATIN lines max_font_cell = the glyph cell
                     // (line_height_pt ≈ 1.2×fs) which removes the ~0.2×fs Latin overshoot.
+                    // S646 (2026-06-23) tested+reverted: a CJK exact-line text-offset DY
+                    // (push glyph down to dwrite truth) only gained tokumei_08_09 +0.0028 at
+                    // the principled 0.06×fs and +0.0106 at the SSIM-peak 0.15×fs — but 0.15
+                    // pushes the glyph BELOW its exact cell (a hack), and the form's SSIM is
+                    // dominated by the TABLE STRUCTURE cumulative vertical drift (content +
+                    // borders ride ~1pt up together, per the 2D band-shift), not the cell
+                    // text offset. The clean fix is the table row/cell-margin position
+                    // precision (deeper wall), not this offset. See [[tokumei_form_family_ssim]].
                     return (line_height - max_font_cell).max(0.5);
                 }
                 // Shape context: text at bottom of line box (extra space above).
