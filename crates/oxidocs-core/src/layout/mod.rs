@@ -6852,6 +6852,34 @@ impl LayoutEngine {
         let mut word_run_index: usize = 0;
         let mut word_char_offset: usize = 0;
 
+        // LATIN-WORDWRAP (default ON, opt-out OXI_LATIN_WORDWRAP_DISABLE): Western
+        // word-wrap for long Latin tokens (URLs). Word treats a maximal Latin run (e.g.
+        // «https://www.mhlw.go.jp/…») as ONE word — it does NOT break at the internal
+        // «/»«-»«:» opportunities to fill a PARTIAL line; the whole token wraps to the
+        // next line first, and breaks at those opportunities ONLY when it overflows a
+        // FULL line. Oxi's is_break_after (below) flushed at every «/»«-»«:» → it greedily
+        // packed the URL start onto the preceding CJK line → 1 line too few (tokyoshugyo
+        // −31, the «（ＰＤＦ版のＵＲＬ：https…» blocks). When on, the is_break_after chars do
+        // NOT flush — they record a break OPPORTUNITY (char-count, cum-width) so flush_word
+        // can split an over-long token across lines, with the EXACT per-«/» fragmentation
+        // (run_idx/char_offset via word_seg_meta) preserved so fitting tokens are
+        // byte-identical to the old greedy path. KINSOKU-gated (see flush_word) so a token
+        // after a line-end-prohibited opening bracket «（» is NOT word-wrapped (Word keeps
+        // the bracket with the token; wrapping would orphan it — c7b923). Gate: tokyoshugyo
+        // 0.9746→0.9753 (+1 para), full corpus 81/84 unchanged (only tokyoshugyo's
+        // pagination moves), SSIM 0 regressed (all previously-changed word_png docs
+        // byte-identical via the seg-meta + kinsoku gate). See [[char_budget_wall]].
+        let latin_wordwrap = std::env::var("OXI_LATIN_WORDWRAP_DISABLE").is_err();
+        let mut word_breaks: Vec<(usize, f32)> = Vec::new();
+        // Per-SEGMENT (run_idx, char_offset) so a split token keeps the EXACT run
+        // metadata of the default per-«/» fragmentation (DWrite re-derives glyph
+        // positions from run_idx/char_offset; a merged multi-run token with the first
+        // run's metadata mis-renders → SSIM regress). Each entry = (start char-count
+        // within `word`, run_idx, char_offset). seg_pending marks "next char starts a
+        // new segment" (after a break char).
+        let mut word_seg_meta: Vec<(usize, usize, usize)> = Vec::new();
+        let mut seg_pending = false;
+
         // Helper: flush the accumulated word into current_line, breaking if needed.
         macro_rules! flush_word {
             ($style:expr) => {
@@ -6863,6 +6891,74 @@ impl LayoutEngine {
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
                     let word_width_tw = pt_to_tw(word_width);
+                    if latin_wordwrap && !word_breaks.is_empty() {
+                        // LATIN-WORDWRAP split: the token is a maximal Latin run with
+                        // internal break opportunities. (1) wrap the WHOLE token to a
+                        // fresh line if it doesn't fit on the current one; (2) split it
+                        // across lines at the recorded opportunities only when it still
+                        // overflows a full line.
+                        // KINSOKU GATE: do NOT do the word-level wrap (1) when the token
+                        // is immediately preceded by a line-end-PROHIBITED char (an opening
+                        // bracket «（»「『 …). Word keeps that bracket WITH the token by
+                        // breaking BEFORE the bracket — moving only the token would orphan
+                        // the bracket at the line end (c7b923 «…ライセンス（https://…» = Word
+                        // puts «（https://…» together on the next line; tokyoshugyo's URL is
+                        // preceded by «：», not prohibited, so it DOES wrap). Skipping (1)
+                        // here falls back to the greedy per-segment placement = the default
+                        // (byte-identical), avoiding the bracket orphan.
+                        let preceded_by_open = current_line.fragments.last()
+                            .and_then(|f| f.text.chars().last())
+                            .map_or(false, kinsoku::is_line_end_prohibited);
+                        if !preceded_by_open
+                            && current_width_tw + word_width_tw > available_tw
+                            && !current_line.fragments.is_empty() && !para_all_whitespace {
+                            lines.push(std::mem::take(&mut current_line));
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                        }
+                        // Place the token as SEGMENTS split at the recorded break
+                        // opportunities — IDENTICAL fragmentation to the default path (which
+                        // flushes a fragment at each is_break_after char) so fitting tokens
+                        // render byte-identically. The ONLY behavioural change: the WHOLE
+                        // token first-fit above (Western word-wrap) — a too-long token is
+                        // wrapped fresh rather than packed onto the current line, and its
+                        // segments break a line only on genuine overflow.
+                        let wchars: Vec<char> = word.chars().collect();
+                        let total_chars = wchars.len();
+                        let mut bounds = std::mem::take(&mut word_breaks);
+                        if bounds.last().map_or(true, |&(cc, _)| cc < total_chars) {
+                            bounds.push((total_chars, word_width));
+                        }
+                        let seg_meta = std::mem::take(&mut word_seg_meta);
+                        let mut seg_start = 0usize;
+                        let mut seg_start_w = 0.0f32;
+                        for &(cc, cw) in bounds.iter() {
+                            if cc <= seg_start || cc > total_chars { continue; }
+                            let seg_w = cw - seg_start_w;
+                            let seg_w_tw = pt_to_tw(seg_w);
+                            if current_width_tw + seg_w_tw > available_tw
+                                && !current_line.fragments.is_empty() && !para_all_whitespace {
+                                lines.push(std::mem::take(&mut current_line));
+                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                            }
+                            // Exact run metadata for this segment (matches the default
+                            // per-«/» fragmentation), so DWrite shapes it identically.
+                            let (ridx, choff) = seg_meta.iter()
+                                .find(|m| m.0 == seg_start)
+                                .map(|m| (m.1, m.2))
+                                .unwrap_or((word_run_index, word_char_offset + seg_start));
+                            let seg: String = wchars[seg_start..cc].iter().collect();
+                            current_line.fragments.push(LineFragment {
+                                text: seg, width: seg_w, natural_width: seg_w, style: ws.clone(),
+                                tab_alignment: None, tab_position: None, field_type: wft,
+                                run_index: ridx, char_offset: choff,
+                            });
+                            current_width += seg_w; current_width_tw += seg_w_tw; current_capw_tw += seg_w_tw;
+                            seg_start = cc; seg_start_w = cw;
+                        }
+                        word.clear();
+                        word_width = 0.0;
+                        word_natural_width = 0.0;
+                    } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
                     if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
@@ -6885,6 +6981,9 @@ impl LayoutEngine {
                     current_capw_tw += word_width_tw; // S475: words have no punct capacity
                     word_width = 0.0;
                     word_natural_width = 0.0;
+                    if latin_wordwrap { word_seg_meta.clear(); }
+                    }
+                    if latin_wordwrap { seg_pending = false; }
                 }
             };
         }
@@ -7712,10 +7811,22 @@ impl LayoutEngine {
                         word_run_index = frag_run_index;
                         word_char_offset = char_pos_in_run;
                     }
+                    if latin_wordwrap && (word.is_empty() || seg_pending) {
+                        word_seg_meta.push((word.chars().count(), frag_run_index, char_pos_in_run));
+                        seg_pending = false;
+                    }
                     word.push(ch);
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
-                    flush_word!(style);
+                    if latin_wordwrap {
+                        // Record a break OPPORTUNITY (after this char) instead of forcing
+                        // a flush — the maximal Latin token is kept together and only split
+                        // by flush_word when it overflows a full line (Western word-wrap).
+                        word_breaks.push((word.chars().count(), word_width));
+                        seg_pending = true; // next char starts a new segment
+                    } else {
+                        flush_word!(style);
+                    }
                 } else if kinsoku::is_cjk(ch) {
                     // CJK characters always break at char boundaries (subject to kinsoku).
                     // ECMA-376 §17.3.1.40: wordWrap controls LATIN word-break only.
@@ -8443,6 +8554,10 @@ impl LayoutEngine {
                         word_run_index = frag_run_index;
                         word_char_offset = char_pos_in_run;
                     }
+                    if latin_wordwrap && (word.is_empty() || seg_pending) {
+                        word_seg_meta.push((word.chars().count(), frag_run_index, char_pos_in_run));
+                        seg_pending = false;
+                    }
                     word.push(ch);
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
@@ -8452,30 +8567,12 @@ impl LayoutEngine {
             // Do NOT flush word here — it may continue in the next fragment
         }
 
-        // Flush any remaining word after all fragments
+        // Flush any remaining word after all fragments. Route through flush_word! so a
+        // LATIN-WORDWRAP over-long token at the paragraph end is split too; the default
+        // path inside the macro is the same break/push logic as the original inline flush.
         if !word.is_empty() {
-            let ws = word_style.take().unwrap_or_else(|| {
-                fragments.last().map(|f| f.1.clone()).unwrap_or_default()
-            });
-            let wft = word_field_type.take();
-            // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-            if current_width_tw + pt_to_tw(word_width) > available_tw && !current_line.fragments.is_empty()
-                && !para_all_whitespace {
-                lines.push(std::mem::take(&mut current_line));
-                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
-            }
-            current_line.fragments.push(LineFragment {
-                text: word,
-                width: word_width,
-                natural_width: word_natural_width,
-                style: ws,
-                tab_alignment: None,
-                tab_position: None,
-                field_type: wft,
-                run_index: word_run_index,
-                char_offset: word_char_offset,
-            });
-            current_width += word_width;
+            let fallback_style = fragments.last().map(|f| f.1.clone()).unwrap_or_default();
+            flush_word!(fallback_style);
         }
 
         // Flush last line
