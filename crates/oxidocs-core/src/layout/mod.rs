@@ -11445,6 +11445,35 @@ impl LayoutEngine {
                         } else {
                             (wrap_w - p_first_line_indent).max(0.0)
                         };
+                        // PROPCELL WRAP CAP (tokyoshugyo/d77a commentary boxes, 2026-06-23, default
+                        // ON, opt-out OXI_PROPCELL_DISABLE): a jc=LEFT single-cell
+                        // box in a PROPORTIONAL CJK font (MS PMincho/PGothic — the 参考/ガイドライン
+                        // 抜粋 commentary boxes) has its wrap ~1 cellMar TOO WIDE (S585c: Oxi cell
+                        // right border = content+2×cellMar vs Word +1×). Oxi wraps at x515.5 vs Word
+                        // x510 → fits ~1 char/line more → content shifts up → page-bottom over-fit →
+                        // the discrete −1 page flips (page-20 趣旨 box: «…ことか|ら、» Oxi 2 / Word 3
+                        // lines). CAP the wrap at the page text-margin (start_x+content_width = Word's
+                        // content-right ≈ x510), paired with the bounded oikomi below (the trailing
+                        // 約物 then overflows enough to oikomi, matching Word). UNLIKE the S585c
+                        // 条文-box PGCAP (which over-corrects because Oxi doesn't compress 約物 in
+                        // JUSTIFIED cells), the jc=LEFT commentary boxes break at NATURAL proportional
+                        // width + oikomi the line-end 約物 (no 約物 compression involved). Scoped to
+                        // proportional + jc=left + single-cell. See [[tokyoshugyo_wrap_not_cellheight]].
+                        let propcell_wrap_cap = std::env::var("OXI_PROPCELL_DISABLE").is_err()
+                            && row.cells.len() == 1
+                            && !matches!(para.alignment, Alignment::Right | Alignment::Center)
+                            && para.runs.iter().any(|r| {
+                                self.resolve_font_family_for_text(&r.text, &r.style, &para.style)
+                                    .map_or(false, |f| f.contains("Ｐ明朝") || f.contains("Ｐゴシック")
+                                        || f.contains("PMincho") || f.contains("PGothic"))
+                            });
+                        if propcell_wrap_cap {
+                            let pg_right = start_x + content_width;
+                            let cont_left = cell_x + pad_l + p_indent_left;
+                            wrap_w = wrap_w.min((pg_right - cont_left).max(0.0));
+                            let fl_left = cell_x + pad_l + (p_indent_left + p_first_line_indent).max(0.0);
+                            first_line_wrap_w = first_line_wrap_w.min((pg_right - fl_left).max(0.0));
+                        }
                         // OXI_PGCAP (tokyoshugyo #2c, half of the coupled fix): cap the cell
                         // content wrap at the PAGE TEXT-MARGIN right (start_x+content_width), not
                         // the over-wide cell border (S585c +1-cellMar over). Must be paired with
@@ -11945,6 +11974,26 @@ impl LayoutEngine {
                                     // per-line best-fit + a1d6-safe gate = multi-session. Reverted.
                                     would_overflow_natural
                                 };
+                                // PROPCELL OIKOMI (tokyoshugyo/d77a commentary boxes, 2026-06-23,
+                                // default ON, opt-out OXI_PROPCELL_DISABLE):
+                                // a jc=LEFT cell in a PROPORTIONAL CJK font (MS PMincho/PGothic/
+                                // HGPGothicM — the 参考/ガイドライン抜粋 commentary boxes) FORCE-FITS
+                                // an overflowing line-end 約物 (S421 oikomi is gated to cellmar/tab
+                                // cells, neither fires here) → it hangs the trailing 、/。 ~6.3pt past
+                                // the margin where Word OIKOMI's the cluster (pushes 約物+companion to
+                                // the next line). Word PDF (page-20 趣旨 box): «…ことか|ら、» — Word
+                                // breaks at か, Oxi packs «から、» (、 to x516.3) → 2 lines vs Word 3 →
+                                // content shifts up ~1 line → page-bottom over-fit → −1 page flips.
+                                // Enable the S421 oikomi when the 約物 overflows past OXI_PROPCELL_BOUND
+                                // (default 5.0pt ≈ Word's measured ~5.9pt max line-end 約物 hang).
+                                let propcell_oikomi = std::env::var("OXI_PROPCELL_DISABLE").is_err()
+                                    && !matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                    && font_family.as_deref().map_or(false, |f|
+                                        f.contains("Ｐ明朝") || f.contains("Ｐゴシック")
+                                        || f.contains("PMincho") || f.contains("PGothic"));
+                                let propcell_over = (line_x + buf_w + cw) - effective_wrap;
+                                let propcell_bound: f32 = std::env::var("OXI_PROPCELL_BOUND").ok()
+                                    .and_then(|v| v.parse().ok()).unwrap_or(5.0);
                                 if !is_space && would_overflow && !(current_line.is_empty() && buf.is_empty()) {
                                     // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
                                     if kinsoku::is_line_start_prohibited(ch) {
@@ -11974,7 +12023,8 @@ impl LayoutEngine {
                                             && (s412_cellmar_subtract
                                                 || (std::env::var("OXI_S443_DISABLE").is_err()
                                                     && p_first_line_indent < 0.0
-                                                    && para_has_tab)) {
+                                                    && para_has_tab)
+                                                || (propcell_oikomi && propcell_over > propcell_bound)) {
                                             let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
                                             let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
                                             loop {
