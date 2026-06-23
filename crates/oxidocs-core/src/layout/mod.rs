@@ -4688,8 +4688,33 @@ impl LayoutEngine {
                 }
             };
 
-            // Page break check for marker
-            if cursor.cursor_y + line_height > page_top + content_height {
+            // Page break check for marker.
+            // S651 (2026-06-24): a 2-cell (sz>=14) numbered chapter heading's MARKER
+            // must break to the next page WITH its body. `line_height` above (via
+            // com_line_height) can return a 1-cell value (18) while the body's first
+            // line snaps to 2 cells (line_height_for_line, 83/64 grid-ceil → 36); when
+            // S651 pushes the body's first line to the next page, the marker would
+            // otherwise STRAND on this page. Use the grid-snapped 83/64 natural for the
+            // marker's break check so the marker moves with its body. Only changes a
+            // multi-cell heading at the page bottom (the S651 case); 1-cell markers are
+            // unchanged (snapped == line_height).
+            let marker_break_h = if para.style.snap_to_grid
+                && std::env::var("OXI_S651_DISABLE").is_err() {
+                match grid_pitch {
+                    Some(p) if p > 0.0 => {
+                        // Use the CJK text metrics (metrics_for_text on the marker text)
+                        // to match the BODY's grid-snapped height — marker_metrics (style)
+                        // resolves to the ascii/hAnsi font (non-83/64) giving a 1-cell
+                        // value, while the body uses the eastAsia 83/64 font (2 cells).
+                        let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
+                        let nat = nat_metrics.word_line_height_no_grid(marker_font_size);
+                        let snapped = (((nat + p * 0.5) / p) + 0.5).floor().max(1.0) * p;
+                        line_height.max(snapped)
+                    }
+                    _ => line_height,
+                }
+            } else { line_height };
+            if cursor.cursor_y + marker_break_h > page_top + content_height {
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -5193,8 +5218,25 @@ impl LayoutEngine {
             let s_tgfull = std::env::var("OXI_S_TGFULL").ok().as_deref() == Some("1")
                 && !page.doc_grid_no_type
                 && effective_lh > natural_lh + 0.1;
+            // S651 (2026-06-24, default ON, opt-out OXI_S651_DISABLE): a typed-grid
+            // line that snaps to 2+ grid cells (effective_lh > 1.5*pitch — a sz>=14pt
+            // chapter heading: natural 18.16 > pitch 18 → cells=2 → effective_lh=36)
+            // must fit its FULL box at the page bottom. The Day-33/S576 natural_lh
+            // leniency forgives only ONE grid cell's leading (~4pt, cell−ink); a 2-cell
+            // heading has a WHOLE empty 2nd cell (~18pt) below the ink, and Word does
+            // NOT let that hang into the bottom margin. tokyoshugyo 第４章 at Op22 y730:
+            // box 36 → bottom 766 > content_bottom 756.85 → Word pushes to p23 (=Word
+            // p23 top), but Oxi's natural_lh 18.16 → 748.16 wrongly fit it on p22 →
+            // the WHOLE 第４章 chapter region (一般勤務 …) cascaded to −1. NARROWER than
+            // OXI_S_TGFULL (which fires on every 1-cell line where effective_lh>natural_lh
+            // = the ~4pt grid leading Word DOES allow to hang → over-corrects the 賃金
+            // body). Only multi-cell (sz>=14) headings trigger. Exact (S548b) / empty
+            // (S562b) lines already use the full box.
+            let s651_multicell_head = std::env::var("OXI_S651_DISABLE").is_err()
+                && !page.doc_grid_no_type
+                && grid_pitch.map_or(false, |p| p > 0.0 && effective_lh > p * 1.5);
             let break_threshold = if s548b_exact_full || s562b_empty_full
-                || s603_typed_fullbox || s605_line0_2 || s_tgfull {
+                || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head {
                 effective_lh
             } else {
                 ink_lh.min(effective_lh)
