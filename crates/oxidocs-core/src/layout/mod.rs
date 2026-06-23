@@ -7843,6 +7843,24 @@ impl LayoutEngine {
                         .flat_map(|f| f.text.chars())
                         .filter(|&c| kinsoku::is_cjk_compressible(c))
                         .count();
+                    // EVEN-DISTRIBUTION break ATTEMPTED + FALSIFIED on the gate (2026-06-23,
+                    // OXI_EVENDIST): the hypothesis was that the flat-cap s475 break wrongly
+                    // wraps nedocontract word_i=333 «イ…規定する子» because the OPENING
+                    // bracket 社（ is capped at 3.1 < its needed even-share 3.335, where
+                    // Word distributes the line's demand EVENLY across the 約物 (、3.36 +
+                    // （3.31 ≈ demand/2). Implemented `fit iff (natural demand)/(n約物) ≤ aki`
+                    // and swept OXI_EVENDIST_AKI on the Phase-1 gate: NO clean window exists.
+                    // aki≤3.1 → 333 still +1 AND a new line over-fits (-1); aki 3.2-3.3 →
+                    // 4 over-fits, +1 remains; aki≥3.33 → 333 fits but 3 lines over-fit
+                    // ({-1:3,0:478}=0.9938 < the flat-cap {0:480,1:1}=0.9979). 333's
+                    // even-share (≈3.33) is HIGHER than the over-fit lines' → non-monotonic:
+                    // any aki that fits 333 over-fits the others. Even-distribution ≡ the
+                    // flat-cap at the equivalent cap (the {-1:3} EXACTLY matches flat
+                    // open=3.34) — it is the SAME fit-iff decision function. CONFIRMS the
+                    // char-budget wall on the gate: the nedo +1×1 residual is a per-line
+                    // oikomi/oidashi BADNESS remainder, not a per-約物 cap/distribution
+                    // issue (needs Word's per-line wrap penalty, not a cap). Reverted.
+                    // See [[char_budget_wall]].
                     // Phase 2 pair-yakumono compression for compressPunctuation docs.
                     // COM-refined 2026-04-17: Word only absorbs overflow when a
                     // PAIR of adjacent yakumono is present that can actually
