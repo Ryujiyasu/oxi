@@ -7441,6 +7441,13 @@ impl LayoutEngine {
             let s475_open: f32 = std::env::var("OXI_S475_OPEN").ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(if s639_body_oikomi { 3.1 } else { s475_solo });
+            // S645 (2026-06-23) FALSIFIED + reverted: a demand-aware closing-bracket
+            // cap (」/） before a non-bracket → light ~0.84, Word-measured) did NOT
+            // fix nedo's cumulative over-pack (still −1×3 at close 1.0-2.0; the
+            // over-pack is not a per-約物-type cap issue) AND regressed b837 1.0→0.9859
+            // (the closing cap is canary-load-bearing for b837's footnote/linesAndChars).
+            // Combined with n_period (openings), still no clean nedo fix → the caps are
+            // inter-doc-coupled; nedo needs Word's reflow, not a cap model. See [[char_budget_wall]].
             let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
             let s473_cap: f32 = std::env::var("OXI_S473_CAP").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(3.25);
