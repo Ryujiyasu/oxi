@@ -4464,6 +4464,48 @@ impl LayoutEngine {
             }
         }
 
+        // S662 (2026-06-24): bodyPr@compatLnSpc="1" textbox text vertical DY.
+        // A DrawingML textbox with compatLnSpc="1" (legacy "compatible line
+        // spacing") places its text ~2.5pt LOWER than Oxi's default placement
+        // (Word reserves the line's leading ABOVE the first baseline; Oxi does
+        // not, rendering textbox text ~1.3-2.8pt too HIGH — measured on 1ec1:
+        // ◎ headings +1.3, □ headings +1.9, ・ bullets +2.8). 1ec1 (the
+        // corpus's worst SSIM, all meaningful textboxes compatLnSpc=1) was the
+        // localizer: textbox POSITIONS are pixel-perfect (bars+boxes match
+        // Word exactly), only the text-in-box baseline is too high. DISCRIMINATOR
+        // is compatLnSpc itself: the SSIM A/B (ssim_ab.py OXI_S662_DISABLE)
+        // showed the gain is concentrated in the THREE compatLnSpc=1 textbox
+        // docs (1ec1 +0.066, 2ea81a +0.0018, b35123 +0.0003) while the SIX
+        // non-compatLnSpc textbox docs (3a4f 64-txbx PASS canary, 459f05,
+        // 29dc6e, 9a8e, bd90b00, 664c) showed ≤0.0011 — scoping to
+        // compatLnSpc=1 leaves them BYTE-IDENTICAL (0 regression by
+        // construction; full-corpus byte-scan confirms ONLY 1ec1 + 2ea81a
+        // change across all 238 word_png bases — kyotei/ohnoshugyo/b837 etc.
+        // with compatLnSpc=1 don't fire). Render-only (shifts text-glyph y only;
+        // box fill/border/clip unchanged) → element.y of body flow / pagination
+        // unaffected (verified: 2ea81a body-para + textbox-text page
+        // distribution byte-identical ON/OFF). Default ON, opt-out
+        // OXI_S662_DISABLE, override OXI_S662_DY.
+        if text_box.compat_line_spacing && std::env::var("OXI_S662_DISABLE").is_err() {
+            // 2.0 chosen over 1ec1's solo SSIM peak (2.5): it is 2ea81a's
+            // per-doc-mean OPTIMUM (the other compat doc) and near the joint
+            // corpus-SSIM peak (~2.25), giving 1ec1 +0.055 / 2ea81a mean +0.009
+            // while minimizing 2ea81a p2's per-page dip. The exact per-line
+            // compat offset is font-leading-dependent (a constant over-corrects
+            // some lines, e.g. 2ea81a p2) — the deeper refinement.
+            let dy = std::env::var("OXI_S662_DY")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(2.0);
+            if dy != 0.0 {
+                for el in elements.iter_mut() {
+                    if matches!(el.content, LayoutContent::Text { .. }) {
+                        el.y += dy;
+                    }
+                }
+            }
+        }
+
         // Patch background fill and clip elements with actual height
         for el in elements.iter_mut() {
             if el.x == abs_x && el.y == abs_y && el.height == text_box.height {

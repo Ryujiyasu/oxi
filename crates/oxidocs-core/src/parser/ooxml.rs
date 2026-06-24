@@ -3213,6 +3213,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut text_body_anchor: Option<String> = None;
     // S481: bodyPr@vertOverflow ("overflow" default / "clip" / "ellipsis").
     let mut text_vert_overflow: Option<String> = None;
+    // S662: bodyPr@compatLnSpc="1" (legacy "compatible line spacing").
+    let mut text_compat_ln_spc = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
 
@@ -3511,6 +3513,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "anchor" => { text_body_anchor = Some(val.to_string()); }
                                 "vertOverflow" => { text_vert_overflow = Some(val.to_string()); }
+                                "compatLnSpc" => { text_compat_ln_spc = val == "1" || val == "true"; }
                                 _ => {}
                             }
                         }
@@ -3839,6 +3842,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 "anchor" => { text_body_anchor = Some(val.to_string()); }
                                 "vertOverflow" => { text_vert_overflow = Some(val.to_string()); }
+                                "compatLnSpc" => { text_compat_ln_spc = val == "1" || val == "true"; }
                                 _ => {}
                             }
                         }
@@ -4004,6 +4008,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             relative_height,
             behind_doc,
             vert_overflow: text_vert_overflow,
+            compat_line_spacing: text_compat_ln_spc,
         })
     } else {
         None

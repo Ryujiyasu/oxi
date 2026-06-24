@@ -642,6 +642,13 @@ pub struct TextBox {
     /// vertically), "clip", or "ellipsis". None = overflow (default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vert_overflow: Option<String>,
+    /// S662: bodyPr@compatLnSpc="1" — "compatible line spacing" (legacy Word
+    /// line-spacing model). With it set, Word places textbox text ~2.5pt LOWER
+    /// (the line's leading sits above the first baseline); Oxi's default
+    /// placement is ~2.5pt too HIGH. Used to apply a render-only text DY scoped
+    /// to compatLnSpc=1 textboxes. Default false (most textboxes lack the attr).
+    #[serde(default)]
+    pub compat_line_spacing: bool,
 }
 
 /// A geometric shape (DrawingML or VML)
