@@ -441,8 +441,26 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
         }
         MathExpr::Nary { op, sub, sup, operand, lim_loc, .. } => {
             let fs = ctx.font_size;
-            let op_size = if ctx.style.is_display() { fs * 1.6 } else { fs * 1.2 };
-            let op_w = op_size * 0.6;
+            let op_is_integral = ('\u{222B}'..='\u{2233}').contains(op);
+            // S653 (coverage): a DISPLAY integral sign is drawn EXTRA-tall —
+            // Word ∫ ink ≈ fs×2.34 (26.64pt @fs=10.5, _glyphsize.py) vs the
+            // generic fs×1.6 display operator (∑∏…). S525 fixed the integral's
+            // limit placement (subSup) but left op_size at the generic display
+            // size, so the ∫ rendered ~8.6pt too short (and S652 then honestly
+            // reserved that short drawing). Keep ∑/∏ at fs×1.6 (sum reserve was
+            // already −0.96, the stacked limits drive its height).
+            let op_size = if op_is_integral && ctx.style.is_display() {
+                fs * 2.34
+            } else if ctx.style.is_display() {
+                fs * 1.6
+            } else {
+                fs * 1.2
+            };
+            // ∫ is tall-and-NARROW (advance ≈ 0.36× its height) unlike the
+            // roughly-square ∑/∏ (0.6×). Decouple width from the S653 taller
+            // op_size so the operand isn't pushed right (Word ∫ total width
+            // 17.28pt vs Oxi 24.0 under the 0.6 factor, _glyphwh.py).
+            let op_w = op_size * if op_is_integral { 0.36 } else { 0.6 };
             let lim_ctx = ctx.descend_script();
             let sub_b = sub.as_ref().map(|s| layout_expr(s, &lim_ctx));
             let sup_b = sup.as_ref().map(|s| layout_expr(s, &lim_ctx));
@@ -451,7 +469,7 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             // reserved bbox matches the draw. Stacking (undOvr) reserves
             // op_size+limit above/below; integrals & inline keep subSup (limits
             // to the right -> height ≈ op_size, width += limits).
-            let op_is_integral = ('\u{222B}'..='\u{2233}').contains(op);
+            // (op_is_integral computed above for the S653 op_size.)
             let stacked = matches!(lim_loc, crate::ir::LimLoc::UndOvr)
                 || (ctx.style.is_display() && matches!(lim_loc, crate::ir::LimLoc::SubSup) && !op_is_integral);
             if stacked {
@@ -1244,9 +1262,18 @@ fn emit_nary(
         lim_loc
     };
 
-    // Operator glyph: render larger if grow or display.
-    let op_size = if ctx.style.is_display() { fs * 1.6 } else { fs * 1.2 };
-    let op_w = op_size * 0.6;
+    // Operator glyph: render larger if grow or display. S653 (coverage): a
+    // DISPLAY integral is drawn extra-tall (Word ∫ ink ≈ fs×2.34); see the
+    // layout_expr Nary counterpart.
+    let op_size = if op_is_integral && ctx.style.is_display() {
+        fs * 2.34
+    } else if ctx.style.is_display() {
+        fs * 1.6
+    } else {
+        fs * 1.2
+    };
+    // ∫ tall-and-narrow: decouple advance width from the taller op_size (S653).
+    let op_w = op_size * if op_is_integral { 0.36 } else { 0.6 };
 
     let mut elems = Vec::new();
     let mut cur_x = x;
