@@ -6170,9 +6170,12 @@ impl LayoutEngine {
                     let a = self.metrics_for_text(&f.text, &f.style, &para.style).word_ascent_pt(fs);
                     // S655: a w:position-raised run extends the line ascent so the
                     // baseline drops to contain it (matches the line-height growth).
+                    // S656: an emphasis mark above the char (dot/comma/circle) also
+                    // extends the ascent.
+                    let em_asc = self.emphasis_above_pt(f, fs).filter(|v| *v > 0.0).unwrap_or(0.0);
                     if std::env::var("OXI_S655_DISABLE").is_err() {
-                        a + f.style.position.map_or(0.0, |p| p.max(0.0))
-                    } else { a }
+                        a + f.style.position.map_or(0.0, |p| p.max(0.0)) + em_asc
+                    } else { a + em_asc }
                 }).fold(0.0_f32, f32::max)
             };
 
@@ -6376,6 +6379,71 @@ impl LayoutEngine {
                                 ruby_el.width = ruby_w + ruby_char_count as f32 * ruby_char_spacing;
                             }
                             elements.push(ruby_el);
+                        }
+                    }
+                }
+
+                // S656 (2026-06-24): emit emphasis marks (圏点, w:em) — a small
+                // mark above each base char (below for underDot). Word does not
+                // render the run via w:em alone, it ADDS the marks; Oxi parsed
+                // emphasis_mark but never drew it. Per-FRAGMENT (not gated on
+                // char_offset) so a wrapped run marks each line's chars. The line
+                // already grew via emphasis_above_pt. 0/corpus → coverage.
+                if std::env::var("OXI_S656_DISABLE").is_err() {
+                    if let Some(em) = frag.style.emphasis_mark.as_deref() {
+                        if em != "none" && !frag.text.is_empty() {
+                            let mark = match em {
+                                "circle" => '○',
+                                "comma" => '﹅',
+                                "underDot" => '●',
+                                _ => '●', // "dot"
+                            };
+                            let base_pt = frag.style.font_size.unwrap_or(para_font_size);
+                            let mark_pt = base_pt * 0.5;
+                            let base_metrics = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                            let mark_str = mark.to_string();
+                            let mark_metrics = self.metrics_for_text(&mark_str, &frag.style, &para.style);
+                            let mark_w = self.registry.char_width_pt_with_fallback(mark, mark_pt, mark_metrics);
+                            let mark_family = self.resolve_font_family_for_text(&mark_str, &frag.style, &para.style)
+                                .map(|s| s.to_string());
+                            let mark_color = self.resolve_color(&frag.style, &para.style).map(|s| s.to_string());
+                            let below = em == "underDot";
+                            // The char top sits at base_el_y + text_y_off + the
+                            // emphasis growth (the grown ascent pushes the baseline
+                            // down by that much); place the mark in the gap just
+                            // above it (or below the char for underDot).
+                            let em_above = base_pt * 0.33;
+                            let char_top = base_el_y + text_y_off + em_above;
+                            let mut cx = base_el_x;
+                            for ch in frag.text.chars() {
+                                let cw = self.registry.char_width_pt_with_fallback(ch, base_pt, base_metrics);
+                                let mx = cx + (cw - mark_w) / 2.0;
+                                let my = if below {
+                                    char_top + base_pt * 0.92
+                                } else {
+                                    char_top - mark_pt
+                                };
+                                let mut mel = LayoutElement::new(
+                                    mx, my, mark_w, mark_pt * 1.2,
+                                    LayoutContent::Text {
+                                        text: mark_str.clone(),
+                                        font_size: mark_pt,
+                                        font_family: mark_family.clone(),
+                                        bold: false, italic: false, underline: false,
+                                        underline_style: None, strikethrough: false,
+                                        double_strikethrough: false, color: mark_color.clone(),
+                                        highlight: None, field_type: None,
+                                        character_spacing: 0.0, text_scale: 100.0,
+                                        is_vertical: false,
+                                    },
+                                );
+                                if let Some(pi) = body_para_index {
+                                    mel.paragraph_index = Some(pi);
+                                    mel.run_index = Some(frag.run_index);
+                                }
+                                elements.push(mel);
+                                cx += cw;
+                            }
                         }
                     }
                 }
@@ -9275,6 +9343,23 @@ impl LayoutEngine {
     /// Oxi rejects lines whose grid-pitch bottom exceeds pgBot by even a
     /// few points (db9ca18 +2pt), while Word fits them (db9ca18 i=37
     /// extends 5.25pt past pgBot in Word).
+    /// S656 (2026-06-24): line-height growth (pt) for a fragment's emphasis
+    /// mark (圏点, `w:em`). Marks sit ABOVE the char (dot/comma/circle →
+    /// positive = grow ascent) or BELOW (underDot → negative = grow descent).
+    /// Word grows the line ~0.33em (perturb_probe.py: MS Mincho 11pt em →
+    /// +3.6pt). Same above-line-annotation class as ruby. 0/corpus
+    /// (greenfield). Opt-out OXI_S656_DISABLE.
+    fn emphasis_above_pt(&self, frag: &LineFragment, font_size: f32) -> Option<f32> {
+        if std::env::var("OXI_S656_DISABLE").is_ok() {
+            return None;
+        }
+        match frag.style.emphasis_mark.as_deref() {
+            Some("underDot") => Some(-(font_size * 0.33)),
+            Some(v) if v != "none" => Some(font_size * 0.33),
+            _ => None,
+        }
+    }
+
     fn natural_line_height_for_line(
         &self,
         line: &Line,
@@ -9304,6 +9389,9 @@ impl LayoutEngine {
                         asc += pos.max(0.0);
                         des += (-pos).max(0.0);
                     }
+                }
+                if let Some(a) = self.emphasis_above_pt(frag, font_size) {
+                    if a >= 0.0 { asc += a; } else { des += -a; }
                 }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
@@ -9427,6 +9515,9 @@ impl LayoutEngine {
                         asc += pos.max(0.0);
                         des += (-pos).max(0.0);
                     }
+                }
+                if let Some(a) = self.emphasis_above_pt(frag, font_size) {
+                    if a >= 0.0 { asc += a; } else { des += -a; }
                 }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
