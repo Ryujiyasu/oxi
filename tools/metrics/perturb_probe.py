@@ -50,7 +50,9 @@ INJECTIONS = {
     'superscript':   '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s%s</w:p>' % (
                       _rpr(), run('x'), run('2', 22, '<w:vertAlign w:val="superscript"/>')),
     'position_up':   '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s%s</w:p>' % (
-                      _rpr(), run('A'), run('B', 22, '<w:position w:val="12"/>')),  # raised 6pt
+                      _rpr(), run('A'), run('B', 22, '<w:position w:val="12"/>')),
+    'position_dn22': '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s%s</w:p>' % (
+                      _rpr(), run('A'), run('B', 22, '<w:position w:val="-22"/>')),  # corpus value (3a4f/model)  # raised 6pt
     'charspacing':   '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
                       _rpr(), run('文字間隔', 22, '<w:spacing w:val="60"/>')),       # +3pt tracking
     'wscale50':      '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
