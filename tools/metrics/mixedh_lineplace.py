@@ -45,11 +45,26 @@ MATH = {
     'frac':   '<m:f><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (r('a'), r('b')),
     'nest':   '<m:f><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (
               '<m:f><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (r('a'), r('b')), r('c')),  # 3 levels
+    'sub':    '<m:sSub><m:e>%s</m:e><m:sub>%s</m:sub></m:sSub>' % (r('x'), r('i')),
     'rad':    '<m:rad><m:deg/><m:e>%s</m:e></m:rad>' % r('x'),
+    'radfrac': '<m:rad><m:deg/><m:e>%s</m:e></m:rad>' % (
+              '<m:f><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (r('a'), r('b'))),  # radical of a fraction
     'sum':    '<m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub>%s</m:sub><m:sup>%s</m:sup><m:e>%s</m:e></m:nary>' % (
               r('1'), r('n'), r('i')),                                          # tall (n-ary)
+    'integral': '<m:nary><m:naryPr><m:chr m:val="∫"/></m:naryPr><m:sub>%s</m:sub><m:sup>%s</m:sup><m:e>%s</m:e></m:nary>' % (
+              r('0'), r('1'), r('x')),                                          # n-ary integral (subSup limits)
     'matrix': '<m:m><m:mr><m:e>%s</m:e><m:e>%s</m:e></m:mr><m:mr><m:e>%s</m:e><m:e>%s</m:e></m:mr></m:m>' % (
               r('a'), r('b'), r('c'), r('d')),                                  # 2 rows tall
+    'abs':    '<m:d><m:dPr><m:begChr m:val="|"/><m:endChr m:val="|"/></m:dPr><m:e>%s</m:e></m:d>' % r('x'),
+    'delim':  '<m:d><m:dPr><m:begChr m:val="("/><m:endChr m:val=")"/></m:dPr><m:e>%s</m:e></m:d>' % (
+              '<m:f><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (r('a'), r('b'))),  # parens around a fraction
+    'bar':    '<m:bar><m:barPr><m:pos m:val="top"/></m:barPr><m:e>%s</m:e></m:bar>' % r('x'),
+    'borderbox': '<m:borderBox><m:e>%s</m:e></m:borderBox>' % ('%s%s%s' % (r('E'), r('='), r('m'))),
+    'nestrad': '<m:rad><m:deg/><m:e><m:rad><m:deg/><m:e>%s</m:e></m:rad></m:e></m:rad>' % r('x'),
+    'prescript': '<m:sPre><m:e>%s</m:e><m:sub>%s</m:sub><m:sup>%s</m:sup></m:sPre>' % (r('X'), r('1'), r('2')),
+    'accent': '<m:acc><m:e>%s</m:e></m:acc>' % r('x'),
+    'eqarray': '<m:eqArr><m:e>%s</m:e><m:e>%s</m:e></m:eqArr>' % (
+              '%s%s%s' % (r('x'), r('+'), r('y')), '%s%s%s' % (r('a'), r('-'), r('b'))),  # 2 stacked rows
 }
 
 BODY = ('<w:p><w:pPr><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'

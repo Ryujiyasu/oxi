@@ -3456,10 +3456,25 @@ impl LayoutEngine {
                             let mut ink_bot = f32::NEG_INFINITY;
                             for e in &math_elems {
                                 let (lo, hi) = match &e.content {
-                                    LayoutContent::Text { .. } => {
-                                        let baseline = e.y + e.height * (2.0 / 3.0);
+                                    LayoutContent::Text { text, .. } => {
                                         let fs = e.height / 1.2;
-                                        (baseline - asc * fs, baseline + desc * fs)
+                                        let baseline = e.y + e.height * (2.0 / 3.0);
+                                        // An INTEGRAL sign (∫∮∬∭∮… U+222B–2233) is the
+                                        // one math glyph that curls ~0.3em BELOW the
+                                        // baseline, so its tight descent under-counts
+                                        // and the next line would overlap it (the ∫
+                                        // "None"/overlap case). Use its raw box. Every
+                                        // other glyph — including an ENLARGED √ or ∑,
+                                        // which are tall above the baseline but shallow
+                                        // below — keeps the tight cap-ascent/descent
+                                        // (the box over-reserves them, e.g. radfrac).
+                                        let is_integral = text.chars()
+                                            .any(|c| ('\u{222B}'..='\u{2233}').contains(&c));
+                                        if is_integral {
+                                            (e.y, e.y + e.height)
+                                        } else {
+                                            (baseline - asc * fs, baseline + desc * fs)
+                                        }
                                     }
                                     _ => (e.y, e.y + e.height),
                                 };
