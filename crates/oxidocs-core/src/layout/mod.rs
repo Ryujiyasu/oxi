@@ -12972,10 +12972,53 @@ impl LayoutEngine {
                             // preserved. Override/disable via OXI_S453_CELL_GLYPH_DY (set 0 to off).
                             // TODO refine: magnitude is doc-dependent (d77a/04b88e want ~2pt) —
                             // a leading-proportional δ would recover b35 and over-correct d77a.
-                            let cell_glyph_dy = std::env::var("OXI_S453_CELL_GLYPH_DY")
+                            let mut cell_glyph_dy = std::env::var("OXI_S453_CELL_GLYPH_DY")
                                 .ok()
                                 .and_then(|v| v.parse::<f32>().ok())
                                 .unwrap_or(1.5);
+                            // S660 (2026-06-24, default ON, opt-out OXI_S660_DISABLE, override
+                            // OXI_S660_EXTRA): a table cell whose exact line box COMPRESSES below the
+                            // natural CJK 83/64 cell renders ~1pt too HIGH even after the flat S453
+                            // +1.5. Gold-standard per-line (Word PDF vs Oxi --dump-glyphs): the
+                            // tokumei form family has exact line 12.7 < natural 83/64 13.62 (10.5pt)
+                            // → +0.96-1.45 still too high; 459f05's exact 15.0 > natural → aligned at
+                            // 1.5. Add an extra +1.0 DY ONLY for these compressed CJK cells. The
+                            // reference is the 83/64 natural (word_line_height_no_grid), NOT
+                            // word_line_height_table_cell (=12.625 for 10.5pt, BELOW tokumei's 12.7 lh
+                            // → would never fire). SCOPE: expanded cells (459f05 lh>natural) AND the
+                            // gen2 family (auto/single, lh≈natural or larger fonts) are byte-identical
+                            // (NOT compressed) → fully protected. Full corpus SSIM A/B (extra=1.0):
+                            // only 30 docs change, net +0.1161, 18 improve (the form bottom-N: 6514
+                            // +0.0333, a1d6 +0.0241, d4d126 +0.0178, de6e32 +0.0164, tokumei_08_09
+                            // +0.0139, 2ea81a +0.0081, b35 +0.0013), 6 regress. RESIDUAL: 31420
+                            // (−0.0136) + order_09 (−0.0076) have CUMULATIVE per-line drift (offset
+                            // grows top→bottom), not a uniform per-cell offset, so a constant DY
+                            // over-corrects them — the deeper cumulative line-pitch wall, deferred.
+                            // Render-only (text_y_off) → element.y / pagination / Phase-1 / IoU
+                            // preserved by construction (same as S453).
+                            let s660_extra = if std::env::var("OXI_S660_DISABLE").is_ok() {
+                                0.0
+                            } else {
+                                std::env::var("OXI_S660_EXTRA").ok()
+                                    .and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0)
+                            };
+                            if s660_extra != 0.0 && !line.is_empty() {
+                                let mut natural_cjk = 0.0_f32;
+                                for (text, fs, _, bold, italic, _u, _us, _st, ff, _c, _h, _cs, _ts) in line.iter() {
+                                    let mut rs = RunStyle::default();
+                                    rs.font_size = Some(*fs);
+                                    rs.bold = *bold; rs.italic = *italic;
+                                    if let Some(f) = ff { rs.font_family = Some(f.clone()); }
+                                    let m = self.metrics_for_text(text, &rs, &para.style);
+                                    if m.is_cjk_83_64_font() {
+                                        let n = m.word_line_height_no_grid(*fs);
+                                        if n > natural_cjk { natural_cjk = n; }
+                                    }
+                                }
+                                if natural_cjk > 0.0 && lh + 0.05 < natural_cjk {
+                                    cell_glyph_dy += s660_extra;
+                                }
+                            }
                             let cell_text_y_off = cell_text_y_off + cell_glyph_dy;
                             // S592: line-1 body starts AFTER the inline marker (no overlap).
                             let mut rx = if s592_cell_space && line_idx == 0 { s592_marker_reserve } else { 0.0_f32 };
