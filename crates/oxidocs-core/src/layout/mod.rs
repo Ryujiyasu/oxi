@@ -6167,7 +6167,12 @@ impl LayoutEngine {
             } else {
                 line.fragments.iter().map(|f| {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
-                    self.metrics_for_text(&f.text, &f.style, &para.style).word_ascent_pt(fs)
+                    let a = self.metrics_for_text(&f.text, &f.style, &para.style).word_ascent_pt(fs);
+                    // S655: a w:position-raised run extends the line ascent so the
+                    // baseline drops to contain it (matches the line-height growth).
+                    if std::env::var("OXI_S655_DISABLE").is_err() {
+                        a + f.style.position.map_or(0.0, |p| p.max(0.0))
+                    } else { a }
                 }).fold(0.0_f32, f32::max)
             };
 
@@ -6200,6 +6205,13 @@ impl LayoutEngine {
                     }
                     _ => (base_font_size, 0.0),
                 };
+                // S655 (2026-06-24): apply the w:position glyph shift. RunStyle
+                // .position is pt, positive = UP; vert_offset is negative=up so
+                // subtract. The line grows to match (two line-height fns +
+                // line_max_ascent). Opt-out OXI_S655_DISABLE.
+                let vert_offset = if std::env::var("OXI_S655_DISABLE").is_err() {
+                    vert_offset - frag.style.position.unwrap_or(0.0)
+                } else { vert_offset };
                 let resolved_bold = self.resolve_bold(&frag.style, &para.style);
                 let adjusted_width = frag.width + frag_width_adjustments[frag_idx];
 
@@ -7162,6 +7174,21 @@ impl LayoutEngine {
         let orphan_line_mult: f32 = std::env::var("OXI_ORPHAN_LINEMULT").ok()
             .and_then(|v| v.parse().ok()).unwrap_or(1.3);
         for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in fragments.iter().enumerate() {
+            // S655 (2026-06-24): flush the accumulated word at a w:position
+            // boundary so the per-run vertical shift survives as its OWN
+            // fragment. Adjacent Latin runs with no break char between them
+            // otherwise concatenate into a single word/fragment carrying only the
+            // FIRST run's style (word_style), DROPPING the next run's position
+            // (and the line-height growth it needs) — the OXI_DBG655 root cause.
+            // NARROW: fires only when adjacent runs differ in position; every
+            // non-position doc has None==None → no flush → byte-identical.
+            // Opt-out OXI_S655_DISABLE.
+            if std::env::var("OXI_S655_DISABLE").is_err()
+                && frag_outer_idx > 0
+                && fragments[frag_outer_idx - 1].1.position != style.position
+            {
+                flush_word!(fragments[frag_outer_idx - 1].1);
+            }
             let font_size = self.resolve_font_size(style, para_style);
             let mut char_pos_in_run = frag_char_start;
             // Char counts in PRECEDING / SUBSEQUENT fragments (paragraph-level total/
@@ -9268,8 +9295,16 @@ impl LayoutEngine {
             for frag in &line.fragments {
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                let asc = metrics.word_ascent_pt(font_size);
-                let des = metrics.word_descent_pt(font_size);
+                let mut asc = metrics.word_ascent_pt(font_size);
+                let mut des = metrics.word_descent_pt(font_size);
+                // S655: w:position raise (+) grows the ascent, lower (−) the
+                // descent (mirror of line_height_for_line_inner).
+                if std::env::var("OXI_S655_DISABLE").is_err() {
+                    if let Some(pos) = frag.style.position {
+                        asc += pos.max(0.0);
+                        des += (-pos).max(0.0);
+                    }
+                }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
             }
@@ -9377,6 +9412,21 @@ impl LayoutEngine {
                 {
                     asc = asc.max(font_size * 1160.0 / 1000.0);
                     des = des.max(font_size * 288.0 / 1000.0);
+                }
+                // S655 (2026-06-24): w:position raises (+) / lowers (−) the run
+                // and Word grows the line to contain it — perturb_probe.py:
+                // +6pt→+6 ascent, −11pt→+11 descent, both dirs; in a grid the
+                // augmented line snaps up to more cells. The per-run position
+                // survives to here only because break_into_lines now flushes the
+                // word at a position boundary (else adjacent runs merge into one
+                // fragment with the first run's style). w:position is in
+                // 3a4f/model/tokyoshugyo (val=−22 manual fractions), gate-
+                // entangled → canary-verified. Opt-out OXI_S655_DISABLE.
+                if std::env::var("OXI_S655_DISABLE").is_err() {
+                    if let Some(pos) = frag.style.position {
+                        asc += pos.max(0.0);
+                        des += (-pos).max(0.0);
+                    }
                 }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
