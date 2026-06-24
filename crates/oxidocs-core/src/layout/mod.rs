@@ -6783,7 +6783,28 @@ impl LayoutEngine {
             // estimate_para_height; this is the matching render-side
             // wiring so cursor positions match the estimate.
             if line_idx + 1 == lines.len() && ruby_para_expansion_pt > 0.0 {
-                cursor.advance(ruby_para_expansion_pt);
+                // S654 (coverage, 2026-06-24): in a TYPED docGrid the furigana
+                // makes the ruby line taller, and Word snaps the ruby-AUGMENTED
+                // line UP to whole grid cells — perturb_probe.py: Word 2 cells
+                // (36pt) vs Oxi 1 cell + raw overhang (23.76), Δ −12.24. The base
+                // line already advanced by its snapped height (no-grid path is
+                // already correct, +0.48), so add only the extra cell(s) that the
+                // natural base + furigana overhang needs. 0/corpus docs use ruby
+                // (greenfield-dormant) → byte-identical gate. Opt-out
+                // OXI_S654_DISABLE.
+                let typed_grid = para.style.snap_to_grid
+                    && grid_pitch.map_or(false, |p| p > 0.0)
+                    && !page.doc_grid_no_type
+                    && std::env::var("OXI_S654_DISABLE").is_err();
+                if typed_grid {
+                    let pitch = grid_pitch.unwrap();
+                    let nat = natural_line_heights.get(line_idx).copied().unwrap_or(line_height);
+                    let base_snapped = line_heights.get(line_idx).copied().unwrap_or(line_height);
+                    let augmented_snapped = ((nat + ruby_para_expansion_pt) / pitch).ceil() * pitch;
+                    cursor.advance((augmented_snapped - base_snapped).max(0.0));
+                } else {
+                    cursor.advance(ruby_para_expansion_pt);
+                }
             }
             // Only advance cumul index when cumulative round is active.
             // COM-confirmed (683f): paragraphs with non-uniform line heights
@@ -14761,7 +14782,22 @@ impl LayoutEngine {
             // expansion to make pagination match Word's larger paragraph box.
             let para_default_pt = self.resolve_font_size(&RunStyle::default(), &para.style);
             let ruby_exp = ruby::paragraph_ruby_expansion_pt(&para.runs, para_default_pt);
-            height += ruby_exp;
+            if ruby_exp > 0.0 {
+                // S654 (coverage): mirror the render-side ruby grid-snap so the
+                // page-break estimate matches. In a typed docGrid the ruby line
+                // snaps UP to whole cells (grid_no_type isn't threaded here, but
+                // no-type-grid ruby is 0/corpus and the render path excludes it).
+                let typed_grid = para.style.snap_to_grid
+                    && grid_pitch.map_or(false, |p| p > 0.0)
+                    && std::env::var("OXI_S654_DISABLE").is_err();
+                if typed_grid {
+                    let pitch = grid_pitch.unwrap();
+                    let augmented_snapped = ((max_line_height + ruby_exp) / pitch).ceil() * pitch;
+                    height += (augmented_snapped - max_line_height).max(0.0);
+                } else {
+                    height += ruby_exp;
+                }
+            }
         }
 
         if should_reset {
