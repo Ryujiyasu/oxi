@@ -1100,7 +1100,7 @@ pub struct ParagraphStyle {
 }
 
 /// Paragraph border definitions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParagraphBorders {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<BorderDef>,
@@ -1115,7 +1115,7 @@ pub struct ParagraphBorders {
 }
 
 /// A single border definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BorderDef {
     /// Border style (e.g. "single", "double", "dashed", "dotted", "thick")
     pub style: String,

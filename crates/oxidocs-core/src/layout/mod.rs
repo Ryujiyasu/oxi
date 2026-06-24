@@ -2518,6 +2518,8 @@ impl LayoutEngine {
         let mut lm2_cells: usize = 0;
         let mut prev_para_style_id: Option<String> = None;
         let mut prev_contextual_spacing: bool = false;
+        // S658: the previous body paragraph's pBdr, for the border-merge gate.
+        let mut prev_borders: Option<ParagraphBorders> = None;
         let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
@@ -3010,7 +3012,8 @@ impl LayoutEngine {
                         &mut pages,
                         &mut elements,
                         grid_pitch,
-                        prev_para_style_id.as_deref(), prev_contextual_spacing, false,
+                        prev_para_style_id.as_deref(), prev_contextual_spacing,
+                        prev_borders.as_ref(), false,
                         prev_space_after,
                         Some(block_idx),
                         lm2_param,
@@ -3180,6 +3183,7 @@ impl LayoutEngine {
 
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
+                    prev_borders = para.style.borders.clone();
                 }
                 Block::Table(table) => {
                     // COM-confirmed: prev paragraph's space_after is always added before table
@@ -3340,6 +3344,7 @@ impl LayoutEngine {
                         }
                     }
                     prev_para_style_id = None;
+                    prev_borders = None; // S658: a table breaks border-merge adjacency
                     prev_space_after = 0.0;
                 }
                 Block::Image(img) => {
@@ -3385,6 +3390,7 @@ impl LayoutEngine {
                     }));
                     cursor.advance(img_adv);
                     prev_para_style_id = None;
+                    prev_borders = None; // S658: an image breaks border-merge adjacency
                 }
                 Block::UnsupportedElement(_) => {
                     // Skip unsupported elements in layout
@@ -3651,7 +3657,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0, None, None, None,
+                            None, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
                             &empty_fn_h_hdr,
@@ -3682,7 +3688,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            false, 0.0, None, None, None,
+                            None, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
                             &empty_fn_h_ftr,
@@ -3998,7 +4004,7 @@ impl LayoutEngine {
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
-                                        false, 0.0, None, None, None,
+                                        None, false, 0.0, None, None, None,
                                         false, false, None,
                                         0.0,
                                         &empty_fn_h_note,
@@ -4286,6 +4292,7 @@ impl LayoutEngine {
                         // TextBox grid snap: enabled for "lines" grid, disabled for "linesAndChars"
                         if page.grid_char_pitch.is_some() { None } else { page.grid_line_pitch },
                         None, false, // no prev style/contextual tracking
+                        None, // S658: no border-merge tracking in textboxes
                         true, // in_textbox: suppress CJK compression
                         0.0, None, None, None,
                         false, false, None,
@@ -4486,6 +4493,14 @@ impl LayoutEngine {
         grid_pitch: Option<f32>,
         prev_style_id: Option<&str>,
         prev_contextual_spacing: bool,
+        // S658 (2026-06-24): the immediately-previous paragraph's pBdr (border-merge
+        // gate). Word merges consecutive paragraphs with an IDENTICAL pBdr into one
+        // box — the top border (and its reserved gap) is drawn only above the FIRST
+        // paragraph of the group. Used to skip the top-border vertical reservation
+        // when this paragraph continues a merged group. Only the body call site
+        // threads a real value; header/footer/footnote/textbox pass None (no merge
+        // detection, matching the existing prev_style_id=None simplification).
+        prev_para_borders: Option<&ParagraphBorders>,
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
         body_para_index: Option<usize>,
@@ -4614,6 +4629,31 @@ impl LayoutEngine {
         }
 
         cursor.advance(effective_spacing);
+
+        // S658 (2026-06-24, pBdr border-merge): reserve the vertical space ABOVE
+        // the paragraph for its TOP border (top.space + top.width). The border
+        // element itself is drawn at para_top - top.space - top.width (mod.rs:6979)
+        // but NOTHING reserved that space, so a boxed paragraph rendered ~5pt too
+        // high (perturb_probe.py para_border -5.28 = top.space 4 + top.width 1 +
+        // bottom bw/2 residual). The naive S658 attempt reserved this for EVERY box
+        // and regressed 3a4f/model 94->95 pages: those docs STACK adjacent boxes
+        // (top=6 bottom=6 left=6), and Word MERGES consecutive paragraphs with an
+        // IDENTICAL pBdr into one box — the top border + its gap is drawn only above
+        // the group's FIRST paragraph; interior boundaries use the "between" border
+        // with NO extra gap. So skip the reservation when this paragraph continues a
+        // merged group (the immediately-previous paragraph has the same pBdr). A
+        // non-bordered paragraph between two boxes breaks the merge (prev != cur) and
+        // correctly re-reserves. Default ON, opt-out OXI_S658_DISABLE.
+        if std::env::var("OXI_S658_DISABLE").is_err() {
+            if let Some(ref borders) = para.style.borders {
+                if let Some(ref top) = borders.top {
+                    let merges_with_prev = prev_para_borders == Some(borders);
+                    if !merges_with_prev {
+                        cursor.advance(top.space + top.width);
+                    }
+                }
+            }
+        }
 
         // Debug: dump per-paragraph cursor_y for Class A FAIL root cause investigation.
         // Gated by env OXI_DUMP_CURSOR_Y. Day 33 part 7 (option B).
