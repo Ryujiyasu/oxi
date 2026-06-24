@@ -14260,7 +14260,29 @@ impl LayoutEngine {
                 let apply_plus_half = table_grid_pitch
                     .map(|p| (row_height - p).abs() < 0.5)
                     .unwrap_or(false);
-                if apply_plus_half {
+                // S661 (2026-06-24, default ON, opt-out OXI_S661_DISABLE): the S200 +0.5
+                // row-pitch overhead ALSO applies to trHeight-BOUND SPARSE rows that the
+                // `≈linePitch` gate misses. perrow_drift.py (Word PDF horizontal lines vs Oxi
+                // rendered borders, 4 tokumei docs): binding-atLeast rows (trHeight binds,
+                // content < row) render a CONSISTENT ~+0.5pt taller in Word — the SAME +0.5
+                // sparse-row overhead, just at trHeight (~22pt) not linePitch (16.8). The
+                // per-row +0.5 accumulates (31420 cumulative border drift +3.3 at the page
+                // bottom); +0.5 on these rows cuts it to +1.3 and aligns the whole family.
+                // Fire when docGrid present AND content is SPARSE (visual_row_h, the actual
+                // cell content, notably < row_height = trHeight binds) AND the row is small
+                // (< 3 cells). NOTE: max_actual_cell_h is init to row_height (~11124) so it
+                // is always ≥ row_height — use visual_row_h (init 0). Render-only
+                // (advance_split → cursor_y/pagination unchanged) → Phase-1 preserved by
+                // construction. Full corpus SSIM A/B (on top of S660): net +0.7720, 16
+                // improve (ed025 +0.18, a1d6 +0.14, de6e32/d4d126 +0.09, 6514 +0.08, the
+                // whole tokumei/order/index form family), 6 over-fire regress (a47e/2ea81a/
+                // bd90b00 ~−0.024 — sparse rows that don't drift in Word; the residual gate-
+                // refinement). lib 142/0/6.
+                let s661_sparse_trheight = std::env::var("OXI_S661_DISABLE").is_err()
+                    && table_grid_pitch.map(|p|
+                        visual_row_h > 0.1 && visual_row_h + 0.4 < row_height && row_height < p * 3.0
+                    ).unwrap_or(false);
+                if apply_plus_half || s661_sparse_trheight {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else {
                     cursor.advance(row_height);
