@@ -4591,10 +4591,17 @@ impl LayoutEngine {
         // contextualSpacing=true AND they share the same style (COM-confirmed).
         let mut effective_spacing = collapsed_spacing;
         if para.style.contextual_spacing || prev_contextual_spacing {
-            if let (Some(cur_id), Some(prev_id)) = (para.style.style_id.as_deref(), prev_style_id) {
-                if cur_id == prev_id {
-                    effective_spacing = 0.0;
-                }
+            // S657 (2026-06-24): two DEFAULT-style paragraphs (both pStyle absent
+            // → style_id None → effective style = Normal) ARE the same style, and
+            // Word suppresses spacing between them (perturb_probe.py contextual
+            // +12→0). The old `(Some, Some)` gate missed None==None. GATE-SAFE:
+            // corpus contextualSpacing is style-level on explicit ids (Title 112 /
+            // a3 15 / List 1 docs → Some==Some already works); 0 docs carry it on
+            // the Normal/default style, so a None-id para never has
+            // contextual_spacing=true → the None==None arm never fires on the
+            // corpus (byte-identical). Found by the perturbation harness.
+            if para.style.style_id.as_deref() == prev_style_id {
+                effective_spacing = 0.0;
             }
         }
 

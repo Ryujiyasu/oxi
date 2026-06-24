@@ -86,6 +86,20 @@ INJECTIONS = {
                       run('下', 22, '<w:position w:val="-12"/>')),                      # +6 and −6 on same line
     'combine':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr><w:r><w:rPr>%s<w:eastAsianLayout w:combine="1"/></w:rPr><w:t>令和</w:t></w:r></w:p>' % (
                       _rpr(), _rpr()),                                                  # 割注/combine (2 chars in 1 cell)
+    # batch 3 (2026-06-24): border/shading/spacing/break features
+    'para_border':   ('<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="auto"/>'
+                      '<w:bottom w:val="single" w:sz="8" w:space="4" w:color="auto"/></w:pBdr>'
+                      '<w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (_rpr(), run('段落罫線'))),
+    'after_auto':    '<w:p><w:pPr><w:spacing w:afterAutospacing="1"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('後ろ自動空き')),
+    'contextual':    '<w:p><w:pPr><w:contextualSpacing/><w:spacing w:after="240"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('文脈空き')),
+    'soft_break':    '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s<w:r><w:rPr>%s</w:rPr><w:br/></w:r>%s</w:p>' % (
+                      _rpr(), run('一行目'), _rpr(), run('二行目')),                     # w:br soft line break
+    'large96':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(192), run('大', 192)),                                       # single 96pt char (extreme)
+    'shd_para':      ('<w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="D9D9D9"/>'
+                      '<w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (_rpr(), run('網掛け段落'))),
 }
 
 
