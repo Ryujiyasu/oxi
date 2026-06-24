@@ -3416,10 +3416,63 @@ impl LayoutEngine {
                         math_block, x, cursor.cursor_y, math_font_size,
                     );
                     if !math_elems.is_empty() {
+                        // S652 (coverage, 2026-06-24): reserve the equation
+                        // paragraph's vertical advance from the ACTUAL emitted
+                        // glyph geometry, not bbox.height(). The layout bbox
+                        // over-estimates the rendered extent (emit_nary's
+                        // descent = op_size + sub.height() double-counts the
+                        // full operator height below the baseline; leaf glyph
+                        // boxes are a loose 0.8em/0.4em), so the old
+                        // `bbox.height().max(fs*1.2)+fs*0.3` over-reserved by
+                        // +1.7pt (rad) to +16pt (n-ary sum) vs Word — pixel-
+                        // confirmed by tools/metrics/mixedh_lineplace.py. Word
+                        // reserves max(ink_height + ~1.4pt leading, math line
+                        // height). Glyph BASELINES render correctly (mathH
+                        // matches Word within ±0.7pt), and emit_text_at sets a
+                        // text element's top = baseline − 0.8·fs with h = 1.2·fs,
+                        // so baseline = y + h·2/3 is recoverable per element.
+                        // Take a tight cap-ascent above the topmost baseline and
+                        // a small descent below the bottommost; non-text
+                        // elements (fraction bar, radical rule, box rect, matrix
+                        // lines) are already tight so use their raw [y, y+h].
+                        // Display math is absent from the whole gate corpus
+                        // (0/2391 docx) → pure coverage, zero gate risk.
+                        // Opt-out OXI_S652_DISABLE.
+                        // Constants calibrated against Word (mixedh_lineplace.py
+                        // 7-structure pixel sweep, _s529_sweep.py): cap-ascent
+                        // 0.60·fs above the topmost baseline, 0.05·fs descent
+                        // below the bottommost, +1.5pt leading, floored at the
+                        // math line height 1.14·fs. Residual ≤ ~2pt (glyph-class
+                        // x-height vs cap variation + radical overbar), vs the
+                        // old +1.7..+16pt over-reservation.
+                        let advance = if std::env::var("OXI_S652_DISABLE").is_ok() {
+                            bbox.height().max(math_font_size * 1.2) + math_font_size * 0.3
+                        } else {
+                            let asc = 0.60_f32;
+                            let desc = 0.05_f32;
+                            let lead = 1.5_f32;
+                            let floor = 1.14_f32;
+                            let mut ink_top = f32::INFINITY;
+                            let mut ink_bot = f32::NEG_INFINITY;
+                            for e in &math_elems {
+                                let (lo, hi) = match &e.content {
+                                    LayoutContent::Text { .. } => {
+                                        let baseline = e.y + e.height * (2.0 / 3.0);
+                                        let fs = e.height / 1.2;
+                                        (baseline - asc * fs, baseline + desc * fs)
+                                    }
+                                    _ => (e.y, e.y + e.height),
+                                };
+                                if lo < ink_top { ink_top = lo; }
+                                if hi > ink_bot { ink_bot = hi; }
+                            }
+                            if ink_bot > ink_top {
+                                (ink_bot - ink_top + lead).max(math_font_size * floor)
+                            } else {
+                                bbox.height().max(math_font_size * 1.2) + math_font_size * 0.3
+                            }
+                        };
                         elements.extend(math_elems);
-                        // Advance by full bbox height + a line of descent leeway.
-                        let advance = bbox.height().max(math_font_size * 1.2)
-                            + math_font_size * 0.3;
                         cursor.advance(advance);
                     }
                 }
