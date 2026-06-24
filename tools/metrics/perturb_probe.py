@@ -72,6 +72,20 @@ INJECTIONS = {
     'tab_right':     ('<w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="9000"/></w:tabs>'
                       '<w:rPr>%s</w:rPr></w:pPr>%s<w:r><w:rPr>%s</w:rPr><w:tab/></w:r>%s</w:p>'
                       % (_rpr(), run('左'), _rpr(), run('右'))),
+    # batch 2 (2026-06-24): height/placement features likely to exercise line growth
+    'em_dot':        '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('圏点', 22, '<w:em w:val="dot"/>')),                 # 圏点 (sesame dots above)
+    'atleast30':     '<w:p><w:pPr><w:spacing w:line="600" w:lineRule="atLeast"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('atLeast30pt')),
+    'before12grid':  '<w:p><w:pPr><w:spacing w:before="240"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('前空き12pt')),                                       # spacing before 12pt
+    'run_border':    '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('囲み罫', 22, '<w:bdr w:val="single" w:sz="4" w:space="0" w:color="auto"/>')),
+    'updn_mixed':    '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s%s%s</w:p>' % (
+                      _rpr(), run('上', 22, '<w:position w:val="12"/>'), run('中'),
+                      run('下', 22, '<w:position w:val="-12"/>')),                      # +6 and −6 on same line
+    'combine':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr><w:r><w:rPr>%s<w:eastAsianLayout w:combine="1"/></w:rPr><w:t>令和</w:t></w:r></w:p>' % (
+                      _rpr(), _rpr()),                                                  # 割注/combine (2 chars in 1 cell)
 }
 
 
