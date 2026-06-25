@@ -13061,7 +13061,24 @@ impl LayoutEngine {
                                     cell_glyph_dy += s660_extra;
                                 }
                             }
-                            let cell_text_y_off = cell_text_y_off + cell_glyph_dy;
+                            // S664 (2026-06-25, default ON, opt-out OXI_S664_DISABLE, override
+                            // OXI_S664_DY): a NEGATIVE-charSpace docGrid (文字詰め horizontal
+                            // compression, w:charSpace<0) renders its cell text ~0.5pt too HIGH
+                            // (render-anchor: the painted cell glyph baseline for these
+                            // compressed-grid forms lands ~0.5pt above Word). RENDER-ONLY cell
+                            // glyph push-down (added to cell_text_y_off, like S660 cell_glyph_dy);
+                            // content_h / row height / pagination UNCHANGED. SCOPE = page-level
+                            // grid_char_space_raw < 0 (doc-derivable): the 3 corpus word_png
+                            // neg-charSpace docs (b35123 +0.0105 [the worst tokumei doc], 191cb5
+                            // tokumei_08_10 +0.0026, albalunaSS neutral) all improve/neutral, 0
+                            // regress; positive-charSpace (d4d126 etc.) and type=lines docs are
+                            // EXCLUDED (mixed/regress under a uniform DY). DY=0.5 = the joint SSIM
+                            // peak (b35123 + 191cb5). See [[tokumei_form_family_ssim]].
+                            let s664_dy: f32 = if page.grid_char_space_raw.map_or(false, |cs| cs < 0)
+                                && std::env::var("OXI_S664_DISABLE").is_err() {
+                                std::env::var("OXI_S664_DY").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5)
+                            } else { 0.0 };
+                            let cell_text_y_off = cell_text_y_off + cell_glyph_dy + s664_dy;
                             // S592: line-1 body starts AFTER the inline marker (no overlap).
                             let mut rx = if s592_cell_space && line_idx == 0 { s592_marker_reserve } else { 0.0_f32 };
                             // Emit list marker on the first line of the paragraph.
