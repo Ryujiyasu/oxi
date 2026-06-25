@@ -222,7 +222,21 @@ pub fn compute_compression(
         // Apply.
         for (ai, &i) in indices.iter().enumerate() {
             let new_adv = chars[i].natural_advance - per_char_savings[ai];
-            final_adv[i] = snap_15tw(new_adv);
+            // S665 (2026-06-25): snap_15tw uses round-to-nearest, so a char whose
+            // natural advance is OFF the 15tw grid (e.g. 9.6pt = 192tw with
+            // balanceSBDB-doubled cs) snaps UP — 9.5904 → 9.75 — INFLATING a
+            // barely-compressed kanji above its natural width. Compression must
+            // never inflate. Clamp the snapped advance to the natural so the snap
+            // can only reduce. a47e order_08 row-1 title "１．統計成果物の名称":
+            // 8 kanji × +0.15 inflation pushed the 10-char fit-sum 91.8→93.0 > the
+            // 92.0 budget → compute_compression falsely reported !fits → Oxi wrapped
+            // the 10th char "称" → row 1 rendered 2 lines (24.5pt) vs Word's 1 (20.3pt).
+            let snapped = snap_15tw(new_adv);
+            final_adv[i] = if std::env::var("OXI_S665_DISABLE").is_err() {
+                snapped.min(chars[i].natural_advance)
+            } else {
+                snapped
+            };
         }
         *remaining -= to_absorb;
     };
