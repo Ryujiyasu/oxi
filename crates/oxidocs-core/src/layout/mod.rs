@@ -6227,6 +6227,51 @@ impl LayoutEngine {
 
             let mut x = line_x + align_offset;
 
+            // S672 (2026-06-26): render-x separation for Latin. Oxi LINE-BREAKS at
+            // com_tw (GDI/10tw-rounded) word widths — correct for PAGINATION (matches
+            // Word's GDI-screenshot wrap, [[latin_text_wrap_compression]]) — but the
+            // DWrite renderer draws each word at its TRUE em advance, so positioning
+            // word/space fragments at the com_tw cumulative x renders them COMPRESSED
+            // (drifting left ~0.5pt/word vs Word, whose word_png screenshot IS true-wide,
+            // UPDATE 2). FIX: keep the break at com_tw (x, pagination unchanged) but emit
+            // each fragment at a PARALLEL TRUE cumulative x (render_x, sum of un-rounded
+            // char_width_em × fs). RENDER-ONLY (element.x is horizontal; pagination
+            // depends on line count/heights, not x) → Phase-1-safe. SCOPE: a pure-Latin
+            // (no CJK char) LEFT-aligned line only — the renderer-side UPDATE-3 attempt
+            // hit an element-granularity/alignment blocker the LAYOUT resolves (it knows
+            // alignment, columns, fragment structure). Justify/center/right and CJK/mixed
+            // lines keep the com_tw x (justify fills to the margin; CJK is on-grid).
+            // Opt-out OXI_S672_DISABLE.
+            // TAB/FIELD exclusion: a tab fragment is positioned at an ABSOLUTE
+            // tab stop (not a char-cumulative advance), and a field (page number
+            // etc.) has special positioning — the true-cumulative render_x would
+            // mis-place everything after them. (Corpus A/B: test_tabs −0.0023 without
+            // this guard.)
+            let s672_candidate = std::env::var("OXI_S672_DISABLE").is_err()
+                && matches!(para.alignment, Alignment::Left)
+                && !line.fragments.is_empty()
+                && line.fragments.iter().all(|f| !f.text.chars().any(kinsoku::is_cjk)
+                    && f.tab_alignment.is_none() && f.field_type.is_none());
+            // TRUE-WIDER gate: apply render-x ONLY when the line's true em width
+            // EXCEEDS its com_tw (break) width — i.e. Word renders it TRUE-WIDE and
+            // Oxi's com_tw is COMPRESSED. MEASURED (gen_report): an 11pt body line is
+            // true-wider (com_tw compressed) → render-x EXPANDS to match Word; but a
+            // 26pt TITLE line is true-NARROWER (com_tw=443px=Word EXACTLY, true=437px)
+            // → render-x would WRONGLY compress it. So shift only toward Word's true-
+            // wide render, never introduce compression. This auto-excludes large
+            // titles + any line where com_tw is already correct (principled, no
+            // arbitrary font-size threshold).
+            let (line_comtw, line_true): (f32, f32) = if s672_candidate {
+                line.fragments.iter().enumerate().map(|(fi, f)| {
+                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    let tw: f32 = f.text.chars().map(|c| m.char_width_em(c) * fs).sum();
+                    (f.width + frag_width_adjustments[fi], tw)
+                }).fold((0.0_f32, 0.0_f32), |(a, b), (c, d)| (a + c, b + d))
+            } else { (0.0, 0.0) };
+            let s672_latinx = s672_candidate && line_true > line_comtw + 0.01;
+            let mut render_x = x;
+
             // Matches Word output: exact/atLeast line spacing places text at BOTTOM of line box.
             // Extra space goes above text (ascent increased, descent unchanged).
             // Session 76 Mech A fix: pass in_textbox so the function can distinguish
@@ -6369,7 +6414,10 @@ impl LayoutEngine {
                 } else {
                     cursor.visual_y
                 };
-                let mut el = LayoutElement::new(x, emit_y, adjusted_width, line_height, LayoutContent::Text {
+                // S672: emit at the TRUE cumulative x (render_x) for pure-Latin
+                // left-aligned lines; else the com_tw cumulative (x).
+                let el_x = if s672_latinx { render_x } else { x };
+                let mut el = LayoutElement::new(el_x, emit_y, adjusted_width, line_height, LayoutContent::Text {
                         text: frag.text.clone(),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
@@ -6575,6 +6623,15 @@ impl LayoutEngine {
                     }
                 }
                 x += adjusted_width + frag_spacing_after[frag_idx];
+                // S672: advance the true-cumulative render track by the fragment's
+                // un-rounded em width (= the DWrite render advance) so the NEXT
+                // fragment emits where this word actually ends on screen.
+                if s672_latinx {
+                    let true_w: f32 = frag.text.chars()
+                        .map(|c| frag_metrics.char_width_em(c) * resolved_font_size)
+                        .sum();
+                    render_x += true_w + frag_spacing_after[frag_idx];
+                }
             }
 
             // R-10: emit one margin change-bar per revision-bearing line.
