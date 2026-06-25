@@ -9991,6 +9991,41 @@ impl LayoutEngine {
         // which under-places LARGE CJK glyphs. See the grid branch.
         doc_grid_no_type: bool,
     ) -> f32 {
+        // S670 (2026-06-25, default ON, opt-out OXI_S670_DISABLE): LATIN analog of S614.
+        // A no-type docGrid LARGE LATIN title/heading (gen2_054 "Audit Report"
+        // Cambria 26pt) is placed at its line-box top (text_y_off≈0) where Word
+        // centers the glyph lower (the title is +3px too high, fresh — S614 is
+        // CJK-gated and never fired here; AND no-type passes grid_pitch=None so
+        // the whole pitch>0 centering block is skipped for these). Same winning
+        // glyph-centering law as S614 (+0.1424): baseline = box + text_y_off − 1.0
+        // + win_ascent×fs ⇒ text_y_off = fs×(1−win_ascent) + COMP. Gated to LARGE
+        // fonts (fs≥18) so the 11/14pt body/headings stay byte-identical (the
+        // dominant SSIM, untouched). Render-only. SWEEP OXI_S670_COMP.
+        if std::env::var("OXI_S670_DISABLE").is_err() && doc_grid_no_type && para_font_size >= 18.0
+            && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto")) {
+            let mut best: Option<(f32, f32)> = None; // (fs, win_ascent) of the largest non-CJK frag
+            let mut consider = |fs: f32, m: &crate::font::FontMetrics| {
+                if !m.is_cjk_83_64_font() && best.map_or(true, |(bfs, _)| fs > bfs) {
+                    best = Some((fs, m.win_ascent));
+                }
+            };
+            if line.fragments.is_empty() {
+                let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                consider(para_font_size, &self.metrics_for_para_mark(&rpr_ref, para_style));
+            } else {
+                for f in &line.fragments {
+                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                    consider(fs, &self.metrics_for_text(&f.text, &f.style, para_style));
+                }
+            }
+            if let Some((fs, win_ascent)) = best {
+                if fs >= 18.0 {
+                    let comp = std::env::var("OXI_S670_COMP")
+                        .ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+                    return (fs * (1.0 - win_ascent) + comp).max(0.0);
+                }
+            }
+        }
         match (para_style.line_spacing_rule.as_deref(), para_style.line_spacing) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
                 // Session 76 Mech A fix: body/cell top-align, shape bottom-align.
@@ -12282,7 +12317,16 @@ impl LayoutEngine {
                                             // at the same family mean (+0.0017 vs +0.0019). The
                                             // b35123-class cell-wrap re-flow cascade (memory) fired.
                                             // Cell visible-wrap stays h8-natural; S466 is body-only.
-                                            let h8_skip = char_space_pt > 0.0;
+                                            // S466CELL re-test (2026-06-25): the cell PAINT advance
+                                            // (grid_cs_adj, 13165) is the grid pitch (10.855), but this
+                                            // wrap decision uses natural (10.5) → the painted line over-
+                                            // packs ~1 char past the cell border. Mirror the body h8
+                                            // (expand fs>=default to grid) so wrap == paint == Word.
+                                            // Re-tested vs the post-S660/661/664/666 baseline (the 2026-
+                                            // 05-31 revert predated those vertical fixes). Default OFF.
+                                            let s466cell = std::env::var("OXI_S466CELL").is_ok();
+                                            let h8_skip = char_space_pt > 0.0
+                                                && (!s466cell || font_size < default_fs);
                                             // S344: when snap_to_grid=false and S344 enabled,
                                             // skip compression unless fs < default_fs.
                                             let s344_skip = s344_fs_gate
@@ -12423,6 +12467,18 @@ impl LayoutEngine {
                                 // [[tokyoshugyo_wrap_not_cellheight]].
                                 let cell_comp_active = std::env::var("OXI_CELLCOMP").ok().as_deref() == Some("1")
                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                                // S466CELL 約物-oikomi (2026-06-25): when S466CELL grid-expansion is
+                                // on, a compressPunctuation cell over-wraps (grid-pitch kanji, no 約物
+                                // compression) where Word fits one more char by compressing close 約物
+                                // (、。」） up to half-em — DERIVED from the tokumei_08_01 family Word PDF
+                                // (a1d6e4 （２）cell: Word 35 chars w/ 約物→8.64, Oxi-grid 34). S497b
+                                // (this lookahead for jc=left cells) was a NO-OP on the DEFAULT em-wrap
+                                // (no overflow → never triggers); WITH grid-expansion it now fires.
+                                // jc-independent (the family cells are jc=left). Default OFF (no env).
+                                // Scoped to POSITIVE charSpace (ratio>1) = where grid-expansion fires.
+                                let s466_oikomi = std::env::var("OXI_S466CELL").is_ok()
+                                    && self.compress_punctuation
+                                    && grid_char_cw_ratio.map_or(false, |r| r > 1.0);
                                 // OXI_CELLBURA (tokyoshugyo #2c): cell line-end 約物 ぶら下げ
                                 // (mirrors the body S601). A hangable line-end 約物 (。、，．・ +
                                 // closing brackets) hangs PAST the wrap when the preceding content
@@ -12466,7 +12522,7 @@ impl LayoutEngine {
                                             | '」' | '』' | '）' | '】' | '〕' | '・')).count() as f32;
                                     let budget = n_yak * legacy_cell_cap * (font_size / 10.5);
                                     ((line_x + buf_w + cw) - effective_wrap) > budget
-                                } else if jc_gate_active && (run_has_neg_cs || cell_comp_active) && would_overflow_natural {
+                                } else if ((jc_gate_active && (run_has_neg_cs || cell_comp_active)) || s466_oikomi) && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                                         ch,
                                         natural_advance: cw,
@@ -14605,7 +14661,11 @@ impl LayoutEngine {
                             // cell-related site without H8 gating. V800y bisection
                             // traced a1d6 +14pt residual drift to this code path.
                             // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
-                            let h8_skip = char_space_pt > 0.0;
+                            // S466CELL re-test (2026-06-25): mirror of the emit-site change
+                            // (count_cell_lines must match the visible wrap). Default OFF.
+                            let s466cell = std::env::var("OXI_S466CELL").is_ok();
+                            let h8_skip = char_space_pt > 0.0
+                                && (!s466cell || font_size < default_fs);
                             // S344: when snap_to_grid=false and S344 enabled,
                             // skip compression unless fs < default_fs.
                             let s344_skip = s344_fs_gate
@@ -14664,7 +14724,10 @@ impl LayoutEngine {
                 // do NOT wrap — matches the actual render decision.
                 let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
                 let run_has_neg_cs = cs <= -0.1;
-                let would_overflow = if jc_gate_active && run_has_neg_cs && would_overflow_natural {
+                // S466CELL 約物-oikomi (count mirror of the emit-site gate; see emit comment).
+                let s466_oikomi = std::env::var("OXI_S466CELL").is_ok() && self.compress_punctuation
+                    && grid_char_cw_ratio.map_or(false, |r| r > 1.0);
+                let would_overflow = if ((jc_gate_active && run_has_neg_cs) || s466_oikomi) && would_overflow_natural {
                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                         ch, natural_advance: cw, font_size,
                     };
