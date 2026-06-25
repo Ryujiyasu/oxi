@@ -9659,7 +9659,20 @@ impl LayoutEngine {
             // value essentially zero. Reverted to keep code simple; LM0
             // lookup question requires per-entry verification (240 cells)
             // before further fix attempts.
+            // S667 (2026-06-25): the lm0_lineauto table holds NO-DOCGRID (LayoutMode-0,
+            // line-gap-INCLUSIVE) line heights. A NO-TYPE docGrid (linePitch=360 → the
+            // grid_pitch=None path) uses Word's NATURAL ascent+descent (the `fallback`
+            // formula = word_line_height_no_grid), NOT the line-gap height. The table
+            // OVER-counts only when its value exceeds run_base — measured: Calibri 14pt
+            // table 20.0 vs run_base 17.25 / formula 17.0 / Word 17.04 (+2.96 too tall);
+            // Times 14pt table 19.0 vs Word 16.08. For every other combo run_base ≥ table
+            // so the table never won → those are byte-identical. LibreOffice renders these
+            // at Word's value (test_line_heights p4: Libra 0.984 vs Oxi 0.840). Skip the
+            // table for no-type docGrid (the natural formula matches Word).
             let lookup_no_grid = |family: &str, font_size: f32, fallback: f32| -> f32 {
+                if grid_no_type && std::env::var("OXI_S667_DISABLE").is_err() {
+                    return fallback;
+                }
                 self.registry.lm0_lineauto_base(family, font_size).unwrap_or(fallback)
             };
             let mut no_grid_max: f32 = 0.0;
