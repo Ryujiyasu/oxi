@@ -10004,8 +10004,16 @@ impl LayoutEngine {
         if std::env::var("OXI_S670_DISABLE").is_err() && doc_grid_no_type && para_font_size >= 18.0
             && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto")) {
             let mut best: Option<(f32, f32)> = None; // (fs, win_ascent) of the largest non-CJK frag
+            // SCOPE FIX (2026-06-25): skip the whole line if ANY fragment is CJK
+            // 83/64. A CJK-dominant title with a stray Latin digit (gen_jp_report
+            // "令和6年度…報告書" — the "6" is non-CJK) must keep its CJK centering
+            // (S614/raw), NOT the Latin law — else the digit hijacks the line and
+            // mis-centers the CJK title (−0.0006). S670 is for PURE-Latin titles.
+            let mut has_cjk = false;
             let mut consider = |fs: f32, m: &crate::font::FontMetrics| {
-                if !m.is_cjk_83_64_font() && best.map_or(true, |(bfs, _)| fs > bfs) {
+                if m.is_cjk_83_64_font() {
+                    has_cjk = true;
+                } else if best.map_or(true, |(bfs, _)| fs > bfs) {
                     best = Some((fs, m.win_ascent));
                 }
             };
@@ -10019,7 +10027,7 @@ impl LayoutEngine {
                 }
             }
             if let Some((fs, win_ascent)) = best {
-                if fs >= 18.0 {
+                if fs >= 18.0 && !has_cjk {
                     let comp = std::env::var("OXI_S670_COMP")
                         .ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
                     return (fs * (1.0 - win_ascent) + comp).max(0.0);
