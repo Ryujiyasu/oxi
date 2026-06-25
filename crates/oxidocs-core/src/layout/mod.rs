@@ -5237,6 +5237,22 @@ impl LayoutEngine {
             lm2_grid_cells.as_deref().copied().unwrap_or(0)
         } else { 0 };
 
+        // S671 (2026-06-25): a NO-TYPE docGrid NON-CJK paragraph advances by its
+        // EXACT per-line hhea-natural height (line_height_for_line_inner) instead of
+        // the LM0 cumulative-round-to-0.5pt model (the CJK single-spacing device-snap,
+        // S629). The 0.5pt cumulative round mis-tracks Word's per-line multiple-spacing
+        // heights (±0.25pt/line phase noise); Word accumulates the EXACT line height and
+        // device-snaps only the RENDERED baseline. test_line_heights mean |O−W|
+        // 0.266→0.032. CJK paras keep the cumulative model (their S629 device-snap is a
+        // separate wall). Scope flag from the first line (must be all non-CJK).
+        let s671_fine = !lines.is_empty()
+            && page.doc_grid_no_type
+            && std::env::var("OXI_S671_DISABLE").is_err()
+            && !lines[0].fragments.is_empty()
+            && lines[0].fragments.iter().all(|f| {
+                !self.metrics_for_text(&f.text, &f.style, &para.style).is_cjk_83_64_font()
+            });
+
         for (line_idx, line) in lines.iter().enumerate() {
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
@@ -5254,13 +5270,20 @@ impl LayoutEngine {
 
             // Page break check with widow/orphan control
             // TextBox content: no page breaks, no widow/orphan. Overflow is clipped.
-            let effective_lh = if is_multiple_spacing && raw_spaced_tw > 0.0 {
+            let effective_lh = if is_multiple_spacing && raw_spaced_tw > 0.0 && !s671_fine {
                 let old_pos = mult_cumul_raw.as_deref().copied().unwrap_or(0.0);
                 let new_pos = old_pos + raw_spaced_tw;
                 let cn = (new_pos / 10.0).round() as i32 * 10;
                 let cc = (old_pos / 10.0).round() as i32 * 10;
                 (cn - cc) as f32 / 20.0
-            } else { line_height };
+            } else {
+                // S671: a NON-CJK no-type-grid line uses the INDEPENDENT per-line
+                // height (line_height_for_line_inner = snap_0.12(hhea natural ×
+                // factor)) — Word computes multiple-spacing line heights per-line,
+                // NOT via the cumulative-round model (which is the LM0 single-spacing
+                // device-snap, S629). line_height already carries the S671 value.
+                line_height
+            };
             // Day 33 part 65 (2026-05-12): use natural_lh (ascent+descent) for
             // break threshold; the grid-snap LEADING (line_h − natural_lh) is
             // allowed to extend into bottom margin. Cursor still advances by
@@ -6794,7 +6817,17 @@ impl LayoutEngine {
             // LM=0 cumulative ROUND includes LAST line; LM≥1 cumulative CEIL excludes last.
             let use_cumulative = (is_multiple_spacing || single_lm0_safe) && raw_spaced_tw > 0.0
                 && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5)
-                && (grid_pitch.is_none() || !is_last);
+                && (grid_pitch.is_none() || !is_last)
+                // S671 (2026-06-25): a NO-TYPE docGrid NON-CJK paragraph advances by
+                // its EXACT per-line height (line_height_for_line_inner = the hhea
+                // natural × factor = Word's no-type-grid Latin line height), NOT the
+                // LM0 cumulative-round-to-0.5pt model (the CJK single-spacing device-
+                // snap, S629). The cumulative round mis-tracks Word's per-line multiple-
+                // spacing heights (±0.25pt/line); Word accumulates the exact height and
+                // device-snaps only at render. Falling to the `else { cursor.advance(
+                // line_height) }` branch uses the exact S671 value. test_line_heights
+                // mean |O−W| 0.266→0.032.
+                && !s671_fine;
             if use_cumulative {
                 let j = cumul_line_idx;
                 let (cn, cc) = if grid_pitch.is_none() && is_single_lm0 {
@@ -9541,6 +9574,12 @@ impl LayoutEngine {
         // path's smaller Latin run_base — see the rounding site below).
         let mut max_combined: f32 = 0.0;
         let mut dominant_cjk_83_64 = false;
+        // S671 (2026-06-25): the EXACT Word no-type-docGrid line-height base for a
+        // NON-CJK line = max over fragments of (hhea ascender+|descender|+lineGap)/UPM
+        // × fontSize. Used (× factor, device-snapped) in place of run_base for
+        // grid_no_type non-CJK lines — see the rounding site. Tracked here so the
+        // tallest Latin fragment drives the height like run_base does.
+        let mut hhea_natural_max: f32 = 0.0;
 
         // adjustLineHeightInTable=true: use standard height without CJK 83/64
         let use_standard = in_table_cell && self.adjust_line_height_in_table;
@@ -9555,6 +9594,7 @@ impl LayoutEngine {
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
             let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
             dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
+            hhea_natural_max = metrics.natural_line_height_hhea(font_size);
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -9614,6 +9654,10 @@ impl LayoutEngine {
                     max_combined = asc + des;
                     dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
                 }
+                // S671: track the tallest fragment's hhea natural line height
+                // (Latin design line height incl. lineGap) for the no-type-grid base.
+                let nat = metrics.natural_line_height_hhea(font_size);
+                if nat > hhea_natural_max { hhea_natural_max = nat; }
             }
         }
 
@@ -9771,6 +9815,51 @@ impl LayoutEngine {
                     Some(factor) => base * factor,
                     None => base,
                 };
+                // S671 (2026-06-25): a NO-TYPE docGrid NON-CJK (Latin) line uses
+                // Word's EXACT design line height: (hhea ascender+|descender|+lineGap)
+                // /UPM × fontSize × factor (the cursor accumulates this exact value;
+                // the renderer device-snaps the baseline at draw — NOT a per-line snap,
+                // which MEASURED to accumulate +0.05pt/line over long paragraphs).
+                // The OLD path (run_base × factor, win-based no-lineGap base
+                // 0.75pt-pixel-rounded, final 0.5pt round amplified by factor) was off
+                // up to 0.85pt (Times 14pt x2.0: 33.0 vs Word 32.16). DERIVED from the
+                // test_line_heights Word PDF (test_line_heights_rt.pdf line1→line2
+                // gaps): the font's natural ratio matches Word EXACTLY — Calibri
+                // 1.2207, Cambria 1.1724, Arial/Times 1.1499. mean |O−W| over the 64
+                // Latin combos: 0.266 → 0.032. This is the multiple-spacing residual
+                // S667 flagged and the gen2-Latin-family cumulative vertical drift (the
+                // LATIN analog of S614/S670 — the gen2_vertical_drift saga was CJK-only;
+                // LibreOffice matches Word here, Oxi did not: test_line_heights p4 Libra
+                // 0.984 vs Oxi 0.840, found via the LibreOffice bug-finder). CJK 83/64
+                // lines (dominant_cjk_83_64) KEEP the existing path — their 1.0 hhea
+                // ratio would drop the 83/64 multiplier. Scope = grid_no_type ONLY (true
+                // LM0 docs have grid_no_type=false, the contract family device-snap S629
+                // is untouched; typed grids snap to whole cells). Opt-out
+                // OXI_S671_DISABLE; OXI_S671_DELTA>0 forces a per-line snap (default 0 =
+                // exact). See [[gen2_vertical_drift]].
+                if grid_no_type && !dominant_cjk_83_64 && hhea_natural_max > 0.0
+                    && std::env::var("OXI_S671_DISABLE").is_err()
+                {
+                    let factor = line_spacing.unwrap_or(1.0);
+                    // hhea_natural_max alone (NOT .max(run_base)): run_base is the
+                    // win-based, pixel-rounded (0.75pt) ascent+descent, which can EXCEED
+                    // the hhea natural for some fonts (Arial/Times pixel-ceil) and would
+                    // defeat the fix. In the S671 scope (dominant non-CJK) the tallest
+                    // fragment is Latin, so hhea_natural_max is the correct base.
+                    let nat = hhea_natural_max * factor;
+                    // EXACT (no per-line snap, default delta=0): Word accumulates the
+                    // EXACT hhea-natural line height and snaps only the RENDERED device
+                    // position (the 150-DPI raster), NOT each line height. A per-line
+                    // snap-to-0.12pt was MEASURED to accumulate a +0.05pt/line error over
+                    // long multi-line paragraphs (test_widow 24-line body: snap-0.12 net
+                    // −0.16 / exact net +0.02; test_keepnext/gen2_054/gen_long all flip
+                    // from regress to improve under exact). So advance by the exact value
+                    // and let the renderer device-snap. OXI_S671_DELTA>0 forces a snap.
+                    let delta = std::env::var("OXI_S671_DELTA").ok()
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    return if delta > 0.0 { (nat / delta).round() * delta } else { nat };
+                }
                 // COM-confirmed (2026-04-03): grid snap only for Single (factor=1.0) or unset.
                 // Multiple spacing (factor≠1.0) does NOT get grid-snapped.
                 let is_single_line = match line_spacing {

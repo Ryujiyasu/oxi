@@ -246,6 +246,26 @@ impl FontMetrics {
         (tw / 10.0).floor() * 10.0 / 20.0
     }
 
+    /// S671 (2026-06-25): the EXACT Word no-type-docGrid line-height base for a
+    /// NON-CJK (Latin) font: the font's design line height = (hhea ascender +
+    /// |hhea descender| + hhea lineGap) / unitsPerEm × fontSize. DERIVED from the
+    /// test_line_heights Word PDF baselines (test_line_heights_rt.pdf, line1→line2
+    /// gaps): Word's no-type-grid line = this natural × the line-spacing factor,
+    /// snapped to the ~0.12pt (600-DPI) device grid. The font's natural ratio
+    /// matches Word EXACTLY: Calibri (1536+512+452)/2048 = 1.2207, Cambria
+    /// (1946+455+0)/2048 = 1.1724, Arial/Times (…+lineGap)/2048 = 1.1499. The
+    /// OLD `word_line_height_no_grid` used win_ascent+win_descent (NO lineGap,
+    /// floored to 0.5pt) → off by up to 0.85pt (Times 14pt x2.0: 33.0 vs 32.16);
+    /// run_base (max_ascent+max_descent, win-based, 0.75pt-pixel-rounded) is also
+    /// wrong. mean |O−W| over the 64 Latin combos: 0.266 (old) → 0.035 (this).
+    /// CJK 83/64 fonts (MS Mincho/Gothic, Yu*) are EXCLUDED at the call site
+    /// (gated on !dominant_cjk_83_64) — their 1.0 hhea ratio would lose the 83/64.
+    pub fn natural_line_height_hhea(&self, font_size: f32) -> f32 {
+        // ascent / descent / line_gap are stored already-normalized (em fractions),
+        // descent stored positive. So natural ratio = ascent + descent + line_gap.
+        (self.ascent + self.descent + self.line_gap) * font_size
+    }
+
     /// Standard line height WITHOUT CJK 83/64 multiplier.
     /// Used when adjustLineHeightInTable=true (compat65).
     pub fn word_line_height_standard(&self, font_size: f32) -> f32 {
