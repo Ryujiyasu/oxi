@@ -10682,6 +10682,18 @@ impl LayoutEngine {
             // preserves the natural pre-pass to avoid 3a4f9f cascade — see
             // session79_adjust_lh_in_table_mixed_cell_valign_falsified.md).
             let mut visual_row_h: f32 = 0.0;
+            // S666 (2026-06-25): does this row have CELL-LEVEL horizontal borders
+            // (tcBorders top/bottom) while the table has NO table-level insideH?
+            // Word renders a cell-bordered row's height = content + the inside border
+            // (~0.5pt for sz=4) — a border-box overhead. Oxi adds this for table-level
+            // tblBorders insideH (via has_inside_h / pad_t) but MISSES it for cell-level
+            // tcBorders → the 様式 form tables (tokumei 08_* T4, d4d126/de6e32/6514/
+            // a1d6e4/31420 pages 2-7) render ~0.5pt/row too short, accumulating down the
+            // page. Repro border_box/bb_repro: Word renders table-insideH AND cell-tcBorder
+            // tables BOTH at 14.5/row (=14.0 content + 0.5 border); Oxi gives 14.0 for the
+            // cell-border table. Corrects S477's "CJK line-height" misattribution (the
+            // per-line height MATCHES Word at 14.0 — the drift is the missed border-box).
+            let mut row_cell_hborder = false;
             // S503 (2026-06-08): centering-only row height using the ACTUAL GDI render
             // line-height (line_height_inner ~13.5) instead of the estimate's
             // word_line_height_table_cell (~12.625). visual_row_h under-counts when the
@@ -10724,6 +10736,14 @@ impl LayoutEngine {
             // First pass: calculate row height
             let mut grid_idx = row.grid_before as usize;
             for cell in row.cells.iter() {
+                // S666: cell-level horizontal border detection (see row_cell_hborder above).
+                if !table.style.has_inside_h {
+                    if let Some(b) = &cell.borders {
+                        if b.top.is_some() || b.bottom.is_some() {
+                            row_cell_hborder = true;
+                        }
+                    }
+                }
                 let span = cell.grid_span.max(1) as usize;
                 // vMerge="continue" cells don't contribute to row height
                 // (their content is part of the vMerge="restart" cell above).
@@ -14341,7 +14361,25 @@ impl LayoutEngine {
                     && table_grid_pitch.map(|p|
                         visual_row_h > 0.1 && visual_row_h + 0.4 < row_height && row_height < p * 3.0
                     ).unwrap_or(false);
-                if apply_plus_half || s661_sparse_trheight {
+                // S666 (2026-06-25, default ON, opt-out OXI_S666_DISABLE): render-only
+                // +0.5 border-box overhead for content rows in cell-tcBorder docGrid
+                // tables (Word adds the inside border to the row height; Oxi's
+                // has_inside_h path misses cell-level borders). advance_split → visual_y
+                // only → pagination/element.y unchanged (pagination-safe by construction).
+                // Gated to docGrid tables without table-level insideH that carry cell
+                // horizontal borders. OR'd with S200/S661 so a row gets +0.5 ONCE.
+                // Gate to CONTENT-BOUND rows (visual_row_h ≈ row_height): the border-box
+                // +0.5 applies where the cell CONTENT (+border) determines the height,
+                // complementary to S661 (which handles trHeight-bound rows, vrh < rh).
+                // 15076 (08_09)'s large cell-bordered rows are trHeight-bound (vrh < rh)
+                // or overflow (vrh > rh) and do NOT drift +0.5 in Word — firing on them
+                // over-corrects (−0.047). The 08_01 family's drifting rows (small AND large,
+                // 22-125pt) are all content-bound (vrh ≈ rh), so this keeps them.
+                let s666_cellborder = std::env::var("OXI_S666_DISABLE").is_err()
+                    && row_cell_hborder
+                    && table_grid_pitch.is_some()
+                    && (row_height - visual_row_h).abs() < 0.5;
+                if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else {
                     cursor.advance(row_height);
