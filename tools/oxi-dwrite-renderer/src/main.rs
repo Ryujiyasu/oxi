@@ -886,6 +886,23 @@ unsafe fn render_text(
         layout_h_dip,
     )?;
 
+    // S668 (2026-06-25): DWrite's CreateTextLayout applies KERNING by default, but
+    // Word does NOT kern unless the run has w:kern set. The Cambria 'Ro' pair (and
+    // others) gets a ~-0.3pt kern in Oxi that Word's PDF render does not apply →
+    // Latin text drifts left across the line (gen_tables: Oxi 'R' adv 6.6 vs Word
+    // 6.9, → 6.83 with kern off). Disable kerning to match Word's default.
+    // Default ON, opt-out OXI_S668_DISABLE.
+    if std::env::var("OXI_S668_DISABLE").is_err() {
+        if let Ok(typo) = dwrite_factory.CreateTypography() {
+            let _ = typo.AddFontFeature(DWRITE_FONT_FEATURE {
+                nameTag: DWRITE_FONT_FEATURE_TAG_KERNING,
+                parameter: 0,
+            });
+            let range = DWRITE_TEXT_RANGE { startPosition: 0, length: text_wide.len() as u32 };
+            let _ = layout.SetTypography(&typo, range);
+        }
+    }
+
     // OOXML w:spacing val="N" gives extra inter-glyph advance in 20ths of a
     // point. Oxi's IR converts that to points before reaching the renderer.
     // GDI applies it via SetTextCharacterExtra (one int trailing pixels per
