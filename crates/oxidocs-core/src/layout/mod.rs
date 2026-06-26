@@ -2581,6 +2581,11 @@ impl LayoutEngine {
             }
         }
 
+        // S676 (2026-06-27): pending drop-cap float. When a paragraph with
+        // framePr dropCap="drop" is seen, its glyph is rendered at the left
+        // (anchored to the NEXT paragraph's top) and the next paragraph's body
+        // is indented by `Some(indent_pt)` so it wraps to the right of the cap.
+        let mut pending_dropcap: Option<f32> = None;
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
             // this block's cursor has reached the float's region (the gap above it
@@ -2677,6 +2682,61 @@ impl LayoutEngine {
             block_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
+                    // S676 (2026-06-27): drop-cap float. A paragraph whose framePr is
+                    // dropCap="drop" is a floating drop cap — Word renders its glyph at
+                    // the left, anchored to the FOLLOWING paragraph's top, WITHOUT
+                    // reserving vertical block space; the next paragraph's body wraps to
+                    // the right (indented by the cap width). Oxi previously laid it out as
+                    // a normal full-height block (the +61pt over-reservation the
+                    // perturbation harness flagged). Gate-safe: 0 corpus docs use dropCap,
+                    // so non-dropCap paras never enter this branch (byte-identical).
+                    if std::env::var("OXI_S676_DISABLE").is_err()
+                        && pending_dropcap.is_none()
+                        && para.style.frame_pr.as_ref()
+                            .map(|fp| fp.drop_cap.as_deref() == Some("drop"))
+                            .unwrap_or(false)
+                    {
+                        let cap_text: String =
+                            para.runs.iter().flat_map(|r| r.text.chars()).collect();
+                        if !cap_text.trim().is_empty() {
+                            if let Some(first) = para.runs.iter().find(|r| !r.text.is_empty()) {
+                                let fs = self.resolve_font_size(&first.style, &para.style);
+                                let metrics = self.metrics_for(&first.style, &para.style);
+                                let cap_w: f32 = cap_text.chars()
+                                    .map(|c| self.registry.char_width_pt_with_fallback(c, fs, metrics))
+                                    .sum();
+                                let family = self
+                                    .resolve_font_family_for_text(&cap_text, &first.style, &para.style)
+                                    .map(|s| s.to_string());
+                                let color = self.resolve_color(&first.style, &para.style)
+                                    .map(|s| s.to_string());
+                                // Anchor the cap top to the body's top (current cursor).
+                                let cap_y = cursor.cursor_y;
+                                elements.push(LayoutElement::new(
+                                    start_x, cap_y, cap_w, fs * 1.2,
+                                    LayoutContent::Text {
+                                        text: cap_text.clone(),
+                                        font_size: fs,
+                                        font_family: family,
+                                        bold: first.style.bold,
+                                        italic: first.style.italic,
+                                        underline: false, underline_style: None,
+                                        strikethrough: false, double_strikethrough: false,
+                                        color,
+                                        highlight: None, field_type: None,
+                                        character_spacing: 0.0, text_scale: 100.0,
+                                        is_vertical: false,
+                                    },
+                                ));
+                                // Body indent = cap width + the framePr hSpace gap.
+                                let h_space = para.style.frame_pr.as_ref()
+                                    .map(|fp| fp.h_space).unwrap_or(0.0).max(0.0);
+                                pending_dropcap = Some(cap_w + h_space);
+                            }
+                        }
+                        // Float: do NOT advance the cursor; skip normal block processing.
+                        continue;
+                    }
                     // Round 29: compute footnote contribution if this paragraph is
                     // laid out on the CURRENT page (delta added) vs a NEW page
                     // (full from-scratch). Used by overflow checks below.
@@ -3001,11 +3061,14 @@ impl LayoutEngine {
                     // Step 0: bucket for per-page fn refs actually rendered by this
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
                     let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
+                    // S676: a pending drop-cap indents THIS paragraph's body to the right
+                    // of the floated cap (start shifted, available width reduced).
+                    let dc_indent = pending_dropcap.take().unwrap_or(0.0);
                     let (para_elements, sa, final_col) = self.layout_paragraph(
                         para,
-                        start_x,
+                        start_x + dc_indent,
                         &mut cursor,
-                        content_width,
+                        content_width - dc_indent,
                         effective_content_h,
                         start_y,
                         page,
