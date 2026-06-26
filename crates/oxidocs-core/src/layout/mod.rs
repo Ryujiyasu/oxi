@@ -14644,6 +14644,11 @@ impl LayoutEngine {
                     && row_cell_hborder
                     && table_grid_pitch.is_some()
                     && (row_height - visual_row_h).abs() < 0.5;
+                if std::env::var("OXI_DBG_S661").is_ok() && s661_sparse_trheight {
+                    eprintln!("[S661] rule={:?} rh={:.2} vrh={:.2} gap={:.2} pitch={:?} hborder={} cy={:.1}",
+                        row.height_rule.as_deref().unwrap_or("none"), row_height, visual_row_h,
+                        row_height - visual_row_h, table_grid_pitch, row_cell_hborder, cursor.cursor_y);
+                }
                 if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else {
