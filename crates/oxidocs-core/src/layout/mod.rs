@@ -4946,10 +4946,20 @@ impl LayoutEngine {
         }
 
         // Collect all text fragments with their styles, field types, and source indices
+        // S673vi (2026-06-26): an inline HIDDEN run (`<w:vanish/>` on the run) is NOT
+        // displayed/printed by Word — its text reserves 0 width. Word render-truth
+        // (minimal repro 前[隠し vanish]後): Word line width 20.16 (= 前後, hidden run
+        // gone); Oxi rendered all 4 chars (42.0). Skip vanish runs from the fragment
+        // list (filter AFTER enumerate so the run index `i` is preserved for the
+        // surviving runs). Greenfield: 0 corpus docs carry an inline vanish run
+        // (the 3 vanish docs use it only on the ¶ mark, S673v) → byte-identical.
+        // Opt-out OXI_S673VI_DISABLE.
+        let s673vi = std::env::var("OXI_S673VI_DISABLE").is_err();
         let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para
             .runs
             .iter()
             .enumerate()
+            .filter(|(_, r)| !(s673vi && r.style.vanish))
             .map(|(i, r)| (r.text.as_str(), &r.style, r.field_type, i, 0usize))
             .collect();
 
