@@ -2087,7 +2087,7 @@ impl LayoutEngine {
                     runs[start..i].iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true, false, false);
+                let lines = self.break_into_lines(&fragments, 1e6, 0.0, para_style, None, None, true, false, true, false, false, false);
                 let natural_w: f32 = lines.iter()
                     .flat_map(|l| l.fragments.iter())
                     .map(|f| f.width)
@@ -5026,13 +5026,65 @@ impl LayoutEngine {
         // (the 3 vanish docs use it only on the ¶ mark, S673v) → byte-identical.
         // Opt-out OXI_S673VI_DISABLE.
         let s673vi = std::env::var("OXI_S673VI_DISABLE").is_err();
-        let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para
-            .runs
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| !(s673vi && r.style.vanish))
-            .map(|(i, r)| (r.text.as_str(), &r.style, r.field_type, i, 0usize))
-            .collect();
+        // S677 (2026-06-27): w:caps / w:smallCaps text transform. Word renders a
+        // w:caps run in UPPERCASE, and a w:smallCaps run with originally-lowercase
+        // letters as SMALL uppercase (size × 0.8 — measured from the Word PDF:
+        // 15.96/20.04) while originally-uppercase letters stay full size. The
+        // transform changes both glyphs AND width, so it is applied to the input
+        // fragments (break_into_lines copies them into LineFragments → both wrap and
+        // render use the transformed text/size). Owned segments the fragments borrow
+        // from; a smallCaps run splits into per-case-class segments. Gate-safe: only
+        // caps/smallCaps runs are transformed and the corpus's caps/smallCaps live
+        // ENTIRELY in UNUSED built-in styles (Subtle/Intense Reference, Book Title,
+        // Calendar2 — used=0) → byte-identical. Opt-out OXI_S677_DISABLE.
+        let caps_active = std::env::var("OXI_S677_DISABLE").is_err()
+            && para.runs.iter().any(|r| r.style.all_caps || r.style.small_caps);
+        // (text, style, field_type, run_index) — owned, outlives `fragments`.
+        let caps_segments: Vec<(String, RunStyle, Option<FieldType>, usize)> = if caps_active {
+            let mut segs = Vec::new();
+            for (i, r) in para.runs.iter().enumerate() {
+                if s673vi && r.style.vanish { continue; }
+                if r.style.small_caps {
+                    let small = self.resolve_font_size(&r.style, &para.style) * 0.8;
+                    let mut cur = String::new();
+                    let mut cur_lower: Option<bool> = None;
+                    for ch in r.text.chars() {
+                        let is_l = ch.is_lowercase();
+                        if cur_lower.is_some() && cur_lower != Some(is_l) && !cur.is_empty() {
+                            let mut st = r.style.clone();
+                            if cur_lower == Some(true) { st.font_size = Some(small); }
+                            segs.push((std::mem::take(&mut cur), st, r.field_type, i));
+                        }
+                        cur_lower = Some(is_l);
+                        for u in ch.to_uppercase() { cur.push(u); }
+                    }
+                    if !cur.is_empty() {
+                        let mut st = r.style.clone();
+                        if cur_lower == Some(true) { st.font_size = Some(small); }
+                        segs.push((cur, st, r.field_type, i));
+                    }
+                } else if r.style.all_caps {
+                    segs.push((r.text.to_uppercase(), r.style.clone(), r.field_type, i));
+                } else {
+                    segs.push((r.text.clone(), r.style.clone(), r.field_type, i));
+                }
+            }
+            segs
+        } else {
+            Vec::new()
+        };
+        let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = if caps_active {
+            caps_segments.iter()
+                .map(|(t, st, ft, ri)| (t.as_str(), st, *ft, *ri, 0usize))
+                .collect()
+        } else {
+            para.runs
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| !(s673vi && r.style.vanish))
+                .map(|(i, r)| (r.text.as_str(), &r.style, r.field_type, i, 0usize))
+                .collect()
+        };
 
         // Resolve font size for line breaking
         let default_style = RunStyle::default();
@@ -5109,7 +5161,7 @@ impl LayoutEngine {
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
         let para_has_lrpb = para.runs.iter().any(|r| r.has_last_rendered_page_break);
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb);
+        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
@@ -7381,6 +7433,12 @@ impl LayoutEngine {
         is_justified: bool,
         doc_grid_no_type: bool,
         para_has_lrpb: bool,
+        // S677: when true (a w:smallCaps paragraph), flush the word accumulator on a
+        // per-fragment font_size CHANGE so the small-caps size segments (full vs 0.8×)
+        // survive as their own fragments instead of merging into one (the same
+        // fragment-flattening that S655 fixes for w:position). false everywhere else
+        // → byte-identical (no font_size-boundary flush for normal paragraphs).
+        caps_size_split: bool,
     ) -> Vec<Line> {
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
@@ -7611,6 +7669,13 @@ impl LayoutEngine {
             if std::env::var("OXI_S655_DISABLE").is_err()
                 && frag_outer_idx > 0
                 && fragments[frag_outer_idx - 1].1.position != style.position
+            {
+                flush_word!(fragments[frag_outer_idx - 1].1);
+            }
+            // S677: flush at a small-caps size boundary (full ↔ 0.8× segments).
+            if caps_size_split
+                && frag_outer_idx > 0
+                && fragments[frag_outer_idx - 1].1.font_size != style.font_size
             {
                 flush_word!(fragments[frag_outer_idx - 1].1);
             }
@@ -15498,7 +15563,7 @@ impl LayoutEngine {
                 let fragments: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = para.runs.iter().enumerate()
                     .map(|(ri, run)| (run.text.as_str(), &run.style, None, ri, 0))
                     .collect();
-                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), false, false);
+                let lines = self.break_into_lines(&fragments, effective_width, first_indent, &para.style, None, None, true, false, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), false, false, false);
                 lines.len().max(1)
             };
 
