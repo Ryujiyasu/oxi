@@ -1034,6 +1034,14 @@ pub struct ParagraphStyle {
     /// w:contextualSpacing: suppress space_before/after between paragraphs of the same style.
     #[serde(default)]
     pub contextual_spacing: bool,
+    /// w:spacing@beforeAutospacing — Word applies a flat ~13.75pt auto before-space
+    /// (COM-derived 2026-06-26, S675: constant, independent of font/grid/docDefaults;
+    /// = Word's hardcoded Normal-Web 11pt×1.25). Overrides explicit before; collapses MAX.
+    #[serde(default)]
+    pub before_autospacing: bool,
+    /// w:spacing@afterAutospacing — flat ~13.75pt auto after-space (see before_autospacing).
+    #[serde(default)]
+    pub after_autospacing: bool,
     /// Style ID (e.g. "Normal", "Heading1") for contextual spacing comparison.
     #[serde(default)]
     pub style_id: Option<String>,
@@ -1164,6 +1172,8 @@ impl Default for ParagraphStyle {
             snap_to_grid: true,
             has_explicit_snap_to_grid: false,
             contextual_spacing: false,
+            before_autospacing: false,
+            after_autospacing: false,
             style_id: None,
             tab_stops: Vec::new(),
             shading: None,

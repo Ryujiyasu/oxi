@@ -240,6 +240,8 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if !child.contextual_spacing && parent.contextual_spacing {
         child.contextual_spacing = true;
     }
+    // S675: before/afterAutospacing is NOT inherited — Word applies it only when
+    // set directly on the paragraph (COM-confirmed harassbosi/b837 Web style = 0).
     if !child.bidi && parent.bidi {
         child.bidi = true;
     }
@@ -703,6 +705,11 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                     "afterLines" => {
                         style.after_lines = val.parse::<f32>().ok();
                     }
+                    // NOTE: before/afterAutospacing is INTENTIONALLY NOT parsed at the
+                    // style level — Word applies HTML-paragraph autospacing only when the
+                    // attribute is set DIRECTLY on the paragraph's pPr, not when inherited
+                    // from a paragraph style (S675, COM-confirmed: harassbosi/b837 64 Web
+                    // paras render with 0 extra; a direct-pPr para renders 13.75).
                     "line" => {
                         line_val = val.parse::<f32>().ok();
                     }
@@ -1247,6 +1254,7 @@ fn parse_style_definition(
                                     "afterLines" => {
                                         style.after_lines = val.parse::<f32>().ok();
                                     }
+                                    // autospacing NOT parsed at style level (S675, see above)
                                     "line" => {
                                         line_val = val.parse::<f32>().ok();
                                     }

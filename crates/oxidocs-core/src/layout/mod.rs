@@ -4645,7 +4645,15 @@ impl LayoutEngine {
 
         // Apply paragraph spacing (space_before).
         // Word uses max(prev_space_after, space_before) — spacing collapse.
-        let space_before = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+        let space_before = if para.style.before_autospacing
+            && std::env::var("OXI_S675_DISABLE").is_err()
+        {
+            // S675 (2026-06-26): w:beforeAutospacing → flat 13.75pt, COM-derived
+            // (constant, independent of font size / docDefaults / grid; applied as a
+            // raw additive, NOT grid-snapped). Overrides any explicit before; the
+            // existing max(prev_sa, cur_sb) collapse below matches Word's MAX collapse.
+            13.75
+        } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
             // beforeLines is specified as percentage of linePitch (e.g., 50 = 0.5 lines).
             // COM-confirmed (2026-04-06): the value is exact (bl/100 * pitch), no grid snap.
             // beforeLines=50 at pitch=17.5 gives exactly 8.75pt, not 17.5pt.
@@ -7160,7 +7168,12 @@ impl LayoutEngine {
             cursor.advance(0.5);
         }
 
-        let space_after = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
+        let space_after = if para.style.after_autospacing
+            && std::env::var("OXI_S675_DISABLE").is_err()
+        {
+            // S675 (2026-06-26): w:afterAutospacing → flat 13.75pt (see space_before).
+            13.75
+        } else if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
             // afterLines: exact value (al/100 * pitch), no grid snap needed.
             al / 100.0 * pitch
         } else {

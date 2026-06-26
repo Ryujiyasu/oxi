@@ -1591,6 +1591,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if ds.keep_next { style.keep_next = true; }
             if ds.keep_lines { style.keep_lines = true; }
             if ds.contextual_spacing { style.contextual_spacing = true; }
+            // S675: before/afterAutospacing is NOT inherited from the paragraph style
+            // (Word applies HTML autospacing only on the direct paragraph pPr).
             // Inherit widow_control: style's explicit setting takes precedence
             if !style.has_explicit_widow_control && ds.has_explicit_widow_control {
                 style.widow_control = ds.widow_control;
@@ -2053,6 +2055,15 @@ fn parse_paragraph_properties(
                                 "afterLines" => {
                                     style.after_lines = val.parse::<f32>().ok();
                                 }
+                                "beforeAutospacing" => {
+                                    // CT_OnOff attr: "1"/"true"/"on" => true (S675)
+                                    let v = val.as_ref();
+                                    style.before_autospacing = v == "1" || v == "true" || v == "on";
+                                }
+                                "afterAutospacing" => {
+                                    let v = val.as_ref();
+                                    style.after_autospacing = v == "1" || v == "true" || v == "on";
+                                }
                                 "line" => {
                                     line_val = val.parse::<f32>().ok();
                                 }
@@ -2267,6 +2278,15 @@ fn parse_paragraph_properties(
                                 }
                                 "afterLines" => {
                                     style.after_lines = val.parse::<f32>().ok();
+                                }
+                                "beforeAutospacing" => {
+                                    // CT_OnOff attr: "1"/"true"/"on" => true (S675)
+                                    let v = val.as_ref();
+                                    style.before_autospacing = v == "1" || v == "true" || v == "on";
+                                }
+                                "afterAutospacing" => {
+                                    let v = val.as_ref();
+                                    style.after_autospacing = v == "1" || v == "true" || v == "on";
                                 }
                                 "line" => {
                                     line_val = val.parse::<f32>().ok();
