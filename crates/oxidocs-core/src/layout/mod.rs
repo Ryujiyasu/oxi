@@ -4586,6 +4586,20 @@ impl LayoutEngine {
         start_column: usize,
         col_x_positions: &[f32],
     ) -> (Vec<LayoutElement>, f32, usize) {
+        // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
+        // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
+        // not display/print the hidden mark, so the para contributes nothing (no
+        // line, no spacing). The corpus idiom = an invisible separator paragraph
+        // before a `<w:tbl>` (3a4f/model/tokyoshugyo each carry exactly one). Word
+        // render-truth (single COM render): hidden-¶ TOP→BOTTOM = no-para 14.4
+        // (collapsed); Oxi reserved ~25.9 (a partial line). Skip the para entirely
+        // (no cursor advance, pass prev_space_after through). Opt-out OXI_S673V_DISABLE.
+        if std::env::var("OXI_S673V_DISABLE").is_err()
+            && para.runs.iter().all(|r| r.text.is_empty())
+            && para.style.ppr_rpr.as_ref().map_or(false, |r| r.vanish)
+        {
+            return (Vec::new(), prev_space_after, start_column);
+        }
         if let Some(v) = line_fn_refs_out.as_deref_mut() {
             if v.is_empty() { v.push(Vec::new()); }
         }

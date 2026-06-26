@@ -1970,6 +1970,15 @@ fn parse_paragraph_properties(
                                             }
                                         }
                                     } else if l == "b" { ppr_rpr.bold = true; }
+                                    else if l == "vanish" || l == "webHidden" {
+                                        // S673v (2026-06-26): the ¶ MARK is hidden. An empty
+                                        // paragraph with a hidden mark COLLAPSES to 0 height in
+                                        // Word (invisible separator before a table idiom —
+                                        // 3a4f/model/tokyoshugyo). The pPr/rPr parser handled
+                                        // only font/bold; vanish was dropped. layout_paragraph
+                                        // reads ppr_rpr.vanish to skip the para.
+                                        ppr_rpr.vanish = true;
+                                    }
                                     else if (l == "ins" || l == "del") && paragraph_mark_revision.is_none() {
                                         // Paragraph-mark revision: `<w:pPr>/<w:rPr>/<w:ins>` or
                                         // `<w:pPr>/<w:rPr>/<w:del>` marks the pilcrow (¶) itself

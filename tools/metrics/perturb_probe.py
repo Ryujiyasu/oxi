@@ -100,6 +100,17 @@ INJECTIONS = {
                       _rpr(192), run('大', 192)),                                       # single 96pt char (extreme)
     'shd_para':      ('<w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="D9D9D9"/>'
                       '<w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (_rpr(), run('網掛け段落'))),
+    # batch 4 (2026-06-26): hidden/symbol/exact-clip/kern — height-reservation features
+    'vanish_para':   '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('完全に隠れた段落です', 22, '<w:vanish/>')),   # hidden para → 0 height
+    'vanish_inline': '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s%s%s</w:p>' % (
+                      _rpr(), run('前'), run('隠し', 22, '<w:vanish/>'), run('後')),  # hidden run mid-line
+    'sym_wing':      '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s<w:r><w:rPr>%s</w:rPr><w:sym w:font="Wingdings" w:char="F0E0"/></w:r>%s</w:p>' % (
+                      _rpr(), run('前'), _rpr(), run('後')),                       # <w:sym> symbol char
+    'exact_small':   '<w:p><w:pPr><w:spacing w:line="160" w:lineRule="exact"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('行間8pt固定11pt文字')),                          # exact line(8pt) < font(11pt) → clip
+    'kern_on':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('カーニングAVAW', 22, '<w:kern w:val="2"/>')),   # kerning enabled
 }
 
 
