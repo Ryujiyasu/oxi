@@ -6449,11 +6449,36 @@ impl LayoutEngine {
                 } else {
                     cursor.visual_y
                 };
+                // S673L (2026-06-26): tab-leader rendering. A tab stop with a
+                // `w:leader` (dot/middleDot/underscore/hyphen) fills the gap to the
+                // stop with leader glyphs — Word draws them, Oxi left the gap BLANK
+                // (the leader was parsed into TabStop.leader but never rendered;
+                // 3a4f/model/tokyoshugyo form fields). Re-derive the leader from the
+                // tab fragment's tab_position (no LineFragment field needed); fill
+                // the gap with floor(gap/advance) leader chars. Opt-out OXI_S673L_DISABLE.
+                let tab_leader_text: Option<String> = if frag.text == TAB_STRING
+                    && std::env::var("OXI_S673L_DISABLE").is_err() {
+                    frag.tab_position.and_then(|pos| {
+                        para.style.tab_stops.iter()
+                            .find(|ts| (ts.position - pos).abs() < 0.5)
+                            .and_then(|ts| ts.leader.as_deref())
+                    }).and_then(|ld| {
+                        let ch = match ld {
+                            "dot" => '.', "middleDot" => '\u{00B7}',
+                            "underscore" => '_', "hyphen" => '-', _ => return None,
+                        };
+                        let adv = frag_metrics.char_width_em(ch) * resolved_font_size;
+                        if adv <= 0.1 || adjusted_width < adv { return None; }
+                        let n = (adjusted_width / adv).floor() as usize;
+                        if n == 0 { return None; }
+                        Some(std::iter::repeat(ch).take(n).collect::<String>())
+                    })
+                } else { None };
                 // S672: emit at the TRUE cumulative x (render_x) for pure-Latin
                 // left-aligned lines; else the com_tw cumulative (x).
                 let el_x = if s672_latinx { render_x } else { x };
                 let mut el = LayoutElement::new(el_x, emit_y, adjusted_width, line_height, LayoutContent::Text {
-                        text: frag.text.clone(),
+                        text: tab_leader_text.clone().unwrap_or_else(|| frag.text.clone()),
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
                             .map(|s| s.to_string()),
