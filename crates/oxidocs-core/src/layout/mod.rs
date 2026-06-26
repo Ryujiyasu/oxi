@@ -7109,6 +7109,48 @@ impl LayoutEngine {
         // NOTE: space_after is NOT added to cursor_y here.
         // It will be collapsed with the next paragraph's space_before via max(sa, sb).
 
+        // S674 (2026-06-26, opt-in OXI_S674, default OFF = byte-identical) ATTEMPTED +
+        // FALSIFIED default-on — the gen2-Latin para-spacing device-snap residual (the
+        // S671-deferred "per-para exact-cumulative" lever). S671 accumulates each line's
+        // EXACT hhea-natural height (multi-line-safe); Word renders each para's LAST
+        // baseline + after-spacing device-snapped to the 0.12pt (600-DPI px) grid →
+        // a systematic ~+0.12pt/para the exact accumulation lacks (Word body single-line
+        // para gap 24.95 vs Oxi exact 24.83 = line round_0.12(14.83→14.88)+0.05 + after
+        // ceil_0.12(10.0→10.08)+0.08). S674 applies the EXACT per-component snap (round
+        // line + ceil after, ADAPTS per font/size — fixing the failed OXI_S671_SADD's
+        // const-0.12 + single-line-only scope) ONCE per para to ALL s671 paras (the
+        // boundary snap is multi-line-safe — interior lines stay exact) on the CURSOR.
+        // ★RESULT (ssim_ab.py OXI_S674, gen2_/gen_/test_ family, 54 changed): net
+        // +0.0573 (33 improved / 21 regressed) — HONEST net-positive but NOT shippable:
+        // (1) PAGINATION-NEUTRAL everywhere (verified: para counts byte-identical OFF/ON
+        // on gen2_054/067, test_widow, test_keepnext — pure render-Y drift +0.08/para);
+        // (2) UNDISCRIMINABLE — gen2_064 (helps −0.034) and gen2_054 (hurts +0.119) have
+        // BYTE-IDENTICAL Oxi top-of-page positions AND both word_pngs drift 24.95, yet
+        // split help/hurt (they diverge deeper by content flow → the SSIM benefit is
+        // dominated by the ABSOLUTE title-block phase, not the body drift, with NO
+        // docx-derivable rule); (3) regresses the CLEANEST controlled refs (test_widow
+        // −0.185 — its word_png matches S671's EXACT accumulation, Word does NOT drift
+        // it; test_keepnext −0.059) and the bottom-N (gen2_054 −0.119, gen2_050 −0.065).
+        // ⇒ the body drift is REAL but the lever is the COUPLED title-block absolute
+        // phase (S614/S618/S620 wall); shipping S674 ALONE = an S559 compensating error
+        // the eventual title-block fix must untangle. Kept opt-in for the coupled
+        // multi-lever session (S674 body-drift ⊕ title-block phase, word_png-gated). The
+        // 5th device-snap attempt on this wall (S629-CJK shipped, S631/S673/S671_SADD
+        // falsified). See [[gen2_vertical_drift]].
+        if s671_fine && std::env::var("OXI_S674").is_ok()
+            && !lines.is_empty()
+            && (cursor.cursor_y - page_top).abs() > 0.1 {
+            let d = std::env::var("OXI_S674_DELTA").ok()
+                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.12);
+            let last_lh = *line_heights.last().unwrap_or(&0.0);
+            let line_snapped = (last_lh / d).round() * d;             // line → ROUND
+            let after_snapped = if space_after > 0.01 {
+                (space_after / d).ceil() * d                          // after → CEIL
+            } else { space_after };
+            let corr = (line_snapped - last_lh) + (after_snapped - space_after);
+            cursor.advance(corr);
+        }
+
         // Paragraph borders (e.g., Title style bottom border)
         if let Some(ref borders) = para.style.borders {
             let para_top = elements.first().map(|e| e.y).unwrap_or(start_x);
