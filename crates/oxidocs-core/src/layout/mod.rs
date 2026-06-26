@@ -5154,6 +5154,17 @@ impl LayoutEngine {
                         let m = self.metrics_for_para_mark(&rpr_ref, &para.style);
                         no_grid_max = m.word_line_height_no_grid(font_size);
                         no_grid_raw_max = (m.win_ascent + m.win_descent) * font_size;
+                        // S612z-empty (2026-06-26): empty Zen Old Mincho para → embedded
+                        // ¶ box 17.376@12pt (1.448em), not the body fallback 15.56 (rt.pdf
+                        // empty-spacer = 17.40). This is the cumulative-LM0 advance basis
+                        // (the operative cursor height for aiguideline's LM0 single-spacing).
+                        // Opt-out OXI_S612ZE_DISABLE. See line_height_for_line_inner site.
+                        if std::env::var("OXI_S612ZE_DISABLE").is_err()
+                            && m.family == "Zen Old Mincho"
+                        {
+                            no_grid_max = no_grid_max.max(font_size * 1448.0 / 1000.0);
+                            no_grid_raw_max = no_grid_raw_max.max(font_size * 1448.0 / 1000.0);
+                        }
                     }
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
@@ -9701,6 +9712,19 @@ impl LayoutEngine {
             } else {
                 max_ascent = metrics.word_ascent_pt(font_size);
                 max_descent = metrics.word_descent_pt(font_size);
+            }
+            // S612z-empty (2026-06-26): an EMPTY Zen Old Mincho paragraph has no body
+            // glyph to font-link to MS Mincho, so Word measures its ¶ in the EMBEDDED
+            // font's deep-win box (17.376@12pt = 1.448em), NOT the body fallback 15.56.
+            // MEASURED (aiguideline_komon_rt.pdf per-line baseline gaps: empty-spacer
+            // lines 17.40 = circled-number lines, body 15.60). The S612z synthesis
+            // (=MS Mincho 15.56) under-counts empties ~2pt. SCOPE: family "Zen Old
+            // Mincho" = aiguideline ONLY (canary-safe). Opt-out OXI_S612ZE_DISABLE.
+            if std::env::var("OXI_S612ZE_DISABLE").is_err()
+                && metrics.family == "Zen Old Mincho"
+            {
+                max_ascent = max_ascent.max(font_size * 1160.0 / 1000.0);
+                max_descent = max_descent.max(font_size * 288.0 / 1000.0);
             }
         } else {
             for frag in &line.fragments {
