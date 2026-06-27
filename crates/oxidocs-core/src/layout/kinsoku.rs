@@ -161,6 +161,48 @@ pub fn is_s473_compressible(ch: char) -> bool {
 /// break accepts a char iff (Σ natural − Σ this capacity) ≤ avail. Returns pt,
 /// scaled by fs/12. `pair_pt`/`solo_pt` are env-tunable (flat-K = pass equal).
 pub fn s475_max_compress(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32, open_pt: f32, fs: f32) -> f32 {
+    s475_max_compress_pt(c, next, pair_pt, solo_pt, open_pt, solo_pt, solo_pt, fs)
+}
+
+/// Per-type variant (2026-06-27, demand-aware breaker): comma/period/closing-solo
+/// get DISTINCT caps. Word PDF MEASURED (nedocontract): comma 、 ≈ 3.4 (demand),
+/// period 。 ≈ 6.0 (half-em), closing-SOLO ）」 ≈ 0.84 (light) — Oxi previously
+/// gave them all `solo_pt`, OVER-crediting closings (over-fit) and UNDER-crediting
+/// periods. d77a's ）」（ CLUSTER closings are before BRACKETS → `pair_pt` (kept),
+/// so a closing-SOLO cap is d77a-safe. The legacy `s475_max_compress` passes
+/// solo_pt for all three = byte-identical.
+#[allow(clippy::too_many_arguments)]
+pub fn s475_max_compress_pt(c: char, next: Option<char>, pair_pt: f32, comma_pt: f32,
+    open_pt: f32, period_pt: f32, close_solo_pt: f32, fs: f32) -> f32 {
+    let scale = fs / 12.0;
+    let solo_pt = comma_pt;
+    let next_is_bracket = next.map_or(false, |n| {
+        YAKUMONO_OPENING.contains(&n) || YAKUMONO_CLOSING.contains(&n)
+    });
+    // Per-type periods/commas (handled BEFORE the closing-bracket set, which also
+    // contains 、。，．). Period uses period_pt; comma uses comma_pt (= solo_pt).
+    if matches!(c, '。' | '．') {
+        return period_pt * scale;
+    }
+    if matches!(c, '、' | '，') {
+        return comma_pt * scale;
+    }
+    // True closing brackets: half-em (pair_pt) before another bracket (d77a
+    // cluster), else the LIGHT closing-solo cap.
+    if YAKUMONO_CLOSING.contains(&c) {
+        return if next_is_bracket { pair_pt * scale } else { close_solo_pt * scale };
+    }
+    if YAKUMONO_OPENING.contains(&c) {
+        return open_pt * scale;
+    }
+    if is_s473_compressible(c) || c == '・' {
+        return solo_pt * scale;
+    }
+    0.0
+}
+
+#[allow(dead_code)]
+fn s475_max_compress_legacy(c: char, next: Option<char>, pair_pt: f32, solo_pt: f32, open_pt: f32, fs: f32) -> f32 {
     let scale = fs / 12.0;
     let next_is_bracket = next.map_or(false, |n| {
         YAKUMONO_OPENING.contains(&n) || YAKUMONO_CLOSING.contains(&n)

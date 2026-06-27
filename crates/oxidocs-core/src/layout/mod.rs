@@ -8819,9 +8819,19 @@ impl LayoutEngine {
                         } else { s475_open }
                     } else { s475_open };
                     let s475_capinc = if s475_break {
+                        // Demand-aware breaker (2026-06-27, OXI_PERTYPE, default OFF =
+                        // byte-identical): per-type 約物 break caps from the Word-PDF
+                        // measurement — comma 3.4 / period 6.0 (half-em) / closing-solo
+                        // 0.84 (light). b837-safe (s475_break = type=lines). Tunable.
+                        let (period_pt, close_solo_pt, comma_pt) =
+                            if std::env::var("OXI_PERTYPE").is_ok() {
+                                (std::env::var("OXI_PT_PERIOD").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0),
+                                 std::env::var("OXI_PT_CLOSE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.84),
+                                 std::env::var("OXI_PT_COMMA").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo))
+                            } else { (s475_solo, s475_solo, s475_solo) };
                         pt_to_tw(pre_yakumono_width
-                            - kinsoku::s475_max_compress(ch, chars_vec.get(char_index + 1).copied(),
-                                s475_pair, s475_solo, s475_open_eff, font_size))
+                            - kinsoku::s475_max_compress_pt(ch, chars_vec.get(char_index + 1).copied(),
+                                s475_pair, comma_pt, s475_open_eff, period_pt, close_solo_pt, font_size))
                     } else { 0 };
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
