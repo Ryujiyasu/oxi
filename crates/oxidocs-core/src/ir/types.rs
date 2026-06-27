@@ -154,6 +154,13 @@ pub struct Page {
     /// (S391/OXI_S391_PER_LINE_LRPB) when env OXI_S394_LRPB_MAX is set.
     #[serde(default)]
     pub total_lrpb_count: usize,
+    /// True when this section is bidirectional (`<w:bidi/>` in sectPr).
+    /// In a bidi (RTL) section, a multi-column layout flows columns
+    /// RIGHT-to-LEFT: the first reading column is the RIGHTMOST one.
+    /// Word-confirmed (minimal repro + albalunaTaidan): first content
+    /// fills the right column, subsequent columns proceed leftward.
+    #[serde(default)]
+    pub bidi_columns: bool,
 }
 
 /// Page border definitions

@@ -256,6 +256,7 @@ impl OoxmlParser {
                     page_number_start: section.properties.page_number_start,
                     page_borders: section.properties.page_borders,
                     total_lrpb_count: total_lrpb,
+                    bidi_columns: section.properties.bidi,
                 });
             }
             // Update previous refs for inheritance
@@ -1087,6 +1088,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         page_borders: None,
         header_distance: None,
         footer_distance: None,
+        bidi: false,
     });
     sections.push(ParsedSection {
         blocks: current_blocks,
@@ -6032,6 +6034,9 @@ struct SectionProperties {
     header_distance: Option<f32>,
     /// Footer distance from page bottom edge (w:pgMar footer attr, in points)
     footer_distance: Option<f32>,
+    /// Bidirectional (RTL) section (`<w:bidi/>`). Drives right-to-left
+    /// multi-column flow (first reading column = rightmost).
+    bidi: bool,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -6055,6 +6060,7 @@ fn parse_section_properties(
     let mut page_borders: Option<PageBorders> = None;
     let mut header_distance: Option<f32> = None;
     let mut footer_distance: Option<f32> = None;
+    let mut bidi = false;
     let mut depth = 0;
 
     loop {
@@ -6381,6 +6387,17 @@ fn parse_section_properties(
                     "titlePg" => {
                         title_pg = true;
                     }
+                    "bidi" => {
+                        // CT_OnOff: absent val (or "1"/"true"/"on") => true
+                        let mut enabled = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                enabled = v != "0" && v != "false" && v != "off";
+                            }
+                        }
+                        bidi = enabled;
+                    }
                     "type" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
@@ -6456,6 +6473,7 @@ fn parse_section_properties(
         page_borders,
         header_distance,
         footer_distance,
+        bidi,
     })
 }
 

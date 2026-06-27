@@ -2457,6 +2457,18 @@ impl LayoutEngine {
                 xs.push(margin_left);
                 ws.push(total_content_width);
             }
+            // Bidi (RTL) section: columns flow RIGHT-to-LEFT, so the first
+            // reading column (fill order index 0) is the RIGHTMOST one.
+            // Reversing both xs and ws keeps each column's (x, width) pairing
+            // while mapping fill-order 0 -> rightmost physical column.
+            // Word-confirmed (minimal repro + albalunaTaidan). Opt-out via
+            // OXI_BIDICOL_DISABLE.
+            if page.bidi_columns && xs.len() > 1
+                && std::env::var("OXI_BIDICOL_DISABLE").is_err()
+            {
+                xs.reverse();
+                ws.reverse();
+            }
             (xs.len(), xs, ws)
         };
 
