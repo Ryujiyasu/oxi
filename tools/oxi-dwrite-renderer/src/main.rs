@@ -1003,7 +1003,9 @@ unsafe fn render_text(
     // layout::vert_para_height (Σ n_chars·font_size). Whitespace advances but
     // is not drawn. Legacy rotation kept behind OXI_S489_ROTATE_LEGACY.
     if is_vertical && std::env::var("OXI_S489_ROTATE_LEGACY").is_err() {
-        let adv_dip = font_size_pt * PT_TO_DIP;
+        // Per-char DOWN advance = one em + character_spacing (docGrid charSpace
+        // 文字詰め for section vertical writing; 0 for tbRlV cells).
+        let adv_dip = (font_size_pt + character_spacing_pt) * PT_TO_DIP;
         // Centre each full-width glyph (advance ≈ one em) horizontally within
         // the cell content column [x_pt, x_pt+w_pt] — Word centres tategaki
         // labels in their column. w_pt is the cell content width.

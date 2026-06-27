@@ -2169,8 +2169,164 @@ impl LayoutEngine {
         }
     }
 
+    /// Minimal vertical-writing (tategaki / 縦書き) layout for a section with
+    /// `<w:textDirection w:val="tbRl"/>`. Characters stack TOP-to-BOTTOM within
+    /// a line; lines advance RIGHT-to-LEFT; `w:cols num=N` divides the page into
+    /// N horizontal BANDS stacked top-to-bottom (reading order top band first,
+    /// each band right-to-left). Gate-safe by construction: only fires when
+    /// `page.vertical_section` (2 corpus docs); the horizontal path is untouched.
+    /// The renderer's S489 `is_vertical` path stacks each Text element's chars
+    /// downward, centred in [x, x+w]. Opt-out OXI_VERTICAL_DISABLE → horizontal.
+    fn layout_page_vertical(&self, page: &Page) -> Vec<LayoutPage> {
+        let page_w = page.size.width;
+        let page_h = page.size.height;
+        let left = page.margin.left;
+        let right = page_w - page.margin.right;
+        let top = page.margin.top;
+        let bottom = page_h - page.margin.bottom;
+
+        let num_bands = page.columns.as_ref().map(|c| c.num.max(1) as usize).unwrap_or(1);
+        let band_space = page.columns.as_ref().and_then(|c| c.space).unwrap_or(0.0);
+        let content_h = (bottom - top).max(0.0);
+        let band_h = ((content_h - band_space * num_bands.saturating_sub(1) as f32)
+            / num_bands as f32).max(0.0);
+        let band_top = |b: usize| top + b as f32 * (band_h + band_space);
+        let band_bottom = |b: usize| band_top(b) + band_h;
+
+        // Horizontal advance between vertical lines = docGrid linePitch (rotated
+        // line grid), falling back to ~1.2em.
+        let line_pitch = page.grid_line_pitch.unwrap_or(self.default_font_size * 1.2);
+
+        let mut elements: Vec<LayoutElement> = Vec::new();
+        let mut band = 0usize;
+        let mut line_x = right - line_pitch; // leftmost x of the rightmost line
+        let page_full = |b: usize| b >= num_bands;
+
+        for (block_idx, block) in page.blocks.iter().enumerate() {
+            let para = match block {
+                Block::Paragraph(p) => p,
+                _ => continue, // tables/images in vertical sections: not yet supported
+            };
+            let style = para.runs.first().map(|r| r.style.clone()).unwrap_or_default();
+            let fs = self.resolve_font_size(&style, &para.style);
+            let para_text: String = para.runs.iter().flat_map(|r| r.text.chars()).collect();
+            let font_family = self
+                .resolve_font_family_for_text(&para_text, &style, &para.style)
+                .map(|s| s.to_string());
+            // Vertical advance per char (along the line) = one em (full-width).
+            // (A docGrid `charSpace` 文字詰め refinement was measured but scored
+            // marginally worse than 1em for albalunaSS — left for a future
+            // calibration pass with precise band geometry.)
+            let char_adv = fs;
+
+            if page_full(band) {
+                break;
+            }
+
+            // Empty paragraph: occupies one (blank) line.
+            if para_text.chars().all(|c| c.is_whitespace()) {
+                line_x -= line_pitch;
+                if line_x < left - 0.01 {
+                    band += 1;
+                    line_x = right - line_pitch;
+                }
+                continue;
+            }
+
+            // Lay the paragraph's chars into vertical lines (each line starts at
+            // the band top and runs down; wrap to the next line leftward).
+            let mut buf: Vec<char> = Vec::new();
+            let mut cur_y = band_top(band);
+            let mut buf_top = cur_y;
+            for ch in para_text.chars() {
+                if cur_y + char_adv > band_bottom(band) + 0.01 && !buf.is_empty() {
+                    // Flush this line, move to the next line (leftward).
+                    let n = buf.len() as f32;
+                    elements.push(self.vertical_line_element(
+                        buf.iter().collect(), line_x, buf_top, line_pitch,
+                        n * char_adv, fs, char_adv - fs, &font_family, &style, &para.style, block_idx,
+                    ));
+                    buf.clear();
+                    line_x -= line_pitch;
+                    if line_x < left - 0.01 {
+                        band += 1;
+                        if page_full(band) { break; }
+                        line_x = right - line_pitch;
+                    }
+                    cur_y = band_top(band);
+                    buf_top = cur_y;
+                }
+                if page_full(band) { break; }
+                buf.push(ch);
+                cur_y += char_adv;
+            }
+            if !buf.is_empty() && !page_full(band) {
+                let n = buf.len() as f32;
+                elements.push(self.vertical_line_element(
+                    buf.iter().collect(), line_x, buf_top, line_pitch,
+                    n * char_adv, fs, char_adv - fs, &font_family, &style, &para.style, block_idx,
+                ));
+            }
+            // Next paragraph starts a new line.
+            line_x -= line_pitch;
+            if line_x < left - 0.01 {
+                band += 1;
+                line_x = right - line_pitch;
+            }
+        }
+
+        vec![LayoutPage { width: page_w, height: page_h, elements }]
+    }
+
+    /// Build one vertical-line Text element (is_vertical=true). The renderer
+    /// stacks `text`'s chars downward from `y`, each centred in [x, x+w].
+    #[allow(clippy::too_many_arguments)]
+    fn vertical_line_element(
+        &self,
+        text: String,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fs: f32,
+        char_spacing: f32,
+        font_family: &Option<String>,
+        style: &RunStyle,
+        para_style: &ParagraphStyle,
+        block_idx: usize,
+    ) -> LayoutElement {
+        let mut elem = LayoutElement::new(
+            x, y, w, h,
+            LayoutContent::Text {
+                text,
+                font_size: fs,
+                font_family: font_family.clone(),
+                bold: self.resolve_bold(style, para_style),
+                italic: style.italic,
+                underline: style.underline,
+                underline_style: style.underline_style.clone(),
+                strikethrough: style.strikethrough,
+                double_strikethrough: style.double_strikethrough,
+                color: style.color.clone(),
+                highlight: style.highlight.clone(),
+                // For vertical text the renderer (S489) adds this to the
+                // per-char DOWN advance (docGrid charSpace 文字詰め).
+                character_spacing: char_spacing,
+                field_type: None,
+                text_scale: style.text_scale.unwrap_or(100.0),
+                is_vertical: true,
+            },
+        );
+        elem.paragraph_index = Some(block_idx);
+        elem
+    }
+
     #[allow(unused_assignments)]
     fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
+        // Vertical writing (tategaki) section: route to the dedicated path.
+        if page.vertical_section && std::env::var("OXI_VERTICAL_DISABLE").is_err() {
+            return self.layout_page_vertical(page);
+        }
         // R-05b: reduce body content width when the document has comments —
         // makes room for the right-margin balloon column. Header / footer /
         // floating-image / footnote widths intentionally use the full

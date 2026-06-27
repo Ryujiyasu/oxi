@@ -257,6 +257,9 @@ impl OoxmlParser {
                     page_borders: section.properties.page_borders,
                     total_lrpb_count: total_lrpb,
                     bidi_columns: section.properties.bidi,
+                    vertical_section: section.properties.text_direction.as_deref()
+                        .map(|d| d == "tbRl" || d == "tbRlV")
+                        .unwrap_or(false),
                 });
             }
             // Update previous refs for inheritance
@@ -1089,6 +1092,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
         header_distance: None,
         footer_distance: None,
         bidi: false,
+        text_direction: None,
     });
     sections.push(ParsedSection {
         blocks: current_blocks,
@@ -6037,6 +6041,10 @@ struct SectionProperties {
     /// Bidirectional (RTL) section (`<w:bidi/>`). Drives right-to-left
     /// multi-column flow (first reading column = rightmost).
     bidi: bool,
+    /// Section text direction (`<w:textDirection w:val="tbRl"/>`). "tbRl" =
+    /// vertical writing (tategaki/縦書き): chars stack top-to-bottom, lines
+    /// advance right-to-left.
+    text_direction: Option<String>,
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
@@ -6061,6 +6069,7 @@ fn parse_section_properties(
     let mut header_distance: Option<f32> = None;
     let mut footer_distance: Option<f32> = None;
     let mut bidi = false;
+    let mut text_direction: Option<String> = None;
     let mut depth = 0;
 
     loop {
@@ -6387,6 +6396,15 @@ fn parse_section_properties(
                     "titlePg" => {
                         title_pg = true;
                     }
+                    "textDirection" => {
+                        // Section-level text direction (e.g. "tbRl" = vertical
+                        // top-to-bottom, right-to-left = tategaki/縦書き).
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                text_direction = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     "bidi" => {
                         // CT_OnOff: absent val (or "1"/"true"/"on") => true
                         let mut enabled = true;
@@ -6474,6 +6492,7 @@ fn parse_section_properties(
         header_distance,
         footer_distance,
         bidi,
+        text_direction,
     })
 }
 

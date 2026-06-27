@@ -161,6 +161,12 @@ pub struct Page {
     /// fills the right column, subsequent columns proceed leftward.
     #[serde(default)]
     pub bidi_columns: bool,
+    /// True when this section is vertical writing (tategaki/縦書き,
+    /// `<w:textDirection w:val="tbRl"/>` in sectPr): characters stack
+    /// top-to-bottom within a line, lines advance right-to-left, and
+    /// multi-column "columns" become horizontal bands stacked top-to-bottom.
+    #[serde(default)]
+    pub vertical_section: bool,
 }
 
 /// Page border definitions
