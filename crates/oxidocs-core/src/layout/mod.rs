@@ -15142,8 +15142,40 @@ impl LayoutEngine {
                         row.height_rule.as_deref().unwrap_or("none"), row_height, visual_row_h,
                         row_height - visual_row_h, table_grid_pitch, row_cell_hborder, cursor.cursor_y);
                 }
+                // S682 (2026-06-28, default ON, opt-out OXI_BBOX_DISABLE): LARGE trHeight-
+                // bound rows (explicit trHeight >= pitch*3) in a table with inside-H borders
+                // miss the border-box overhead. Word renders each such row at trHeight +
+                // top_bw + bottom_bw (border-box); Oxi renders EXACTLY trHeight (the unused
+                // `_border_overhead` above). S661's pitch*3 gate EXCLUDES these large rows
+                // and only adds +0.5 (half the border-box) to the small ones. 7ead52b: 56.7pt
+                // trHeight rows render at 56.7 in Oxi but ~58.0 in Word (+1.3, accumulating
+                // −9pt over 9 rows). Render-only (advance_split → visual_y) ⇒ pagination
+                // byte-identical. ★Gate on the EXPLICIT trHeight (row.height) binding a large
+                // row, NOT the computed row_height (which includes multi-line content) — this
+                // EXCLUDES content-tall rows (b35123 max trHeight 30.75pt, whose content makes
+                // row_height >= pitch*3; firing on them regressed b35123 −0.0258, a bottom-N
+                // floor doc). Amount = 2*border_width (the top+bottom border-box). Direct
+                // per-page SSIM over the 20 word_png docs with large trHeight + inside-H (the
+                // complete surface): net +0.0907, ed025 +0.0934 (16pg), a47e +0.0190, 191cb5
+                // +0.0122, 31420 +0.0104, 7ead52b +0.0082, f16f228 +0.0078; regress e8caed
+                // −0.0574 (its large rows don't drift in Word — no docx discriminator vs the
+                // same-structure f16f228 that improves; the documented per-doc over-fire wall),
+                // 29dc6e/4a36b small. Bottom-N floor (b35123/1ec1/15076) byte-identical →
+                // Phase-3 gate (bottom-N protected, mean up) passes. Canaries (3a4f/459f/0e7af/
+                // 2ea81a/tokumei_08_01) byte-identical. OXI_BBOX overrides the amount (tuning).
+                let bbox_large = std::env::var("OXI_BBOX_DISABLE").is_err()
+                    && table.style.has_inside_h
+                    && table_grid_pitch.map(|p|
+                        row.height.map(|h| h >= p * 3.0).unwrap_or(false)
+                        && visual_row_h > 0.1 && visual_row_h + 0.4 < row_height
+                    ).unwrap_or(false);
                 if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
+                } else if bbox_large {
+                    let amt = std::env::var("OXI_BBOX").ok().and_then(|v| v.parse::<f32>().ok())
+                        .filter(|v| *v > 0.01)
+                        .unwrap_or_else(|| 2.0 * table.style.border_width.unwrap_or(0.5));
+                    cursor.advance_split(row_height, row_height + amt);
                 } else {
                     cursor.advance(row_height);
                 }
