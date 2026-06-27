@@ -11378,6 +11378,12 @@ impl LayoutEngine {
                 })
             })
         });
+        // S487: cell-anchored floating text boxes must render ON TOP of the whole
+        // table (Word z-orders floating drawings in front of the table grid). Adding
+        // them inline during the cell loop puts later rows' borders on top of the
+        // box's white fill — the table grid lines then show THROUGH the callout. Defer
+        // them to a separate vec and append AFTER the row loop so they paint last.
+        let mut deferred_cell_textboxes: Vec<LayoutElement> = Vec::new();
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
             // Session 79c: visual_row_h = max cell content_h with emit-equivalent
@@ -14359,7 +14365,9 @@ impl LayoutEngine {
                         };
                         let tb_elems = self.layout_text_box_at(
                             tb, page, &[], Some((abs_x, abs_y)));
-                        elements.extend(tb_elems);
+                        // Defer (not `elements.extend`) so the box paints on top of the
+                        // whole table grid — see deferred_cell_textboxes declaration.
+                        deferred_cell_textboxes.extend(tb_elems);
                     }
                 }
 
@@ -15117,6 +15125,8 @@ impl LayoutEngine {
             }
         }
 
+        // S487: paint cell-anchored floating text boxes last (on top of the grid).
+        elements.extend(deferred_cell_textboxes);
         elements
     }
 
