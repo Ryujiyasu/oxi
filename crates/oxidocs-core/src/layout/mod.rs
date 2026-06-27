@@ -1593,6 +1593,58 @@ fn s546_autospace_extra(font_size: f32) -> f32 {
     }
 }
 
+/// S680 (2026-06-27): Word's SINGLE (lineRule=auto, single) line height for the
+/// common Latin fonts, MEASURED via Word COM (Information(6) gap, line=240).
+/// Word device-rounds the line height per-size (NOT a flat ratio — Calibri 14pt
+/// =16.90 vs 11pt=13.15, ratio 1.207 vs 1.195), so a closed-form hhea ratio
+/// (S671) cannot reproduce it. LibreOffice matches Word because it uses the OS
+/// device-rounded metrics; this lookup gives Oxi the same. Pairs are (pt, height
+/// pt); linearly interpolated, extrapolated by the nearest-size ratio. Returns
+/// None for unknown fonts (caller falls back to S671 hhea-natural).
+fn word_com_single_line_height(family: &str, fs: f32) -> Option<f32> {
+    // strip style suffixes; Arial and Times New Roman share the same metrics.
+    let base = family
+        .trim_end_matches(" Bold")
+        .trim_end_matches(" Italic")
+        .trim();
+    // (size_pt, single_line_height_pt) — Word COM sweep 2026-06-27, line=240.
+    const CALIBRI: &[(f32, f32)] = &[
+        (8.0, 10.00), (10.0, 12.55), (10.5, 12.55), (11.0, 13.15), (12.0, 15.05),
+        (13.0, 16.30), (14.0, 16.90), (18.0, 22.55), (22.0, 26.90),
+    ];
+    const CAMBRIA: &[(f32, f32)] = &[
+        (8.0, 9.40), (10.0, 11.90), (10.5, 12.50), (11.0, 13.15), (12.0, 14.40),
+        (13.0, 15.05), (14.0, 16.30), (18.0, 21.30), (22.0, 26.30),
+    ];
+    const ARIAL: &[(f32, f32)] = &[
+        (8.0, 9.40), (10.0, 11.90), (10.5, 12.50), (11.0, 12.50), (12.0, 13.75),
+        (13.0, 15.05), (14.0, 15.65), (18.0, 20.65), (22.0, 25.00),
+    ];
+    let table: &[(f32, f32)] = match base {
+        "Calibri" => CALIBRI,
+        "Cambria" => CAMBRIA,
+        "Arial" | "Times New Roman" => ARIAL,
+        _ => return None,
+    };
+    // exact / interpolate / extrapolate-by-nearest-ratio.
+    if fs <= table[0].0 {
+        return Some(fs * table[0].1 / table[0].0);
+    }
+    let last = table[table.len() - 1];
+    if fs >= last.0 {
+        return Some(fs * last.1 / last.0);
+    }
+    for w in table.windows(2) {
+        let (s0, h0) = w[0];
+        let (s1, h1) = w[1];
+        if fs >= s0 && fs <= s1 {
+            let t = (fs - s0) / (s1 - s0);
+            return Some(h0 + (h1 - h0) * t);
+        }
+    }
+    None
+}
+
 /// Snap character spacing to pixel grid (DPI=96 fixed).
 /// Character spacing pixel-snap: Word converts twips→pixels at 96 DPI
 /// using round-to-nearest integer division, then back to points.
@@ -10048,6 +10100,12 @@ impl LayoutEngine {
         // grid_no_type non-CJK lines — see the rounding site. Tracked here so the
         // tallest Latin fragment drives the height like run_base does.
         let mut hhea_natural_max: f32 = 0.0;
+        // S680 (2026-06-27): track the family+size of the tallest Latin fragment so the
+        // no-type-grid line height can use Word's COM-measured device-rounded single-line
+        // height (varies per-size; a flat hhea ratio cannot reproduce it). See the S680
+        // lookup at the rounding site.
+        let mut hhea_natural_family: String = String::new();
+        let mut hhea_natural_size: f32 = 0.0;
 
         // adjustLineHeightInTable=true: use standard height without CJK 83/64
         let use_standard = in_table_cell && self.adjust_line_height_in_table;
@@ -10063,6 +10121,8 @@ impl LayoutEngine {
             let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
             dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
             hhea_natural_max = metrics.natural_line_height_hhea(font_size);
+            hhea_natural_family = metrics.family.clone();
+            hhea_natural_size = font_size;
             if use_standard {
                 let h = metrics.word_line_height_standard(font_size);
                 max_ascent = h * metrics.win_ascent / (metrics.win_ascent + metrics.win_descent);
@@ -10138,7 +10198,11 @@ impl LayoutEngine {
                 // S671: track the tallest fragment's hhea natural line height
                 // (Latin design line height incl. lineGap) for the no-type-grid base.
                 let nat = metrics.natural_line_height_hhea(font_size);
-                if nat > hhea_natural_max { hhea_natural_max = nat; }
+                if nat > hhea_natural_max {
+                    hhea_natural_max = nat;
+                    hhea_natural_family = metrics.family.clone();
+                    hhea_natural_size = font_size;
+                }
             }
         }
 
@@ -10327,7 +10391,21 @@ impl LayoutEngine {
                     // the hhea natural for some fonts (Arial/Times pixel-ceil) and would
                     // defeat the fix. In the S671 scope (dominant non-CJK) the tallest
                     // fragment is Latin, so hhea_natural_max is the correct base.
-                    let nat = hhea_natural_max * factor;
+                    // S680 (2026-06-27): Word's SINGLE line height is a per-SIZE
+                    // device-rounded value (COM sweep: Calibri 14pt=16.90 but 11pt=13.15,
+                    // ratio non-uniform 1.207 vs 1.195; Arial=Times shorter; Cambria mid)
+                    // that a flat hhea ratio (S671) cannot reproduce — LibreOffice matches
+                    // Word (gen2_064 Libra 0.982 vs Oxi 0.877) because it uses the OS
+                    // device-rounded metrics. Use the COM-measured single line height for
+                    // the known Latin fonts, then × factor (the multiple is 1.15 × single,
+                    // COM-confirmed). Opt-in OXI_S680 (default OFF = S671 hhea base).
+                    let single = if std::env::var("OXI_S680").is_ok() {
+                        word_com_single_line_height(&hhea_natural_family, hhea_natural_size)
+                            .unwrap_or(hhea_natural_max)
+                    } else {
+                        hhea_natural_max
+                    };
+                    let nat = single * factor;
                     // EXACT (no per-line snap, default delta=0): Word accumulates the
                     // EXACT hhea-natural line height and snaps only the RENDERED device
                     // position (the 150-DPI raster), NOT each line height. A per-line
