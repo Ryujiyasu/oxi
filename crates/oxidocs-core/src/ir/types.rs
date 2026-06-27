@@ -923,6 +923,10 @@ pub struct ColumnLayout {
     /// Whether columns have equal width
     #[serde(default)]
     pub equal_width: bool,
+    /// Draw a separator line between columns (`w:sep="1"`). Currently
+    /// rendered only for vertical-writing sections (between horizontal bands).
+    #[serde(default)]
+    pub separator: bool,
     /// Individual column definitions (for unequal widths)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<ColumnDef>,

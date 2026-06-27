@@ -2327,6 +2327,21 @@ impl LayoutEngine {
             }
         }
 
+        // w:sep="1": a separator line between bands, at each band-gap centre,
+        // spanning the content width. (Word draws it for vertical multi-band.)
+        if page.columns.as_ref().map_or(false, |c| c.separator) && num_bands > 1 {
+            for b in 0..num_bands - 1 {
+                let sep_y = band_bottom(b) + band_space / 2.0;
+                elements.push(LayoutElement::new(
+                    left, sep_y, (right - left).max(0.0), 0.0,
+                    LayoutContent::TableBorder {
+                        x1: left, y1: sep_y, x2: right, y2: sep_y,
+                        color: None, width: 0.5, style: None,
+                    },
+                ));
+            }
+        }
+
         vec![LayoutPage { width: page_w, height: page_h, elements }]
     }
 

@@ -6131,6 +6131,7 @@ fn parse_section_properties(
                     let mut num = 1u32;
                     let mut space: Option<f32> = None;
                     let mut equal_width = true;
+                    let mut separator = false;
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
                         let val = String::from_utf8_lossy(&attr.value);
@@ -6138,6 +6139,7 @@ fn parse_section_properties(
                             "num" => { num = val.parse().unwrap_or(1); }
                             "space" => { space = val.parse::<f32>().ok().map(|v| v / 20.0); }
                             "equalWidth" => { equal_width = val.as_ref() != "0" && val.as_ref() != "false"; }
+                            "sep" => { separator = val.as_ref() != "0" && val.as_ref() != "false"; }
                             _ => {}
                         }
                     }
@@ -6172,7 +6174,7 @@ fn parse_section_properties(
                         }
                     }
                     if num > 1 {
-                        columns = Some(ColumnLayout { num, space, equal_width, columns: col_defs });
+                        columns = Some(ColumnLayout { num, space, equal_width, separator, columns: col_defs });
                     }
                 } else {
                     depth += 1;
@@ -6442,6 +6444,7 @@ fn parse_section_properties(
                         let mut num = 1u32;
                         let mut space: Option<f32> = None;
                         let mut equal_width = true;
+                        let mut separator = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -6449,11 +6452,12 @@ fn parse_section_properties(
                                 "num" => { num = val.parse().unwrap_or(1); }
                                 "space" => { space = val.parse::<f32>().ok().map(|v| v / 20.0); }
                                 "equalWidth" => { equal_width = val.as_ref() != "0" && val.as_ref() != "false"; }
+                                "sep" => { separator = val.as_ref() != "0" && val.as_ref() != "false"; }
                                 _ => {}
                             }
                         }
                         if num > 1 {
-                            columns = Some(ColumnLayout { num, space, equal_width, columns: Vec::new() });
+                            columns = Some(ColumnLayout { num, space, equal_width, separator, columns: Vec::new() });
                         }
                     }
                     _ => {}
