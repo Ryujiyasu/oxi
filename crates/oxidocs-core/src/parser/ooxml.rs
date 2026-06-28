@@ -1163,6 +1163,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // Runs between "separate" and "end" contain cached field results
     // that should be suppressed when the field is evaluated (e.g. PAGE).
     let mut field_result_depth: i32 = 0; // >0 = inside field result region
+    let mut current_field_type: Option<FieldType> = None; // tracks the active field across its result runs
 
     loop {
         match reader.read_event()? {
@@ -1195,7 +1196,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     }
                     "r" if depth == 0 => {
                         let (mut run, dr) = parse_run(reader, ctx, styles, None)?;
-                        // Track field state: fldChar begin/separate/end spans across runs
+                        // Track field state: fldChar begin/separate/end spans across runs.
+                        // Remember a CrossRef field so its cached result run is KEPT.
+                        if run.field_type.is_some() {
+                            current_field_type = run.field_type.clone();
+                        }
                         if run.text.contains('\u{FFFE}') {
                             // Marker for fldChar separate (set in parse_run)
                             run.text = run.text.replace('\u{FFFE}', "");
@@ -1205,10 +1210,18 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             // Marker for fldChar end
                             run.text = run.text.replace('\u{FFFF}', "");
                             field_result_depth -= 1;
+                            if field_result_depth <= 0 {
+                                current_field_type = None;
+                            }
                         }
                         // Suppress cached field result text (between separate and end)
-                        // when the field was already evaluated (e.g. PAGE → "#")
-                        if field_result_depth > 0 && run.field_type.is_none() {
+                        // when the field was already evaluated (e.g. PAGE → "#"). KEEP the
+                        // cached result for CrossRef (REF/NOTEREF/PAGEREF) — Oxi can't
+                        // re-resolve the bookmark, so the cache («第１９条») is the display
+                        // value; dropping it (old "#") shifted wrapping doc-wide.
+                        if field_result_depth > 0 && run.field_type.is_none()
+                            && !matches!(current_field_type, Some(FieldType::CrossRef))
+                        {
                             run.text.clear();
                         }
                         runs.push(run);
@@ -2922,8 +2935,15 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         } else if field.contains("TOC") || field.contains("HYPERLINK") {
             // Table of contents / hyperlink fields — keep existing text (result display)
         } else if field.contains("REF") || field.contains("NOTEREF") || field.contains("PAGEREF") {
-            // Cross-reference fields — show placeholder
-            if text.is_empty() {
+            // S685 (2026-06-28, default ON, opt-out OXI_CROSSREF_DISABLE): cross-reference
+            // fields render the CACHED RESULT (the run between fldChar separate and end),
+            // NOT a "#" placeholder. The instruction run itself has no display text (leave
+            // empty); FieldType::CrossRef tells parse_paragraph to KEEP (not suppress) the
+            // cached result run. Word shows «第１９条»; the old "#" dropped chars → shifted
+            // wrapping doc-wide (tokyoshugyo 0.9759→0.9792, deltas reduced).
+            if std::env::var("OXI_CROSSREF_DISABLE").is_err() {
+                field_type = Some(FieldType::CrossRef);
+            } else if text.is_empty() {
                 text = "#".to_string();
             }
         } else if field.contains("AUTHOR") || field.contains("TITLE") || field.contains("SUBJECT") {

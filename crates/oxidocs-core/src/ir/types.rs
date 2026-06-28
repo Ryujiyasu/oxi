@@ -288,6 +288,11 @@ pub enum FieldType {
     Page,
     /// Total number of pages (NUMPAGES field)
     NumPages,
+    /// Cross-reference (REF/NOTEREF/PAGEREF) — render the CACHED RESULT (the text
+    /// between fldChar separate and end), NOT a "#" placeholder. Word displays the
+    /// cached value (e.g. «第１９条»); Oxi can't re-resolve the bookmark, so the
+    /// cache is the only source. Dropping it shifts wrapping doc-wide (tokyoshugyo).
+    CrossRef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
