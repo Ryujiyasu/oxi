@@ -3591,10 +3591,23 @@ impl LayoutEngine {
                             .map_or(false, |p| p.x.abs() < 0.5);
                         let h_anchor_page = table.style.position.as_ref()
                             .map_or(false, |p| p.h_anchor.as_deref() == Some("page"));
+                        // S686 (2026-06-28, opt-out OXI_S686_DISABLE): a vertAnchor="text"
+                        // full-width float anchored to the MARGIN fills the text column,
+                        // so the following body must wrap BELOW it. tokyoshugyo's パワハラ
+                        // box (tblpX=250tw≈12.5pt, horz=margin, width≈content) was excluded
+                        // by the (pos_x_zero||h_anchor_page) gate → Oxi overlapped the
+                        // following body (【第１２条】 heading + commentary) INSIDE the box
+                        // → 4 extra lines packed onto p16 → 【参考】 and 28 paragraphs all
+                        // shifted -1 page (the gate's −1 cascade origin). ed025c's
+                        // OFF-column floats (horzAnchor absent → None, or "page", tblpX
+                        // 32-100pt, overflow the column) keep h_anchor!=margin → unaffected.
+                        let h_anchor_margin = std::env::var("OXI_S686_DISABLE").is_err()
+                            && table.style.position.as_ref()
+                                .map_or(false, |p| p.h_anchor.as_deref() == Some("margin"));
                         let wide_table = table_w_pt > content_width - 30.0;
                         let needs_wrap_below = v_anchor_text
                             && wide_table
-                            && (pos_x_zero || h_anchor_page);
+                            && (pos_x_zero || h_anchor_page || h_anchor_margin);
 
                         if needs_wrap_below && pages_added > 0 {
                             current_page_idx += pages_added;
