@@ -13059,6 +13059,12 @@ impl LayoutEngine {
                                 }
                                 let cm = self.metrics_for_char(ch, &run.style, &para.style);
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                                // S691 (2026-06-29) FALSIFIED: forcing full-width digits (U+FF1x)
+                                // to font_size in the cell break (OXI_FWDIGIT) was a NO-OP — the
+                                // 第N条-marker break-width discrepancy (--dump-layout 9.5/char vs
+                                // --dump-glyphs painted 10.5/char) is NOT the full-width digit
+                                // char-width (already 10.5 here) but a charSpace/marker-path cause
+                                // (UNISOLATED). The chapter cell over-fit root is still open.
                                 // OXI_CJKADV_K=<pt>: experimental — widen the fullwidth-CJK cell
                                 // break advance (Word's typed-docGrid CJK advance ≈10.56 vs Oxi em
                                 // 10.50). Applied to chars whose natural advance ≈ font_size (full-
