@@ -8782,29 +8782,18 @@ impl LayoutEngine {
                     // Discriminator = paragraph-remaining-chars ≤ one line (last-line
                     // context): fires on «（» when it sits in the para's final line, not on
                     // a middle-line «、». OXI_ORPHAN_OPEN / OXI_ORPHAN_LINEMULT tune.
-                    // OXI_NPALL (2026-06-28, the "never give up" demand-aware breaker):
-                    // n_period applied to ALL 約物 types, not just openings. Word's per-line
-                    // model: PERIODS (。．) always compress to half-em (6.0); the OTHER 約物
-                    // (comma/closing/opening) compress ONLY when the line has <2 cheap periods
-                    // (n_period<2 → demand-compress; ≥2 → periods do the work, others stay
-                    // light). Unifies nedo's W1 over-fit (2 periods → others light → 甲 wraps)
-                    // with the 336/etc. under-fits (<2 periods → demand-compress → fit like
-                    // Word). b837-SAFE by construction (s475_break = type=lines only). Default
-                    // OFF byte-identical. Env-tunable OXI_NPALL_{COMMA,CLOSE,OPEN,PERIOD}.
-                    let npall = s475_break && std::env::var("OXI_NPALL").is_ok();
-                    let line_periods_all = if npall {
-                        current_line.fragments.iter()
-                            .flat_map(|f| f.text.chars())
-                            .filter(|&c| matches!(c, '。' | '．'))
-                            .count()
-                    } else { 0 };
-                    let s475_open_eff = if npall {
-                        if line_periods_all >= 2 {
-                            std::env::var("OXI_NPALL_OPEN_LO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
-                        } else {
-                            std::env::var("OXI_NPALL_OPEN").ok().and_then(|v| v.parse().ok()).unwrap_or(3.1)
-                        }
-                    } else if s475_break && std::env::var("OXI_NPERIOD").is_ok() {
+                    // S684 (2026-06-28, default ON, opt-out OXI_NPERIOD_DISABLE): the n_period
+                    // opening gate — Word credits OPENING-bracket demand compression only when
+                    // the line lacks cheap PERIOD (。．) half-em. Fixes nedo W1 (≥2 periods →
+                    // openings light → 甲 wraps) AND 333 (0 periods → opening HI=3.4 → 子 fits).
+                    // Pairs with OXI_TRAILBR (the trailing-<w:br/> empty line) to PASS nedo: the
+                    // {−1:3} the memory called an 8-session char-budget cascade was the dropped
+                    // <w:br/> empty line (found via the reliable article/page-top measurement).
+                    // ★The all-types NPALL variant (≥2-period → comma/closing also light) was
+                    // tried + FALSIFIED — it regressed b837/d77a/harassmanual/ohnoikuji; nedo
+                    // only needs the OPENINGS gate (this) + TRAILBR. b837-SAFE (s475_break =
+                    // type=lines only; b837 = linesAndChars). HI=3.4 fixes 333, LO=0 wraps W1.
+                    let s475_open_eff = if s475_break && std::env::var("OXI_NPERIOD_DISABLE").is_err() {
                         // n_period DISCRIMINATOR (2026-06-23, OXI_NPERIOD, default OFF):
                         // Word credits OPENING-bracket demand compression only when the line
                         // lacks cheap PERIOD (。．) half-em compression. MEASURED (nedo Word
@@ -8846,20 +8835,7 @@ impl LayoutEngine {
                         // measurement — comma 3.4 / period 6.0 (half-em) / closing-solo
                         // 0.84 (light). b837-safe (s475_break = type=lines). Tunable.
                         let (period_pt, close_solo_pt, comma_pt) =
-                            if npall {
-                                // PERIODS always half-em (6.0); comma/closing demand-compress
-                                // only when <2 periods, else light (the cheap periods do the work).
-                                let period = std::env::var("OXI_NPALL_PERIOD").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
-                                if line_periods_all >= 2 {
-                                    (period,
-                                     std::env::var("OXI_NPALL_CLOSE_LO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
-                                     std::env::var("OXI_NPALL_COMMA_LO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0))
-                                } else {
-                                    (period,
-                                     std::env::var("OXI_NPALL_CLOSE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.84),
-                                     std::env::var("OXI_NPALL_COMMA").ok().and_then(|v| v.parse().ok()).unwrap_or(3.4))
-                                }
-                            } else if std::env::var("OXI_PERTYPE").is_ok() {
+                            if std::env::var("OXI_PERTYPE").is_ok() {
                                 (std::env::var("OXI_PT_PERIOD").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0),
                                  std::env::var("OXI_PT_CLOSE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.84),
                                  std::env::var("OXI_PT_COMMA").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo))
@@ -9557,6 +9533,20 @@ impl LayoutEngine {
 
         // Flush last line
         if !current_line.fragments.is_empty() {
+            lines.push(current_line);
+        } else if std::env::var("OXI_TRAILBR_DISABLE").is_err()
+            && lines.last().map_or(false, |l| l.break_type == LineBreakType::SoftBreak)
+        {
+            // S684/TRAILBR (2026-06-28, default ON, opt-out OXI_TRAILBR_DISABLE): a TRAILING
+            // <w:br/> (soft break at the paragraph end) leaves an EMPTY current_line that the
+            // !is_empty() check above drops. Word renders it as an empty line (+1 line height)
+            // — the author's idiom for adding space before the next heading. nedo:
+            // «…譲り渡されるものとする。<w:br/>» before «（知的財産権放棄の届出）» → Word +18pt,
+            // Oxi dropped it → Oxi over-fit 1 line at the p22 bottom → the {−1:3} "cascade".
+            // ★This is the REAL root of nedo's 8-session "char-budget wall" — a dropped
+            // trailing <w:br/>, not 約物. Push the empty line. GATE: full Phase-1 85/87→86/87
+            // (nedo PASS, 0 regress); SSIM byte-identical (0 word_png docs have a trailing
+            // <w:br/>; canaries 3a4f/b837/d77a/kojin/683f byte-identical); lib 142/0/6.
             lines.push(current_line);
         }
 
