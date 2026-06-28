@@ -5158,9 +5158,28 @@ impl LayoutEngine {
             // Symbol font bullets (•/●) have large glyphs relative to em-square.
             // No font size adjustment needed — use the paragraph's font size directly.
             let marker_metrics = self.metrics_for(marker_style, &para.style);
+            // S692 (2026-06-29, SHIPPED default ON, opt-out OXI_MARKERCJK_DISABLE): a numbered-list label that is
+            // CJK/full-width (e.g. 「第３４条」, the tokyoshugyo regulation article
+            // markers) had its WIDTH computed with metrics_for (the ASCII font, Century),
+            // so the full-width digits 「３４」 fell to the proportional ~7.5pt (marker
+            // w=36) — but the GDI RENDER paints them in the eastAsia font (MS Mincho,
+            // 10.5/char = Word, via font-linking). The under-counted marker shifts the
+            // body start ~6pt LEFT → the body line over-fits (fits 「当」 where Word
+            // wraps). Resolve the marker width per-char (CJK → metrics_for_char's
+            // eastAsia font), matching the render. See [[tokyoshugyo_wrap_not_cellheight]].
+            let marker_cjk = std::env::var("OXI_MARKERCJK_DISABLE").is_err();
             let marker_width: f32 = marker
                 .chars()
-                .map(|c| self.registry.char_width_pt_with_fallback(c, marker_font_size, marker_metrics))
+                .map(|c| {
+                    // The CJK render paints full-width marker chars (e.g. 「第３４条」's
+                    // digits) at the eastAsia monospace width (font_size), NOT the Century
+                    // proportional 7.5 that metrics_for resolves at break time. Match the
+                    // render so the marker width (→ hanging-indent → body start) is correct.
+                    if marker_cjk && crate::font::is_fullwidth(c) {
+                        return marker_font_size;
+                    }
+                    self.registry.char_width_pt_with_fallback(c, marker_font_size, marker_metrics)
+                })
                 .sum();
             let list_indent = para.style.list_indent.unwrap_or(18.0);
             let marker_x = start_x + indent_left - list_indent;
@@ -12847,8 +12866,22 @@ impl LayoutEngine {
                             let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
                             let marker_fs = self.resolve_font_size(&marker_style, &para.style);
                             let marker_metrics = self.metrics_for(&marker_style, &para.style);
+                            // S692 (2026-06-29, SHIPPED default ON, opt-out OXI_MARKERCJK_DISABLE): a CELL numbered-list
+                            // label that is CJK/full-width (「第３４条」, the tokyoshugyo 賃金
+                            // regulation article markers) had its WIDTH computed with metrics_for
+                            // (the ASCII Century font) → the full-width digits 「３４」 fell to the
+                            // proportional ~7.5pt (marker w=36, vs the GDI RENDER's 10.5/char = 42
+                            // = Word). The under-counted marker reserve (s592_marker_reserve = w +
+                            // fs*0.25) starts the body ~6pt too LEFT → the body line over-fits
+                            // (fits 「当」 where Word wraps). Use the render width (font_size) for
+                            // full-width marker chars. See [[tokyoshugyo_wrap_not_cellheight]].
+                            let marker_cjk = std::env::var("OXI_MARKERCJK_DISABLE").is_err();
                             let marker_width: f32 = marker.chars()
-                                .map(|c| self.registry.char_width_pt_with_fallback(c, marker_fs, marker_metrics))
+                                .map(|c| if marker_cjk && crate::font::is_fullwidth(c) {
+                                    marker_fs
+                                } else {
+                                    self.registry.char_width_pt_with_fallback(c, marker_fs, marker_metrics)
+                                })
                                 .sum();
                             (marker.clone(), marker_fs, marker_width)
                         });
