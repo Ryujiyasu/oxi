@@ -5824,6 +5824,17 @@ impl LayoutEngine {
             let s651_multicell_head = std::env::var("OXI_S651_DISABLE").is_err()
                 && !page.doc_grid_no_type
                 && grid_pitch.map_or(false, |p| p > 0.0 && effective_lh > p * 1.5);
+            // S687 FALSIFIED (2026-06-28): "a mid-paragraph CONTINUATION line uses the
+            // FULL grid box (no ink leniency)" — aimed at the tokyoshugyo 賃金-chapter −1
+            // origin, p46 «給月給（定額賃金制…» (Oxi cursor 742.55, ink_lh 13.5 → over=-0.8
+            // FIT; Word breaks to p47, full box → over=+3.7; cursors aligned ~0.65pt).
+            // Forcing full box for ALL continuation lines OVER-CORRECTS: tokyoshugyo −1
+            // 23→8 (the 賃金 origin IS continuation-line leniency) BUT +1 5→30 (most
+            // continuation lines Word KEEPS via leniency), net 0.9817→0.9761 WORSE. The
+            // «給月給» (Word ink overflows by 0.15pt) and the 30 Word-keeps lines INTERLEAVE
+            // at the sub-pt ink boundary — the documented "no threshold separates
+            // push-vs-keep" wall (S651). Needs Word's exact per-line ink/device-snap, not
+            // a continuation-line gate. See [[tokyoshugyo_wrap_not_cellheight]].
             let break_threshold = if s548b_exact_full || s562b_empty_full
                 || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head {
                 effective_lh
