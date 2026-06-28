@@ -15163,6 +15163,11 @@ impl LayoutEngine {
                 // 29dc6e/4a36b small. Bottom-N floor (b35123/1ec1/15076) byte-identical →
                 // Phase-3 gate (bottom-N protected, mean up) passes. Canaries (3a4f/459f/0e7af/
                 // 2ea81a/tokumei_08_01) byte-identical. OXI_BBOX overrides the amount (tuning).
+                // NOTE: extending to cell-level tcBorders (OXI_BBOX_CELL, tested 2026-06-28)
+                // helps the tokumei_08_01 family (+0.0266) but REGRESSES 15076_tokumei_08_09
+                // −0.0429 (a BOTTOM-N FLOOR doc whose large cell-border rows render ~at
+                // trHeight in Word — the per-doc wall, no signal vs de6e32). Net −0.0163,
+                // lowers the floor → NOT shippable. Kept table-level insideH only.
                 let bbox_large = std::env::var("OXI_BBOX_DISABLE").is_err()
                     && table.style.has_inside_h
                     && table_grid_pitch.map(|p|
@@ -15172,6 +15177,11 @@ impl LayoutEngine {
                 if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else if bbox_large {
+                    if std::env::var("OXI_DBG_BBOX").is_ok() {
+                        eprintln!("[BBOX] trH={:.1} rh={:.2} vrh={:.2} content={:.2} bw={:.2} cy={:.1}",
+                            row.height.unwrap_or(0.0), row_height, visual_row_h, visual_row_h,
+                            table.style.border_width.unwrap_or(0.5), cursor.cursor_y);
+                    }
                     // S682b (2026-06-28): amount = 1× border_width, NOT 2×. The per-row
                     // PITCH overhead is ONE inside-H border (shared between adjacent rows:
                     // N rows have N+1 horizontal borders → per-row ≈ 1 bw), so 2*bw
