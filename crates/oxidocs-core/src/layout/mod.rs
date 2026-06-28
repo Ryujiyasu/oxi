@@ -8257,7 +8257,24 @@ impl LayoutEngine {
             // compress (176 expand at natural 約物). So the capacity model with
             // cap≈2.5 (≈ Word max) reproduces Word's compress-14/expand-176 split,
             // unlike ×0.6667 (over) / S589-natural (under) / S543-fs/2 (way over).
-            let s590_legacy_just_cap = std::env::var("OXI_S590").ok().as_deref() == Some("1")
+            // S689 (2026-06-29, SHIPPED default ON, opt-out OXI_S590_DISABLE): the body
+            // half of the tokyoshugyo joint-solve. A LEGACY (compat<15) JUSTIFIED
+            // type=lines compressPunctuation body para uses the s475 CAPACITY break
+            // (greedy + demand 約物 compression, cap solo 1.5 / pair 6.0) instead of the
+            // flat ×0.6667 pre-compress (which OVER-compresses 約物 → fits ~1 extra
+            // char/line → −1 page drift). DERIVED S590 (2026-06-16): _tks_oidashi --absorb
+            // shows Word compresses RARELY (14/219 full lines) at cap ~2.5 max; the
+            // capacity model reproduces the compress-14/expand-176 split. ★Shipped now
+            // (was opt-in OXI_S590=1): the memory kept it opt-in citing "page count
+            // 90→91", but that PREDATED S591/S585b (cell-clamp) being default-ON — with
+            // the cells clamped, the body capacity break keeps tokyoshugyo at 90 pages
+            // (= Word) AND improves the reliable page-top metric 41→36 (gate 0.9817→
+            // 0.9824, one −1 fixed). ★SINGLE-DOC-SCOPED by construction (compat<15 +
+            // justified + type=lines + compressPunctuation = tokyoshugyo ALONE in the
+            // corpus; verified byte-identical for gen/gen2/test + all others). The CELL
+            // under-compression (the regulation boxes' jc=left wrapper does ZERO 約物
+            // compression) is the SEPARATE joint-solve piece, still pending.
+            let s590_legacy_just_cap = std::env::var("OXI_S590_DISABLE").is_err()
                 && is_justified && self.compress_punctuation
                 && self.compat_mode < 15 && !lines_and_chars;
             let s475_break = ((std::env::var("OXI_S475_DISABLE").is_err()
