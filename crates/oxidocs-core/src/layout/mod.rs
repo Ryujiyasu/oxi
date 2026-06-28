@@ -5839,7 +5839,32 @@ impl LayoutEngine {
                 || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head {
                 effective_lh
             } else {
-                ink_lh.min(effective_lh)
+                // S688 PROBE/SCAFFOLD (2026-06-28, default 0 = byte-identical, opt-in
+                // OXI_TGINK_K=<pt>): the typed-grid page-bottom break threshold (= natural_lh,
+                // the win*83/64 SPACING box, 13.617 for MS Mincho 10.5pt) UNDER-estimates the
+                // TRUE rendered ink bottom from the cursor by ~1.0pt. MEASURED on tokyoshugyo
+                // «る賃金» (p46 mid-para continuation, pi=444): cursor 742.55, Word baseline
+                // 755.70 (Oxi baseline IDENTICAL — no cursor drift, confirmed via --dump-glyphs),
+                // glyph descent 1.477 → ink bottom 757.18 > content_bottom 756.85 → Word BREAKS;
+                // natural_lh 13.617 gives cursor+13.617 = 756.17 ≤ 756.85 → Oxi KEEPS. The
+                // baseline sits LOW in the 18pt cell (leading 4.1pt ABOVE the ink), so the real
+                // ink bottom from cursor = baseline_offset(13.15) + descent(1.477) = 14.63, NOT
+                // 13.617. The principled K ≈ true_ink_bottom − natural_lh − Word_tolerance
+                //   = 14.63 − 13.617 − 0.19 ≈ 0.82 (sweep flips at K∈(0.80, 0.85]).
+                // ★Canaries db9ca/ikujikaigo/model/3a4f/roudoujoken/34140 ALL stay PASS at K≤2.0
+                //   (the typed-grid bump has NO canary risk — supersedes the S576/S687 fear).
+                // ★NOT shipped: a uniform K can't fix tokyoshugyo. It is a DOC-WIDE BIDIRECTIONAL
+                //   distributed wall (~41 reliable page-top divergences, both Oxi-ahead AND
+                //   Oxi-behind), and breaking «る賃金» alone over-corrects the chapter via the
+                //   coupled empty-para/section-heading SPACING drift (Oxi's «（）»-heading gap is
+                //   +1.9pt mean vs Word; the «（基本給）» section renders ~18.25/increment vs Word
+                //   18.10, accumulating ~+0.6/section). K=0.85 nets reliable 41→39 only. The
+                //   coupled fix needs the threshold (−1) AND the spacing drift (+1) together.
+                //   See [[tokyoshugyo_wrap_not_cellheight]].
+                let tgink_k = if !page.doc_grid_no_type {
+                    std::env::var("OXI_TGINK_K").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0)
+                } else { 0.0 };
+                (ink_lh + tgink_k).min(effective_lh)
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
