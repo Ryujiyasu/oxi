@@ -15172,9 +15172,16 @@ impl LayoutEngine {
                 if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else if bbox_large {
+                    // S682b (2026-06-28): amount = 1× border_width, NOT 2×. The per-row
+                    // PITCH overhead is ONE inside-H border (shared between adjacent rows:
+                    // N rows have N+1 horizontal borders → per-row ≈ 1 bw), so 2*bw
+                    // DOUBLE-counted. The SSIM audit (per-DOC-mean, not per-page sum) showed
+                    // 2*bw over-corrected the small 1-page docs (191cb5/f16f228/e8caed/4a36b)
+                    // → per-doc-mean NEUTRAL (−0.0007); 1*bw recovers them → per-doc-mean
+                    // +0.0464. (per-page sum is misleading — it over-weights the 16-page ed025.)
                     let amt = std::env::var("OXI_BBOX").ok().and_then(|v| v.parse::<f32>().ok())
                         .filter(|v| *v > 0.01)
-                        .unwrap_or_else(|| 2.0 * table.style.border_width.unwrap_or(0.5));
+                        .unwrap_or_else(|| table.style.border_width.unwrap_or(0.5));
                     cursor.advance_split(row_height, row_height + amt);
                 } else {
                     cursor.advance(row_height);
