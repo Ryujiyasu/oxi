@@ -8782,7 +8782,29 @@ impl LayoutEngine {
                     // Discriminator = paragraph-remaining-chars ≤ one line (last-line
                     // context): fires on «（» when it sits in the para's final line, not on
                     // a middle-line «、». OXI_ORPHAN_OPEN / OXI_ORPHAN_LINEMULT tune.
-                    let s475_open_eff = if s475_break && std::env::var("OXI_NPERIOD").is_ok() {
+                    // OXI_NPALL (2026-06-28, the "never give up" demand-aware breaker):
+                    // n_period applied to ALL 約物 types, not just openings. Word's per-line
+                    // model: PERIODS (。．) always compress to half-em (6.0); the OTHER 約物
+                    // (comma/closing/opening) compress ONLY when the line has <2 cheap periods
+                    // (n_period<2 → demand-compress; ≥2 → periods do the work, others stay
+                    // light). Unifies nedo's W1 over-fit (2 periods → others light → 甲 wraps)
+                    // with the 336/etc. under-fits (<2 periods → demand-compress → fit like
+                    // Word). b837-SAFE by construction (s475_break = type=lines only). Default
+                    // OFF byte-identical. Env-tunable OXI_NPALL_{COMMA,CLOSE,OPEN,PERIOD}.
+                    let npall = s475_break && std::env::var("OXI_NPALL").is_ok();
+                    let line_periods_all = if npall {
+                        current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars())
+                            .filter(|&c| matches!(c, '。' | '．'))
+                            .count()
+                    } else { 0 };
+                    let s475_open_eff = if npall {
+                        if line_periods_all >= 2 {
+                            std::env::var("OXI_NPALL_OPEN_LO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+                        } else {
+                            std::env::var("OXI_NPALL_OPEN").ok().and_then(|v| v.parse().ok()).unwrap_or(3.1)
+                        }
+                    } else if s475_break && std::env::var("OXI_NPERIOD").is_ok() {
                         // n_period DISCRIMINATOR (2026-06-23, OXI_NPERIOD, default OFF):
                         // Word credits OPENING-bracket demand compression only when the line
                         // lacks cheap PERIOD (。．) half-em compression. MEASURED (nedo Word
@@ -8824,7 +8846,20 @@ impl LayoutEngine {
                         // measurement — comma 3.4 / period 6.0 (half-em) / closing-solo
                         // 0.84 (light). b837-safe (s475_break = type=lines). Tunable.
                         let (period_pt, close_solo_pt, comma_pt) =
-                            if std::env::var("OXI_PERTYPE").is_ok() {
+                            if npall {
+                                // PERIODS always half-em (6.0); comma/closing demand-compress
+                                // only when <2 periods, else light (the cheap periods do the work).
+                                let period = std::env::var("OXI_NPALL_PERIOD").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
+                                if line_periods_all >= 2 {
+                                    (period,
+                                     std::env::var("OXI_NPALL_CLOSE_LO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                                     std::env::var("OXI_NPALL_COMMA_LO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0))
+                                } else {
+                                    (period,
+                                     std::env::var("OXI_NPALL_CLOSE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.84),
+                                     std::env::var("OXI_NPALL_COMMA").ok().and_then(|v| v.parse().ok()).unwrap_or(3.4))
+                                }
+                            } else if std::env::var("OXI_PERTYPE").is_ok() {
                                 (std::env::var("OXI_PT_PERIOD").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0),
                                  std::env::var("OXI_PT_CLOSE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.84),
                                  std::env::var("OXI_PT_COMMA").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo))
