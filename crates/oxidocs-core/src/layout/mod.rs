@@ -5861,6 +5861,17 @@ impl LayoutEngine {
                 //   18.10, accumulating ~+0.6/section). K=0.85 nets reliable 41→39 only. The
                 //   coupled fix needs the threshold (−1) AND the spacing drift (+1) together.
                 //   See [[tokyoshugyo_wrap_not_cellheight]].
+                // S690 (2026-06-29) FINDING: the ink-threshold is CONFIRMED NOT PRODUCTIVE
+                // for tokyoshugyo AFTER the body fix (S689/S590 default-ON). Post-S690 the
+                // reliable page-top is 36 at BOTH K=0 and K=0.85 — the «る賃金» break does
+                // NOT reduce real divergences (the body 約物 capacity break already captured
+                // that region); the gate {-1:7,1:30} it produces is PURE text-prefix ARTIFACT.
+                // AND the kojin coupling is NOT separable by continuation-vs-para-start: a
+                // continuation-line scope (line_idx>0) STILL regressed kojin (its flips are
+                // continuation CASCADES, not para-starts — the para_idx detection misled).
+                // ⇒ the ink-threshold under-estimate is real but a DEAD pagination lever for
+                // tokyoshugyo post-body-fix; OXI_TGINK_K kept as a default-0 byte-identical
+                // probe only. The p47 賃金-region divergence is a DIFFERENT cause (re-examine).
                 let tgink_k = if !page.doc_grid_no_type {
                     std::env::var("OXI_TGINK_K").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0)
                 } else { 0.0 };
