@@ -25,7 +25,7 @@
 
 use crate::font::{MathTable, MathGlyphTables, math_substitute};
 use crate::ir::{MathBlock, MathExpr, MathStyle};
-use crate::layout::{LayoutElement, LayoutContent};
+use crate::layout::{LayoutElement, LayoutContent, TextEffects};
 
 /// Bounding box for a math fragment. All values in points, relative to
 /// a math baseline at y=0. Width extends rightward from origin x=0.
@@ -752,7 +752,7 @@ fn emit_text_at(
             field_type: None,
             character_spacing: 0.0,
             text_scale: 100.0,
-            is_vertical: false,
+            is_vertical: false, effects: TextEffects::default(),
         },
     )
 }

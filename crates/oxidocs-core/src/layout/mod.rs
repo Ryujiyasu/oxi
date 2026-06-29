@@ -1323,6 +1323,16 @@ impl LayoutElement {
     }
 }
 
+/// S702 (2026-06-30): Word character effects (shadow/emboss/imprint/outline).
+/// Carried on Text elements; both renderers draw them. Default = none.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TextEffects {
+    pub shadow: bool,
+    pub emboss: bool,
+    pub imprint: bool,
+    pub outline: bool,
+}
+
 pub enum LayoutContent {
     Text {
         text: String,
@@ -1350,6 +1360,9 @@ pub enum LayoutContent {
         /// GDI: set LOGFONT.lfEscapement = -900. DWrite: apply per-run
         /// transform matrix. Default false (horizontal flow).
         is_vertical: bool,
+        /// S702 (2026-06-30): text effects (w:shadow / w:emboss / w:imprint /
+        /// w:outline) — faithful render of Word's character effects. Render-only.
+        effects: TextEffects,
     },
     Image {
         data: Vec<u8>,
@@ -2389,6 +2402,10 @@ impl LayoutEngine {
                 field_type: None,
                 text_scale: style.text_scale.unwrap_or(100.0),
                 is_vertical: true,
+                effects: TextEffects {
+                    shadow: style.shadow, emboss: style.emboss,
+                    imprint: style.imprint, outline: style.outline,
+                },
             },
         );
         elem.paragraph_index = Some(block_idx);
@@ -2967,7 +2984,7 @@ impl LayoutEngine {
                                         color,
                                         highlight: None, field_type: None,
                                         character_spacing: 0.0, text_scale: 100.0,
-                                        is_vertical: false,
+                                        is_vertical: false, effects: TextEffects::default(),
                                     },
                                 ));
                                 // Body indent = cap width + the framePr hSpace gap.
@@ -5324,7 +5341,7 @@ impl LayoutEngine {
                     field_type: None,
                     character_spacing: 0.0,
                     text_scale: 100.0,
-                    is_vertical: false,
+                    is_vertical: false, effects: TextEffects::default(),
             }));
         }
 
@@ -7113,6 +7130,11 @@ impl LayoutEngine {
                         },
                         text_scale: frag.style.text_scale.unwrap_or(100.0),
                         is_vertical: is_vert_frag,
+                        // S702: faithful Word character effects.
+                        effects: TextEffects {
+                            shadow: frag.style.shadow, emboss: frag.style.emboss,
+                            imprint: frag.style.imprint, outline: frag.style.outline,
+                        },
                 });
                 // Session 72 Phase A: populate text_y_off (y still includes it).
                 // S700: place the vert column from the line-box top (text_y_off −
@@ -7206,7 +7228,7 @@ impl LayoutEngine {
                                     field_type: None,
                                     character_spacing: ruby_char_spacing,
                                     text_scale: 100.0,
-                                    is_vertical: false,
+                                    is_vertical: false, effects: TextEffects::default(),
                                 },
                             );
                             if let Some(pi) = body_para_index {
@@ -7278,7 +7300,7 @@ impl LayoutEngine {
                                         double_strikethrough: false, color: mark_color.clone(),
                                         highlight: None, field_type: None,
                                         character_spacing: 0.0, text_scale: 100.0,
-                                        is_vertical: false,
+                                        is_vertical: false, effects: TextEffects::default(),
                                     },
                                 );
                                 if let Some(pi) = body_para_index {
@@ -7369,7 +7391,7 @@ impl LayoutEngine {
                             field_type: None,
                             character_spacing: 0.0,
                             text_scale: 100.0,
-                            is_vertical: false,
+                            is_vertical: false, effects: TextEffects::default(),
                         },
                     );
                     // Session 72 Phase A: populate text_y_off (y still includes it).
@@ -12658,6 +12680,10 @@ impl LayoutEngine {
                                 text_scale: first_run_style.text_scale.unwrap_or(100.0),
                                 // Session 132: flag for renderer rotation.
                                 is_vertical: true,
+                                effects: TextEffects {
+                                    shadow: first_run_style.shadow, emboss: first_run_style.emboss,
+                                    imprint: first_run_style.imprint, outline: first_run_style.outline,
+                                },
                             },
                         );
                         elem.paragraph_index = block_idx;
@@ -14053,7 +14079,7 @@ impl LayoutEngine {
                                         character_spacing: 0.0,
                                         field_type: None,
                                         text_scale: 100.0,
-                                        is_vertical: false,
+                                        is_vertical: false, effects: TextEffects::default(),
                                     },
                                 );
                                 empty_el.paragraph_index = block_idx;
@@ -14463,7 +14489,7 @@ impl LayoutEngine {
                                             character_spacing: 0.0,
                                             field_type: None,
                                             text_scale: 100.0,
-                                            is_vertical: false,
+                                            is_vertical: false, effects: TextEffects::default(),
                                         },
                                     );
                                     // Session 72 Phase A: populate text_y_off.
@@ -14502,7 +14528,7 @@ impl LayoutEngine {
                                         character_spacing: *cs + justify_char_spacing + grid_cs_adj,
                                         field_type: None,
                                         text_scale: *ts,
-                                        is_vertical: false,
+                                        is_vertical: false, effects: TextEffects::default(),
                                 });
                                 // Session 72 Phase A: populate text_y_off (y still includes it).
                                 cell_el.text_y_off = cell_text_y_off;

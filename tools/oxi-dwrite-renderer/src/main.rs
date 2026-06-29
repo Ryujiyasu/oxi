@@ -334,7 +334,7 @@ unsafe fn render_page_elements(
                 text, font_size, font_family, bold, italic, color,
                 underline: _, underline_style, strikethrough, double_strikethrough,
                 highlight, character_spacing,
-                text_scale, is_vertical, ..
+                text_scale, is_vertical, effects, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
                 // Session 75 Phase D (2026-05-17): el.y is LINE BOX TOP; pass
@@ -373,6 +373,7 @@ unsafe fn render_page_elements(
                     *strikethrough, *double_strikethrough, is_double_underline,
                     highlight.as_deref(), *character_spacing,
                     *is_vertical, *text_scale,
+                    effects.shadow, effects.emboss, effects.imprint, effects.outline,
                 )?;
             }
             LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
@@ -797,6 +798,10 @@ unsafe fn render_text(
     character_spacing_pt: f32,
     is_vertical: bool,
     text_scale_pct: f32,
+    fx_shadow: bool,
+    fx_emboss: bool,
+    fx_imprint: bool,
+    fx_outline: bool,
 ) -> windows::core::Result<()> {
     use windows::core::*;
     use windows::Win32::Graphics::Direct2D::*;
@@ -1089,16 +1094,51 @@ unsafe fn render_text(
         Some(saved)
     } else { None };
 
+    // S702 (2026-06-30): faithful Word character effects (shadow/emboss/imprint/
+    // outline). Extra passes drawn UNDER the main glyph + the main glyph re-coloured.
+    let pt2 = PT_TO_DIP;
+    if fx_shadow {
+        // Drop shadow: a 50%-gray copy ~1pt down-right, under the text.
+        if let Ok(sh) = rt.CreateSolidColorBrush(&rgb_to_d2d_color(128, 128, 128), None) {
+            let so = D2D_POINT_2F { x: origin.x + pt2, y: origin.y + pt2 };
+            rt.DrawTextLayout(so, &layout, &sh, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+    }
+    if fx_emboss || fx_imprint {
+        // Raised (emboss) / sunken (imprint): a dark edge offset diagonally; the
+        // main glyph is re-coloured light below so the 3D bevel reads on a white page.
+        if let Ok(dk) = rt.CreateSolidColorBrush(&rgb_to_d2d_color(96, 96, 96), None) {
+            let (dx, dy) = if fx_emboss { (0.7, 0.7) } else { (-0.7, -0.7) };
+            let so = D2D_POINT_2F { x: origin.x + dx * pt2, y: origin.y + dy * pt2 };
+            rt.DrawTextLayout(so, &layout, &dk, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+    }
+    if fx_outline {
+        // Hollow text: draw the glyph in the text colour offset in 8 directions
+        // (a thick border ring), then the main pass (re-coloured white) fills the
+        // interior — leaving an outline.
+        for (dx, dy) in [(-0.8, 0.0), (0.8, 0.0), (0.0, -0.8), (0.0, 0.8),
+                         (-0.6, -0.6), (0.6, -0.6), (-0.6, 0.6), (0.6, 0.6)] {
+            let oo = D2D_POINT_2F { x: origin.x + dx * pt2, y: origin.y + dy * pt2 };
+            rt.DrawTextLayout(oo, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+    }
+    let effect_main: Option<ID2D1SolidColorBrush> = if fx_outline {
+        rt.CreateSolidColorBrush(&rgb_to_d2d_color(255, 255, 255), None).ok()
+    } else if fx_emboss || fx_imprint {
+        rt.CreateSolidColorBrush(&rgb_to_d2d_color(200, 200, 200), None).ok()
+    } else { None };
+    let main_brush: &ID2D1SolidColorBrush = effect_main.as_ref().unwrap_or(&brush);
     rt.DrawTextLayout(
         origin,
         &layout,
-        &brush,
+        main_brush,
         D2D1_DRAW_TEXT_OPTIONS_NONE,
     );
     // S493f: faux-bold overprint (no real bold face) — second pass +faux_dx right.
     if faux_bold {
         let o2 = D2D_POINT_2F { x: origin.x + faux_dx, y: origin.y };
-        rt.DrawTextLayout(o2, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        rt.DrawTextLayout(o2, &layout, main_brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
     }
     if let Some(saved) = ww_saved {
         rt.SetTransform(&saved);

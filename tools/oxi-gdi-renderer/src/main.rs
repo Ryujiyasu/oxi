@@ -161,7 +161,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
 
                 match &elem.content {
                     oxidocs_core::layout::LayoutContent::Text {
-                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, double_strikethrough, highlight, character_spacing, text_scale, is_vertical, ..
+                        text, font_size, font_family, bold, italic, color, underline, underline_style, strikethrough, double_strikethrough, highlight, character_spacing, text_scale, is_vertical, effects, ..
                     } => {
                         // Session 75 Phase D (2026-05-17): elem.y is LINE BOX TOP;
                         // glyph_y = LBT + text_y_off is where TextOutW/underline/
@@ -280,7 +280,31 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             } else {
                                 (x, glyph_y)
                             };
+                            // S702 (2026-06-30): faithful Word character effects.
+                            // off ≈ 1px at this scale; extra TextOutW passes recolour
+                            // via SetTextColor, restored to `rgb` afterward.
+                            let off = (scale.max(1.0)).round() as i32;
+                            if effects.shadow {
+                                SetTextColor(mem_dc, COLORREF(0x00808080));
+                                TextOutW(mem_dc, x_draw + off, y_draw + off, &text_wide);
+                                SetTextColor(mem_dc, rgb);
+                            }
+                            if effects.emboss || effects.imprint {
+                                let d = if effects.emboss { off } else { -off };
+                                SetTextColor(mem_dc, COLORREF(0x00606060));
+                                TextOutW(mem_dc, x_draw + d, y_draw + d, &text_wide);
+                                SetTextColor(mem_dc, COLORREF(0x00C8C8C8)); // light fill
+                            }
+                            if effects.outline {
+                                for (dx, dy) in [(-off,0),(off,0),(0,-off),(0,off),(-off,-off),(off,-off),(-off,off),(off,off)] {
+                                    TextOutW(mem_dc, x_draw + dx, y_draw + dy, &text_wide);
+                                }
+                                SetTextColor(mem_dc, COLORREF(0x00FFFFFF)); // white interior
+                            }
                             TextOutW(mem_dc, x_draw, y_draw, &text_wide);
+                            if effects.emboss || effects.imprint || effects.outline {
+                                SetTextColor(mem_dc, rgb); // restore for subsequent glyphs
+                            }
 
                             // S494: per-char EXACT positions for --dump-glyphs.
                             // Use GetTextExtentExPointW for the cumulative RENDERED
