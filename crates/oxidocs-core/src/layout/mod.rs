@@ -5470,7 +5470,7 @@ impl LayoutEngine {
         // grids ohnoikuji's SHORT EMBEDDED a4 sg0 run between gridded paras but
         // natural-izes 9a8e's large sg0 BLOCK) is the snapToGrid line-height precision
         // wall — deferred. line_height_inner:8218 is the natural-vs-grid site.
-        let line_heights: Vec<f32> = lines.iter().map(|line| {
+        let mut line_heights: Vec<f32> = lines.iter().map(|line| {
             self.line_height_for_line(line, &para.style, para_font_size, para.style.snap_to_grid, grid_pitch, page.doc_grid_no_type)
         }).collect();
         // Day 33 part 65 (2026-05-12): natural line heights (ascent+descent only)
@@ -5480,7 +5480,7 @@ impl LayoutEngine {
         // line at y=758.25, grid line_h=18, line bottom=776.25 (5.25pt past
         // pgBot=771) — Word fits, while Oxi (using full line_h for break
         // check) rejected.
-        let natural_line_heights: Vec<f32> = lines.iter().map(|line| {
+        let mut natural_line_heights: Vec<f32> = lines.iter().map(|line| {
             self.natural_line_height_for_line(line, &para.style, para_font_size)
         }).collect();
         // S576 (2026-06-15): glyph-ink line heights (typo_sum*fs ≈ em) for the
@@ -5488,9 +5488,55 @@ impl LayoutEngine {
         // box (win*83/64 = 1.297*em for CJK), ~3.2pt larger than the real glyph
         // ink — that over-count rejected page-bottom lines Word fits (their grid
         // leading hangs into the margin). See break_threshold below.
-        let ink_line_heights: Vec<f32> = lines.iter().map(|line| {
+        let mut ink_line_heights: Vec<f32> = lines.iter().map(|line| {
             self.ink_line_height_for_line(line, &para.style, para_font_size)
         }).collect();
+
+        // S689 (2026-06-29, SHIPPED default ON, opt-out OXI_S689_DISABLE): a list
+        // paragraph whose numbering marker is a SYMBOL-FONT bullet (\u{F0B7}) renders
+        // its line ~0.67pt TALLER in Word/LibreOffice (Symbol natural ratio 1.2251 >
+        // Cambria 1.1724; at 11pt×1.15 = 15.49 vs 14.83). Oxi omits the marker glyph's
+        // font from the line-height max → the bullet line is too short → cumulative
+        // drift (the gen2 family's BIGGEST residual; Libra — matching the word_png at
+        // ~0.98 — proved it FIXABLE, reframing the deferred "render-anchor wall"; the
+        // body 11pt is already correct via S671). Bump line 0 (the bullet line) by the
+        // Symbol/body natural-ratio so line_height = marker_natural × factor. SCOPED to
+        // the S671 no-type-docGrid Latin path (line_height = natural_hhea × factor, so
+        // the ratio scale transfers the factor cleanly; s671_fine routes the advance to
+        // line_heights[0]). ★GATE: corpus SSIM A/B net +1.4326 (page-sum), 33 improved
+        // (the whole gen2 Latin family — gen2_064 0.9167→0.9733/+0.0566, gen2_041
+        // +0.109, gen2_067 +0.088 …) / 1 negligible (test_lists −0.0057). ALL page
+        // counts STABLE (N/N) → no pagination shift; only 34 synthetic gen2/gen/test
+        // docs byte-change → every Phase-1 regulation doc BYTE-IDENTICAL → Phase-1
+        // preserved by construction (S689 fires only on no-type-docGrid + Latin-line0
+        // + Symbol bullet, which the candidate scan confirms is gen2/gen/test ONLY;
+        // CJK gen2 excluded by all_latin). lib 142/0/6. Tools: _bugfind_rank.py,
+        // Libra-PDF per-line baselines. See [[gen2_vertical_drift]].
+        if std::env::var("OXI_S689_DISABLE").is_err()
+            && page.doc_grid_no_type
+            && !lines.is_empty()
+            && !lines[0].fragments.is_empty()
+            && para.style.list_marker.as_deref().map_or(false, |m| m.contains('\u{F0B7}'))
+        {
+            // body natural-hhea of line 0 (max over fragments), and confirm all-Latin
+            let mut body_nat: f32 = 0.0;
+            let mut all_latin = true;
+            for f in &lines[0].fragments {
+                let fs = f.style.font_size.unwrap_or(para_font_size);
+                let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                if m.is_cjk_83_64_font() { all_latin = false; }
+                let n = m.natural_line_height_hhea(fs);
+                if n > body_nat { body_nat = n; }
+            }
+            const SYMBOL_RATIO: f32 = 1.2251; // win(2059+450)/upm 2048 of Microsoft Symbol
+            let marker_nat = SYMBOL_RATIO * para_font_size;
+            if all_latin && body_nat > 0.0 && marker_nat > body_nat {
+                let scale = marker_nat / body_nat;
+                line_heights[0] *= scale;
+                natural_line_heights[0] *= scale;
+                ink_line_heights[0] *= scale;
+            }
+        }
 
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
@@ -11254,16 +11300,55 @@ impl LayoutEngine {
                         // lever; the residual is purely the coupled box-position wall
                         // (title line-height + body accumulation), element.y-affecting and
                         // in the most-reverted S611/S612/S615 area — deferred.
-                        let s457_dy = if line.fragments.iter().any(|f| {
+                        // S688 (2026-06-29) — FONT-SIZE-PROPORTIONAL s457 grid-CJK
+                        // glyph δ. FALSIFIED as a clean corpus fix → OPT-IN only
+                        // (default = flat 2.5, BYTE-IDENTICAL). The flat 2.5 was
+                        // δ-swept on the 12pt-body docs d77a/b837/c7b923; 3a4f
+                        // (10.5pt body, type=lines pitch 360) PEAKS at ~2.2 (word_png
+                        // sweep: mean 0.9188→0.9288 @2.2, +0.010 — pages 4-8 body all
+                        // gain). The two LOOKED like a clean proportional law δ = fs×k
+                        // (k=2.5/12=0.2083 → 12pt=2.50 [d77a/b837 byte-identical],
+                        // 10.5pt=2.19). BUT the full-corpus A/B falsified it: the
+                        // 10.5pt type=lines/pitch=360 docs SPLIT improve/regress with
+                        // IDENTICAL docx input — 3a4f/db9ca/190xxx want ~2.2, the
+                        // index family ed025/34140/04b88e want 2.5 (confirmed: flat
+                        // 2.2 ≈ proportional ≪ flat 2.5 on them, so it's the 10.5pt
+                        // BODY not the 8pt content → no floor fixes it). No
+                        // docx-derivable discriminator (same font/size/grid/pitch) ⇒
+                        // the gen2-class word_png-reference/render-anchor inconsistency
+                        // wall (see [[gen2_vertical_drift]], [[ssim_residual_is_subpixel_position]]).
+                        // Per-doc-mean was +0.024 but that is arbitrary
+                        // reference-luck, NOT a docx-derivable fidelity gain — so it
+                        // does NOT ship. Knob retained for the eventual
+                        // consistent-reference-regeneration session. Render-only
+                        // (text_y_off) → Phase-1 safe. OXI_S457_PROP=1 enables the
+                        // proportional law; OXI_S457_PROP_K overrides k;
+                        // OXI_S457_GRID_CJK_DY=v forces a FLAT v (sweeps).
+                        let s457_dy = if !line.fragments.iter().any(|f| {
                             self.metrics_for_text(&f.text, &f.style, para_style)
                                 .is_cjk_83_64_font()
                         }) {
-                            std::env::var("OXI_S457_GRID_CJK_DY")
+                            0.0
+                        } else if let Ok(v) = std::env::var("OXI_S457_GRID_CJK_DY") {
+                            v.parse::<f32>().unwrap_or(2.5)
+                        } else if std::env::var("OXI_S457_PROP").is_ok() {
+                            let k = std::env::var("OXI_S457_PROP_K")
                                 .ok()
                                 .and_then(|v| v.parse::<f32>().ok())
-                                .unwrap_or(2.5)
+                                .unwrap_or(2.5 / 12.0);
+                            let mut cjk_fs: f32 = 0.0;
+                            for f in &line.fragments {
+                                if self
+                                    .metrics_for_text(&f.text, &f.style, para_style)
+                                    .is_cjk_83_64_font()
+                                {
+                                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                                    if fs > cjk_fs { cjk_fs = fs; }
+                                }
+                            }
+                            cjk_fs * k
                         } else {
-                            0.0
+                            2.5
                         };
                         grid_base + s457_dy
                     } else {
