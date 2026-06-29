@@ -12604,7 +12604,22 @@ impl LayoutEngine {
                     let style_has_explicit_rule = effective_line_rule == Some("exact") || effective_line_rule == Some("atLeast");
                     let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
                     let tbl_has_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing).is_some();
-                    let (effective_line_spacing, effective_line_rule) = if tbl_has_ls && !para.style.has_direct_spacing {
+                    // S699 (2026-06-30): the table-style line-spacing override must NOT fire
+                    // when the paragraph STYLE itself sets explicit line spacing. ECMA-376
+                    // precedence (see comment above) is table style pPr < paragraph style <
+                    // direct, so a paragraph-style value (line_spacing present and NOT inherited
+                    // from docDefaults) outranks the table style. Without this guard, a cell
+                    // whose Normal style sets line=276 (1.15x) was wrongly reset to the
+                    // TableGrid style's line=240 (Single) → rows ~1.92pt too short, cumulative
+                    // (test_table_grid: Oxi 13.44pt/row vs Word 15.36, drift ~9.6pt over 5
+                    // rows). Corpus blast radius = 1 (test_table_grid is the only doc with a
+                    // Normal-style line!=240 + a styled table); gen2 (docDefaults line=276,
+                    // from_doc_defaults=true) and the form family are unchanged. Opt-out
+                    // OXI_S699_DISABLE.
+                    let para_style_explicit_ls = para.style.line_spacing.is_some()
+                        && !para.style.line_spacing_from_doc_defaults
+                        && std::env::var("OXI_S699_DISABLE").is_err();
+                    let (effective_line_spacing, effective_line_rule) = if tbl_has_ls && !para.style.has_direct_spacing && !para_style_explicit_ls {
                         let tbl_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing);
                         let tbl_lr = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref());
                         (tbl_ls, tbl_lr)
