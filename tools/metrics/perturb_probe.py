@@ -111,6 +111,24 @@ INJECTIONS = {
                       _rpr(), run('行間8pt固定11pt文字')),                          # exact line(8pt) < font(11pt) → clip
     'kern_on':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
                       _rpr(), run('カーニングAVAW', 22, '<w:kern w:val="2"/>')),   # kerning enabled
+    # batch 5 (2026-06-29): untested vertical-reservation features (line-based spacing,
+    # rotated run, fitText, text effects) likely in real JP docs.
+    'beforelines':   '<w:p><w:pPr><w:spacing w:beforeLines="100" w:before="0"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('前100行%')),                                  # beforeLines=1 line (100/100ths)
+    'afterlines':    '<w:p><w:pPr><w:spacing w:afterLines="100" w:after="0"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('後100行%')),                                  # afterLines=1 line
+    'ea_vert':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s<w:r><w:rPr>%s<w:eastAsianLayout w:vert="1"/></w:rPr><w:t>縦中横</w:t></w:r>%s</w:p>' % (
+                      _rpr(), run('前'), _rpr(), run('後')),                      # rotated (tate-chu-yoko) run
+    'fittext':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr><w:r><w:rPr>%s<w:fitText w:val="2000" w:id="1"/></w:rPr><w:t>項目名</w:t></w:r></w:p>' % (
+                      _rpr(), _rpr()),                                            # fitText: squeeze to 100pt
+    'emboss':        '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('浮き出し', 22, '<w:emboss/>')),                # emboss text effect
+    'imprint':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('くぼみ', 22, '<w:imprint/>')),                 # imprint text effect
+    'dstrike':       '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('二重取り消し', 22, '<w:dstrike/>')),            # double strikethrough
+    'outline_eff':   '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('中抜き', 22, '<w:outline/>')),                 # outline text effect
 }
 
 
