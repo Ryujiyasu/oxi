@@ -129,6 +129,17 @@ INJECTIONS = {
                       _rpr(), run('二重取り消し', 22, '<w:dstrike/>')),            # double strikethrough
     'outline_eff':   '<w:p><w:pPr><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
                       _rpr(), run('中抜き', 22, '<w:outline/>')),                 # outline text effect
+    # batch 6 (2026-06-29): line-multiple compression + spacing precedence (S697 bug class)
+    'auto_compress': '<w:p><w:pPr><w:spacing w:line="180" w:lineRule="auto"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('行間0.75倍圧縮')),                              # auto 0.75x (line<240)
+    'auto_125':      '<w:p><w:pPr><w:spacing w:line="300" w:lineRule="auto"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('行間1.25倍')),                                  # auto 1.25x
+    'before_both':   '<w:p><w:pPr><w:spacing w:before="360" w:beforeLines="50"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('before両方')),                                  # before=18pt + beforeLines=0.5 → which wins?
+    'before240':     '<w:p><w:pPr><w:spacing w:before="360"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('before18pt')),                                  # plain before=18pt (sanity)
+    'atleast_tiny':  '<w:p><w:pPr><w:spacing w:line="100" w:lineRule="atLeast"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
+                      _rpr(), run('atLeast5pt<11pt')),                             # atLeast 5pt < font 11pt → font wins
 }
 
 
