@@ -14292,7 +14292,40 @@ impl LayoutEngine {
                                 && std::env::var("OXI_S664_DISABLE").is_err() {
                                 std::env::var("OXI_S664_DY").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5)
                             } else { 0.0 };
-                            let cell_text_y_off = cell_text_y_off + cell_glyph_dy + s664_dy;
+                            // S698 (2026-06-30, default ON, opt-out OXI_S698_DISABLE, override
+                            // OXI_S698_DY): a PURE-LATIN (non-CJK) table cell renders ~0.76pt too
+                            // LOW. The S453 flat +1.5 cell_glyph_dy was calibrated on CJK cells
+                            // (which render too HIGH without it — Word reserves more leading above
+                            // a CJK first line); Latin glyphs need LESS leading, so +1.5 overshoots.
+                            // MEASURED uniform +0.76 within-cell across 4 gen2 Latin tables
+                            // (gen2_050/051/044/069 — Word PNG vs Oxi DWrite cell-text centroid),
+                            // with LibreOffice matching Word exactly (dY ~−0.01). Found via the
+                            // LibreOffice bug-finder (gen2 p2 table bands 0.65 vs Libra 0.98). The
+                            // root is grid-independent (S453 over-corrects Latin leading) so the
+                            // gate is purely "no CJK-83/64 fragment in the cell line" → the tuned
+                            // CJK form family (tokumei/1ec1/b35123, MS Mincho cells) is BYTE-
+                            // IDENTICAL by construction (s660 also keys off the CJK fragment, never
+                            // co-fires here). RENDER-ONLY (text_y_off) → element.y / row height /
+                            // pagination / Phase-1 / IoU preserved (same as S453/S660/S664).
+                            let s698_reduce: f32 = if std::env::var("OXI_S698_DISABLE").is_err()
+                                && !line.is_empty() {
+                                let mut has_cjk = false;
+                                for (text, fs, _, bold, italic, _u, _us, _st, ff, _c, _h, _cs, _ts) in line.iter() {
+                                    let mut rs = RunStyle::default();
+                                    rs.font_size = Some(*fs);
+                                    rs.bold = *bold; rs.italic = *italic;
+                                    if let Some(f) = ff { rs.font_family = Some(f.clone()); }
+                                    if self.metrics_for_text(text, &rs, &para.style).is_cjk_83_64_font() {
+                                        has_cjk = true;
+                                        break;
+                                    }
+                                }
+                                if has_cjk { 0.0 } else {
+                                    std::env::var("OXI_S698_DY").ok()
+                                        .and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.76)
+                                }
+                            } else { 0.0 };
+                            let cell_text_y_off = cell_text_y_off + cell_glyph_dy + s664_dy - s698_reduce;
                             // S592: line-1 body starts AFTER the inline marker (no overlap).
                             let mut rx = if s592_cell_space && line_idx == 0 { s592_marker_reserve } else { 0.0_f32 };
                             // Emit list marker on the first line of the paragraph.
