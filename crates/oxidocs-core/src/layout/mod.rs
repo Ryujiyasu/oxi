@@ -16,6 +16,10 @@ use crate::ir::*;
 /// Pre-allocated single-character strings to avoid heap allocation in hot loops.
 const TAB_STRING: &str = "\t";
 const SPACE_STRING: &str = " ";
+/// S697 (2026-06-29): Word's FIXED "1 line" for NO-GRID beforeLines/afterLines
+/// (= 240 twips). MEASURED constant 12.0pt across every font/size and para line
+/// spacing (_bl_derive). docGrid uses the grid pitch instead.
+const NO_GRID_LINE_PT: f32 = 12.0;
 
 /// Convert a char to a String with pre-sized buffer (avoids realloc for multi-byte chars).
 #[inline]
@@ -4995,6 +4999,21 @@ impl LayoutEngine {
             // COM-confirmed (2026-04-06): the value is exact (bl/100 * pitch), no grid snap.
             // beforeLines=50 at pitch=17.5 gives exactly 8.75pt, not 17.5pt.
             bl / 100.0 * pitch
+        } else if let Some(bl) = para.style.before_lines
+            .filter(|_| page.grid_line_pitch.is_none() && std::env::var("OXI_S697_DISABLE").is_err()) {
+            // S697 (2026-06-29): NO-GRID beforeLines. Without a docGrid there is no
+            // linePitch, so Word uses a FIXED "line" of 12.0pt (=240 twips, the default
+            // line-spacing unit) — MEASURED constant across ALL fonts/sizes AND para line
+            // spacing (perturb_probe + _bl_derive: MS Mincho 10.5-20pt, Cambria, Calibri,
+            // MS Gothic, and auto-2x/exact/1.5x all give beforeLines=100 → +12.00pt). The
+            // prior code only applied before_lines under a grid → no-grid docs reserved 0.
+            // SCOPE = `page.grid_line_pitch.is_none()` (the DOCUMENT has no docGrid): a
+            // TEXTBOX paragraph in a docGrid doc passes grid_pitch=None too, but its
+            // beforeLines should NOT use the 12.0 line — firing on 1ec1's textboxes
+            // regressed it −0.0078. So gate on the document-level no-docGrid, not the
+            // local grid_pitch. Coverage fix (0 corpus docs are no-docGrid + beforeLines).
+            // Opt-out OXI_S697_DISABLE.
+            bl / 100.0 * NO_GRID_LINE_PT
         } else {
             para.style.space_before.unwrap_or(0.0)
         };
@@ -7745,6 +7764,11 @@ impl LayoutEngine {
         } else if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
             // afterLines: exact value (al/100 * pitch), no grid snap needed.
             al / 100.0 * pitch
+        } else if let Some(al) = para.style.after_lines
+            .filter(|_| page.grid_line_pitch.is_none() && std::env::var("OXI_S697_DISABLE").is_err()) {
+            // S697: no-grid afterLines = (al/100) × 12.0pt fixed (doc has no docGrid;
+            // textbox-in-docGrid excluded via page.grid_line_pitch — see space_before).
+            al / 100.0 * NO_GRID_LINE_PT
         } else {
             para.style.space_after.unwrap_or(0.0)
         };
