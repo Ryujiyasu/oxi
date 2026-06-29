@@ -5818,19 +5818,26 @@ impl LayoutEngine {
                 && line_idx == 0 && lines.len() == 2
                 && !page.doc_grid_no_type
                 && !s548b_exact_full && !s562b_empty_full;
-            // S693 PROBE (2026-06-29, opt-in OXI_S693=1, default byte-identical):
-            // generalize S605 from 2-line paras to ANY NON-LAST line — a typed-grid
-            // page-bottom line with MORE lines following in the same paragraph uses
-            // the FULL grid cell (no natural_lh leniency). DERIVED discriminator
-            // (BR_DUMP keep/break vs Word PDF): tokyoshugyo «給月給» (pi=444, line 2
-            // of a 5-line para, over=-0.80, Word BREAKS) vs kojin pi=52 (over=-0.35,
-            // LAST line, Word KEEPS) and 〔例２〕 (pi=205, over=-1.10, LAST line of
-            // pg26, Word KEEPS) — over is INVERTED (kojin keeps the tighter -0.35,
-            // tokyo breaks the looser -0.80), so the discriminator is last-vs-non-last,
-            // NOT over (refutes OXI_TGINK_K / S651 over-threshold). NARROWER than the
+            // S693 (2026-06-29, default ON, opt-out OXI_S693_DISABLE): generalize
+            // S605 from 2-line paras to ANY NON-LAST line — a typed-grid page-bottom
+            // line with MORE lines following in the same paragraph, whose natural-
+            // leniency over is a HAIRLINE (nat_over > OXI_S693_OV, default -1.0; the
+            // full box barely overflows the content bottom), breaks at the FULL grid
+            // cell (no natural_lh leniency). DERIVED discriminator (BR_DUMP keep/break
+            // vs Word PDF): tokyoshugyo «給月給» (pi=444, line 2 of a 5-line para,
+            // over=-0.80, Word BREAKS) vs kojin pi=52 (over=-0.35, LAST line, Word
+            // KEEPS) and 〔例２〕 (pi=205, over=-1.10, LAST line, Word KEEPS) — over is
+            // INVERTED (kojin keeps the tighter -0.35), so the cut is last-vs-non-last
+            // (NOT over, refuting OXI_TGINK_K/S651), with an over-hairline gate WITHIN
+            // non-last lines (see break_threshold override below). NARROWER than the
             // FALSIFIED S687 ("all continuation lines", idx>=1) which broke the
             // last-line continuations Word keeps (+1 5->30); s693 EXCLUDES last lines.
-            let s693_nonlast = std::env::var("OXI_S693").ok().as_deref() == Some("1")
+            // Shipped DEFAULT-ON JOINTLY with S694 (the widow box-split fix): S693
+            // pushes «給月給» down (fixing the chapter -1) but EXPOSES the chapter
+            // over-tallness (the 精勤手当/賞与 widow-push), which S694 then fixes — the
+            // two are a compensating pair (S559 pattern), net tokyoshugyo 0.9855→
+            // 0.9874. Corpus-safe: only tokyoshugyo changes (every canary byte-identical).
+            let s693_nonlast = std::env::var("OXI_S693_DISABLE").is_err()
                 && line_idx + 1 < lines.len()
                 && !page.doc_grid_no_type
                 && !s548b_exact_full && !s562b_empty_full;
@@ -5923,9 +5930,11 @@ impl LayoutEngine {
                 0.0
             };
             let effective_break_bottom = page_top + content_height + line_lenient_extra;
-            // S693 (2026-06-29, opt-in OXI_S693=1): a NON-LAST typed-grid line whose
-            // natural-leniency over is a HAIRLINE (nat_over > -1.0pt, the full box
-            // barely overflows the content bottom) breaks at the FULL grid cell.
+            // S693 (2026-06-29, default ON, opt-out OXI_S693_DISABLE): a NON-LAST
+            // typed-grid line whose natural-leniency over is a HAIRLINE (nat_over >
+            // -1.0pt, the full box barely overflows the content bottom) breaks at the
+            // FULL grid cell. The over-hairline gate is the S693-commit's pi=106 fix:
+            // a comfortable-margin non-last line (over < -1.0) keeps the leniency.
             // Two-part discriminator derived from BR_DUMP keep/break vs Word PDF:
             //   (1) last-vs-non-last: kojin pi=52 (over -0.35, LAST line) Word KEEPS;
             //       tokyoshugyo «給月給» (line 2/5, over -0.80, non-last) Word BREAKS.
@@ -12034,12 +12043,40 @@ impl LayoutEngine {
             // implicit widow → restrict to single-row single-cell.
             let is_single_row_single_cell = table.rows.len() == 1
                 && table.rows.get(0).map_or(false, |r| r.cells.len() == 1);
+            // S694 (2026-06-29, default ON, opt-out OXI_S694_DISABLE): lower the
+            // R7.74 single-row-single-cell table-start widow threshold from pitch*4
+            // to pitch*2.2 (GRID docs only; no-grid kept at 58.0). A long
+            // regulation-box row whose start leaves ~3+ lines free at the page
+            // bottom SPLITS in Word; the pitch*4 threshold pushed it WHOLE. This is
+            // the tokyoshugyo 賃金-chapter "over-tallness" the S693 給月給 fix exposes:
+            // under S693 the 精勤手当/賞与 box starts at free≈60pt (3.3 lines) and the
+            // old pitch*4=72pt threshold widow-pushed it → a 137pt blank on p48 →
+            // the whole lower chapter shifts +1. ★DERIVED window (not tuned): 3a4f's
+            // LARGEST Word-PUSHES single-row box (母性健康管理, free 29.9) and
+            // tokyoshugyo's Word-SPLITS box (精勤手当, free 59.9) bound the threshold;
+            // the tokyoshugyo-improving window is pitch*[2.0, 2.4], and pitch*2.2
+            // (~39.6pt) is its center, 9.7pt above 3a4f's 29.9 (canary 3a4f/model/
+            // d4d126 byte-identical — their push-boxes all free <30 < 39.6). OXI_WIDOW_K
+            // overrides for sweeping; OXI_S694_DISABLE restores the pre-S694 pitch*4.
+            let widow_k_default: f32 = if std::env::var("OXI_S694_DISABLE").is_ok() { 4.0 } else { 2.2 };
+            let widow_k = std::env::var("OXI_WIDOW_K").ok()
+                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(widow_k_default);
             let widow_break_needed = row_idx == 0 && has_content && is_single_row_single_cell && {
                 let free_space = page_bottom - cursor.cursor_y;
                 let widow_threshold = if let Some(pitch) = table_grid_pitch {
-                    pitch * 4.0
+                    pitch * widow_k
                 } else { 58.0 };
-                free_space > 0.0 && free_space < widow_threshold
+                let fire = free_space > 0.0 && free_space < widow_threshold;
+                if std::env::var("OXI_DBG_WIDOW").is_ok() && row_overflows {
+                    let prev: String = row.cells.get(0)
+                        .and_then(|c| c.blocks.iter().find_map(|b| match b {
+                            Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(14).collect::<String>()),
+                            _ => None }))
+                        .unwrap_or_default();
+                    eprintln!("[WIDOW] cur_y={:.1} free={:.1} thr={:.1} fire={} single={} txt={:?}",
+                        cursor.cursor_y, free_space, widow_threshold, fire, is_single_row_single_cell, prev);
+                }
+                fire
             };
 
             // S533 (2026-06-10): a row carrying an inline IMAGE block is pushed
