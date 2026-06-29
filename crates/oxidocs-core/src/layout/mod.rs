@@ -5818,6 +5818,22 @@ impl LayoutEngine {
                 && line_idx == 0 && lines.len() == 2
                 && !page.doc_grid_no_type
                 && !s548b_exact_full && !s562b_empty_full;
+            // S693 PROBE (2026-06-29, opt-in OXI_S693=1, default byte-identical):
+            // generalize S605 from 2-line paras to ANY NON-LAST line — a typed-grid
+            // page-bottom line with MORE lines following in the same paragraph uses
+            // the FULL grid cell (no natural_lh leniency). DERIVED discriminator
+            // (BR_DUMP keep/break vs Word PDF): tokyoshugyo «給月給» (pi=444, line 2
+            // of a 5-line para, over=-0.80, Word BREAKS) vs kojin pi=52 (over=-0.35,
+            // LAST line, Word KEEPS) and 〔例２〕 (pi=205, over=-1.10, LAST line of
+            // pg26, Word KEEPS) — over is INVERTED (kojin keeps the tighter -0.35,
+            // tokyo breaks the looser -0.80), so the discriminator is last-vs-non-last,
+            // NOT over (refutes OXI_TGINK_K / S651 over-threshold). NARROWER than the
+            // FALSIFIED S687 ("all continuation lines", idx>=1) which broke the
+            // last-line continuations Word keeps (+1 5->30); s693 EXCLUDES last lines.
+            let s693_nonlast = std::env::var("OXI_S693").ok().as_deref() == Some("1")
+                && line_idx + 1 < lines.len()
+                && !page.doc_grid_no_type
+                && !s548b_exact_full && !s562b_empty_full;
             // ★tokyoshugyo #2 (2026-06-22 s3): typed-grid full-cell break — one of the
             // ~3 stackable #2 components (page-bottom natural-leniency ~11 lines). Forces
             // effective_lh when the cell snaps > natural. Canary-clean on ikujikaigo/
@@ -5907,6 +5923,23 @@ impl LayoutEngine {
                 0.0
             };
             let effective_break_bottom = page_top + content_height + line_lenient_extra;
+            // S693 (2026-06-29, opt-in OXI_S693=1): a NON-LAST typed-grid line whose
+            // natural-leniency over is a HAIRLINE (nat_over > -1.0pt, the full box
+            // barely overflows the content bottom) breaks at the FULL grid cell.
+            // Two-part discriminator derived from BR_DUMP keep/break vs Word PDF:
+            //   (1) last-vs-non-last: kojin pi=52 (over -0.35, LAST line) Word KEEPS;
+            //       tokyoshugyo «給月給» (line 2/5, over -0.80, non-last) Word BREAKS.
+            //   (2) WITHIN non-last lines, over still matters: pi=205 «〔例２〕»
+            //       (non-last, over -1.10) Word KEEPS, «給月給» (over -0.80) BREAKS —
+            //       a non-last line with comfortable margin (over < -1.0) keeps the
+            //       leniency; only a hairline non-last line (over in (-1.0, 0)) breaks.
+            // OXI_S693_OV overrides the -1.0 threshold for sweeping.
+            let break_threshold = if s693_nonlast {
+                let nat_over = cursor.cursor_y + natural_lh - effective_break_bottom;
+                let ov_thr = std::env::var("OXI_S693_OV").ok()
+                    .and_then(|v| v.parse::<f32>().ok()).unwrap_or(-1.0);
+                if nat_over > ov_thr { effective_lh } else { break_threshold }
+            } else { break_threshold };
             let natural_needs_page_break = if in_textbox { false } else {
                 cursor.cursor_y + break_threshold > effective_break_bottom
             };
