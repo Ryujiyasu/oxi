@@ -3333,6 +3333,7 @@ impl LayoutEngine {
                         num_columns,
                         current_column,
                         &col_x_positions,
+                        false, // S691: body context
                     );
                     prev_space_after = sa;
                     // S637: layout_paragraph may have advanced the column (flowing
@@ -3988,6 +3989,7 @@ impl LayoutEngine {
                             0.0,
                             &empty_fn_h_hdr,
                             1, 0, &[],
+                            true, // S691: header context
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -4019,6 +4021,7 @@ impl LayoutEngine {
                             0.0,
                             &empty_fn_h_ftr,
                             1, 0, &[],
+                            true, // S691: footer context
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -4335,6 +4338,7 @@ impl LayoutEngine {
                                         0.0,
                                         &empty_fn_h_note,
                                         1, 0, &[],
+                                        false, // S691: footnote context
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -4625,6 +4629,7 @@ impl LayoutEngine {
                         0.0,
                         &empty_fn_h_txbx,
                         1, 0, &[],
+                        false, // S691: textbox context (in_textbox)
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -4911,6 +4916,12 @@ impl LayoutEngine {
         num_columns: usize,
         start_column: usize,
         col_x_positions: &[f32],
+        // S691 (2026-06-29): this paragraph is laid out in a HEADER or FOOTER.
+        // Scopes the large-CJK 83/64 baseline placement (the header/footer
+        // snapToGrid=0 context Word places at 83/64 but Oxi's renderer drew at
+        // raw); the body/textbox/cell large-CJK placement is already calibrated
+        // (S455/S457/S662) and must NOT get the extra shift.
+        is_header_footer: bool,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -6955,11 +6966,37 @@ impl LayoutEngine {
                 let frag_metrics = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                 let frag_ascent = frag_metrics.word_ascent_pt(resolved_font_size);
                 // COM-confirmed (2026-04-14, gen2_001): Word does NOT apply
-                // per-fragment baseline adjustment. All fragments on the same line
-                // share the same Y coordinate. GDI TextOutW aligns from font cell top.
-                let baseline_adjust = 0.0;
+                // per-fragment baseline adjustment for body text. All fragments share
+                // the same line-box TOP and the renderer adds each font's own ascent.
+                // S691 (2026-06-29): the EXCEPTION — place a LARGE CJK glyph on a
+                // snapToGrid=0 (header/footer/LM0) line at the 83/64 baseline (box_top +
+                // word_ascent_pt), where Word draws CJK. The renderer draws baseline =
+                // box_top + win_ascent×fs (the RAW win ascent), which for an MS Mincho-
+                // class (win_sum≈1.0) CJK font is ~0.255×fs (= word_ascent − raw, the
+                // 83/64 excess) TOO HIGH — visible on the 16pt albalunaTaidan header
+                // title 対談版 (raw baseline 26.48 vs Word 30.56). The body GRID path
+                // already adds this via S457/S166 centering; the snapToGrid=0 header does
+                // not. Add baseline_adjust = word_ascent_pt − win_ascent×fs to the CJK
+                // fragments. SCOPED: snap_to_grid==false, CJK-83/64, win_sum≈1.0
+                // (EXCLUDES Yu Mincho, whose renderer ascent ≠ win_ascent so the layout
+                // can't predict it — the Latin "6pt" stays put), fs≥14 (the 6pt body &
+                // ≤12pt text untouched — they're the calibrated S455/S457 wall), and NOT
+                // a no-type docGrid (S614 already places those via text_y_off).
+                // Render-only (text_y_off). Opt-out OXI_S691_DISABLE.
+                let win_sum = frag_metrics.win_ascent + frag_metrics.win_descent;
+                let baseline_adjust = if std::env::var("OXI_S691_DISABLE").is_err()
+                    && is_header_footer
+                    && !para.style.snap_to_grid
+                    && !page.doc_grid_no_type
+                    && resolved_font_size >= 14.0
+                    && frag_metrics.is_cjk_83_64_font()
+                    && (win_sum - 1.0).abs() < 0.05
+                {
+                    frag_ascent - frag_metrics.win_ascent * resolved_font_size
+                } else {
+                    0.0
+                };
                 let _ = line_max_ascent;
-                let _ = frag_ascent;
 
                 // Session 75 Phase D (2026-05-17): y is LINE BOX TOP, renderer adds
                 // text_y_off + baseline_adjust + vert_offset at draw time. See
