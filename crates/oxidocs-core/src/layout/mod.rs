@@ -7073,8 +7073,23 @@ impl LayoutEngine {
                 // S672: emit at the TRUE cumulative x (render_x) for pure-Latin
                 // left-aligned lines; else the com_tw cumulative (x).
                 let el_x = if s672_latinx { render_x } else { x };
+                // S700: a vert_in_horz fragment renders as a stacked is_vertical
+                // column (n chars down a 1-em cell).
+                let is_vert_frag = frag.style.vert_in_horz
+                    && std::env::var("OXI_S700_DISABLE").is_err();
                 let mut el = LayoutElement::new(el_x, emit_y, adjusted_width, line_height, LayoutContent::Text {
-                        text: tab_leader_text.clone().unwrap_or_else(|| frag.text.clone()),
+                        // S700: Word renders eastAsianLayout w:vert by ROTATING the run
+                        // 90° CCW, so the run's chars run BOTTOM→TOP (first char at the
+                        // column bottom, last at the top — Word PDF draw-order confirmed).
+                        // The is_vertical path stacks upright TOP→BOTTOM, so REVERSE the
+                        // text to land each char in Word's vertical position (横 top, 縦
+                        // bottom). The glyph ROTATION (vs upright) is a basics-only residual
+                        // (no pixel gate; 0/corpus). The reservation (n·fs) is exact.
+                        text: if is_vert_frag {
+                            frag.text.chars().rev().collect::<String>()
+                        } else {
+                            tab_leader_text.clone().unwrap_or_else(|| frag.text.clone())
+                        },
                         font_size: resolved_font_size,
                         font_family: self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
                             .map(|s| s.to_string()),
@@ -7087,16 +7102,29 @@ impl LayoutEngine {
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
                         highlight: frag.style.highlight.clone(),
                         field_type: frag.field_type,
-                        character_spacing: if frag.style.fit_text.is_some() {
+                        character_spacing: if is_vert_frag {
+                            // The column's per-char DOWN advance is exactly fs (the
+                            // renderer adds character_spacing to it) → keep it 0.
+                            0.0
+                        } else if frag.style.fit_text.is_some() {
                             frag.style.character_spacing.unwrap_or(0.0) + justify_char_spacing
                         } else {
                             snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0)) + justify_char_spacing
                         },
                         text_scale: frag.style.text_scale.unwrap_or(100.0),
-                        is_vertical: false,
+                        is_vertical: is_vert_frag,
                 });
                 // Session 72 Phase A: populate text_y_off (y still includes it).
-                el.text_y_off = text_y_off + baseline_adjust + vert_offset;
+                // S700: place the vert column from the line-box top (text_y_off −
+                // (n-1)/2·fs) so it stacks down through the (centred) char-row — the
+                // line grew by (n-1)·fs and the centring pushed the char-row to the
+                // middle, so the column's middle char aligns with the body chars.
+                el.text_y_off = if is_vert_frag {
+                    let n = frag.text.chars().count().max(1);
+                    text_y_off - (n.saturating_sub(1)) as f32 * resolved_font_size * 0.5
+                } else {
+                    text_y_off + baseline_adjust + vert_offset
+                };
                 if let Some(pi) = body_para_index {
                     el.paragraph_index = Some(pi);
                     el.run_index = Some(frag.run_index);
@@ -8158,6 +8186,34 @@ impl LayoutEngine {
                 flush_word!(fragments[frag_outer_idx - 1].1);
             }
             let font_size = self.resolve_font_size(style, para_style);
+            // S700 (2026-06-30): a vert_in_horz run (eastAsianLayout w:vert, 縦中横
+            // / tate-chu-yoko) is an ATOMIC vertical column — its n chars stack
+            // downward in ONE 1-em-wide cell, so it advances exactly fs horizontally
+            // (independent of char count) and never breaks internally. Push the WHOLE
+            // run as one LineFragment of width fs; the emit loop renders it as an
+            // is_vertical column and the line-height fns grow the line to fit it.
+            // Gated on the parsed flag (false for the whole corpus → byte-identical;
+            // verified 0/corpus uses eastAsianLayout w:vert). Opt-out OXI_S700_DISABLE.
+            if style.vert_in_horz && !text.is_empty()
+                && std::env::var("OXI_S700_DISABLE").is_err() {
+                flush_word!(style);
+                let vw_tw = pt_to_tw(font_size);
+                if current_width_tw + vw_tw > available_tw
+                    && !current_line.fragments.is_empty() && !para_all_whitespace {
+                    lines.push(std::mem::take(&mut current_line));
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                }
+                current_line.fragments.push(LineFragment {
+                    text: text.to_string(), width: font_size, natural_width: font_size,
+                    style: style.clone(), tab_alignment: None, tab_position: None,
+                    field_type: frag_field_type, run_index: frag_run_index,
+                    char_offset: frag_char_start,
+                });
+                current_width += font_size;
+                current_width_tw += vw_tw;
+                current_capw_tw += vw_tw;
+                continue;
+            }
             let mut char_pos_in_run = frag_char_start;
             // Char counts in PRECEDING / SUBSEQUENT fragments (paragraph-level total/
             // remaining lookahead for the short-para oikomi gate). Only when enabled.
@@ -10312,6 +10368,26 @@ impl LayoutEngine {
         }
     }
 
+    /// S700 (2026-06-30): the HALF column height (= the per-line ascent AND
+    /// descent each) of a `vert_in_horz` run. `eastAsianLayout w:vert` (縦中横 /
+    /// tate-chu-yoko) sets the run's n chars as a single vertical COLUMN — 1 em
+    /// wide horizontally, n chars stacked downward — and Word makes the line
+    /// exactly the COLUMN height (n·fs), centred on the char-row (MEASURED:
+    /// pb_ea_vert Word PDF — the vert line adds 18.72pt over a normal 14.28 line =
+    /// 33.0 = 3×11pt = n·fs, NOT normal+(n-1)·fs). So the column dominates the
+    /// line: its ascent and descent are each n·fs/2 (the split is irrelevant —
+    /// only the sum n·fs reaches line_height, and LM0 centring uses line_height
+    /// not the split). Returns 0 for non-vert frags / when disabled. 0/corpus
+    /// (greenfield) → byte-identical. Opt-out OXI_S700_DISABLE.
+    fn vert_in_horz_half_grow(&self, frag: &LineFragment, font_size: f32) -> f32 {
+        if frag.style.vert_in_horz && std::env::var("OXI_S700_DISABLE").is_err() {
+            let n = frag.text.chars().count().max(1) as f32;
+            n * font_size * 0.5
+        } else {
+            0.0
+        }
+    }
+
     fn natural_line_height_for_line(
         &self,
         line: &Line,
@@ -10345,6 +10421,9 @@ impl LayoutEngine {
                 if let Some(a) = self.emphasis_above_pt(frag, font_size) {
                     if a >= 0.0 { asc += a; } else { des += -a; }
                 }
+                // S700: a vert_in_horz column dominates the line at n·fs/2 each way.
+                let vg = self.vert_in_horz_half_grow(frag, font_size);
+                if vg > 0.0 { asc = asc.max(vg); des = des.max(vg); }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
             }
@@ -10376,7 +10455,12 @@ impl LayoutEngine {
             for frag in &line.fragments {
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
-                let ink = metrics.glyph_ink_height_pt(font_size);
+                // S700: a vert_in_horz column's ink spans n·fs (the stacked chars).
+                let ink = if frag.style.vert_in_horz && std::env::var("OXI_S700_DISABLE").is_err() {
+                    (frag.text.chars().count().max(1)) as f32 * font_size
+                } else {
+                    metrics.glyph_ink_height_pt(font_size)
+                };
                 if ink > max_ink { max_ink = ink; }
             }
         }
@@ -10499,6 +10583,10 @@ impl LayoutEngine {
                 if let Some(a) = self.emphasis_above_pt(frag, font_size) {
                     if a >= 0.0 { asc += a; } else { des += -a; }
                 }
+                // S700: a vert_in_horz column (縦中横) dominates the line at n·fs/2
+                // each way so the line height = the n-char stacked column (n·fs).
+                let vg = self.vert_in_horz_half_grow(frag, font_size);
+                if vg > 0.0 { asc = asc.max(vg); des = des.max(vg); }
                 if asc > max_ascent { max_ascent = asc; }
                 if des > max_descent { max_descent = des; }
                 if asc + des >= max_combined {

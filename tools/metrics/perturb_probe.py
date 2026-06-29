@@ -139,11 +139,13 @@ INJECTIONS = {
     'before240':     '<w:p><w:pPr><w:spacing w:before="360"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
                       _rpr(), run('before18pt')),                                  # plain before=18pt (sanity)
     'atleast_tiny':  '<w:p><w:pPr><w:spacing w:line="100" w:lineRule="atLeast"/><w:rPr>%s</w:rPr></w:pPr>%s</w:p>' % (
-                      _rpr(), run('atLeast5pt<11pt')),                             # atLeast 5pt < font 11pt → font wins
+                      _rpr(), run('atLeast5pt_under_11pt')),                       # atLeast 5pt < font 11pt → font wins
 }
 
 
 def t2b(png):
+    if not os.path.exists(png):
+        return None  # render failed (e.g. malformed inject) — don't crash the whole run
     b = _ink_bands(png, DPI)
     return round(b[-1][0] - b[0][0], 2) if len(b) >= 3 else None
 
