@@ -3960,7 +3960,19 @@ impl LayoutEngine {
         let header_y = page.header_distance.unwrap_or(36.0);
         let footer_dist = page.footer_distance.unwrap_or(36.0);
         let hdr_x = page.margin.left;
-        let hdr_width = content_width;
+        // S690 (2026-06-29): headers/footers span the FULL page text width, NOT a
+        // body column width. `content_width` is the mutable body cursor that ends at
+        // `col_widths[last_column]` after the body loop — for a MULTI-COLUMN section
+        // (e.g. the bidi 2-col albalunaTaidan) that is a single column (150pt), so a
+        // right-aligned header title was placed against the column edge (x≈142) instead
+        // of the page right margin (x≈315). Headers always use the full text width.
+        // For SINGLE-column docs col_widths[0] == total_content_width, so byte-identical.
+        // Opt-out OXI_S690_DISABLE.
+        let hdr_width = if std::env::var("OXI_S690_DISABLE").is_err() {
+            total_content_width
+        } else {
+            content_width
+        };
         for (page_idx, lp) in pages.iter_mut().enumerate() {
             if !page.header.is_empty() {
                 let mut cy = LayoutCursor::new(header_y);
