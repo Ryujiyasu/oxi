@@ -11154,6 +11154,72 @@ impl LayoutEngine {
                 //   single test doc (test_line_heights with 11pt) where the effect is ~0.3pt
                 //   and visually masked; larger fonts (26pt) show a -3.84pt glyph-top shift
                 //   that cascades through gen2_* series (46 docs).
+                // S695 (2026-06-29, opt-out OXI_S695_DISABLE, ref OXI_S695_REF):
+                // a NO-TYPE docGrid NON-CJK line places the glyph baseline at a
+                // CONSTANT offset from the box top, NOT vertically CENTERED. The
+                // centering `(line_height − ch)/2` GROWS with the line height, so a
+                // MULTIPLE-spacing line (line=276/360/480 → ×1.15/1.5/2.0) pushes the
+                // baseline DOWN by ~extra/2 — but Word keeps the baseline FIXED (the
+                // extra leading goes BELOW it). DERIVED (test_line_heights, Word PDF ⊕
+                // LibreOffice render-truth, both within ±0.1pt): Word baseline = box +
+                // win_ascent×fs (a constant offset, independent of the spacing factor).
+                // Oxi's centering net glyph error was x1.0 −1.1 / x1.15 −0.1 / x1.5 +1.9
+                // / x2.0 +5.5 — the centering ACCIDENTALLY matched Word at ×1.15 (why
+                // the gen2 body, line=276, looked fine) but over-shoots every other
+                // factor. FIX: compute the centering at a FIXED reference factor (1.15,
+                // the docDefaults default) instead of the line's actual factor — i.e.
+                // freeze the baseline offset to the (per-fs, Word-correct) ×1.15 value.
+                // This is BYTE-IDENTICAL for ×1.15 lines (0 regression on the pure-1.15×
+                // gen2 body/headings — a CONSTANT dy could not, since the ×1.15 centering
+                // is ~1.0pt at 10.5pt but ~1.5pt at 14pt) and fixes ×1.0/1.5/2.0.
+                // Render-only (text_y_off) → element.y / pagination byte-identical →
+                // Phase-1 safe. SCOPE: no-type docGrid + line all-non-CJK (CJK 83/64
+                // lines keep the S455/S457/S614 placement); the fs≥18 Latin title
+                // already returns via S670 above (untouched). Found via the LibreOffice
+                // bug-finder (test_line_heights p2/3/4 +0.06-0.08, gen2_050/051 p2).
+                // See [[gen2_vertical_drift]].
+                // EXCLUDE Symbol-bullet list lines: S689 BUMPS their line-0 height for
+                // the marker, so line_height ≠ nat×1.15 and the freeze would shift the
+                // (already-S689-correct) bullet text. The non-bullet 1.15× body/headings
+                // ARE byte-identical under the freeze (nat×1.15 == line_height), so only
+                // the bullet lines need excluding to keep the whole gen2 family byte-
+                // identical (0 regression) while still fixing the ×1.0/1.5/2.0 lines.
+                let is_symbol_bullet = para_style.list_marker.as_deref()
+                    .map_or(false, |m| m.contains('\u{F0B7}'));
+                if doc_grid_no_type && !is_symbol_bullet
+                    && std::env::var("OXI_S695_DISABLE").is_err() {
+                    let line_all_latin = if !line.fragments.is_empty() {
+                        line.fragments.iter().all(|f| {
+                            !self.metrics_for_text(&f.text, &f.style, para_style)
+                                .is_cjk_83_64_font()
+                        })
+                    } else {
+                        let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        !self.metrics_for_para_mark(&rpr_ref, para_style).is_cjk_83_64_font()
+                    };
+                    if line_all_latin {
+                        let reff = std::env::var("OXI_S695_REF")
+                            .ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.15);
+                        // single (1.0×) natural line height of the dominant fragment,
+                        // and the GDI cell (centering_height) — both max over fragments.
+                        let (mut nat, mut cell): (f32, f32) = (0.0, 0.0);
+                        if !line.fragments.is_empty() {
+                            for f in &line.fragments {
+                                let fs = f.style.font_size.unwrap_or(para_font_size);
+                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                nat = nat.max(m.natural_line_height_hhea(fs));
+                                cell = cell.max(m.word_line_height_table_cell(fs));
+                            }
+                        } else {
+                            let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            let m = self.metrics_for_para_mark(&rpr_ref, para_style);
+                            nat = m.natural_line_height_hhea(para_font_size);
+                            cell = m.word_line_height_table_cell(para_font_size);
+                        }
+                        let raw = (nat * reff - cell).max(0.0) / 2.0;
+                        return (raw * 2.0 + 0.5).floor() / 2.0;
+                    }
+                }
                 let has_grid = grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid;
                 if has_grid {
                     // COM-confirmed (2026-04-04/16): text is vertically centered within
