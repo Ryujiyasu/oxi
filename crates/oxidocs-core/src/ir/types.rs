@@ -373,9 +373,12 @@ pub struct RunStyle {
     /// Character width scale percentage (w:w, default 100)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_scale: Option<f32>,
-    /// East Asian layout: combine (kumimoji)
+    /// East Asian layout: combine (kumimoji / 割注 — two lines in one cell)
     #[serde(default)]
     pub combine: bool,
+    /// w:combineBrackets value (none/round/square/angle/curly) for `combine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combine_brackets: Option<String>,
     /// East Asian layout: vertical-in-horizontal (tate-chu-yoko)
     #[serde(default)]
     pub vert_in_horz: bool,
@@ -422,6 +425,7 @@ impl Default for RunStyle {
             fit_text_id: None,
             text_scale: None,
             combine: false,
+            combine_brackets: None,
             vert_in_horz: false,
             position: None,
             emphasis_mark: None,

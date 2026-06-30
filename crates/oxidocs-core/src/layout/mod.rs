@@ -7090,6 +7090,51 @@ impl LayoutEngine {
                 // S672: emit at the TRUE cumulative x (render_x) for pure-Latin
                 // left-aligned lines; else the com_tw cumulative (x).
                 let el_x = if s672_latinx { render_x } else { x };
+                // S703 (2026-06-30): render a `combine` run (割注 / two-lines-in-one)
+                // as warichu — optional brackets + the n chars split into 2 small
+                // (~half-size) rows stacked within one line height. Emits 2-4 plain
+                // Text elements in place of the single glyph (no renderer change).
+                if frag.style.combine && std::env::var("OXI_S703_DISABLE").is_err() {
+                    let fs = resolved_font_size;
+                    let small = fs * 0.5;
+                    let bsz = fs * 0.8;
+                    let chars: Vec<char> = frag.text.chars().collect();
+                    let half = (chars.len() + 1) / 2;
+                    let top: String = chars[..half].iter().collect();
+                    let bot: String = chars[half..].iter().collect();
+                    let (lb, rb): (&str, &str) = match frag.style.combine_brackets.as_deref() {
+                        Some("round") => ("（", "）"),
+                        Some("square") => ("〔", "〕"),
+                        Some("angle") => ("〈", "〉"),
+                        Some("curly") => ("｛", "｝"),
+                        _ => ("", ""),
+                    };
+                    let ff = self.resolve_font_family_for_text(&frag.text, &frag.style, &para.style)
+                        .map(|s| s.to_string());
+                    let wcolor = self.resolve_color(&frag.style, &para.style).map(|s| s.to_string());
+                    let rbold = resolved_bold;
+                    let mut wpush = |elements: &mut Vec<LayoutElement>, t: String, wx: f32, woff: f32, wsz: f32| {
+                        if t.is_empty() { return; }
+                        let mut e = LayoutElement::new(wx, emit_y, wsz, line_height, LayoutContent::Text {
+                            text: t, font_size: wsz, font_family: ff.clone(),
+                            bold: rbold, italic: false, underline: false, underline_style: None,
+                            strikethrough: false, double_strikethrough: false, color: wcolor.clone(),
+                            highlight: None, field_type: None, character_spacing: 0.0,
+                            text_scale: 100.0, is_vertical: false, effects: TextEffects::default(),
+                        });
+                        e.text_y_off = woff;
+                        if let Some(pi) = body_para_index { e.paragraph_index = Some(pi); }
+                        elements.push(e);
+                    };
+                    let mut cx = el_x;
+                    if !lb.is_empty() { wpush(&mut elements, lb.to_string(), cx, text_y_off, bsz); cx += bsz; }
+                    wpush(&mut elements, top, cx, text_y_off, small);
+                    wpush(&mut elements, bot, cx, text_y_off + small, small);
+                    cx += half as f32 * small;
+                    if !rb.is_empty() { wpush(&mut elements, rb.to_string(), cx, text_y_off, bsz); }
+                    x += adjusted_width + frag_spacing_after[frag_idx];
+                    continue;
+                }
                 // S700: a vert_in_horz fragment renders as a stacked is_vertical
                 // column (n chars down a 1-em cell).
                 let is_vert_frag = frag.style.vert_in_horz
@@ -8234,6 +8279,34 @@ impl LayoutEngine {
                 current_width += font_size;
                 current_width_tw += vw_tw;
                 current_capw_tw += vw_tw;
+                continue;
+            }
+            // S703 (2026-06-30): a `combine` run (eastAsianLayout w:combine, 割注 /
+            // kumimoji — two-lines-in-one) is an atomic COMPACT unit: its n chars are
+            // set as 2 small (~half-size) rows within ONE line height, optionally in
+            // brackets. Width ≈ ceil(n/2) half-size chars + (brackets). Push as ONE
+            // fragment; the emit loop renders the warichu. Opt-out OXI_S703_DISABLE.
+            if style.combine && !text.is_empty()
+                && std::env::var("OXI_S703_DISABLE").is_err() {
+                flush_word!(style);
+                let n = text.chars().count();
+                let rows_chars = (n + 1) / 2;
+                let has_br = style.combine_brackets.as_deref().map_or(false, |b| b != "none");
+                let cw = rows_chars as f32 * (font_size * 0.5)
+                    + if has_br { font_size * 0.8 } else { 0.0 };
+                let cw_tw = pt_to_tw(cw);
+                if current_width_tw + cw_tw > available_tw
+                    && !current_line.fragments.is_empty() && !para_all_whitespace {
+                    lines.push(std::mem::take(&mut current_line));
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                }
+                current_line.fragments.push(LineFragment {
+                    text: text.to_string(), width: cw, natural_width: cw,
+                    style: style.clone(), tab_alignment: None, tab_position: None,
+                    field_type: frag_field_type, run_index: frag_run_index,
+                    char_offset: frag_char_start,
+                });
+                current_width += cw; current_width_tw += cw_tw; current_capw_tw += cw_tw;
                 continue;
             }
             let mut char_pos_in_run = frag_char_start;

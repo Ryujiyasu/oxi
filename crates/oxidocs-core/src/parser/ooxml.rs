@@ -4999,6 +4999,10 @@ fn parse_run_properties(
                                     let val = String::from_utf8_lossy(&attr.value);
                                     style.combine = val.as_ref() != "0" && val.as_ref() != "false";
                                 }
+                                "combineBrackets" => {
+                                    style.combine_brackets =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
                                 "vert" => {
                                     let val = String::from_utf8_lossy(&attr.value);
                                     style.vert_in_horz = val.as_ref() != "0" && val.as_ref() != "false";
