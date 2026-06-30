@@ -18,7 +18,8 @@ View, render, and edit .docx / .xlsx / .pptx / PDF natively in the browser — n
 - Edit text in .docx / .xlsx / .pptx with round-trip fidelity — original XML is preserved
 - Download edited files — changes are patched into the original ZIP, not rebuilt from scratch
 - PDF text extraction, structure parsing, and PDF generation
-- Japanese typography — kinsoku shori (JIS X 4051), CJK font metrics
+- Japanese typography — kinsoku shori (JIS X 4051), CJK font metrics, vertical writing (tategaki), tate-chu-yoko (縦中横), ruby (furigana), warichu (割注), emphasis marks (圏点)
+- Rich character & paragraph formatting — run/paragraph shading, character borders (w:bdr), text effects (shadow / emboss / imprint / outline), small-caps, drop caps, tab leaders
 - Hanko / Inkan — Japanese digital stamp generation (round, square, oval) + PAdES PDF signatures
 - 100% client-side — all processing runs in WebAssembly, nothing leaves your browser
 
@@ -213,15 +214,15 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
-  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12"]
+  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12", "06-30"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189]
+  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189, 0.9253]
 ```
 
 > The small step at **05-30** is not a regression: Phase 3 recomputed a clean
 > SSIM baseline from scratch, so points before and after that date sit on
-> slightly different measurement bases. **06-12** is the current per-page mean
-> over scored pages.
+> slightly different measurement bases. **06-30** is the current per-page mean
+> over scored pages (per-doc mean **0.9487**).
 
 | Date | avg SSIM | gate / Phase | Key Changes |
 |------|----------|--------------|-------------|
@@ -243,6 +244,7 @@ xychart-beta
 | 2026-05-30 | per-page **0.8862** · per-doc **0.9235** | **Phase 3** (SSIM) | Primary gate switches back to pixel SSIM (mean ≥ 0.99 + bottom-N floor) on a freshly recomputed baseline. SSIM is the only metric that sees the uniform table-top offset Phase 2 hid. Phase 1 (54/55) and Phase 2 (0.9692) are kept as regression sentinels |
 | 2026-06-03 | per-page **0.9126** | **Phase 3** · Phase 1 54/55 | R35 yakumono capacity-budget line breaking (S475/S476, docGrid `lines`+`linesAndChars`), then a 36-doc correctness sweep shipping localized coverage fixes: floating-textbox z-order (S478), 144 pt footnote separator (S479), dash-dot art borders (S480), explicit nil-cell-border suppression (S482), Word "final" revision view (S483), **upright CJK vertical writing** (S489), ellipse ○ option-markers (S490) |
 | 2026-06-12 | per-page **0.9189** | **Phase 3** · Phase 1 54/55 | Two weeks of COM-measured spec re-derivations (S495-S548): `lineRule=exact` text bottom-aligns in its box (S495), cell inline images (S533), inline drawing canvases (S535/S537), three justification bugs — style-chain `jc` inheritance, explicit `jc=left` vs style default, jc-left natural breaks (S539/S540) — demand *oikomi* with a line-total fs/2 budget under Word-2010 compat (S543-S546), **character-width trio**: UPM-256 halfwidth = fs/2 exact, autoSpaceDE/DN = fs/4 true-space, yakumono pair-halving gated on `w:kern` with the full 26×26 pair table (S546/S547), compat-15 oidashi-not-burasagari + exact-line page-break threshold (S548). The single Phase-1 FAIL (`3a4f9f`) is down to 3 paragraphs (one page early), all traced to the inline-image text-line model |
+| 2026-06-30 | per-page **0.9253** · per-doc **0.9487** | **Phase 3** · Phase 1 86/87 | Corpus expanded to 87 body-text docs (Phase 1) / 238 SSIM-scored docs. A long pagination + fidelity run (S559-S707): the *char-budget wall* (per-line 約物 demand-compression model, derived from a controlled synthetic dataset + Word-PDF render-truth — gate, mechanism, half-em/0.32em caps, ぶら下げ), the **form-family row-height re-derivation** (drift is a cell-tcBorder border-box overhead, not CJK line-height — S648/S660/S661/S666), the **gen2/Latin vertical & horizontal stack** (no-type-docGrid hhea line height S671, render-x word separation S672, glyph-centering S614/S670, DWrite kerning-off S668), **font substitution** (Latin-only eastAsia → MS Mincho S634, embedded Zen Old Mincho S612z), multi-column + vertical/bidi section flow (S637/S638/S678/S679), and a coverage sweep graduating **vertical writing, tate-chu-yoko (縦中横), ruby, warichu (割注), emphasis marks, run/paragraph shading, and character borders** (S654-S707). Found increasingly via a Word-vs-LibreOffice bug-finder (pages where LibreOffice ≈ Word but Oxi ≠ Word = a fixable Oxi bug) and a feature-injection perturbation harness. The sole remaining Phase-1 FAIL (`tokyoshugyo`) is the legacy compat≤14 約物-oikomi body wrap |
 
 **Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 3 — pixel SSIM** (mean ≥ 0.99 + bottom-N floor), active since 2026-05-30. Earlier phases are kept as regression sentinels: **Phase 1** pagination correctness (per-paragraph page match, 54/55) and **Phase 2** element IoU (mean 0.9692). Phases 1 and 2 each plateaued below their entry bars for structural reasons — pagination on one split-table outlier, IoU because its median-dy subtraction hides uniform table offsets — so the gate advanced to the metric that can see the remaining pixel error. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
 
