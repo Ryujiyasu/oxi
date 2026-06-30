@@ -2461,14 +2461,22 @@ fn parse_paragraph_properties(
                         }
                     }
                     "shd" => {
+                        // S705 (2026-06-30): paragraph-level shd → effective background
+                        // colour (was: raw fill only, so pctN para shading mis-coloured).
+                        // val="clear" → fill; "solid" → color; "pctN" → N% color over fill.
+                        // Rendered as a full-line paragraph background in layout.
+                        let mut shd_val = String::new();
+                        let mut shd_fill = String::new();
+                        let mut shd_color = String::new();
                         for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "fill" {
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
-                                if val != "auto" {
-                                    style.shading = Some(val);
-                                }
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "val" => shd_val = String::from_utf8_lossy(&attr.value).to_string(),
+                                "fill" => shd_fill = String::from_utf8_lossy(&attr.value).to_string(),
+                                "color" => shd_color = String::from_utf8_lossy(&attr.value).to_string(),
+                                _ => {}
                             }
                         }
+                        style.shading = effective_shading_color(&shd_val, &shd_fill, &shd_color);
                     }
                     "pageBreakBefore" => {
                         // CT_OnOff: respect w:val="0"/"false"/"off" (S597). Direct
