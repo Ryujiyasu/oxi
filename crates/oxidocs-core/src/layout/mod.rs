@@ -8286,7 +8286,11 @@ impl LayoutEngine {
             // set as 2 small (~half-size) rows within ONE line height, optionally in
             // brackets. Width ≈ ceil(n/2) half-size chars + (brackets). Push as ONE
             // fragment; the emit loop renders the warichu. Opt-out OXI_S703_DISABLE.
-            if style.combine && !text.is_empty()
+            // s476_body gate: only the BODY emit renders the warichu (the cell /
+            // estimate breakers produce a tuple that has no `combine` flag, so a
+            // compact width there would cram full-size text). Cells stay full-size
+            // (byte-identical) — the cell warichu is a deferred follow-up.
+            if style.combine && !text.is_empty() && s476_body
                 && std::env::var("OXI_S703_DISABLE").is_err() {
                 flush_word!(style);
                 let n = text.chars().count();
