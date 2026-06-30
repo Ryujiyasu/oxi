@@ -1267,8 +1267,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         // cached result for CrossRef (REF/NOTEREF/PAGEREF) — Oxi can't
                         // re-resolve the bookmark, so the cache («第１９条») is the display
                         // value; dropping it (old "#") shifted wrapping doc-wide.
+                        // KEEP the cache for CrossRef (S685) and Cached (S708,
+                        // DATE/TIME/AUTHOR/…); only PAGE/NUMPAGES results are suppressed
+                        // (Oxi computes and substitutes those in the layout post-pass).
                         if field_result_depth > 0 && run.field_type.is_none()
-                            && !matches!(current_field_type, Some(FieldType::CrossRef))
+                            && !matches!(current_field_type,
+                                Some(FieldType::CrossRef) | Some(FieldType::Cached))
                         {
                             run.text.clear();
                         }
@@ -2986,8 +2990,6 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
             text = "#".to_string();
             field_type = Some(FieldType::NumPages);
-        } else if field.contains("DATE") || field.contains("TIME") {
-            text = field.to_string();
         } else if field.contains("TOC") || field.contains("HYPERLINK") {
             // Table of contents / hyperlink fields — keep existing text (result display)
         } else if field.contains("REF") || field.contains("NOTEREF") || field.contains("PAGEREF") {
@@ -3002,9 +3004,24 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
             } else if text.is_empty() {
                 text = "#".to_string();
             }
-        } else if field.contains("AUTHOR") || field.contains("TITLE") || field.contains("SUBJECT") {
-            // Document property fields — show field name as placeholder
-            if text.is_empty() {
+        } else if field.contains("DATE") || field.contains("TIME")
+            || field.contains("AUTHOR") || field.contains("TITLE") || field.contains("SUBJECT")
+            || field.contains("FILENAME") || field.contains("DOCPROPERTY")
+            || field.contains("USERNAME") || field.contains("LASTSAVEDBY")
+            || field.contains("COMMENTS") || field.contains("KEYWORDS")
+            || field.contains("STYLEREF")
+        {
+            // S708 (2026-06-30, default ON, opt-out OXI_FIELDCACHE_DISABLE): fields whose
+            // value Word stores as a CACHED RESULT (the run between fldChar separate and
+            // end) and re-displays on open — DATE/TIME/CREATEDATE/SAVEDATE/AUTHOR/TITLE/
+            // FILENAME/… Oxi can't re-evaluate them, so the cache is the only source.
+            // Like CrossRef: KEEP the cached result, leave the instruction run empty.
+            // The old code showed the raw instruction («DATE \@ "yyyy/MM/dd"») or a
+            // «[AUTHOR]» placeholder AND dropped the cache → garbage text + shifted wrap.
+            if std::env::var("OXI_FIELDCACHE_DISABLE").is_err() {
+                field_type = Some(FieldType::Cached);
+            } else if text.is_empty() {
+                // legacy A/B path: show field name placeholder (old AUTHOR behaviour)
                 text = format!("[{}]", field.split_whitespace().next().unwrap_or(field));
             }
         }

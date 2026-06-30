@@ -1881,9 +1881,10 @@ impl LayoutEngine {
                             None => format!("{}", page_idx + 1),
                         },
                         FieldType::NumPages => format!("{}", total_pages),
-                        // CrossRef: the display text is the cached result run («第１９条»),
-                        // a SEPARATE element; this instruction element is empty — skip it.
-                        FieldType::CrossRef => continue,
+                        // CrossRef (S685) / Cached (S708): the display text is the cached
+                        // result run («第１９条» / «2026/06/30»), a SEPARATE element; this
+                        // instruction element is empty — skip it.
+                        FieldType::CrossRef | FieldType::Cached => continue,
                     };
                     if &new_text != text {
                         // Estimate new width: each digit is ~size/2 pt for typical fonts.

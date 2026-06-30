@@ -108,23 +108,28 @@ fn v1_page_of_numpages_carries_both_variants_in_order() {
 }
 
 #[test]
-fn v1_date_field_does_not_carry_field_type_variant() {
-    // DATE is handled (text rewritten to the field-code string) but the
-    // FieldType enum currently only has Page/NumPages variants. So DATE
-    // produces no field_type, just text rewriting. Pins the current
-    // behavior so a future FieldType::Date variant can't silently regress.
+fn v1_date_field_carries_cached_variant() {
+    // S708 (2026-06-30): a DATE field's instruction run now carries
+    // FieldType::Cached (like CrossRef), the raw field code is NOT rendered,
+    // and the CACHED RESULT run («2026/5/25») is KEPT as the display text.
+    // The old behaviour (rewrite the instruction run to the field-code string
+    // «DATE \@ "yyyy/M/d"» and drop the cache) showed garbage + shifted wrapping.
     let Some(doc) = load("v1_date.docx") else { return };
     let runs = collect_runs(&doc);
-    let with_ft: Vec<&Run> = runs.iter()
-        .filter(|r| r.field_type.is_some())
+    let cached: Vec<&Run> = runs.iter()
+        .filter(|r| r.field_type == Some(FieldType::Cached))
         .copied()
         .collect();
-    assert!(with_ft.is_empty(),
-        "DATE field should NOT produce a field_type variant (yet)");
-    // The instrText run keeps the field-code string as its rendered text.
-    let has_date_marker = runs.iter().any(|r| r.text.contains("DATE"));
-    assert!(has_date_marker,
-        "DATE field-code text should appear somewhere in the run stream");
+    assert_eq!(cached.len(), 1,
+        "DATE field should produce exactly one FieldType::Cached run");
+    // The cached result is kept and visible.
+    let has_cached_value = runs.iter().any(|r| r.text.contains("2026/5/25"));
+    assert!(has_cached_value,
+        "DATE field cached result «2026/5/25» should be kept in the run stream");
+    // The raw field-code instruction must NOT leak into rendered text.
+    let leaks_instruction = runs.iter().any(|r| r.text.contains("DATE") || r.text.contains("\\@"));
+    assert!(!leaks_instruction,
+        "DATE field-code instruction must not appear as rendered text");
 }
 
 #[test]
@@ -134,7 +139,8 @@ fn all_four_fixtures_parse_with_expected_field_counts() {
         ("v1_page.docx",              1, &[FieldType::Page]),
         ("v1_numpages.docx",          1, &[FieldType::NumPages]),
         ("v1_page_of_numpages.docx",  2, &[FieldType::Page, FieldType::NumPages]),
-        ("v1_date.docx",              0, &[]),
+        // S708: DATE now carries FieldType::Cached (was 0 / no variant).
+        ("v1_date.docx",              1, &[FieldType::Cached]),
     ];
     for (name, expected_count, expected_types) in cases {
         let path = fixture_path(name);

@@ -293,6 +293,14 @@ pub enum FieldType {
     /// cached value (e.g. «第１９条»); Oxi can't re-resolve the bookmark, so the
     /// cache is the only source. Dropping it shifts wrapping doc-wide (tokyoshugyo).
     CrossRef,
+    /// Cached-result field (DATE/TIME/CREATEDATE/SAVEDATE/AUTHOR/TITLE/FILENAME/…).
+    /// S708 (2026-06-30): Word displays the CACHED RESULT run (the text between
+    /// fldChar separate and end, e.g. «2026/06/30»), which it last evaluated on
+    /// save. Oxi can't re-evaluate these, so the cache is the only display source.
+    /// Behaves like CrossRef: KEEP the cached result, suppress the instruction.
+    /// The old code showed the raw instruction («DATE \@ "yyyy/MM/dd"») or a
+    /// «[AUTHOR]» placeholder and DROPPED the cache → garbage text + shifted wrapping.
+    Cached,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
