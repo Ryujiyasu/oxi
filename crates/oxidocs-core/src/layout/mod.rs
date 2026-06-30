@@ -2001,6 +2001,29 @@ impl LayoutEngine {
     /// COM-confirmed: Word uses the East Asian font for empty paragraph line height
     /// in CJK documents (0e7a: MS 明朝 13.5pt, not Calibri 15.5pt).
     fn metrics_for_para_mark(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        self.metrics_for_para_mark_g(run_style, para_style, false)
+    }
+
+    /// `prefer_ascii` = the caller is a NO-GRID line-height context (S707).
+    fn metrics_for_para_mark_g(&self, run_style: &RunStyle, para_style: &ParagraphStyle, prefer_ascii: bool) -> &FontMetrics {
+        // S707 (2026-06-30): in a NO-GRID / no-type-docGrid context the empty-
+        // paragraph / ¶-mark line height is governed by the ASCII (Latin) font,
+        // NOT the eastAsia font (the S583 rule, here for the no-grid case S583
+        // didn't cover). 0e7a's ascii IS MS Mincho (→ CJK 13.5, unchanged);
+        // test_lists/test_misc_props ascii=Calibri (a Latin theme font) with a
+        // CJK theme eastAsia → use Calibri (15.05), not the 83/64-inflated CJK
+        // metric (16.50). Use eastAsia ONLY when the ASCII font is itself
+        // CJK-83/64. ★Scoped to no-grid (prefer_ascii): a TYPED docGrid
+        // (lines/linesAndChars) grid-snaps the empty para and S583 already
+        // calibrated those WITH the eastAsia metric — applying this there
+        // regressed bd90b00/ed025 (the S559 compensating pattern). Opt-out
+        // OXI_S707_DISABLE.
+        if prefer_ascii && std::env::var("OXI_S707_DISABLE").is_err() {
+            let ascii = self.metrics_for(run_style, para_style);
+            if !ascii.is_cjk_83_64_font() {
+                return ascii;
+            }
+        }
         if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
             return m;
         }
@@ -5628,7 +5651,8 @@ impl LayoutEngine {
                         .and_then(|r| r.font_size)
                         .unwrap_or(para_font_size);
                     let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                    let m = self.metrics_for_para_mark(&rpr_ref, &para.style);
+                    // S707: no-grid empty-para line height is governed by the ASCII font.
+                    let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, grid_pitch.is_none());
                     ma = m.word_ascent_pt(font_size); md = m.word_descent_pt(font_size);
                 } else {
                     for frag in &first_line.fragments {
@@ -5673,7 +5697,9 @@ impl LayoutEngine {
                             .and_then(|r| r.font_size)
                             .unwrap_or(para_font_size);
                         let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let m = self.metrics_for_para_mark(&rpr_ref, &para.style);
+                        // S707: this is the no_grid block (grid_pitch.is_none()); the
+                        // empty-para line height is governed by the ASCII font.
+                        let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, grid_pitch.is_none());
                         no_grid_max = m.word_line_height_no_grid(font_size);
                         no_grid_raw_max = (m.win_ascent + m.win_descent) * font_size;
                         // S612z-empty (2026-06-26): empty Zen Old Mincho para → embedded
@@ -10697,7 +10723,8 @@ impl LayoutEngine {
                 .and_then(|r| r.font_size)
                 .unwrap_or(para_font_size);
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-            let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+            // S707: no-grid empty-para line height is governed by the ASCII font.
+            let metrics = self.metrics_for_para_mark_g(&rpr_ref, para_style, grid_pitch.is_none());
             dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
             hhea_natural_max = metrics.natural_line_height_hhea(font_size);
             hhea_natural_family = metrics.family.clone();
