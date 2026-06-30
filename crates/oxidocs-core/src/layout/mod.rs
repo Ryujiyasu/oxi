@@ -14904,6 +14904,46 @@ impl LayoutEngine {
                         prev_cell_para_had_mid_lrpb = para.runs.iter().enumerate().any(|(i, r)|
                             i > 0 && r.has_last_rendered_page_break);
 
+                        // PROBE (2026-07-01, OXI_CELLBUMP; default 0.0 = byte-identical):
+                        // an exact-lineRule cell line immediately FOLLOWED BY a default(auto)
+                        // line renders ~+2.4pt taller in Word (Word absolute-grid-snaps the
+                        // default line; the off-grid exact lines leave a gap the preceding
+                        // exact line absorbs). Oxi clips it to the exact value. tokyoshugyo
+                        // 割増賃金 fraction spacers (the empty line before each ×factor): ~+2.4
+                        // × 5 blocks ≈ +12.45 over page 51 → pushes ③深夜労働 off (= the −1×10
+                        // cascade origin). See [[tokyoshugyo_wrap_not_cellheight]] 2026-07-01.
+                        // SCOPE (2026-07-01): fire ONLY on the 賃金-style multi-page
+                        // SPLITTING single-cell regulation box (row taller than a page →
+                        // must split). This EXCLUDES the tokumei FORM family (multi-cell or
+                        // page-fitting fixed/atLeast rows) where the placement-only bump
+                        // (no matching row-height growth) shifts content within fixed rows
+                        // and regresses SSIM (31420 −0.1000, 15076/191cb5/order_09). The
+                        // 賃金 box is single-cell + row_height > content_height (spans pages).
+                        // S710 (2026-07-01, default ON; opt-out/override via OXI_CELLBUMP,
+                        // set =0 to disable): bump value = the measured grid gap ~2.4pt
+                        // (gate-stable across [2.0,2.6]). Scoped to the 賃金-style multi-page
+                        // SPLITTING single-cell box; the tokumei FORM family is excluded
+                        // (row_height <= content_height) — see SCOPE comment below.
+                        if effective_line_rule == Some("exact") && row_line_pitch.is_some()
+                            && row.cells.len() == 1 && row_height > content_height {
+                            let bump = std::env::var("OXI_CELLBUMP").ok()
+                                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(2.4);
+                            if bump != 0.0 {
+                                let next_default = cell.blocks.get(block_pos + 1)
+                                    .map_or(false, |nb| match nb {
+                                        Block::Paragraph(np) => {
+                                            let nlr = if np.style.line_spacing_from_doc_defaults { None }
+                                                else { np.style.line_spacing_rule.as_deref() };
+                                            nlr != Some("exact") && nlr != Some("atLeast")
+                                        }
+                                        _ => false,
+                                    });
+                                if next_default {
+                                    content_h += bump;
+                                }
+                            }
+                        }
+
                         // Render shapes attached to this paragraph (e.g. bracketPair)
                         // pos.y = offset from paragraph start (Word COM confirmed)
                         for shape in &para.shapes {
