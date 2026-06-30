@@ -7000,15 +7000,16 @@ impl LayoutEngine {
             // (start_x + indent_left, NOT offset by first_line_indent), w = the
             // indent-adjusted text width, h = the line box. Run-level shd (S704)
             // is handled per-fragment.
-            // OPT-IN (OXI_S705, default OFF/byte-identical): the render is
-            // CORRECT (the gray box wraps Oxi's text with Word-matching padding +
-            // ~1.5pt horizontal bleed), but on the sole corpus target
-            // test_misc_props it is net −0.0014 SSIM — the gray EXPOSES a
-            // pre-existing ~1.4pt text-Y offset (Oxi's shaded para sits 3px
-            // lower than Word's; the gray faithfully follows Oxi's text). S559
-            // compensating pattern. Ships default-on once the text-Y precision
-            // is resolved or a real paragraph-shaded doc shows net-positive.
-            if std::env::var("OXI_S705").is_ok() {
+            // DEFAULT ON (opt-out OXI_S705_DISABLE): the gray box wraps Oxi's
+            // text with Word-matching padding + ~1.5pt horizontal bleed. Was held
+            // opt-in (net −0.0014) because the gray EXPOSED a pre-existing ~1.4pt
+            // text-Y offset (the empty-para over-count, S559) — now FIXED by S707,
+            // so S705 is net +0.0043 on test_misc_props (0.9930→0.9973). Scope =
+            // ONLY test_misc_props among word_png docs (the lone applied-pPr-shd
+            // doc; ParagraphStyle.shading never reaches run fragments so S704's
+            // run path is untouched). Render-only (CellShading post-layout) →
+            // pagination byte-identical.
+            if std::env::var("OXI_S705_DISABLE").is_err() {
                 if let Some(ref shd) = para.style.shading {
                     if !shd.is_empty() && shd != "auto" {
                         // Word bleeds paragraph shading ~1.5pt past the text margins
