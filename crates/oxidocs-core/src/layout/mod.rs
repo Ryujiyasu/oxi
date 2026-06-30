@@ -13505,6 +13505,35 @@ impl LayoutEngine {
                             let font_family = self.resolve_font_family_for_text(&run.text, &run.style, &para.style)
                                 .map(|s| s.to_string());
 
+                            // S703c (2026-06-30): a `combine` run (割注 / two-lines-in-one)
+                            // in a TABLE CELL renders as warichu. Push ONE compact tuple
+                            // whose text is SENTINEL-encoded ("\u{F8FF}{brackets}\u{F8FF}
+                            // {realtext}") — the cell emit decodes it and draws 2 small
+                            // rows + brackets (avoids a tuple-arity change). Gated on
+                            // combine → only kyotei's 1 run fires; other cells unchanged.
+                            if run.style.combine && !run.text.trim().is_empty()
+                                && std::env::var("OXI_S703_DISABLE").is_err() {
+                                let n = run.text.chars().count();
+                                let rows_chars = (n + 1) / 2;
+                                let brackets = run.style.combine_brackets.clone()
+                                    .unwrap_or_else(|| "none".to_string());
+                                let has_br = brackets != "none";
+                                let cw = rows_chars as f32 * (font_size * 0.5)
+                                    + if has_br { font_size * 0.8 } else { 0.0 };
+                                let ew = if is_first_line { first_line_wrap_w } else { wrap_w };
+                                if line_x + cw > ew && !current_line.is_empty() {
+                                    lines.push(std::mem::take(&mut current_line));
+                                    line_x = 0.0; current_line_chars.clear(); is_first_line = false;
+                                }
+                                let encoded = format!("\u{F8FF}{}\u{F8FF}{}", brackets, run.text);
+                                current_line.push((encoded, font_size, cw, bold,
+                                    run.style.italic, run.style.underline, run.style.underline_style.clone(),
+                                    run.style.strikethrough, font_family.clone(), run.style.color.clone(),
+                                    run.style.highlight.clone(), 0.0, 100.0));
+                                line_x += cw;
+                                continue;
+                            }
+
                             // Split text character by character for wrapping
                             let cs = if run.style.fit_text.is_some() {
                                 run.style.character_spacing.unwrap_or(0.0)
@@ -14576,6 +14605,48 @@ impl LayoutEngine {
                             }
                             for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs, ts)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
+                                // S703c: a SENTINEL-encoded combine tuple → warichu (2
+                                // small rows + brackets), in place of one glyph element.
+                                if let Some(rest) = text.strip_prefix('\u{F8FF}') {
+                                    let mut it = rest.splitn(2, '\u{F8FF}');
+                                    let brk = it.next().unwrap_or("none");
+                                    let realtext = it.next().unwrap_or("");
+                                    let base_x = cell_x + pad_l + line_indent + align_offset + rx;
+                                    let small = *fs * 0.5;
+                                    let bsz = *fs * 0.8;
+                                    let chars: Vec<char> = realtext.chars().collect();
+                                    let half = (chars.len() + 1) / 2;
+                                    let toprow: String = chars[..half].iter().collect();
+                                    let botrow: String = chars[half..].iter().collect();
+                                    let (lb, rb): (&str, &str) = match brk {
+                                        "round" => ("（", "）"), "square" => ("〔", "〕"),
+                                        "angle" => ("〈", "〉"), "curly" => ("｛", "｝"), _ => ("", ""),
+                                    };
+                                    let mut wpush = |elements: &mut Vec<LayoutElement>, t: String, wx: f32, ydelta: f32, wsz: f32| {
+                                        if t.is_empty() { return; }
+                                        let mut e = LayoutElement::new(wx, content_h, wsz, lh, LayoutContent::Text {
+                                            text: t, font_size: wsz, font_family: font_family.clone(),
+                                            bold: *bold, italic: *italic, underline: false, underline_style: None,
+                                            strikethrough: false, double_strikethrough: false, color: color.clone(),
+                                            highlight: None, field_type: None, character_spacing: 0.0,
+                                            text_scale: 100.0, is_vertical: false, effects: TextEffects::default(),
+                                        });
+                                        e.text_y_off = cell_text_y_off + ydelta;
+                                        e.paragraph_index = block_idx;
+                                        e.cell_paragraph_index = Some(cell_para_counter);
+                                        e.cell_row_index = Some(row_idx);
+                                        e.cell_col_index = Some(cell_idx);
+                                        elements.push(e);
+                                    };
+                                    let mut wx = base_x;
+                                    if !lb.is_empty() { wpush(&mut cell_elements, lb.to_string(), wx, 0.0, bsz); wx += bsz; }
+                                    wpush(&mut cell_elements, toprow, wx, 0.0, small);
+                                    wpush(&mut cell_elements, botrow, wx, small, small);
+                                    wx += half as f32 * small;
+                                    if !rb.is_empty() { wpush(&mut cell_elements, rb.to_string(), wx, 0.0, bsz); }
+                                    rx += adj_w;
+                                    continue;
+                                }
                                 // 2026-04-19: Inject charSpace delta into GDI cs so TextOutW
                                 // renders at layout-correct advance (prevents glyph overlap
                                 // between fragments when pitch<natural).
