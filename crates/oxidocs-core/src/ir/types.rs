@@ -389,6 +389,11 @@ pub struct RunStyle {
     /// Emphasis mark / 圏点 (w:em): "dot", "comma", "circle", "underDot"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emphasis_mark: Option<String>,
+    /// S706 (2026-06-30): run/character border (w:bdr) — Word draws a box
+    /// around the run's text (e.g. a bordered title banner). Rendered per
+    /// line fragment as a BoxRect stroke.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_border: Option<BorderDef>,
 }
 
 impl Default for RunStyle {
@@ -429,6 +434,7 @@ impl Default for RunStyle {
             vert_in_horz: false,
             position: None,
             emphasis_mark: None,
+            run_border: None,
         }
     }
 }

@@ -5002,6 +5002,29 @@ fn parse_run_properties(
                             effective_shading_color(&shd_val, &shd_fill, &shd_color)
                         };
                     }
+                    "bdr" => {
+                        // S706 (2026-06-30): run/character border (w:bdr) — a box
+                        // around the run's text. w:sz in 1/8 pt, w:space in pt.
+                        let mut b_style = String::from("single");
+                        let mut b_width = 0.5_f32;
+                        let mut b_color: Option<String> = None;
+                        let mut b_space = 0.0_f32;
+                        for attr in e.attributes().flatten() {
+                            let v = String::from_utf8_lossy(&attr.value).to_string();
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "val" => b_style = v,
+                                "sz" => b_width = v.parse::<f32>().unwrap_or(4.0) / 8.0,
+                                "space" => b_space = v.parse::<f32>().unwrap_or(0.0),
+                                "color" => if v != "auto" { b_color = Some(v) },
+                                _ => {}
+                            }
+                        }
+                        if b_style != "none" && b_style != "nil" {
+                            style.run_border = Some(BorderDef {
+                                style: b_style, width: b_width, color: b_color, space: b_space,
+                            });
+                        }
+                    }
                     "rtl" => {
                         style.rtl = true;
                     }

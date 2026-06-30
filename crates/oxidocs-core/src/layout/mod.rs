@@ -7006,6 +7006,13 @@ impl LayoutEngine {
                 }
             }
 
+            // S706 (2026-06-30): accumulate run-border (w:bdr) spans on this line
+            // into ONE box per contiguous bordered run (avoids internal verticals
+            // between same-run fragments). (x_left, x_right, border). Opt-out
+            // OXI_S706_DISABLE.
+            let s706_on = std::env::var("OXI_S706_DISABLE").is_err();
+            let mut run_bdr_acc: Option<(f32, f32, BorderDef)> = None;
+
             for (frag_idx, frag) in line.fragments.iter().enumerate() {
                 let base_font_size = frag.style.font_size.unwrap_or(para_font_size);
                 // Round 29: superscript/subscript rendering. Word default for
@@ -7178,6 +7185,18 @@ impl LayoutEngine {
                 // column (n chars down a 1-em cell).
                 let is_vert_frag = frag.style.vert_in_horz
                     && std::env::var("OXI_S700_DISABLE").is_err();
+                // S706: extend/start this line's run-border box for a w:bdr fragment.
+                if s706_on {
+                    if let Some(ref b) = frag.style.run_border {
+                        let sp = b.space;
+                        let l = el_x - sp;
+                        let r = el_x + adjusted_width + sp;
+                        run_bdr_acc = Some(match run_bdr_acc.take() {
+                            Some((al, _, _)) => (al.min(l), r, b.clone()),
+                            None => (l, r, b.clone()),
+                        });
+                    }
+                }
                 let mut el = LayoutElement::new(el_x, emit_y, adjusted_width, line_height, LayoutContent::Text {
                         // S700: Word renders eastAsianLayout w:vert by ROTATING the run
                         // 90° CCW, so the run's chars run BOTTOM→TOP (first char at the
@@ -7425,6 +7444,30 @@ impl LayoutEngine {
                         .map(|c| frag_metrics.char_width_em(c) * resolved_font_size)
                         .sum();
                     render_x += true_w + frag_spacing_after[frag_idx];
+                }
+            }
+
+            // S706: flush this line's run-border box (one stroked rect around the
+            // bordered run's text, padded by w:space). Drawn after the text so the
+            // thin border sits on top at the edges.
+            if let Some((l, r, b)) = run_bdr_acc.take() {
+                let sp = b.space;
+                // w:bdr color="auto" (parsed to None) resolves to black.
+                let col = Some(b.color.clone().map_or_else(
+                    || "#000000".to_string(),
+                    |c| if c.starts_with('#') { c } else { format!("#{}", c) },
+                ));
+                let w = (r - l).max(0.0);
+                if w > 0.0 {
+                    elements.push(LayoutElement::new(
+                        l, cursor.visual_y - sp, w, line_height + 2.0 * sp,
+                        LayoutContent::BoxRect {
+                            fill: None,
+                            stroke_color: col,
+                            stroke_width: b.width,
+                            corner_radius: 0.0,
+                        },
+                    ));
                 }
             }
 
