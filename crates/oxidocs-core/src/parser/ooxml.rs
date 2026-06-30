@@ -816,6 +816,54 @@ struct ParsedSection {
     shapes: Vec<Shape>,
 }
 
+/// S704 (2026-06-30): compute the EFFECTIVE shading colour from w:shd val/fill/color.
+/// val="clear"/"nil" → fill; "solid" → color; "pctN" → N% color blended over fill
+/// (e.g. pct15 black/white = #D9D9D9); stripe/grid patterns → ~25% color (approx).
+/// Returns None when the result is transparent (auto) or pure white (no visible bg).
+fn effective_shading_color(val: &str, fill: &str, color: &str) -> Option<String> {
+    let parse = |h: &str, default: (u8, u8, u8)| -> (u8, u8, u8) {
+        let h = h.trim_start_matches('#');
+        if h.eq_ignore_ascii_case("auto") || h.len() != 6 {
+            return default;
+        }
+        match (
+            u8::from_str_radix(&h[0..2], 16),
+            u8::from_str_radix(&h[2..4], 16),
+            u8::from_str_radix(&h[4..6], 16),
+        ) {
+            (Ok(r), Ok(g), Ok(b)) => (r, g, b),
+            _ => default,
+        }
+    };
+    let fill_rgb = parse(fill, (255, 255, 255)); // default white (page)
+    let color_rgb = parse(color, (0, 0, 0)); // default black (pattern ink)
+    let pct: f32 = match val {
+        "clear" | "nil" | "" => {
+            if fill.eq_ignore_ascii_case("auto") {
+                return None;
+            }
+            let (r, g, b) = fill_rgb;
+            if (r, g, b) == (255, 255, 255) {
+                return None;
+            }
+            return Some(format!("{:02X}{:02X}{:02X}", r, g, b));
+        }
+        "solid" => 1.0,
+        v if v.starts_with("pct") => v[3..].parse::<f32>().unwrap_or(0.0) / 100.0,
+        _ => 0.25, // stripe/grid/cross patterns ≈ 25% ink
+    };
+    let blend = |c: u8, f: u8| -> u8 { (pct * c as f32 + (1.0 - pct) * f as f32).round() as u8 };
+    let (r, g, b) = (
+        blend(color_rgb.0, fill_rgb.0),
+        blend(color_rgb.1, fill_rgb.1),
+        blend(color_rgb.2, fill_rgb.2),
+    );
+    if (r, g, b) == (255, 255, 255) {
+        return None;
+    }
+    Some(format!("{:02X}{:02X}{:02X}", r, g, b))
+}
+
 /// Parse the w:body content of document.xml into sections
 fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<ParsedSection>, ParseError> {
     let mut reader = Reader::from_str(xml);
@@ -4922,15 +4970,29 @@ fn parse_run_properties(
                         style.all_caps = true;
                     }
                     "shd" => {
+                        // S704 (2026-06-30): compute the EFFECTIVE run-shading colour from
+                        // val + fill + color (was: stored only `fill`, so a `pct15`/`FFFFFF`
+                        // pattern stored white → invisible). val="clear" → fill; "solid" →
+                        // color; "pctN" → N% color blended over fill (e.g. pct15 black/white
+                        // = #D9D9D9). Stored in RunStyle.shading; the emit draws it as a
+                        // run background.
+                        let mut shd_val = String::new();
+                        let mut shd_fill = String::new();
+                        let mut shd_color = String::new();
                         for attr in e.attributes().flatten() {
-                            let key = local_name(attr.key.as_ref());
-                            if key == "fill" {
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
-                                if val != "auto" {
-                                    style.shading = Some(val);
-                                }
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "val" => shd_val = String::from_utf8_lossy(&attr.value).to_string(),
+                                "fill" => shd_fill = String::from_utf8_lossy(&attr.value).to_string(),
+                                "color" => shd_color = String::from_utf8_lossy(&attr.value).to_string(),
+                                _ => {}
                             }
                         }
+                        // opt-out OXI_S704_DISABLE → no run-shading background (pre-S704 pixels)
+                        style.shading = if std::env::var("OXI_S704_DISABLE").is_ok() {
+                            None
+                        } else {
+                            effective_shading_color(&shd_val, &shd_fill, &shd_color)
+                        };
                     }
                     "rtl" => {
                         style.rtl = true;

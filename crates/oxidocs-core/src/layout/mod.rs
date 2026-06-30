@@ -7162,7 +7162,11 @@ impl LayoutEngine {
                         strikethrough: frag.style.strikethrough,
                         double_strikethrough: frag.style.double_strikethrough,
                         color: self.resolve_color(&frag.style, &para.style).map(|s| s.to_string()),
-                        highlight: frag.style.highlight.clone(),
+                        // S704 (2026-06-30): render run-level shading (w:shd) as a
+                        // background by reusing the highlight rect (the renderer draws a
+                        // hex highlight). Effective colour computed in the parser. A real
+                        // highlight wins; else the shading fills the background.
+                        highlight: frag.style.highlight.clone().or_else(|| frag.style.shading.clone()),
                         field_type: frag.field_type,
                         character_spacing: if is_vert_frag {
                             // The column's per-char DOWN advance is exactly fs (the
@@ -13529,7 +13533,7 @@ impl LayoutEngine {
                                 current_line.push((encoded, font_size, cw, bold,
                                     run.style.italic, run.style.underline, run.style.underline_style.clone(),
                                     run.style.strikethrough, font_family.clone(), run.style.color.clone(),
-                                    run.style.highlight.clone(), 0.0, 100.0));
+                                    run.style.highlight.clone().or_else(|| run.style.shading.clone()), 0.0, 100.0));
                                 line_x += cw;
                                 continue;
                             }
@@ -13566,7 +13570,7 @@ impl LayoutEngine {
                                             run.style.strikethrough,
                                             font_family.clone(),
                                             run.style.color.clone(),
-                                            run.style.highlight.clone(),
+                                            run.style.highlight.clone().or_else(|| run.style.shading.clone()),
                                             cs, run.style.text_scale.unwrap_or(100.0),
                                         ));
                                         buf.clear();
@@ -14007,7 +14011,7 @@ impl LayoutEngine {
                                                 // Oikomi succeeded: flush remaining buf as
                                                 // line1 tail, push line1, seed line2 with carry.
                                                 if !buf.is_empty() {
-                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
+                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
                                                     buf.clear();
                                                     buf_w = 0.0;
                                                     current_line_chars.extend(buf_chars.drain(..));
@@ -14033,7 +14037,7 @@ impl LayoutEngine {
                                             ch, natural_advance: cw, font_size,
                                         });
                                         if !buf.is_empty() {
-                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
+                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
                                             buf.clear();
                                             buf_w = 0.0;
                                             current_line_chars.extend(buf_chars.drain(..));
@@ -14046,7 +14050,7 @@ impl LayoutEngine {
                                     }
                                     // Flush buffer to current line, then wrap
                                     if !buf.is_empty() {
-                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
+                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
                                         buf.clear();
                                         buf_w = 0.0;
                                         current_line_chars.extend(buf_chars.drain(..));
@@ -14079,7 +14083,7 @@ impl LayoutEngine {
                                             run.style.italic, run.style.underline,
                                             run.style.underline_style.clone(), run.style.strikethrough,
                                             font_family.clone(), run.style.color.clone(),
-                                            run.style.highlight.clone(), cs,
+                                            run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs,
                                             run.style.text_scale.unwrap_or(100.0)));
                                         prev_char_emitted = Some(ch);
                                         continue;
@@ -14093,7 +14097,7 @@ impl LayoutEngine {
                                 prev_char_emitted = Some(ch);
                             }
                             if !buf.is_empty() {
-                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone(), cs, run.style.text_scale.unwrap_or(100.0)));
+                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
                                 line_x += buf_w;
                                 current_line_chars.extend(buf_chars.drain(..));
                             }
