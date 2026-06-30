@@ -3216,8 +3216,46 @@ impl LayoutEngine {
                     // the heading itself doesn't fit.
                     if para.style.keep_next && !elements.is_empty() {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
-                            let this_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
+                            let this_h0 = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                             let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None, false, None, None);
+                            // S709 (2026-06-30): estimate_para_height drops a paragraph's
+                            // STYLE-defined space_before for body paras (its `should_reset`
+                            // is a table-cell rule that mis-fires when has_direct_spacing=false
+                            // and the line rule is auto). A keepNext HEADING (Heading1/2 etc.)
+                            // carries its space_before in the STYLE → this_h0 = line only,
+                            // under-counting the heading's real consumed height by ~space_before.
+                            // The heading then "fits" at the page bottom where Word (honouring
+                            // the heading's space_before) pushes the whole heading+follower to
+                            // the next page (gen2 family "Scope"/"Procedure" headings orphaned).
+                            // Add the effective space_before (= max(prev space_after, this
+                            // space_before); cursor sits at the prev para's last-line bottom,
+                            // i.e. it does NOT include prev space_after) when the estimate
+                            // dropped it. Scoped to the keepNext lookahead only (the shared
+                            // estimate is left untouched — high blast radius on Phase-1).
+                            let s709 = std::env::var("OXI_S709_DISABLE").is_err();
+                            let this_h = if s709 {
+                                let head_reset = !para.style.has_direct_spacing
+                                    && para.style.line_spacing_rule.as_deref() != Some("exact")
+                                    && para.style.line_spacing_rule.as_deref() != Some("atLeast");
+                                if head_reset {
+                                    let this_sb = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+                                        bl / 100.0 * pitch
+                                    } else {
+                                        para.style.space_before.unwrap_or(0.0)
+                                    };
+                                    let prev_sa = if block_idx > 0 {
+                                        match page.blocks.get(block_idx - 1) {
+                                            Some(Block::Paragraph(pp)) => pp.style.space_after.unwrap_or(0.0),
+                                            _ => 0.0,
+                                        }
+                                    } else { 0.0 };
+                                    this_h0 + prev_sa.max(this_sb)
+                                } else {
+                                    this_h0
+                                }
+                            } else {
+                                this_h0
+                            };
                             let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                             // S635: a keepNext heading is pushed WITH its follower when the
                             // follower would move WHOLLY to the next page. A ≤3-line para
@@ -3247,6 +3285,11 @@ impl LayoutEngine {
                             } else {
                                 pair_overflows && this_h > remaining
                             };
+                            if std::env::var("OXI_DBG_KN635").is_ok() {
+                                let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(16).collect();
+                                eprintln!("[KN635] {:?} this_h={:.1} next_h={:.1} rem={:.1} 1line={:.1} nlines={} wc={} pair_ov={} fmw={} do_push={}",
+                                    t, this_h, next_h, remaining, one_line_h, next_lines, next_para.style.widow_control, pair_overflows, follower_moves_wholly, do_push);
+                            }
                             if do_push {
                                 if num_columns > 1 && current_column + 1 < num_columns {
                                     current_column += 1;
