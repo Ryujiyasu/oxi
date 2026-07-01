@@ -12985,19 +12985,27 @@ impl LayoutEngine {
                 } else {
                     cell_w
                 };
-                // The BORDER/shading clamp (eff_cell_w) is render-only and pagination-
-                // neutral, so it ships by default. Narrowing the WRAP to the clamped
+                // S585c wrap+compress (2026-07-02, coupled with the border clamp,
+                // opt-out OXI_S585C_WRAP_DISABLE): narrowing the WRAP to the clamped
                 // content (eff_cell_w − 2×cellMar = Word's true content width) is
-                // geometrically the matching half, but Oxi OVER-WRAPS at that width
-                // (it lacks Word's per-line cell 約物 compression — the char-budget
-                // wall), so tokyoshugyo goes 90→91 pages (+688 paras, 0.9931→0.5588).
-                // The current wide wrap (S585b, cell_w−2pad) is the compensating value
-                // that keeps line counts ≈ Word. So the wrap-narrow is OPT-IN
-                // (OXI_S585C_WRAP=1) pending the cell 約物 compression; the border
-                // fix alone is the shippable, pagination-neutral render improvement.
-                // See [[tokyoshugyo_wrap_not_cellheight]] / [[char_budget_wall]].
-                let s585c_wrap = s585c_clamp
-                    && std::env::var("OXI_S585C_WRAP").ok().as_deref() == Some("1");
+                // geometrically the matching half. Narrow ALONE over-wraps (Oxi had no
+                // cell 約物 compression → tokyoshugyo 90→91 pages), but Word fits its
+                // content within the clamped width via per-line 約物 compression — the
+                // DERIVED cell model (~0.235em kanji-fit break cap + line-end ぶら下げ,
+                // = legacy_cell_break + cell_bura below, formerly OXI_LEGACYCELL). Narrow
+                // COUPLED with that compression recovers Word's line counts EXACTLY
+                // (tokyoshugyo 90pg = the compensating-wide baseline, now geometrically
+                // correct: border, wrap, AND 約物 positions all at Word's geometry).
+                // SCOPE = LEGACY (compat<15) + compressPunctuation — Word's legacy cell
+                // 約物 oikomi/ぶら下げ (S568/S572 for the body; this is the cell analog).
+                // e3c545 (the only OTHER s585c word_png doc) is Latin/non-compressPunctuation
+                // → s585c_narrow=false → border-only (unchanged, +0.0328). Full-corpus
+                // Phase-1: 0 real flips (only tokyoshugyo, unchanged score). See
+                // [[tokyoshugyo_wrap_not_cellheight]] / [[char_budget_wall]].
+                let s585c_narrow = s585c_clamp
+                    && std::env::var("OXI_S585C_WRAP_DISABLE").is_err()
+                    && self.compat_mode < 15
+                    && self.compress_punctuation;
 
                 // Round 30 (2026-04-09): When cell top/bottom padding is 0 and
                 // the table has borders, add the border width as implicit padding.
@@ -13681,13 +13689,15 @@ impl LayoutEngine {
                             && is_nested
                             && cell.width.is_some()
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center);
-                        let wrap_base = if s585c_wrap
-                            && !matches!(para.alignment, Alignment::Right | Alignment::Center) {
+                        let wrap_base = if s585c_narrow
+                            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute) {
                             // S585c: the clamped box wraps within its Word content area
                             // (eff_cell_w - 2×cellMar). Supersedes s585_cellmar/s594 (which
                             // subtracted from the UNCLAMPED cell_w, leaving the wrap ~1 cellMar
                             // wider than the clamped border). Derived from the SAME eff_cell_w
-                            // the border/shading use → border-x and wrap are consistent.
+                            // the border/shading use → border-x and wrap are consistent. Paired
+                            // with legacy_cell_break + cell_bura (below) so the narrower wrap
+                            // fits Word's line counts via cell 約物 compression + ぶら下げ.
                             (eff_cell_w - pad_l - pad_r).max(0.0)
                         } else if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
@@ -14282,7 +14292,8 @@ impl LayoutEngine {
                                 // 約物 past it (de-ぶら下げ content wrap is uniformly the margin).
                                 // Without it PGCAP wraps the trailing 約物 → +1 line/sentence-cell.
                                 let cell_bura_active = (std::env::var("OXI_CELLBURA").ok().as_deref() == Some("1")
-                                    || std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1"))
+                                    || std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
+                                    || s585c_narrow)
                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
                                 // OXI_LEGACYCELL (2026-06-23): the REFINED cell break = the derived
                                 // TWO-BUDGET model. LibreOffice (guess.cxx compress-to-fit + SwHangingPortion)
@@ -14294,7 +14305,8 @@ impl LayoutEngine {
                                 // ぶら下げ; compute_compression/justify keeps half-em for the render. Scoped to
                                 // LEGACY (compat≤14) compressPunctuation justified cells (3a4f/model = compat15,
                                 // EXCLUDED → their compensating baseline preserved). See [[char_budget_wall]].
-                                let legacy_cell_break = std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
+                                let legacy_cell_break = (std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
+                                    || s585c_narrow)
                                     && self.compat_mode < 15 && self.compress_punctuation
                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
                                 let legacy_cell_cap: f32 = std::env::var("OXI_LEGACYCELL_CAP").ok()
