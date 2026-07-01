@@ -12285,13 +12285,17 @@ impl LayoutEngine {
                 // paragraph's space_after; the credit min(prev_sa, cur_sb) is removed.
                 let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
                 let mut prev_sa: Option<f32> = None;
+                // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
+                // container-edge suppression. See cell_autospace_effective.
+                let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
+                let last_para_pos = cell.blocks.iter().rposition(|b| matches!(b, Block::Paragraph(_)));
 
                 // Session 131 (2026-05-20): vertical writing — cell height
                 // along the page-y axis equals the sum of vertical-text lengths
                 // (chars × font_size), not the wrapped-horizontal line count.
                 // Gated by OXI_VERT_WRITING env var.
                 let vert_writing_active = self.is_vert_writing_active(cell);
-                for block in &cell.blocks {
+                for (block_pos, block) in cell.blocks.iter().enumerate() {
                     match block {
                         Block::Paragraph(para) => {
                             let (para_h, para_h_visual, para_h_center) = if vert_writing_active {
@@ -12326,6 +12330,18 @@ impl LayoutEngine {
                             // S427: collapse this paragraph's space_before against
                             // the previous paragraph's space_after.
                             let (cur_sb, cur_sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), row_line_pitch);
+                            // Cell-autospace override: estimate_para_height added the
+                            // explicit (cur_sb, cur_sa) to para_h above; replace it with
+                            // the autospace-effective values (13.75 / edge-suppressed 0).
+                            let (cur_sb, cur_sa) = if para.style.before_autospacing || para.style.after_autospacing {
+                                let (eff_sb, eff_sa) = self.cell_autospace_effective(
+                                    para, Some(block_pos) == first_para_pos, Some(block_pos) == last_para_pos, cur_sb, cur_sa);
+                                cell_content_h += (eff_sb - cur_sb) + (eff_sa - cur_sa);
+                                cell_content_h_visual += (eff_sb - cur_sb) + (eff_sa - cur_sa);
+                                (eff_sb, eff_sa)
+                            } else {
+                                (cur_sb, cur_sa)
+                            };
                             if s427_collapse {
                                 if let Some(psa) = prev_sa {
                                     let credit = psa.min(cur_sb);
@@ -12831,6 +12847,11 @@ impl LayoutEngine {
                     })
                     .map(|(i, _)| i)
                     .last();
+                // Cell-autospace (OXI_CELLAS): first/last Paragraph block positions for
+                // container-edge suppression of before/afterAutospacing. See
+                // cell_autospace_effective.
+                let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
+                let last_para_pos = cell.blocks.iter().rposition(|b| matches!(b, Block::Paragraph(_)));
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
                 // S488: snapshot this block's content_h-relative top (aligns with
                 // block_pos via enumerate; pushed before the exact-clip break so
@@ -13012,6 +13033,21 @@ impl LayoutEngine {
                         para.style.space_after
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_after))
                     };
+                    // Cell autospace override (before/afterAutospacing → 13.75,
+                    // overriding explicit, edge-suppressed). See cell_autospace_effective.
+                    let (effective_space_before, effective_space_after) =
+                        if para.style.before_autospacing || para.style.after_autospacing {
+                            let (sb, sa) = self.cell_autospace_effective(
+                                para,
+                                Some(block_pos) == first_para_pos,
+                                Some(block_pos) == last_para_pos,
+                                effective_space_before,
+                                effective_space_after.unwrap_or(0.0),
+                            );
+                            (sb, Some(sa))
+                        } else {
+                            (effective_space_before, effective_space_after)
+                        };
                     // S427: collapse this paragraph's space_before against the
                     // previous cell paragraph's space_after (max(sa,sb), not sum).
                     if s427_collapse {
@@ -16591,7 +16627,11 @@ impl LayoutEngine {
             // consistent with the row-height pre-pass and content placement.
             let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
             let mut prev_sa: Option<f32> = None;
-            for block in &cell.blocks {
+            // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
+            // container-edge suppression. See cell_autospace_effective.
+            let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
+            let last_para_pos = cell.blocks.iter().rposition(|b| matches!(b, Block::Paragraph(_)));
+            for (block_pos, block) in cell.blocks.iter().enumerate() {
                 match block {
                     Block::Paragraph(para) => {
                         let para_h = if vert_writing_active {
@@ -16606,6 +16646,17 @@ impl LayoutEngine {
                         // since LEGACY var default false). S151 default ON.
                         cell_content_h += para_h;
                         let (cur_sb, cur_sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), table_grid_pitch);
+                        // Cell-autospace override: estimate_para_height_emit added the
+                        // explicit (cur_sb, cur_sa) to para_h; replace with the
+                        // autospace-effective (13.75 / edge-suppressed 0).
+                        let (cur_sb, cur_sa) = if para.style.before_autospacing || para.style.after_autospacing {
+                            let (eff_sb, eff_sa) = self.cell_autospace_effective(
+                                para, Some(block_pos) == first_para_pos, Some(block_pos) == last_para_pos, cur_sb, cur_sa);
+                            cell_content_h += (eff_sb - cur_sb) + (eff_sa - cur_sa);
+                            (eff_sb, eff_sa)
+                        } else {
+                            (cur_sb, cur_sa)
+                        };
                         if s427_collapse {
                             if let Some(psa) = prev_sa {
                                 cell_content_h -= psa.min(cur_sb);
@@ -16967,6 +17018,50 @@ impl LayoutEngine {
             para.style.space_after
                 .or_else(|| table_para_style.and_then(|ps| ps.space_after))
                 .unwrap_or(0.0)
+        };
+        (sb, sa)
+    }
+
+    /// Cell before/afterAutospacing effective (before, after) given the explicit
+    /// (est_sb, est_sa). Ra-derived 2026-07-01 (COM Y-gap; `Format.SpaceBefore` is
+    /// unreliable — it returns only the explicit setting): when
+    /// `before`/`afterAutospacing` is set on a table-cell paragraph, the auto value
+    /// **13.75pt** (= the body S675 value) OVERRIDES any explicit `w:before`/`w:after`
+    /// (Word ignores the explicit when autospacing is on; compatibilityMode-independent),
+    /// and is SUPPRESSED to 0 at the container edge — first cell para → before, last
+    /// cell para → after (a SOLE para → both → contributes 0). MAX-collapse with the
+    /// neighbour is handled by the existing S427 `prev_cell_sa` machinery. The corpus's
+    /// 4 sole empty spacers in 29dc6e thus go from Oxi's explicit 5+5=10pt to Word's 0.
+    ///
+    /// OPT-IN (default OFF, enable with OXI_CELLAS=1). The value/edge-suppression are
+    /// COM-CORRECT, but the gate is a WASH: byte-isolated to 29dc6e/d4d126 (the only
+    /// corpus docs with cell autospacing, both tuned SSIM bottom-N form family),
+    /// Phase-1 pagination-neutral (both PASS OFF & ON), SSIM per-doc-mean d4d126 +0.0005
+    /// (floor-ward, improves) / 29dc6e −0.0006 (a compensating over-count exposed, S559).
+    /// Net ≈ 0 with a regression → held opt-in until 29dc6e's compensating error is
+    /// co-fixed (then this + that ship default-ON net-positive). See
+    /// [[cell_autospacing_amount]], [[tokumei_form_family_ssim]].
+    fn cell_autospace_effective(
+        &self,
+        para: &Paragraph,
+        is_first: bool,
+        is_last: bool,
+        est_sb: f32,
+        est_sa: f32,
+    ) -> (f32, f32) {
+        if std::env::var("OXI_CELLAS").map(|v| v == "0" || v.is_empty()).unwrap_or(true) {
+            return (est_sb, est_sa);
+        }
+        const AUTO: f32 = 13.75;
+        let sb = if para.style.before_autospacing {
+            if is_first { 0.0 } else { AUTO }
+        } else {
+            est_sb
+        };
+        let sa = if para.style.after_autospacing {
+            if is_last { 0.0 } else { AUTO }
+        } else {
+            est_sa
         };
         (sb, sa)
     }
