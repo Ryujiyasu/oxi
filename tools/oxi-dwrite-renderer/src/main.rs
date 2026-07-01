@@ -691,18 +691,45 @@ fn s480_dash_style(style: Option<&str>)
 {
     use windows::Win32::Graphics::Direct2D::*;
     if std::env::var("OXI_S480_DISABLE").is_ok() { return None; }
-    // S480 ships only the HEAVY ornamental "Stroked" art borders, where any
-    // breaking of the thick solid bar clearly improves the match (gate-confirmed
-    // +0.0044 on the tokumei dashDotStroked box family). Thin line-style borders
-    // (dashed/dashSmallGap/dotted/dotDash) are left SOLID: Word renders their
-    // small gaps nearly-solid, and a coarse width-scaled dash matches WORSE than
-    // solid (459f05 −0.0078, 3a4f −0.0035). Those need a measured fine cadence
-    // (follow-up); see S480 memo.
+    // The HEAVY ornamental "Stroked" art borders use the built-in cadence
+    // (gate-confirmed +0.0044 on the tokumei dashDotStroked box family).
     match style? {
         "dashDotStroked" => Some(D2D1_DASH_STYLE_DASH_DOT),
         "dashDotDotStroked" => Some(D2D1_DASH_STYLE_DASH_DOT_DOT),
         _ => None,
     }
+}
+
+// S711b (2026-07-01): thin line-style borders (dashed/dotted/dotDash/
+// dashSmallGap) as a FIXED-CADENCE dash — the dash lengths are absolute points,
+// independent of the stroke width. The old S480 left these SOLID because a
+// built-in width-SCALED dash matched WORSE than solid (459f05/3a4f regressed) —
+// but that was a bad approximation, not evidence that solid is correct: Word
+// draws these as visible dashes/dots. Word-MEASURED cadence: tokyoshugyo (注)
+// dotDash @0.5pt = on≈0.96pt / off≈1.92pt (a fine dotted line, NOT scaled by
+// the 0.5pt width). D2D dash arrays are in units of stroke width, so we divide
+// the absolute pt cadence by the width. Opt-out OXI_DASHFIX_DISABLE.
+#[cfg(windows)]
+fn s711b_dash_units(style: Option<&str>, width_pt: f32) -> Option<Vec<f32>> {
+    if std::env::var("OXI_S480_DISABLE").is_ok() { return None; }
+    // OPT-IN (default solid) until the sub-pixel border-POSITION wall is fixed:
+    // a correct-cadence dotted border still SSIM-regresses (3a4f -0.0033) because
+    // Oxi's border position differs from Word's by sub-pixel, so the dots
+    // anti-correlate (phase) with Word's dots. Enable with OXI_DASHFIX=1 for
+    // visual inspection / once border positions are sub-pixel-accurate.
+    if std::env::var("OXI_DASHFIX").is_err() { return None; }
+    // absolute (on, off) in points — DPI- and width-independent.
+    // ONLY dotDash: Word-MEASURED (tokyoshugyo (注) 0.5pt border = on0.96/off1.92,
+    // a clearly-visible dotted line). "dashed" was measured NEARLY-SOLID in Word
+    // (on1.44/off0.48, ~1px gaps) so solid is already a close match — a coarse
+    // dash there matches WORSE (S480). dotted/dashSmallGap not yet Word-measured,
+    // so they stay solid until measured (no speculation).
+    let (on, off): (f32, f32) = match style? {
+        "dotDash" => (0.96, 1.92),
+        _ => return None,
+    };
+    let w = width_pt.max(0.25);
+    Some(vec![on / w, off / w])
 }
 
 #[cfg(windows)]
@@ -718,22 +745,39 @@ unsafe fn render_line(
     let (r, g, b) = color.map(parse_hex_rgb).unwrap_or((0, 0, 0));
     let brush = rt.CreateSolidColorBrush(&rgb_to_d2d_color(r, g, b), None)?;
     // Build a dashed stroke style when the border declares a dash art style.
-    let stroke_style: Option<ID2D1StrokeStyle> = match s480_dash_style(style) {
-        Some(dash) => {
+    // Thin styles (S711b) use a FIXED-cadence CUSTOM dash; the heavy "Stroked"
+    // art borders (S480) use the built-in cadence.
+    let stroke_style: Option<ID2D1StrokeStyle> =
+        if let Some(dashes) = s711b_dash_units(style, width_pt) {
             let factory: ID2D1Factory = rt.GetFactory()?;
             let props = D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_FLAT,
                 endCap: D2D1_CAP_STYLE_FLAT,
-                dashCap: if dash == D2D1_DASH_STYLE_DOT { D2D1_CAP_STYLE_ROUND } else { D2D1_CAP_STYLE_FLAT },
+                dashCap: D2D1_CAP_STYLE_FLAT,
                 lineJoin: D2D1_LINE_JOIN_MITER,
                 miterLimit: 10.0,
-                dashStyle: dash,
+                dashStyle: D2D1_DASH_STYLE_CUSTOM,
                 dashOffset: 0.0,
             };
-            factory.CreateStrokeStyle(&props, None).ok()
-        }
-        None => None,
-    };
+            factory.CreateStrokeStyle(&props, Some(&dashes)).ok()
+        } else {
+            match s480_dash_style(style) {
+                Some(dash) => {
+                    let factory: ID2D1Factory = rt.GetFactory()?;
+                    let props = D2D1_STROKE_STYLE_PROPERTIES {
+                        startCap: D2D1_CAP_STYLE_FLAT,
+                        endCap: D2D1_CAP_STYLE_FLAT,
+                        dashCap: if dash == D2D1_DASH_STYLE_DOT { D2D1_CAP_STYLE_ROUND } else { D2D1_CAP_STYLE_FLAT },
+                        lineJoin: D2D1_LINE_JOIN_MITER,
+                        miterLimit: 10.0,
+                        dashStyle: dash,
+                        dashOffset: 0.0,
+                    };
+                    factory.CreateStrokeStyle(&props, None).ok()
+                }
+                None => None,
+            }
+        };
     rt.DrawLine(
         D2D_POINT_2F { x: x1_pt * PT_TO_DIP, y: y1_pt * PT_TO_DIP },
         D2D_POINT_2F { x: x2_pt * PT_TO_DIP, y: y2_pt * PT_TO_DIP },

@@ -4060,6 +4060,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             flip_v,
             arrow_head,
             arrow_tail,
+            is_vml: false, // DrawingML
         })
     } else {
         None
@@ -4339,6 +4340,59 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             }
                         }
                     }
+                    // S711 (2026-07-01): a SELF-CLOSING VML shape (<v:rect .../>,
+                    // <v:oval/>, <v:roundrect/>, <v:line/>) arrives as Event::Empty,
+                    // NOT Event::Start — the Start arm above (4261) only fires for
+                    // shapes WITH children. Without this arm a childless filled rect
+                    // (tokyoshugyo/3a4f/model (注) note: <v:rect fillcolor="silver"
+                    // .../>, the gray reference box) set no shape_type -> the Shape
+                    // was dropped entirely. Mirror the Start-arm attribute parse.
+                    // Opt-out OXI_VMLRECT_DISABLE.
+                    "shape" | "rect" | "oval" | "roundrect" | "line"
+                        if std::env::var("OXI_VMLRECT_DISABLE").is_err() =>
+                    {
+                        let vml_type_attr = e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "type")
+                            .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                        shape_type = Some(match local.as_str() {
+                            "shape" => match vml_type_attr.as_deref() {
+                                Some(t) if t.contains("t185") => "bracketPair",
+                                _ => "rect",
+                            },
+                            "roundrect" => "roundRect",
+                            other => other,
+                        }.to_string());
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            match key.as_str() {
+                                "style" => {
+                                    for part in val.split(';') {
+                                        let part = part.trim();
+                                        if let Some(w) = part.strip_prefix("width:") {
+                                            width = parse_css_length(w.trim());
+                                        } else if let Some(h) = part.strip_prefix("height:") {
+                                            height = parse_css_length(h.trim());
+                                        } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
+                                            v_text_anchor = Some(anchor.trim().to_string());
+                                        } else if let Some(ml) = part.strip_prefix("margin-left:") {
+                                            margin_left = parse_css_length(ml.trim());
+                                        } else if let Some(mt) = part.strip_prefix("margin-top:") {
+                                            margin_top = parse_css_length(mt.trim());
+                                        } else if part.starts_with("position:absolute") {
+                                            is_absolute = true;
+                                        }
+                                    }
+                                }
+                                "filled" => { if val == "f" || val == "false" { no_fill = true; } }
+                                "fillcolor" => fill_color = Some(val.trim_start_matches('#').to_string()),
+                                "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
+                                "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
+                                "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -4449,6 +4503,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         flip_v: false,
         arrow_head: false,
         arrow_tail: false,
+        is_vml: true, // legacy VML <w:pict> shape
     });
 
     Ok(DrawingResult { image, shape, text_box: None })

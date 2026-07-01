@@ -101,6 +101,124 @@ pub fn comment_balloon_fill(author_color_index: usize, resolved: bool) -> &'stat
     palette[author_color_index % palette.len()]
 }
 
+/// S711 (2026-07-01): resolve a VML/CSS color token to a 6-hex string. The
+/// renderer's parse_hex_rgb treats a non-hex string as black, so VML named
+/// colors (fillcolor="silver") must be mapped here. "#rrggbb"/"rrggbb" pass
+/// through unchanged.
+fn vml_color_to_hex(c: &str) -> String {
+    let t = c.trim().trim_start_matches('#');
+    let named = match t.to_ascii_lowercase().as_str() {
+        "silver" => "C0C0C0", "gray" | "grey" => "808080", "black" => "000000",
+        "white" => "FFFFFF", "red" => "FF0000", "green" => "008000",
+        "blue" => "0000FF", "yellow" => "FFFF00", "lime" => "00FF00",
+        "aqua" | "cyan" => "00FFFF", "fuchsia" | "magenta" => "FF00FF",
+        "maroon" => "800000", "navy" => "000080", "olive" => "808000",
+        "purple" => "800080", "teal" => "008080",
+        "windowtext" => "000000", "window" => "FFFFFF",
+        _ => return t.to_string(), // assume already hex
+    };
+    named.to_string()
+}
+
+/// S711 (2026-07-01): a FILLED VML rect/roundRect renders as a `BoxRect` so its
+/// fill is actually drawn — `PresetShape` carries no fill field (it only draws
+/// an outline), which silently dropped the gray legend box in the tokyoshugyo/
+/// 3a4f/model (注) note (`<v:rect fillcolor="silver" .../>`). Returns None for
+/// non-filled or non-rect shapes so the caller keeps its existing PresetShape
+/// path byte-identical. Opt-out OXI_VMLRECT_DISABLE.
+/// S713 (2026-07-01, opt-in OXI_S713): render-only cumulative device-snap of
+/// table-CELL CJK line baselines. Word renders a CJK cell line at the 83/64
+/// natural (13.617 for 10.5pt) DEVICE-SNAPPED to the ~0.12pt (600-DPI) grid, so
+/// consecutive lines oscillate 13.56/13.68 (VALIDATED: repro Word gaps
+/// 13.56/13.68/13.56); Oxi's `line_height_inner` FLOORS to a flat 13.5 →
+/// cumulative under-count → the tokumei form-family border-y scatter. This
+/// post-pass re-places each cell paragraph's wrap lines at
+/// `anchor + snap_δ(raw×i)` (raw = 83/64×fs), anchored at the paragraph's first
+/// line. Render-only: shifts only Text `elem.y` (NOT content_h / row height /
+/// borders / pagination — byte-identical), orthogonal to the S453/S660/S664
+/// cell text_y_off (stored separately, renderer adds it). Fires ONLY on a clean
+/// floored-CJK cell paragraph (all lines same fs, observed gaps ≈ floor(83/64×fs))
+/// so mixed-font / spaced cells are untouched. δ via OXI_S713_DELTA (default 0.12).
+fn s713_cell_snap(pages: &mut [LayoutPage]) {
+    if std::env::var("OXI_S713").is_err() {
+        return;
+    }
+    let delta: f32 = std::env::var("OXI_S713_DELTA").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let snap = |x: f32| (x / delta).round() * delta;
+    use std::collections::HashMap;
+    for page in pages.iter_mut() {
+        // group cell Text elements by (row, col, cell_paragraph)
+        let mut groups: HashMap<(usize, usize, usize), Vec<usize>> = HashMap::new();
+        for (i, el) in page.elements.iter().enumerate() {
+            if let (Some(r), Some(c), Some(p)) = (el.cell_row_index, el.cell_col_index, el.cell_paragraph_index) {
+                if matches!(el.content, LayoutContent::Text { .. }) {
+                    groups.entry((r, c, p)).or_default().push(i);
+                }
+            }
+        }
+        for (_k, idxs) in groups {
+            // cluster into lines by y
+            let mut sorted = idxs;
+            sorted.sort_by(|&a, &b| page.elements[a].y.partial_cmp(&page.elements[b].y).unwrap());
+            let mut lines: Vec<(f32, f32, Vec<usize>)> = Vec::new(); // (y, fs, elem idxs)
+            for i in sorted {
+                let y = page.elements[i].y;
+                let fs = if let LayoutContent::Text { font_size, .. } = &page.elements[i].content { *font_size } else { 0.0 };
+                if let Some(last) = lines.last_mut() {
+                    if (y - last.0).abs() <= 3.0 { last.2.push(i); continue; }
+                }
+                lines.push((y, fs, vec![i]));
+            }
+            if lines.len() < 2 { continue; }
+            let fs0 = lines[0].1;
+            if fs0 <= 0.0 { continue; }
+            // all lines must share fs0 (clean single-size cell paragraph)
+            if lines.iter().any(|l| (l.1 - fs0).abs() > 0.01) { continue; }
+            let raw = fs0 * 83.0 / 64.0;
+            let floored = (raw * 8.0).floor() / 8.0;
+            // observed gaps must all ≈ floored (this IS a floored-CJK cell paragraph)
+            let clean = lines.windows(2).all(|w| ((w[1].0 - w[0].0) - floored).abs() < 0.2);
+            if !clean { continue; }
+            // re-place lines[1..] at anchor + snap(raw * i)
+            let anchor = lines[0].0;
+            for (i, l) in lines.iter().enumerate().skip(1) {
+                let target = anchor + snap(raw * i as f32);
+                let shift = target - l.0;
+                if shift.abs() < 1e-4 { continue; }
+                for &e in &l.2 {
+                    page.elements[e].y += shift;
+                }
+            }
+        }
+    }
+}
+
+fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
+    if std::env::var("OXI_VMLRECT_DISABLE").is_ok() {
+        return None;
+    }
+    // Only VML-origin (`<w:pict>`) filled rects. A full-corpus SSIM A/B showed
+    // that filling DrawingML form rects regresses the callout/form docs
+    // (2ea81a, 1ec1) — Word draws those differently (behind text / noFill) —
+    // while the VML (注) legend box (`<v:rect fillcolor="silver">`, the only
+    // emitted VML fill rect in the corpus: tokyoshugyo/3a4f/model) is a clean
+    // gain. DrawingML rects keep the outline-only PresetShape.
+    if !shape.is_vml {
+        return None;
+    }
+    let fill = shape.fill.as_deref()?;
+    if !matches!(shape.shape_type.as_str(), "rect" | "roundRect") {
+        return None;
+    }
+    Some(LayoutContent::BoxRect {
+        fill: Some(vml_color_to_hex(fill)),
+        stroke_color: shape.stroke_color.as_deref().map(vml_color_to_hex),
+        stroke_width: shape.stroke_width.unwrap_or(0.75),
+        corner_radius: if shape.shape_type == "roundRect" { 3.0 } else { 0.0 },
+    })
+}
+
 /// Resolved variant of the comment tint palette (R-09). When a comment has
 /// `Comment.resolved == true` (`<w15:done="1"/>` in `commentsExtended.xml`),
 /// Word desaturates the in-line range tint AND the balloon background by
@@ -1913,6 +2031,7 @@ impl LayoutEngine {
             }
         }
 
+        s713_cell_snap(&mut pages);
         LayoutResult { pages }
     }
 
@@ -3540,13 +3659,13 @@ impl LayoutEngine {
                             // v_relative=paragraph: y = anchor_y + offset
                             let sx = page.margin.left + pos.x;
                             let sy = para_anchor_y + pos.y;
-                            elements.push(LayoutElement::new(
-                                sx, sy, shape.width, shape.height,
-                                LayoutContent::PresetShape {
+                            let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
                                     shape_type: shape.shape_type.clone(),
                                     stroke_color: shape.stroke_color.clone(),
                                     stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
-                                },
+                            });
+                            elements.push(LayoutElement::new(
+                                sx, sy, shape.width, shape.height, content,
                             ));
                         }
                     }
@@ -4449,11 +4568,12 @@ impl LayoutEngine {
                         // v_relative="paragraph": y = anchor_paragraph_y + offset
                         let sx = start_x + pos.x;
                         let sy = anchor_y + pos.y;
-                        lp.elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, LayoutContent::PresetShape {
+                        let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
                                 shape_type: shape.shape_type.clone(),
                                 stroke_color: shape.stroke_color.clone(),
                                 stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
-                        }));
+                        });
+                        lp.elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, content));
                     }
                 }
             }
@@ -4729,13 +4849,13 @@ impl LayoutEngine {
                         if let Some(ref pos) = shape.position {
                             let sx = inner_x + pos.x;
                             let sy = para_start_y + pos.y;
-                            elements.push(LayoutElement::new(
-                                sx, sy, shape.width, shape.height,
-                                LayoutContent::PresetShape {
+                            let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
                                     shape_type: shape.shape_type.clone(),
                                     stroke_color: shape.stroke_color.clone(),
                                     stroke_width: shape.stroke_width.unwrap_or(0.75), flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
-                                },
+                            });
+                            elements.push(LayoutElement::new(
+                                sx, sy, shape.width, shape.height, content,
                             ));
                         }
                     }
@@ -10459,6 +10579,14 @@ impl LayoutEngine {
             let gdi_height_pt = h_px as f32 * 72.0 / 96.0;
             if metrics.is_cjk_83_64_font() {
                 let raw = gdi_height_pt * 83.0 / 64.0;
+                // S712 (2026-07-01, FALSIFIED+reverted): the 1/8pt snap is FLOOR.
+                // For 10.5pt cells raw 13.617 → floor 13.5. Word renders 13.617
+                // DEVICE-SNAPPED, oscillating 13.56/13.68 by cumulative position;
+                // 13.5 (floor) is the best FIXED compromise (closer to the 13.56
+                // majority). ROUND (→13.625) overshoots → full-corpus A/B net
+                // -0.1285, 11 regress incl. b35123 itself -0.0115. The real fix is
+                // an S629-style cumulative device-snap of the CELL line (so it
+                // oscillates 13.56/13.68 with Word), not a fixed floor↔round swap.
                 (raw * 8.0).floor() / 8.0
             } else {
                 gdi_height_pt
@@ -14984,12 +15112,13 @@ impl LayoutEngine {
                         // pos.y = offset from paragraph start (Word COM confirmed)
                         for shape in &para.shapes {
                             if let Some(ref pos) = shape.position {
-                                cell_elements.push(LayoutElement::new(cell_x + pad_l + pos.x, para_content_start_h + pos.y, shape.width, shape.height, LayoutContent::PresetShape {
+                                let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
                                         shape_type: shape.shape_type.clone(),
                                         stroke_color: shape.stroke_color.clone(),
                                         stroke_width: shape.stroke_width.unwrap_or(0.5),
                                         flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
-                                }));
+                                });
+                                cell_elements.push(LayoutElement::new(cell_x + pad_l + pos.x, para_content_start_h + pos.y, shape.width, shape.height, content));
                             }
                         }
                     }

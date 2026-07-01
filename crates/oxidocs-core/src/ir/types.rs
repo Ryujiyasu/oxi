@@ -738,6 +738,12 @@ pub struct Shape {
     /// Connector arrowhead at the end (a:ln/a:tailEnd type≠none).
     #[serde(default)]
     pub arrow_tail: bool,
+    /// S711: true when this shape came from the legacy VML path (`<w:pict>`),
+    /// false for DrawingML (`<a:...>`). A filled VML rect renders its fill (the
+    /// (注) legend box); a DrawingML rect keeps the outline-only PresetShape —
+    /// filling DML form rects regressed 2ea81a/1ec1 (SSIM A/B).
+    #[serde(default)]
+    pub is_vml: bool,
 }
 
 /// A gradient color stop
