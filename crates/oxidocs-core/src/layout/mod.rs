@@ -12950,6 +12950,55 @@ impl LayoutEngine {
                     cell_w += pad_l;
                 }
 
+                // S585c (2026-07-01, default ON, opt-out OXI_S585C_DISABLE): the
+                // ONE consistent clamp for the over-wide single-cell AUTO box (the
+                // tokyoshugyo 条文/解説 regulation boxes). Word clamps such a box so
+                // its content-RIGHT aligns with the page text margin and its right
+                // border sits at content_right + cellMar; the declared gridCol
+                // overflow is discarded. Oxi kept cell_w = declared gridCol, so the
+                // right border landed +1 cellMar too far (measured tokyoshugyo:
+                // right border Oxi 520.15 vs Word 514.9, LEFT border 92.6 vs 92.18 =
+                // aligned) AND the wrap was ~1 cellMar too wide. S585b/S594/S585N/
+                // PGCAP/PROPCELL/LEGACYCELL each patched only the RENDER wrap, leaving
+                // the border and the estimate/render wraps inconsistent. This computes
+                // a single `eff_cell_w` = the width whose right border matches Word,
+                // and threads it through BOTH the border/shading rendering AND the
+                // render wrap so every border-x/wrap path is derived from one geometry.
+                // SCOPE = the validated s585_cellmar envelope (single-cell, inherited
+                // cellMar, tblW=auto → Word fits to page; dxa/pct keep wide) + a
+                // geometric overshoot trigger (the border actually exceeds Word's
+                // position). is_nested excluded (nested boxes reference a parent cell,
+                // not the page margin — the deferred S585N case). See
+                // [[tokyoshugyo_wrap_not_cellheight]] (S585c).
+                let content_right_edge = start_x + content_width;
+                let s585c_over = cell_w - content_width;
+                let s585c_clamp = std::env::var("OXI_S585C_DISABLE").is_err()
+                    && !is_nested
+                    && row.cells.len() == 1
+                    && !table.style.has_explicit_cellmar
+                    && cell_w > content_width
+                    && (s585c_over < 5.0
+                        || (table.style.width_type.as_deref() == Some("auto") && s585c_over < 11.0))
+                    && cell_x + cell_w > content_right_edge + pad_r + 0.5;
+                let eff_cell_w = if s585c_clamp {
+                    (content_right_edge + pad_r - cell_x).min(cell_w).max(0.0)
+                } else {
+                    cell_w
+                };
+                // The BORDER/shading clamp (eff_cell_w) is render-only and pagination-
+                // neutral, so it ships by default. Narrowing the WRAP to the clamped
+                // content (eff_cell_w − 2×cellMar = Word's true content width) is
+                // geometrically the matching half, but Oxi OVER-WRAPS at that width
+                // (it lacks Word's per-line cell 約物 compression — the char-budget
+                // wall), so tokyoshugyo goes 90→91 pages (+688 paras, 0.9931→0.5588).
+                // The current wide wrap (S585b, cell_w−2pad) is the compensating value
+                // that keeps line counts ≈ Word. So the wrap-narrow is OPT-IN
+                // (OXI_S585C_WRAP=1) pending the cell 約物 compression; the border
+                // fix alone is the shippable, pagination-neutral render improvement.
+                // See [[tokyoshugyo_wrap_not_cellheight]] / [[char_budget_wall]].
+                let s585c_wrap = s585c_clamp
+                    && std::env::var("OXI_S585C_WRAP").ok().as_deref() == Some("1");
+
                 // Round 30 (2026-04-09): When cell top/bottom padding is 0 and
                 // the table has borders, add the border width as implicit padding.
                 // Word positions text below the top border line, not at the border.
@@ -12972,7 +13021,7 @@ impl LayoutEngine {
                         } else {
                             format!("#{}", shading_color)
                         };
-                        elements.push(LayoutElement::new(cell_x, cursor.visual_y, cell_w, row_height, LayoutContent::CellShading {
+                        elements.push(LayoutElement::new(cell_x, cursor.visual_y, eff_cell_w, row_height, LayoutContent::CellShading {
                                 color: color_hex,
                         }));
                     }
@@ -13632,7 +13681,15 @@ impl LayoutEngine {
                             && is_nested
                             && cell.width.is_some()
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center);
-                        let wrap_base = if s585_cellmar {
+                        let wrap_base = if s585c_wrap
+                            && !matches!(para.alignment, Alignment::Right | Alignment::Center) {
+                            // S585c: the clamped box wraps within its Word content area
+                            // (eff_cell_w - 2×cellMar). Supersedes s585_cellmar/s594 (which
+                            // subtracted from the UNCLAMPED cell_w, leaving the wrap ~1 cellMar
+                            // wider than the clamped border). Derived from the SAME eff_cell_w
+                            // the border/shading use → border-x and wrap are consistent.
+                            (eff_cell_w - pad_l - pad_r).max(0.0)
+                        } else if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested {
                             (cell_w - pad_l - pad_r).max(0.0)
@@ -15528,9 +15585,11 @@ impl LayoutEngine {
                     let use_collapsed = table.style.border && !has_cell_borders;
 
                     // Top — skip for vMerge continue cells (internal to merged range)
+                    // S585c: draw the box borders at the clamped width (eff_cell_w) so the
+                    // right border matches Word's position (content_right + cellMar).
                     if !is_vmerge_continue && top_color.is_some() && (!use_collapsed || row_idx == 0) {
-                        elements.push(LayoutElement::new(bx, by, cell_w, 0.0, LayoutContent::TableBorder {
-                                x1: bx, y1: by, x2: bx + cell_w, y2: by,
+                        elements.push(LayoutElement::new(bx, by, eff_cell_w, 0.0, LayoutContent::TableBorder {
+                                x1: bx, y1: by, x2: bx + eff_cell_w, y2: by,
                                 color: top_color, width: top_width, style: top_style,
                         }));
                     }
@@ -15542,8 +15601,8 @@ impl LayoutEngine {
                         false
                     };
                     if bot_color.is_some() && !next_is_continue {
-                        elements.push(LayoutElement::new(bx, by + row_height, cell_w, 0.0, LayoutContent::TableBorder {
-                                x1: bx, y1: by + row_height, x2: bx + cell_w, y2: by + row_height,
+                        elements.push(LayoutElement::new(bx, by + row_height, eff_cell_w, 0.0, LayoutContent::TableBorder {
+                                x1: bx, y1: by + row_height, x2: bx + eff_cell_w, y2: by + row_height,
                                 color: bot_color, width: bot_width, style: bot_style,
                         }));
                     }
@@ -15556,8 +15615,8 @@ impl LayoutEngine {
                     }
                     // Right
                     if right_color.is_some() {
-                        elements.push(LayoutElement::new(bx + cell_w, by, 0.0, row_height, LayoutContent::TableBorder {
-                                x1: bx + cell_w, y1: by, x2: bx + cell_w, y2: by + row_height,
+                        elements.push(LayoutElement::new(bx + eff_cell_w, by, 0.0, row_height, LayoutContent::TableBorder {
+                                x1: bx + eff_cell_w, y1: by, x2: bx + eff_cell_w, y2: by + row_height,
                                 color: right_color, width: right_width, style: right_style,
                         }));
                     }
