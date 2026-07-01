@@ -4061,6 +4061,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             arrow_head,
             arrow_tail,
             is_vml: false, // DrawingML
+            escapes_cell: false,
         })
     } else {
         None
@@ -4191,6 +4192,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut margin_left: f32 = 0.0;
     let mut margin_top: f32 = 0.0;
     let mut is_absolute = false;
+    let mut escapes_cell = false; // o:allowincell="f" (S711b)
     // VML drawing canvas (<v:group editas="canvas">). Word reserves the
     // group's DECLARED height (style height:Npt) in the inline text flow; the
     // inner position:absolute shapes are canvas-internal (relative to the
@@ -4303,6 +4305,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                 "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
+                                "allowincell" => { if val == "f" || val == "false" { escapes_cell = true; } }
                                 _ => {}
                             }
                         }
@@ -4389,6 +4392,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                 "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
+                                "allowincell" => { if val == "f" || val == "false" { escapes_cell = true; } }
                                 _ => {}
                             }
                         }
@@ -4504,6 +4508,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         arrow_head: false,
         arrow_tail: false,
         is_vml: true, // legacy VML <w:pict> shape
+        escapes_cell,
     });
 
     Ok(DrawingResult { image, shape, text_box: None })

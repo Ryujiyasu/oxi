@@ -194,6 +194,50 @@ fn s713_cell_snap(pages: &mut [LayoutPage]) {
     }
 }
 
+/// S714 (2026-07-01, default ON, opt-out OXI_ASCELL_DISABLE): split a CELL text fragment at
+/// autoSpaceDE/DN boundaries (CJK↔alpha with `de`, CJK↔digit with `dn`),
+/// returning `(segment_text, dx_from_frag_start, segment_width)` so the caller
+/// emits one Text element per segment with the fs/4 aki inserted between them.
+/// Render-only: the cell wrap already put the aki into the fragment width, so
+/// this just REDISTRIBUTES it into the visible gaps (rx/wrap unchanged). The
+/// per-char advance = char_width + cs_render (matches the renderer). Returns
+/// None when neither flag is on or no boundary exists (caller pushes normally).
+fn autospace_cell_segments(
+    text: &str, fs: f32, registry: &FontMetricsRegistry, metrics: &FontMetrics,
+    cs_render: f32, de: bool, dn: bool,
+) -> Option<Vec<(String, f32, f32)>> {
+    if !de && !dn { return None; }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 2 { return None; }
+    let mut split_before = vec![false; chars.len()];
+    let mut any = false;
+    for i in 1..chars.len() {
+        let (a, b) = (chars[i - 1], chars[i]);
+        let ai = kinsoku::is_cjk_ideograph_or_kana(a);
+        let bi = kinsoku::is_cjk_ideograph_or_kana(b);
+        let de_b = de && ((ai && b.is_ascii_alphabetic()) || (a.is_ascii_alphabetic() && bi));
+        let dn_b = dn && ((ai && b.is_ascii_digit()) || (a.is_ascii_digit() && bi));
+        if de_b || dn_b { split_before[i] = true; any = true; }
+    }
+    if !any { return None; }
+    let aki = s546_autospace_extra(fs);
+    let mut segs: Vec<(String, f32, f32)> = Vec::new();
+    let mut seg = String::new();
+    let mut seg_w = 0.0f32;
+    let mut seg_x = 0.0f32;
+    for i in 0..chars.len() {
+        if i > 0 && split_before[i] {
+            segs.push((std::mem::take(&mut seg), seg_x, seg_w));
+            seg_x += seg_w + aki;
+            seg_w = 0.0;
+        }
+        seg_w += registry.char_width_pt_with_fallback(chars[i], fs, metrics) + cs_render;
+        seg.push(chars[i]);
+    }
+    if !seg.is_empty() { segs.push((seg, seg_x, seg_w)); }
+    Some(segs)
+}
+
 fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     if std::env::var("OXI_VMLRECT_DISABLE").is_ok() {
         return None;
@@ -211,9 +255,18 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     if !matches!(shape.shape_type.as_str(), "rect" | "roundRect") {
         return None;
     }
+    // S711b: VML shapes are STROKED by default (black) unless stroked="f".
+    // The (注) box has strokeweight=".5pt" but no strokecolor → Word draws a
+    // black .5pt border. The parser sets stroke_width=None only when no_stroke,
+    // so a Some(width) here means "stroked" → default the colour to black.
+    let stroke_color = if shape.stroke_width.is_some() {
+        Some(shape.stroke_color.as_deref().map(vml_color_to_hex).unwrap_or_else(|| "000000".to_string()))
+    } else {
+        shape.stroke_color.as_deref().map(vml_color_to_hex)
+    };
     Some(LayoutContent::BoxRect {
         fill: Some(vml_color_to_hex(fill)),
-        stroke_color: shape.stroke_color.as_deref().map(vml_color_to_hex),
+        stroke_color,
         stroke_width: shape.stroke_width.unwrap_or(0.75),
         corner_radius: if shape.shape_type == "roundRect" { 3.0 } else { 0.0 },
     })
@@ -1368,6 +1421,7 @@ pub struct LayoutPage {
     pub elements: Vec<LayoutElement>,
 }
 
+#[derive(Clone)]
 pub struct LayoutElement {
     pub x: f32,
     pub y: f32,
@@ -1451,6 +1505,7 @@ pub struct TextEffects {
     pub outline: bool,
 }
 
+#[derive(Clone)]
 pub enum LayoutContent {
     Text {
         text: String,
@@ -15051,7 +15106,44 @@ impl LayoutEngine {
                                         cell_el.is_paragraph_start_with_lrpb = true;
                                     }
                                 }
-                                cell_elements.push(cell_el);
+                                // S714 (default ON, opt-out OXI_ASCELL_DISABLE): render the autoSpaceDE/DN aki
+                                // INSIDE a cell fragment. The cell wrap already put the fs/4
+                                // aki into adj_w (buf_w), but the fragment renders as ONE
+                                // monolithic element → glyphs tight, aki only trailing. Split
+                                // the element at DE/DN boundaries and redistribute the aki into
+                                // the gaps (total width unchanged → rx/wrap/pagination
+                                // unchanged; render-only). Matches the BODY fragment-widening.
+                                let ascell_split: Option<Vec<(String, f32, f32)>> = if std::env::var("OXI_ASCELL_DISABLE").is_err() {
+                                    let fm = self.registry.get(font_family.as_deref().unwrap_or(""));
+                                    autospace_cell_segments(text, *fs, &self.registry, fm,
+                                        *cs + justify_char_spacing + grid_cs_adj,
+                                        para.style.auto_space_de, para.style.auto_space_dn)
+                                } else { None };
+                                if let Some(segs) = ascell_split {
+                                    let base_x = cell_x + pad_l + line_indent + align_offset + rx;
+                                    let lrpb = cell_el.is_paragraph_start_with_lrpb;
+                                    for (si, (seg_text, seg_dx, seg_w)) in segs.iter().enumerate() {
+                                        let mut se = LayoutElement::new(base_x + seg_dx, content_h, *seg_w, lh,
+                                            LayoutContent::Text {
+                                                text: seg_text.clone(), font_size: *fs, font_family: font_family.clone(),
+                                                bold: *bold, italic: *italic, underline: *underline,
+                                                underline_style: underline_style.clone(), strikethrough: *strikethrough,
+                                                double_strikethrough: false, color: color.clone(), highlight: highlight.clone(),
+                                                character_spacing: *cs + justify_char_spacing + grid_cs_adj,
+                                                field_type: None, text_scale: *ts, is_vertical: false,
+                                                effects: TextEffects::default(),
+                                            });
+                                        se.text_y_off = cell_text_y_off;
+                                        se.paragraph_index = block_idx;
+                                        se.cell_paragraph_index = Some(cell_para_counter);
+                                        se.cell_row_index = Some(row_idx);
+                                        se.cell_col_index = Some(cell_idx);
+                                        se.is_paragraph_start_with_lrpb = lrpb && si == 0;
+                                        cell_elements.push(se);
+                                    }
+                                } else {
+                                    cell_elements.push(cell_el);
+                                }
                                 rx += adj_w + frag_spacing[frag_idx];
                             }
                             content_h += lh;
@@ -15118,7 +15210,22 @@ impl LayoutEngine {
                                         stroke_width: shape.stroke_width.unwrap_or(0.5),
                                         flip_h: shape.flip_h, flip_v: shape.flip_v, arrow_head: shape.arrow_head, arrow_tail: shape.arrow_tail,
                                 });
-                                cell_elements.push(LayoutElement::new(cell_x + pad_l + pos.x, para_content_start_h + pos.y, shape.width, shape.height, content));
+                                // S711b: o:allowincell="f" shapes escape the cell — anchor x at
+                                // the page text column (start_x), not the cell content edge.
+                                // (注) gray box: Word = page-margin(85.05)+margin-left(50.2), NOT
+                                // cell_x+pad (measured Oxi was +11.52pt too far right).
+                                let escapes = shape.escapes_cell && std::env::var("OXI_VMLRECT_DISABLE").is_err();
+                                let sx = if escapes { start_x + pos.x } else { cell_x + pad_l + pos.x };
+                                // S711b vertical: an allowincell=f shape's margin-top is measured
+                                // from the paragraph TOP (before space_before), not from
+                                // para_content_start_h (which already added space_before). The (注)
+                                // box was +5.76pt too LOW (= the note para's 6pt space_before).
+                                let sy = if escapes {
+                                    para_content_start_h - effective_space_before + pos.y
+                                } else {
+                                    para_content_start_h + pos.y
+                                };
+                                cell_elements.push(LayoutElement::new(sx, sy, shape.width, shape.height, content));
                             }
                         }
                     }

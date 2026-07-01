@@ -744,6 +744,12 @@ pub struct Shape {
     /// filling DML form rects regressed 2ea81a/1ec1 (SSIM A/B).
     #[serde(default)]
     pub is_vml: bool,
+    /// S711b: VML `o:allowincell="f"` — the shape ESCAPES the table cell and is
+    /// positioned relative to the page text column (start_x), NOT the cell content
+    /// edge. The (注) gray legend box uses this (Word anchors it at page-margin +
+    /// margin-left, not cell_x+pad). Default false = normal cell-relative.
+    #[serde(default)]
+    pub escapes_cell: bool,
 }
 
 /// A gradient color stop
