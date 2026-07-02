@@ -6279,7 +6279,21 @@ impl LayoutEngine {
                 let tgink_k = if !page.doc_grid_no_type {
                     std::env::var("OXI_TGINK_K").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0)
                 } else { 0.0 };
-                (ink_lh + tgink_k).min(effective_lh)
+                // S714 (2026-07-02, default ON, opt-out OXI_S714_DISABLE): a
+                // lineRule=atLeast line demands its EXPLICIT box (the atLeast value)
+                // at the page bottom — the ink/natural leniency only forgives GRID
+                // slack above the box, not the author's explicit minimum (the
+                // exact/empty analogy: S548b / S562b). tokyoshugyo 〔例３〕 heading
+                // (atLeast 350=17.5): Word pushes it to p31; the 13.5 font-natural
+                // leniency wrongly kept it at the p30 bottom (over −1.85 vs +2.15).
+                // Scoped to typed docGrid snap_to_grid paragraphs.
+                let atleast_floor = if std::env::var("OXI_S714_DISABLE").is_err()
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && para.style.line_spacing_rule.as_deref() == Some("atLeast") {
+                    para.style.line_spacing.unwrap_or(0.0)
+                } else { 0.0 };
+                (ink_lh + tgink_k).max(atleast_floor).min(effective_lh)
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
@@ -12497,7 +12511,25 @@ impl LayoutEngine {
                 // OXI_CELLPAIR experiment (2026-07-02): universal SUBTRACT boundary
                 // (Word always wraps cell text at cell_w - cellMar; 24-config derivation)
                 // paired with the small-cap cell 約物 credit below. See char_budget_wall.
-                let inner_w = if self.cellpair_active() {
+                // S713 (2026-07-02, default ON, opt-out OXI_S713_DISABLE): a LEGACY
+                // (compat<=14) single-cell row in a table with an author-declared
+                // tblCellMar wraps at cell_w - pads (Word render-truth tokyoshugyo p30
+                // (注) cell: content [96.98, 517.42] inside borders [92.06, 522.22] =
+                // both cellMars subtracted; Oxi wrapped to the border -> fit +1 char/
+                // line -> the (注) para 2 lines vs Word 3 -> the 変形 -1x6 cascade).
+                // This envelope (explicit tblCellMar) was excluded from EVERY prior
+                // subtract gate (s531/s559/s585 all require !has_explicit_cellmar), so
+                // it is orthogonal to the tuned cellMar discriminators. Corpus scope:
+                // compat<=14 + explicit tblCellMar = tokyoshugyo/parttime/ohnoitaku
+                // ONLY (3a4f/model are compat15; repro_tcmar_* have NO compatSetting,
+                // which parse_compat_mode reads as 15 -> not fired, byte-identical).
+                // Paired with the S421 oikomi arm below (same discriminator): the
+                // narrowed budget forces wraps Word resolves by oikomi/oidashi.
+                let s713_cellmar = std::env::var("OXI_S713_DISABLE").is_err()
+                    && row.cells.len() == 1
+                    && table.style.has_explicit_cellmar
+                    && self.compat_mode <= 14;
+                let inner_w = if self.cellpair_active() || s713_cellmar {
                     (cell_w - _pad_l - _pad_r).max(0.0)
                 } else {
                     cell_w.max(0.0)
@@ -12619,8 +12651,21 @@ impl LayoutEngine {
                             // shorter than Word → downstream content cascades
                             // to wrong page. Gated by parser-side env so this
                             // arm only matches when fix is active.
-                            cell_content_h += img.height;
-                            cell_content_h_visual += img.height;
+                            // S715 (2026-07-02, default ON, opt-out OXI_S715_DISABLE):
+                            // a typed-grid cell IMAGE line snaps to whole grid cells
+                            // like a text line (Word render-truth tokyoshugyo p34
+                            // calendar: 289.5pt VML image cell → Word table bottom
+                            // border at 596.11 ≈ image_top + 17 cells; Oxi resumed
+                            // the body at image_top + 289.5 exactly, 1 grid line
+                            // early → the 変形 p35/36 −1s).
+                            let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
+                                match row_line_pitch {
+                                    Some(p) if p > 0.0 => (img.height / p).ceil() * p,
+                                    _ => img.height,
+                                }
+                            } else { img.height };
+                            cell_content_h += img_h_eff;
+                            cell_content_h_visual += img_h_eff;
                         }
                         _ => {}
                     }
@@ -13738,6 +13783,13 @@ impl LayoutEngine {
                             && is_nested
                             && cell.width.is_some()
                             && !matches!(para.alignment, Alignment::Right | Alignment::Center);
+                        // S713 render mirror (see the estimate-side s713_cellmar comment):
+                        // legacy (compat<=14) single-cell explicit-tblCellMar row wraps
+                        // at cell_w - pads. Word render-truth tokyoshugyo (注) cell.
+                        let s713_cellmar_render = std::env::var("OXI_S713_DISABLE").is_err()
+                            && row.cells.len() == 1
+                            && table.style.has_explicit_cellmar
+                            && self.compat_mode <= 14;
                         let wrap_base = if s585c_narrow
                             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute) {
                             // S585c: the clamped box wraps within its Word content area
@@ -13751,7 +13803,8 @@ impl LayoutEngine {
                         } else if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested
-                            || self.cellpair_active() {
+                            || self.cellpair_active()
+                            || s713_cellmar_render {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
@@ -14459,12 +14512,20 @@ impl LayoutEngine {
                                         // discriminator as the S412 budget narrowing
                                         // fires it ONLY on the 263 ed025+1ec1 cells where
                                         // Word's narrowed budget forces the wrap.
+                                        // S713: the narrowed budget (cell_w - pads) forces
+                                        // wraps Word resolves by OIKOMI/OIDASHI, so the
+                                        // S421 oikomi ties to the same discriminator (the
+                                        // S421b precedent: oikomi follows the budget gate).
+                                        // tokyoshugyo (注) L2: 。 overflows 9.45pt > the
+                                        // compression budget -> Word pulls す down (L3 =
+                                        // す。); the old force-fit kept 。 on L2.
                                         if std::env::var("OXI_S421_DISABLE").is_err()
                                             && (s412_cellmar_subtract
                                                 || (std::env::var("OXI_S443_DISABLE").is_err()
                                                     && p_first_line_indent < 0.0
                                                     && para_has_tab)
-                                                || (propcell_oikomi && propcell_over > propcell_bound)) {
+                                                || (propcell_oikomi && propcell_over > propcell_bound)
+                                                || s713_cellmar_render) {
                                             let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
                                             let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
                                             loop {
@@ -15388,7 +15449,15 @@ impl LayoutEngine {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
                         }));
-                    content_h += img.height;
+                    // S715: typed-grid cell image line snaps to whole grid cells
+                    // (mirrors the pre-pass arm; see comment there).
+                    let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
+                        match row_line_pitch {
+                            Some(p) if p > 0.0 => (img.height / p).ceil() * p,
+                            _ => img.height,
+                        }
+                    } else { img.height };
+                    content_h += img_h_eff;
                     prev_cell_sa = None;
                 }
                 _ => {}
@@ -17106,7 +17175,14 @@ impl LayoutEngine {
                         // (mirrors the pre-pass arm at ~8532 and the placement
                         // arm; without it the row-height estimate ignored the
                         // image and the row collapsed to text height).
-                        cell_content_h += img.height;
+                        // S715: typed-grid cell image line snaps to whole cells.
+                        let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
+                            match table_grid_pitch {
+                                Some(p) if p > 0.0 => (img.height / p).ceil() * p,
+                                _ => img.height,
+                            }
+                        } else { img.height };
+                        cell_content_h += img_h_eff;
                         prev_sa = None;
                     }
                     _ => {}
