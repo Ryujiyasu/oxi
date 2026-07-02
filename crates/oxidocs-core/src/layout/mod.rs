@@ -14676,13 +14676,31 @@ impl LayoutEngine {
                                 break;
                             }
                             // Line height = max of all runs in line (in_table_cell=true: no default font minimum)
-                            let lh: f32 = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                            // OXI_CELLPAIR: whitespace-only fragments do NOT contribute to the
+                            // line height (b35123 row2: the note's leading sz-21 「　」 run must
+                            // not lift the fs-9 line from 11.7 to 13.5 — Word row arithmetic
+                            // 17.5+11.7+11.7+3.5 = 44.4 ≈ measured 44.6; with 13.5 it would be
+                            // 46.4 = Oxi's wrong row). Word sizes the line by its INK runs.
+                            let cellpair_ws = std::env::var("OXI_CELLPAIR").is_ok();
+                            let mut lh: f32 = line.iter()
+                                .filter(|(t, ..)| !cellpair_ws || !t.trim().is_empty())
+                                .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
                                 let metrics = match font_family.as_deref() {
                                     Some(ff) => self.registry.get(ff),
                                     None => self.registry.default_metrics(),
                                 };
                                 self.line_height_inner(*fs, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true)
                             }).fold(0.0_f32, f32::max);
+                            if lh == 0.0 {
+                                // whitespace-only line: fall back to all fragments
+                                lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                    let metrics = match font_family.as_deref() {
+                                        Some(ff) => self.registry.get(ff),
+                                        None => self.registry.default_metrics(),
+                                    };
+                                    self.line_height_inner(*fs, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true)
+                                }).fold(0.0_f32, f32::max);
+                            }
 
                             // Paragraph indentation: first line uses indent_left + first_line_indent
                             let line_indent = p_indent_left + if line_idx == 0 { p_first_line_indent } else { 0.0 };
@@ -17235,7 +17253,12 @@ impl LayoutEngine {
                 && para.style.snap_to_grid
                 && grid_pitch.is_some();
             let mut max_line_height: f32 = 0.0;
+            // OXI_CELLPAIR: whitespace-only runs do not contribute to the line
+            // height (mirror of the render-side rule; b35123 note sz-21 「　」).
+            let cellpair_ws_est = std::env::var("OXI_CELLPAIR").is_ok()
+                && para.runs.iter().any(|r| !r.text.trim().is_empty());
             for run in &para.runs {
+                if cellpair_ws_est && run.text.trim().is_empty() { continue; }
                 let font_size = self.resolve_font_size(&run.style, &para.style);
                 let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
                 let is_single_run = match (eff_lr, eff_ls) {
