@@ -1849,6 +1849,13 @@ fn word_com_single_line_height(family: &str, fs: f32) -> Option<f32> {
 /// Derived from COM measurement: comparing Word's actual character
 /// positions (Range.Information) against input spacing values.
 /// Example: cs=-0.45pt → -9tw → round(-9*96/1440) = -1px → -0.75pt
+thread_local! {
+    /// S721 body arm: set by the paragraph-level two-pass orphan re-break
+    /// (see the caller near break_into_lines) so the cap computation inside
+    /// break_into_lines escalates the 約物 caps for the retry pass only.
+    static S721_ORPHAN_RETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn snap_character_spacing(cs_pt: f32) -> f32 {
     // 2026-05-04 (Day 11-17): Word applies char_spacing at twip precision (1/20pt),
     // NOT GDI pixel precision. Old code snapped to 96 DPI pixels which destroyed
@@ -5745,6 +5752,38 @@ impl LayoutEngine {
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
         let para_has_lrpb = para.runs.iter().any(|r| r.has_last_rendered_page_break);
         let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
+        // S721 body arm (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
+        // PARAGRAPH-TAIL ORPHAN ELIMINATION via a two-pass re-break. Word accepts
+        // ABOVE-normal 約物 compression (~3.9/約物 vs the s590 break cap 1.5) when
+        // it removes a short (≤2-glyph) final line. Render-truth tokyoshugyo p36 ③:
+        // Word compresses the L1 、 by 3.78 (measured 6.72 render) to pull 数 up,
+        // which lets L2 hold the rest (with the 。 hang) → 2 lines; Oxi's cap-1.5
+        // break left 数 down → an ん。 orphan L3. Mechanism: if the first pass ends
+        // with a ≤2-glyph final line, re-break the whole paragraph with the orphan
+        // caps (thread-local flag read by the cap computation) and accept the
+        // re-break ONLY when it saves a line (ikujidetail る。: demand ~11 > 3.9 →
+        // count unchanged → keep the first pass, matching Word's oidashi there;
+        // nedo 子: 1-glyph tail, fits at open 3.4 → saved → matches Word).
+        let lines = {
+            let last_glyphs: usize = lines.last()
+                .map(|l| l.fragments.iter().map(|f| f.text.chars().count()).sum())
+                .unwrap_or(0);
+            if std::env::var("OXI_S721_DISABLE").is_err()
+                && lines.len() >= 2
+                && last_glyphs > 0 && last_glyphs <= 2
+                && self.compress_punctuation
+                // LEGACY scope (compat<15): the orphan-cap evidence (③ 3.78, ⑧ 3.9)
+                // is all compat-11; nedocontract (compat 15, Word break cap ~3.4 per
+                // S639b) DECLINES the same-size compression on its wi=51 short-tail
+                // para — the retry flipped it PASS→FAIL until this gate.
+                && self.compat_mode < 15
+            {
+                S721_ORPHAN_RETRY.with(|f| f.set(true));
+                let retry = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
+                S721_ORPHAN_RETRY.with(|f| f.set(false));
+                if retry.len() < lines.len() { retry } else { lines }
+            } else { lines }
+        };
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
@@ -9089,6 +9128,17 @@ impl LayoutEngine {
                 && std::env::var("OXI_S575_DISABLE").is_err() { s575_body_cap } else { 2.5 };
             let s475_solo: f32 = if s476_grid { s476_cap } else {
                 std::env::var("OXI_S475_SOLO").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo_default) };
+            // S721 orphan re-break pass: escalate the 約物 caps (see the caller's
+            // two-pass comment — accepted only when it saves a line).
+            let s721_retry = S721_ORPHAN_RETRY.with(|f| f.get());
+            let s475_solo = if s721_retry {
+                // 4.4 code-scale (s475 caps scale by fs/12) = 3.85 effective @10.5pt,
+                // covering the ③-measured 3.78 demand; the (注) L1 (Word declines,
+                // demand 7.75) still wraps → its re-break saves no line → first pass
+                // kept. OXI_S721_CAP to sweep.
+                s475_solo.max(std::env::var("OXI_S721_CAP").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(4.4))
+            } else { s475_solo };
             // S639b: opening-bracket break cap (< solo) in the body-oikomi context only
             // (where solo=3.4). Elsewhere = s475_solo (byte-identical to pre-S639b).
             let s639_body_oikomi = s639 && s476_body && !para_has_lrpb && !s476_grid
@@ -9097,6 +9147,11 @@ impl LayoutEngine {
             let s475_open: f32 = std::env::var("OXI_S475_OPEN").ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(if s639_body_oikomi { 3.1 } else { s475_solo });
+            // S721 orphan re-break: openings escalate too (nedo 子 needs （ at 3.31).
+            let s475_open = if s721_retry {
+                s475_open.max(std::env::var("OXI_S721_OPEN").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(3.4))
+            } else { s475_open };
             // S645 (2026-06-23) FALSIFIED + reverted: a demand-aware closing-bracket
             // cap (」/） before a non-bracket → light ~0.84, Word-measured) did NOT
             // fix nedo's cumulative over-pack (still −1×3 at close 1.0-2.0; the
@@ -9657,6 +9712,11 @@ impl LayoutEngine {
                     } else {
                         current_width_tw + pt_to_tw(char_width) - available_tw
                     };
+                    if std::env::var("OXI_DBG721").is_ok() && text.contains("三六協定で定める時間数") {
+                        eprintln!("[DBG721] ch={:?} idx={} cw_tw={} capw_tw={} avail={} ovf={} s475={} s590={} lrpb={}",
+                            ch, char_index, current_width_tw, current_capw_tw, available_tw, overflow_tw,
+                            s475_break, s590_legacy_just_cap, para_has_lrpb);
+                    }
                     // PER-LINE TOTAL compression budget FALSIFIED (2026-06-23): tested
                     // OXI_LINE_BUDGET (wrap iff nat_overflow > budget). It correctly wrapped
                     // nedo's preamble 甲 (nat_ovf 18.8, Word compresses only 15.36 & wraps)
@@ -14468,7 +14528,28 @@ impl LayoutEngine {
                                     let n_yak = current_line_chars.iter().chain(buf_chars.iter())
                                         .filter(|c| matches!(c.ch, '、' | '。' | '，' | '．'
                                             | '」' | '』' | '）' | '】' | '〕' | '・')).count() as f32;
-                                    let budget = n_yak * legacy_cell_cap * (font_size / 10.5);
+                                    // S721 (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
+                                    // PARAGRAPH-TAIL ORPHAN ELIMINATION — Word compresses mid-line
+                                    // 約物 up to ~3.9pt each (vs the derived ~2.5 normal break cap)
+                                    // when fitting the char removes a short (≤2-glyph) final line.
+                                    // Word render-truth p76 ⑧火災等: «…をとり、␣␣␣␣に» — に is
+                                    // the para's LAST glyph; Word compresses 、×2 to 6.60/6.63
+                                    // (−3.90 each) to fit it on one line (avoiding a 1-char orphan
+                                    // continuation); mid-para overflows keep the small cap (the
+                                    // 変形-line flips at a FLAT cap ≥3.68 stay byte-identical —
+                                    // the orphan gate IS the discriminator the flat sweep lacked).
+                                    // Consistent with ikujidetail る。 (S595: demand ~11 > 3.9 →
+                                    // Word wraps even at the tail) and the S590 derivation (normal
+                                    // break compression rare/small).
+                                    let s721_gpos = s586_run_offset + s586_ci;
+                                    let s721_k: usize = std::env::var("OXI_S721_K").ok()
+                                        .and_then(|v| v.parse().ok()).unwrap_or(1);
+                                    let s721_tail = s586_para_chars.len().saturating_sub(s721_gpos) <= s721_k;
+                                    let s721_cap = if s721_tail && std::env::var("OXI_S721_DISABLE").is_err() {
+                                        std::env::var("OXI_S721_CAP").ok()
+                                            .and_then(|v| v.parse().ok()).unwrap_or(3.9)
+                                    } else { legacy_cell_cap };
+                                    let budget = n_yak * s721_cap * (font_size / 10.5);
                                     ((line_x + buf_w + cw) - effective_wrap) > budget
                                 } else if ((jc_gate_active && (run_has_neg_cs || cell_comp_active)) || s466_oikomi) && would_overflow_natural {
                                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
