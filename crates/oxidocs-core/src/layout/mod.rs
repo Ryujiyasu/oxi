@@ -14444,9 +14444,18 @@ impl LayoutEngine {
                                         && matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
                                 let legacy_cell_cap: f32 = std::env::var("OXI_LEGACYCELL_CAP").ok()
                                     .and_then(|v| v.parse().ok()).unwrap_or(2.5);
-                                let is_cell_hangable = matches!(ch,
-                                    '。' | '、' | '，' | '．' | '・'
-                                    | '）' | '」' | '』' | '】' | '〕' | '］' | '｝');
+                                // S720: ぶら下げ (hanging punctuation) applies to PERIODS/COMMAS
+                                // only (JIS X 4051) — NOT closing brackets. Word render-truth
+                                // tokyoshugyo p20 (イ): the para-final «）» at overflow 2.6pt is
+                                // OIDASHI'd (間」）to the next line), not hung; the old list let
+                                // cell_bura hang any closing bracket → the box lost a line.
+                                let is_cell_hangable = if std::env::var("OXI_S720_DISABLE").is_err() {
+                                    matches!(ch, '。' | '、' | '，' | '．' | '・')
+                                } else {
+                                    matches!(ch,
+                                        '。' | '、' | '，' | '．' | '・'
+                                        | '）' | '」' | '』' | '】' | '〕' | '］' | '｝')
+                                };
                                 let would_overflow = if cell_bura_active && is_cell_hangable
                                     && (line_x + buf_w) <= effective_wrap && !(current_line.is_empty() && buf.is_empty()) {
                                     false
@@ -14502,14 +14511,34 @@ impl LayoutEngine {
                                 // content shifts up ~1 line → page-bottom over-fit → −1 page flips.
                                 // Enable the S421 oikomi when the 約物 overflows past OXI_PROPCELL_BOUND
                                 // (default 5.0pt ≈ Word's measured ~5.9pt max line-end 約物 hang).
+                                let propcell_font = font_family.as_deref().map_or(false, |f|
+                                    f.contains("Ｐ明朝") || f.contains("Ｐゴシック")
+                                    || f.contains("PMincho") || f.contains("PGothic"));
                                 let propcell_oikomi = std::env::var("OXI_PROPCELL_DISABLE").is_err()
                                     && !matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
-                                    && font_family.as_deref().map_or(false, |f|
-                                        f.contains("Ｐ明朝") || f.contains("Ｐゴシック")
-                                        || f.contains("PMincho") || f.contains("PGothic"));
+                                    && propcell_font;
                                 let propcell_over = (line_x + buf_w + cw) - effective_wrap;
                                 let propcell_bound: f32 = std::env::var("OXI_PROPCELL_BOUND").ok()
                                     .and_then(|v| v.parse().ok()).unwrap_or(5.0);
+                                // S720 (2026-07-03, default ON, opt-out OXI_S720_DISABLE): extend
+                                // the S643 propcell oikomi to JUSTIFIED proportional-font cell
+                                // paragraphs. S643 excluded Justify to protect the MONOSPACE
+                                // justified 条文 boxes — but the FONT gate already excludes those;
+                                // the justified+proportional combination (the（参考）ガイドライン
+                                // box's (ア)(イ)(ウ) items, ＭＳ Ｐ明朝, jc=both inherited) was
+                                // left in force-fit land. Word render-truth p20 (イ): the para-final
+                                // «間」）» — Word OIDASHI's the trailing «）» at overflow 2.6pt
+                                // (kinsoku cascade pulls 間」 down → L3 = 間」）), while Oxi
+                                // force-fit all three → the box lost a line → 特に crept onto p20
+                                // (wi=434). Word's natural Ｐ明朝 advances = Oxi's (±0.06, measured
+                                // unstretched last lines); the 2.6 overflow is real. Bound default
+                                // 1.0 (< the measured 2.6 oidashi; OXI_S720_BOUND to sweep) — the
+                                // jc=LEFT arm keeps its 5.0.
+                                let s720_just_prop = std::env::var("OXI_S720_DISABLE").is_err()
+                                    && propcell_font
+                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                    && propcell_over > std::env::var("OXI_S720_BOUND").ok()
+                                        .and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
                                 if !is_space && would_overflow && !(current_line.is_empty() && buf.is_empty()) {
                                     // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
                                     if kinsoku::is_line_start_prohibited(ch) {
@@ -14548,6 +14577,7 @@ impl LayoutEngine {
                                                     && p_first_line_indent < 0.0
                                                     && para_has_tab)
                                                 || (propcell_oikomi && propcell_over > propcell_bound)
+                                                || s720_just_prop
                                                 || s713_cellmar_render) {
                                             let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
                                             let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
