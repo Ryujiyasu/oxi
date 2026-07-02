@@ -15406,15 +15406,21 @@ impl LayoutEngine {
                         // (no matching row-height growth) shifts content within fixed rows
                         // and regresses SSIM (31420 −0.1000, 15076/191cb5/order_09). The
                         // 賃金 box is single-cell + row_height > content_height (spans pages).
-                        // S710 (2026-07-01, default ON; opt-out/override via OXI_CELLBUMP,
-                        // set =0 to disable): bump value = the measured grid gap ~2.4pt
-                        // (gate-stable across [2.0,2.6]). Scoped to the 賃金-style multi-page
-                        // SPLITTING single-cell box; the tokumei FORM family is excluded
-                        // (row_height <= content_height) — see SCOPE comment below.
+                        // S710 (2026-07-01) — RETIRED to default 0.0 (2026-07-02, S719b):
+                        // the flat +2.4/block bump approximated ONE missing 12pt line —
+                        // the whitespace-only exact-240 spacer the overflow-loop straddle
+                        // re-base displaced above page_top (and S570's trim()-empty
+                        // collapse dropped at Step-1 splits). Ink-chain decomposition:
+                        // Word STACKS these cell lines contiguously (exact→default
+                        // transition gap ≈ 0.05 on BOTH 月給制 [Σexact=36≡0 mod 18] and
+                        // 日給制 [Σexact=48≡12] blocks — the "absolute-grid-snap the
+                        // default line" model and g(Σ mod pitch) are both falsified);
+                        // the per-block bump over-pushed p50 by +2.4×6 = wi=1603 (+1).
+                        // OXI_CELLBUMP=<pt> kept as an A/B probe knob.
                         if effective_line_rule == Some("exact") && row_line_pitch.is_some()
                             && row.cells.len() == 1 && row_height > content_height {
                             let bump = std::env::var("OXI_CELLBUMP").ok()
-                                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(2.4);
+                                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
                             if bump != 0.0 {
                                 let next_default = cell.blocks.get(block_pos + 1)
                                     .map_or(false, |nb| match nb {
@@ -16059,15 +16065,28 @@ impl LayoutEngine {
                 // 64.5 = a +16.5pt offset). Anchor to the first NON-EMPTY text and drop
                 // the leading empty-text lines above it. Opt-out OXI_S570_DISABLE.
                 let s570 = std::env::var("OXI_S570_DISABLE").is_err();
+                // S719 (2026-07-02, default ON, opt-out OXI_S719_DISABLE): the S570
+                // leading-line collapse applies to TRULY EMPTY paragraphs (no runs,
+                // element text == "") ONLY — a WHITESPACE-run line is CONTENT Word
+                // keeps at the continuation top. Render-truth tokyoshugyo p50/51:
+                // the 賃金 box split lands just before a whitespace-only exact-240
+                // spacer («␣␣＋U+3000×28», line=240 exact); Word renders it as the
+                // p51 continuation's first line (the 日給 numerator box at 111.55 =
+                // 99.55 + 12), while the trim()-empty test dropped it. harassbun's
+                // S570 case (a TRUE no-run empty, text == "") still collapses.
+                let s719_true_empty = std::env::var("OXI_S719_DISABLE").is_err();
+                let s719_collapsible = |text: &str| -> bool {
+                    if s719_true_empty { text.is_empty() } else { text.trim().is_empty() }
+                };
                 let min_overflow_text_y = next_page_elems.iter()
                     .filter(|e| matches!(&e.content,
-                        LayoutContent::Text { text, .. } if !s570 || !text.trim().is_empty()))
+                        LayoutContent::Text { text, .. } if !s570 || !s719_collapsible(text)))
                     .map(|e| e.y)
                     .fold(f32::INFINITY, f32::min);
                 if s570 && min_overflow_text_y.is_finite() {
                     next_page_elems.retain(|e| !matches!(&e.content,
                         LayoutContent::Text { text, .. }
-                            if text.trim().is_empty() && e.y < min_overflow_text_y - 0.1));
+                            if s719_collapsible(text) && e.y < min_overflow_text_y - 0.1));
                 }
                 if min_overflow_text_y.is_finite() {
                     let original_shift = split_y - page_top;
@@ -16408,6 +16427,44 @@ impl LayoutEngine {
                         }
                     }
 
+                    // S719b (2026-07-02, default ON, opt-out OXI_S719_DISABLE): the
+                    // overflow loop lacked Step-1's re-anchor — a text line STRADDLING
+                    // the split boundary (top < next_split, bottom > next_split) gets
+                    // re-based by `next_split − page_top` and lands ABOVE page_top
+                    // (into the margin, over the box border). tokyoshugyo p50/51: the
+                    // whitespace exact-240 spacer (top 747.5, bottom 759.5, split
+                    // 756.85) landed at y=90.15 above the border 99.5 → the +12 line
+                    // Word renders at the continuation top was lost → the S710 flat
+                    // +2.4/block bump compensated (now retired to 0). Port the Step-1
+                    // re-anchor for the straddle case only (min text y < page_top):
+                    // collapse leading TRUE-empty lines (S570/S719 semantics), then
+                    // shift Text elements down so the first content line sits at
+                    // page_top. Straddle-only keeps non-straddling rounds byte-
+                    // identical (the tuned corpus).
+                    if s719_true_empty {
+                        let min_ov_y = overflow.iter()
+                            .filter(|e| matches!(&e.content,
+                                LayoutContent::Text { text, .. } if !s570 || !s719_collapsible(text)))
+                            .map(|e| e.y)
+                            .fold(f32::INFINITY, f32::min);
+                        if min_ov_y.is_finite() && min_ov_y < page_top - 0.1 {
+                            if s570 {
+                                overflow.retain(|e| !matches!(&e.content,
+                                    LayoutContent::Text { text, .. }
+                                        if s719_collapsible(text) && e.y < min_ov_y - 0.1));
+                            }
+                            let adjust = page_top - min_ov_y;
+                            for e in overflow.iter_mut() {
+                                if matches!(e.content, LayoutContent::Text { .. }) {
+                                    e.y += adjust;
+                                }
+                            }
+                            if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                                eprintln!("[SPLIT-REANCHOR] min_ov_y={:.2} < page_top={:.2} -> shifted overflow text +{:.2}",
+                                    min_ov_y, page_top, adjust);
+                            }
+                        }
+                    }
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         let tp_txt = this_page.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
                         let ov_txt = overflow.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
