@@ -12452,7 +12452,14 @@ impl LayoutEngine {
                 // (mod.rs:9640+) is the operative budget for pagination, and it is a
                 // KNOWN doc-dependent discriminator problem (191cb uses cell_w-extend,
                 // d77a/29dc6e use cell_w−cellMar; "No simple toggle works"). See memory.
-                let inner_w = cell_w.max(0.0);
+                // OXI_CELLPAIR experiment (2026-07-02): universal SUBTRACT boundary
+                // (Word always wraps cell text at cell_w - cellMar; 24-config derivation)
+                // paired with the small-cap cell 約物 credit below. See char_budget_wall.
+                let inner_w = if std::env::var("OXI_CELLPAIR").is_ok() {
+                    (cell_w - _pad_l - _pad_r).max(0.0)
+                } else {
+                    cell_w.max(0.0)
+                };
                 let mut cell_content_h = pad_t;
                 // Session 79c: parallel emit-equivalent content_h for visual_row_h
                 let mut cell_content_h_visual = pad_t;
@@ -13701,7 +13708,8 @@ impl LayoutEngine {
                             (eff_cell_w - pad_l - pad_r).max(0.0)
                         } else if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
-                        } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested {
+                        } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested
+                            || std::env::var("OXI_CELLPAIR").is_ok() {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
@@ -14305,10 +14313,17 @@ impl LayoutEngine {
                                 // ぶら下げ; compute_compression/justify keeps half-em for the render. Scoped to
                                 // LEGACY (compat≤14) compressPunctuation justified cells (3a4f/model = compat15,
                                 // EXCLUDED → their compensating baseline preserved). See [[char_budget_wall]].
-                                let legacy_cell_break = (std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
+                                let legacy_cell_break = ((std::env::var("OXI_LEGACYCELL").ok().as_deref() == Some("1")
                                     || s585c_narrow)
                                     && self.compat_mode < 15 && self.compress_punctuation
-                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute))
+                                    // OXI_CELLPAIR: the small-cap 約物 credit for ANY justified
+                                    // compressPunctuation cell (compat-independent), paired with
+                                    // the universal subtract boundary. 191cb なお: needs 1.45pt
+                                    // over 3 、 (~0.48/、, well under the 2.5 cap).
+                                    || (std::env::var("OXI_CELLPAIR").is_ok()
+                                        && self.compress_punctuation
+                                        && matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
                                 let legacy_cell_cap: f32 = std::env::var("OXI_LEGACYCELL_CAP").ok()
                                     .and_then(|v| v.parse().ok()).unwrap_or(2.5);
                                 let is_cell_hangable = matches!(ch,
@@ -16761,7 +16776,20 @@ impl LayoutEngine {
                 // S466CELL 約物-oikomi (count mirror of the emit-site gate; see emit comment).
                 let s466_oikomi = std::env::var("OXI_S466CELL").is_ok() && self.compress_punctuation
                     && grid_char_cw_ratio.map_or(false, |r| r > 1.0);
-                let would_overflow = if ((jc_gate_active && run_has_neg_cs) || s466_oikomi) && would_overflow_natural {
+                // OXI_CELLPAIR estimate mirror of the render small-cap credit
+                // (legacy_cell_break branch): fit a would-wrap char iff overflow ≤
+                // Σ(2.5pt-cap per compressible mid-line 約物), for justified
+                // compressPunctuation cells.
+                let cellpair_est = std::env::var("OXI_CELLPAIR").is_ok()
+                    && self.compress_punctuation
+                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                let would_overflow = if cellpair_est && would_overflow_natural {
+                    let n_yak = current_line_chars.iter().chain(buf_chars.iter())
+                        .filter(|c| matches!(c.ch, '、' | '。' | '，' | '．'
+                            | '」' | '』' | '）' | '】' | '〕' | '・')).count() as f32;
+                    let budget = n_yak * 2.5 * (font_size / 10.5);
+                    ((line_x + buf_w + cw) - effective_wrap) > budget
+                } else if ((jc_gate_active && run_has_neg_cs) || s466_oikomi) && would_overflow_natural {
                     let ch_ctx = crate::layout::jc_both_compress::CharContext {
                         ch, natural_advance: cw, font_size,
                     };
