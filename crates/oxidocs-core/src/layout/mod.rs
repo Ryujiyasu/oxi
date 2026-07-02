@@ -12559,7 +12559,12 @@ impl LayoutEngine {
                 // (chars × font_size), not the wrapped-horizontal line count.
                 // Gated by OXI_VERT_WRITING env var.
                 let vert_writing_active = self.is_vert_writing_active(cell);
+                // S716: the post-nested-table stub paragraph contributes no height.
+                let s716_stub = self.nested_table_stub_pos(cell);
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
+                    if Some(block_pos) == s716_stub {
+                        continue;
+                    }
                     match block {
                         Block::Paragraph(para) => {
                             let (para_h, para_h_visual, para_h_center) = if vert_writing_active {
@@ -13186,6 +13191,9 @@ impl LayoutEngine {
                 // cell_autospace_effective.
                 let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
                 let last_para_pos = cell.blocks.iter().rposition(|b| matches!(b, Block::Paragraph(_)));
+                // S716: the post-nested-table stub paragraph is skipped entirely
+                // (no element, no content_h advance) — Word collapses it to ~0.
+                let s716_stub_render = self.nested_table_stub_pos(cell);
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
                 // S488: snapshot this block's content_h-relative top (aligns with
                 // block_pos via enumerate; pushed before the exact-clip break so
@@ -13195,6 +13203,9 @@ impl LayoutEngine {
                 // Clip content that overflows exact row height
                 if is_exact && content_h + pad_t >= row_height {
                     break;
+                }
+                if Some(block_pos) == s716_stub_render {
+                    continue;
                 }
                 match block {
                 Block::Table(nested) => {
@@ -16438,10 +16449,19 @@ impl LayoutEngine {
                         .fold(f32::NEG_INFINITY, f32::max);
                     let trailing_empty_count = row.cells.iter()
                         .map(|cell| {
-                            cell.blocks.iter().rev()
+                            let te = cell.blocks.iter().rev()
                                 .take_while(|b| matches!(b, Block::Paragraph(p)
                                     if p.runs.iter().all(|r| r.text.is_empty())))
-                                .count()
+                                .count();
+                            // S716: the post-nested-table stub para is collapsed
+                            // to ~0 by Word — exclude it from the split-continuation
+                            // formula (the stub is Some only when te == 1 and the
+                            // preceding block is a nested table).
+                            if self.nested_table_stub_pos(cell).is_some() {
+                                te.saturating_sub(1)
+                            } else {
+                                te
+                            }
                         })
                         .max()
                         .unwrap_or(0);
@@ -17022,6 +17042,34 @@ impl LayoutEngine {
         cell.text_direction.as_deref() == Some("tbRlV")
     }
 
+    /// S716 (2026-07-02, default ON, opt-out OXI_S716_DISABLE): Word renders
+    /// the REQUIRED empty paragraph after a nested table at ~ZERO height when
+    /// it is the outer cell's LAST block (the structural stub docx mandates
+    /// after a nested table). COM-proven on a self-authored repro (nt_repro:
+    /// V6 plain / V7 line=204 both COLLAPSE; V8 interior post-table empty and
+    /// V10 double-trailing empties render NORMALLY — the stub rule applies
+    /// only to the single cell-final paragraph directly after the table) +
+    /// the real tokyoshugyo 配偶者手当 box (Word PDF: outer table bottom
+    /// 227.06 = inner table bottom 226.34 + borders only; the stub para gets
+    /// a phantom COM Information(6) y below the actual bottom).
+    /// Corpus pattern scan (`</w:tbl>` + one empty `<w:p>` + `</w:tc>`):
+    /// exactly 3 docs — tokyoshugyo + the 3a4f/model template twins, 3 each.
+    /// Returns the stub's block index when the cell ends [.., Table, empty P].
+    fn nested_table_stub_pos(&self, cell: &TableCell) -> Option<usize> {
+        if std::env::var("OXI_S716_DISABLE").is_ok() {
+            return None;
+        }
+        let n = cell.blocks.len();
+        if n < 2 {
+            return None;
+        }
+        match (&cell.blocks[n - 2], &cell.blocks[n - 1]) {
+            (Block::Table(_), Block::Paragraph(p))
+                if p.runs.iter().all(|r| r.text.is_empty()) => Some(n - 1),
+            _ => None,
+        }
+    }
+
     fn vert_para_height(&self, para: &Paragraph) -> f32 {
         let mut h = 0.0_f32;
         for run in &para.runs {
@@ -17111,7 +17159,12 @@ impl LayoutEngine {
             // container-edge suppression. See cell_autospace_effective.
             let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
             let last_para_pos = cell.blocks.iter().rposition(|b| matches!(b, Block::Paragraph(_)));
+            // S716: the post-nested-table stub paragraph contributes no height.
+            let s716_stub_nat = self.nested_table_stub_pos(cell);
             for (block_pos, block) in cell.blocks.iter().enumerate() {
+                if Some(block_pos) == s716_stub_nat {
+                    continue;
+                }
                 match block {
                     Block::Paragraph(para) => {
                         let para_h = if vert_writing_active {
