@@ -13966,6 +13966,18 @@ impl LayoutEngine {
                         if s592_cell_space {
                             first_line_wrap_w = (first_line_wrap_w - s592_marker_reserve).max(0.0);
                         }
+                        // S718: TAB-suffix list body starts at the next defaultTabStop
+                        // when it precedes ind_l (see s718_list_tab_pull). Widen line 0's
+                        // budget by the pull; the emit shifts line 0's text left to match.
+                        let s718_pull = if !s592_cell_space {
+                            list_marker_info.as_ref()
+                                .map(|(_, _, w)| self.s718_list_tab_pull(
+                                    p_indent_left,
+                                    para.style.list_indent.unwrap_or(18.0),
+                                    *w))
+                                .unwrap_or(0.0)
+                        } else { 0.0 };
+                        first_line_wrap_w += s718_pull;
 
                         // Collect runs into lines with greedy wrapping
                         // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing, text_scale)
@@ -15155,7 +15167,10 @@ impl LayoutEngine {
                             } else { 0.0 };
                             let cell_text_y_off = cell_text_y_off + cell_glyph_dy + s664_dy - s698_reduce;
                             // S592: line-1 body starts AFTER the inline marker (no overlap).
-                            let mut rx = if s592_cell_space && line_idx == 0 { s592_marker_reserve } else { 0.0_f32 };
+                            // S718: line-1 body pulled left to the defaultTabStop position.
+                            let mut rx = if s592_cell_space && line_idx == 0 { s592_marker_reserve }
+                                else if line_idx == 0 { -s718_pull }
+                                else { 0.0_f32 };
                             // Emit list marker on the first line of the paragraph.
                             if line_idx == 0 {
                                 if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
@@ -17042,6 +17057,34 @@ impl LayoutEngine {
         cell.text_direction.as_deref() == Some("tbRlV")
     }
 
+    /// S718 (2026-07-02, default ON, opt-out OXI_S718_DISABLE): a TAB-suffix
+    /// list number's body text starts at the NEXT defaultTabStop multiple
+    /// after the marker end when that stop precedes the left indent — NOT at
+    /// the left indent. Word render-truth (tokyoshugyo p76, defaultTabStop
+    /// 840tw=42.0): ALL the ①-⑧ items (ind left=884tw=44.2 hanging=425)
+    /// place the body at 42.0 from the content edge (= the 840tw stop; the
+    /// marker ends at 33.5), 2.2pt LEFT of Oxi's ind_l placement — 8
+    /// consistent instances measured. Returns the pull-back (ind_l − stop)
+    /// used to widen line 0's wrap budget and shift its text left.
+    /// Scoped to the CELL paths (evidence = cell lists; the body list path
+    /// keeps its COM-confirmed "text starts at left" model as a follow-up).
+    fn s718_list_tab_pull(&self, indent_l: f32, list_indent: f32, marker_w: f32) -> f32 {
+        if std::env::var("OXI_S718_DISABLE").is_ok() {
+            return 0.0;
+        }
+        let dts = self.default_tab_stop;
+        if dts <= 1.0 {
+            return 0.0;
+        }
+        let marker_end = (indent_l - list_indent).max(0.0) + marker_w;
+        let stop = (marker_end / dts + 1e-4).floor() * dts + dts;
+        if stop + 0.05 < indent_l {
+            indent_l - stop
+        } else {
+            0.0
+        }
+    }
+
     /// S716 (2026-07-02, default ON, opt-out OXI_S716_DISABLE): Word renders
     /// the REQUIRED empty paragraph after a nested table at ~ZERO height when
     /// it is the outer cell's LAST block (the structural stub docx mandates
@@ -17402,6 +17445,22 @@ impl LayoutEngine {
                 } else {
                     (effective_width - first_indent).max(0.0)
                 };
+                // S718 estimate mirror: TAB-suffix list body starts at the next
+                // defaultTabStop before ind_l -> line 0 gains the pull-back
+                // (matches the render wrapper; marker width via the same
+                // fullwidth-marker rule as list_marker_info/S692).
+                let first_line_wrap_w = if est_list_consumes_hanging
+                    && !matches!(para.style.list_suff.as_deref(), Some("space")) {
+                    let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                    let mk_fs = self.resolve_font_size(&marker_style, &para.style);
+                    let mk_metrics = self.metrics_for(&marker_style, &para.style);
+                    let mk_w: f32 = para.style.list_marker.as_ref().map(|m| m.chars()
+                        .map(|c| if crate::font::is_fullwidth(c) { mk_fs }
+                             else { self.registry.char_width_pt_with_fallback(c, mk_fs, mk_metrics) })
+                        .sum()).unwrap_or(0.0);
+                    first_line_wrap_w + self.s718_list_tab_pull(
+                        indent_l, para.style.list_indent.unwrap_or(18.0), mk_w)
+                } else { first_line_wrap_w };
                 // S348 (2026-05-27): decouple cell-paragraph HEIGHT from
                 // visible WRAP. Per S347 analysis: Word uses natural (uncompressed)
                 // line count for cell height allocation, but compressed line count
