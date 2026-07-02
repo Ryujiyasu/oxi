@@ -1705,6 +1705,13 @@ pub struct LayoutEngine {
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
     compress_punctuation: bool,
+    /// CELLPAIR scope (2026-07-02): the document has a linesAndChars docGrid with
+    /// NEGATIVE charSpace (the 文字詰め form family: 191cb/b35123/atimesresume/
+    /// parttime). Within this scope the derived Word cell model applies: subtract
+    /// wrap boundary, light 約物 credit, real-line-count height, whitespace-run
+    /// exclusion, raw (unfloored) cell line heights. Opt-out OXI_CELLPAIR_DISABLE;
+    /// OXI_CELLPAIR=1 forces it unscoped (experiments). See char_budget_wall.
+    cellpair_neg_charspace: bool,
     /// w:doNotExpandShiftReturn: don't justify lines ending with soft break (Shift+Enter)
     do_not_expand_shift_return: bool,
     /// w:balanceSingleByteDoubleByteWidth: when set, character_spacing is doubled
@@ -1867,6 +1874,7 @@ impl LayoutEngine {
             compat_mode: 15,
             compat_mode_explicit: true,
             compress_punctuation: false,
+            cellpair_neg_charspace: false,
             do_not_expand_shift_return: false,
             balance_single_byte_double_byte_width: false,
             balloon_column_width: 0.0,
@@ -1939,6 +1947,10 @@ impl LayoutEngine {
             compat_mode: doc.compat_mode,
             compat_mode_explicit: doc.compat_mode_explicit,
             compress_punctuation: doc.compress_punctuation,
+            cellpair_neg_charspace: doc.pages.iter().any(|pg| {
+                pg.doc_grid_lines_and_chars
+                    && pg.grid_char_space_raw.map_or(false, |cs| cs < 0)
+            }),
             do_not_expand_shift_return: doc.do_not_expand_shift_return,
             balance_single_byte_double_byte_width: doc.balance_single_byte_double_byte_width,
             // R-05b: 293.8pt balloon column + 24pt buffer between body and
@@ -10591,6 +10603,24 @@ impl LayoutEngine {
         self.line_height_inner(font_size, line_spacing, line_spacing_rule, metrics, snap_to_grid, grid_pitch, false)
     }
 
+    /// CELLPAIR scope test: the derived Word cell model (subtract boundary,
+    /// light credit, real-count height, whitespace exclusion, raw line heights).
+    /// Default ON for neg-charSpace linesAndChars docs; OXI_CELLPAIR_DISABLE
+    /// opts out; OXI_CELLPAIR=1 forces unscoped (experiments).
+    fn cellpair_active(&self) -> bool {
+        // Held OPT-IN (2026-07-02): the scoped model is pagination-clean
+        // (full corpus 0 real flips) and b35123 SSIM +0.0041, but 191cb is
+        // -0.0044 (the raw-height +0.07/line overshoot; the true model is a
+        // CUMULATIVE 0.12pt FLOOR of the cell line stack - piece 5b, next).
+        // OXI_CELLPAIR=1 -> scoped (neg-charSpace linesAndChars docs);
+        // OXI_CELLPAIR=all -> unscoped (experiments). Default OFF.
+        match std::env::var("OXI_CELLPAIR").ok().as_deref() {
+            Some("all") => true,
+            Some(_) => self.cellpair_neg_charspace,
+            None => false,
+        }
+    }
+
     fn line_height_inner(
         &self,
         font_size: f32,
@@ -10642,7 +10672,15 @@ impl LayoutEngine {
                 // -0.1285, 11 regress incl. b35123 itself -0.0115. The real fix is
                 // an S629-style cumulative device-snap of the CELL line (so it
                 // oscillates 13.56/13.68 with Word), not a fixed floor↔round swap.
-                (raw * 8.0).floor() / 8.0
+                // OXI_CELLPAIR: use the RAW height (Word's ROW total = the raw sum,
+                // b35123 r4 = 17.5+17.5+11.67+11.67+3.5 = 62.4 EXACT; the flat floor
+                // under-counts −0.05..−0.25/line). The intra-row 0.12 device
+                // oscillation is a later cosmetic refinement.
+                if self.cellpair_active() {
+                    raw
+                } else {
+                    (raw * 8.0).floor() / 8.0
+                }
             } else {
                 gdi_height_pt
             }
@@ -10721,7 +10759,11 @@ impl LayoutEngine {
                             // 29dc6e p3 +0.0089; 4 tiny regress all <0.001 (de6e32/15076df/
                             // 1636d28/a1d6e4 < the 0.005 threshold). Cell-only (non-table docs
                             // byte-identical). Screenshot ground-truth (not COM-logical) drove it.
-                            if in_table_cell && std::env::var("OXI_S492Y_DISABLE").is_err() {
+                            // OXI_CELLPAIR: keep the RAW grid multiple (17.5) — Word's row
+                            // total = the raw sum; the S492y 0.75-floor (17.25) under-counts
+                            // −0.25/grid-line (the b35123 p1 monotone bias).
+                            if in_table_cell && std::env::var("OXI_S492Y_DISABLE").is_err()
+                                && !self.cellpair_active() {
                                 return ((snapped / 0.75).round() * 0.75).max(1.0);
                             }
                             return snapped;
@@ -12455,7 +12497,7 @@ impl LayoutEngine {
                 // OXI_CELLPAIR experiment (2026-07-02): universal SUBTRACT boundary
                 // (Word always wraps cell text at cell_w - cellMar; 24-config derivation)
                 // paired with the small-cap cell 約物 credit below. See char_budget_wall.
-                let inner_w = if std::env::var("OXI_CELLPAIR").is_ok() {
+                let inner_w = if self.cellpair_active() {
                     (cell_w - _pad_l - _pad_r).max(0.0)
                 } else {
                     cell_w.max(0.0)
@@ -13709,7 +13751,7 @@ impl LayoutEngine {
                         } else if s585_cellmar {
                             (cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested
-                            || std::env::var("OXI_CELLPAIR").is_ok() {
+                            || self.cellpair_active() {
                             (cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
@@ -14321,7 +14363,7 @@ impl LayoutEngine {
                                     // compressPunctuation cell (compat-independent), paired with
                                     // the universal subtract boundary. 191cb なお: needs 1.45pt
                                     // over 3 、 (~0.48/、, well under the 2.5 cap).
-                                    || (std::env::var("OXI_CELLPAIR").is_ok()
+                                    || (self.cellpair_active()
                                         && self.compress_punctuation
                                         && matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
                                 let legacy_cell_cap: f32 = std::env::var("OXI_LEGACYCELL_CAP").ok()
@@ -14681,7 +14723,7 @@ impl LayoutEngine {
                             // not lift the fs-9 line from 11.7 to 13.5 — Word row arithmetic
                             // 17.5+11.7+11.7+3.5 = 44.4 ≈ measured 44.6; with 13.5 it would be
                             // 46.4 = Oxi's wrong row). Word sizes the line by its INK runs.
-                            let cellpair_ws = std::env::var("OXI_CELLPAIR").is_ok();
+                            let cellpair_ws = self.cellpair_active();
                             let mut lh: f32 = line.iter()
                                 .filter(|(t, ..)| !cellpair_ws || !t.trim().is_empty())
                                 .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
@@ -16798,7 +16840,7 @@ impl LayoutEngine {
                 // (legacy_cell_break branch): fit a would-wrap char iff overflow ≤
                 // Σ(2.5pt-cap per compressible mid-line 約物), for justified
                 // compressPunctuation cells.
-                let cellpair_est = std::env::var("OXI_CELLPAIR").is_ok()
+                let cellpair_est = self.cellpair_active()
                     && self.compress_punctuation
                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
                 let would_overflow = if cellpair_est && would_overflow_natural {
@@ -17233,7 +17275,12 @@ impl LayoutEngine {
                 // count for height even when grid compresses visible wrap. Env-var
                 // preserved as opt-OUT.
                 let s348_natural_height = std::env::var("OXI_S348_NATURAL_HEIGHT").map(|v| v != "0" && v != "false").unwrap_or(true);
-                let (gcp_for_count, gcr_for_count) = if s348_natural_height && !para.style.snap_to_grid {
+                // CELLPAIR: the estimate must count REAL lines (grid pitch =
+                // fs + charSpace/4096) -- S348's natural count made 191cb's fs-11
+                // snapToGrid=0 label estimate 3 lines vs the render's 2 (row
+                // +7.7pt, masked at the extend boundary, exposed by subtract).
+                let (gcp_for_count, gcr_for_count) = if s348_natural_height && !para.style.snap_to_grid
+                    && !self.cellpair_active() {
                     (None, None)
                 } else {
                     (grid_char_pitch, grid_char_cw_ratio)
@@ -17255,7 +17302,7 @@ impl LayoutEngine {
             let mut max_line_height: f32 = 0.0;
             // OXI_CELLPAIR: whitespace-only runs do not contribute to the line
             // height (mirror of the render-side rule; b35123 note sz-21 「　」).
-            let cellpair_ws_est = std::env::var("OXI_CELLPAIR").is_ok()
+            let cellpair_ws_est = self.cellpair_active()
                 && para.runs.iter().any(|r| !r.text.trim().is_empty());
             for run in &para.runs {
                 if cellpair_ws_est && run.text.trim().is_empty() { continue; }
