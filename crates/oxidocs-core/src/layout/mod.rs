@@ -10608,16 +10608,16 @@ impl LayoutEngine {
     /// Default ON for neg-charSpace linesAndChars docs; OXI_CELLPAIR_DISABLE
     /// opts out; OXI_CELLPAIR=1 forces unscoped (experiments).
     fn cellpair_active(&self) -> bool {
-        // Held OPT-IN (2026-07-02): the scoped model is pagination-clean
-        // (full corpus 0 real flips) and b35123 SSIM +0.0041, but 191cb is
-        // -0.0044 (the raw-height +0.07/line overshoot; the true model is a
-        // CUMULATIVE 0.12pt FLOOR of the cell line stack - piece 5b, next).
-        // OXI_CELLPAIR=1 -> scoped (neg-charSpace linesAndChars docs);
-        // OXI_CELLPAIR=all -> unscoped (experiments). Default OFF.
+        // DEFAULT ON scoped (2026-07-02): with the trHeight-gated S661 the model
+        // is SSIM net +0.1439 (b35123 0.7442/0.7953 -> 0.8198/0.8679, the
+        // form-family floor lift; 191cb -0.0044 = the one small trade, the
+        // S661/S682b ship precedent). Pagination: full corpus 0 real flips.
+        // Opt-out OXI_CELLPAIR_DISABLE; OXI_CELLPAIR=all forces unscoped.
         match std::env::var("OXI_CELLPAIR").ok().as_deref() {
             Some("all") => true,
             Some(_) => self.cellpair_neg_charspace,
-            None => false,
+            None => self.cellpair_neg_charspace
+                && std::env::var("OXI_CELLPAIR_DISABLE").is_err(),
         }
     }
 
@@ -16479,7 +16479,23 @@ impl LayoutEngine {
                 // whole tokumei/order/index form family), 6 over-fire regress (a47e/2ea81a/
                 // bd90b00 ~−0.024 — sparse rows that don't drift in Word; the residual gate-
                 // refinement). lib 142/0/6.
+                // CELLPAIR: the raw heights make rows content-correct; the S661
+                // sparse +0.5 was calibrated for the FLOORED heights and double-counts
+                // under raw (b35123 r3/r7/r10 inset 1.0, +0.5..+0.7/row; with S661
+                // excluded all insets = 0.5 and rows land on Word within +-0.3).
+                // Within the CELLPAIR scope, raise the sparse margin 0.4 -> 1.5: the
+                // raw-height estimate skews row_height ~+0.5 over the visual content
+                // (b35123 content-bound rows falsely read "sparse" and double-counted
+                // +0.5), while GENUINE trHeight-bound sparse rows (191cb labels,
+                // trHeight - content ~6pt) still qualify and keep Word's +0.5.
+                // (margin experiment superseded): within the CELLPAIR scope, S661
+                // requires an EXPLICIT trHeight (row.height) -- its own derivation
+                // ("sparse-trHeight rows") -- so b35123's content-bound checkbox rows
+                // (trPr=None; the raw-estimate skew ~+0.5 falsely read "sparse") are
+                // excluded while 191cb's genuine trHeight-bound labels (trHeight=724)
+                // keep Word's +0.5.
                 let s661_sparse_trheight = std::env::var("OXI_S661_DISABLE").is_err()
+                    && (!self.cellpair_active() || row.height.is_some())
                     && table_grid_pitch.map(|p|
                         visual_row_h > 0.1 && visual_row_h + 0.4 < row_height && row_height < p * 3.0
                     ).unwrap_or(false);
