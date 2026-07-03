@@ -2823,7 +2823,24 @@ impl LayoutEngine {
         // break the reservation resets. The body's effective overflow check uses
         // (content_height - footnote_reserved_current_page).
         // Helper to estimate one footnote body height by id.
-        let estimate_footnote_h = |id: u32| -> f32 {
+        // S727 (2026-07-03): footnote-height estimates pass the TYPED grid pitch
+        // so grid-snapping footnote paragraphs reserve their real (snapped) line
+        // height. Word render-truth (probefn, type=lines 360): footnote lines
+        // snap to the 18pt grid (gaps 18.0 at 9pt font) and Oxi's RENDER already
+        // snaps (FN_PLACE heights=18.0) — but the estimate passed gp=None →
+        // natural ~11.3/line → the body under-reserved ~6pt/note → packed +2
+        // body lines/page → probefn {-1:8}. The DISCRIMINATOR rides
+        // estimate_para_height's own `para.style.snap_to_grid` gate: real docs'
+        // footnote-text style sets snapToGrid=0 (b837 style a8) → natural,
+        // byte-identical; style-less footnote paras (snap default true) snap.
+        // No-type grids don't snap (S609/S571 family) → keep None.
+        let fn_est_gp = if std::env::var("OXI_S727_DISABLE").is_err()
+            && !page.doc_grid_no_type { page.grid_line_pitch } else { None };
+        if std::env::var("OXI_FN_PROBE").is_ok() {
+            eprintln!("[FN_EST] fn_est_gp={:?} pitch={:?} no_type={}",
+                fn_est_gp, page.grid_line_pitch, page.doc_grid_no_type);
+        }
+        let estimate_footnote_h = move |id: u32| -> f32 {
             if let Some(note) = page.footnotes.iter().find(|n| n.number == id) {
                 let cw = page.size.width - page.margin.left - page.margin.right;
                 let mut h: f32 = 0.0;
@@ -2847,7 +2864,41 @@ impl LayoutEngine {
                                     first_run.text = format!("{}{}", prefix, first_run.text);
                                 }
                             }
-                            let ph = self.estimate_para_height(&p2, cw, None, None, false, None, None);
+                            // S727: render-lh dispatch — a SNAPPING footnote para
+                            // estimates at the render line height (grid-snapped,
+                            // line_height_inner) so the reservation matches the
+                            // emitted 18pt/line; non-snapping (footnote-text style
+                            // snapToGrid=0, e.g. b837 a8) keeps the calibrated
+                            // word_line_height_table_cell estimate byte-identically.
+                            // S727: a SNAPPING footnote paragraph in a typed grid
+                            // occupies whole grid cells per line (the footnote body
+                            // renders through the BODY line-height path, which
+                            // grid-snaps: probefn render = 18.0/line at 9pt; Word
+                            // render-truth gaps = 18.0). The natural estimate
+                            // under-reserved ~6pt/line → the body over-packed.
+                            // lines = natural_h / per-line natural (uniform-font
+                            // notes); cells/line = ceil(natural line / pitch).
+                            // Non-snapping footnote paras (footnote-text style
+                            // snapToGrid=0, e.g. b837 a8) keep the calibrated
+                            // natural estimate byte-identically.
+                            let ph_nat = self.estimate_para_height(&p2, cw, None, None, false, None, None);
+                            let ph = if let (Some(pitch), true) = (fn_est_gp, p2.style.snap_to_grid) {
+                                let fs = self.resolve_font_size(
+                                    p2.runs.iter().find(|r| !r.text.trim().is_empty())
+                                        .map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                                    &p2.style);
+                                let m = self.metrics_for(
+                                    p2.runs.iter().find(|r| !r.text.trim().is_empty())
+                                        .map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                                    &p2.style);
+                                let per_line = m.word_line_height_table_cell(fs).max(1.0);
+                                let lines = (ph_nat / per_line).round().max(1.0);
+                                let cells = (m.word_line_height_no_grid(fs) / pitch).ceil().max(1.0);
+                                lines * cells * pitch
+                            } else { ph_nat };
+                            if std::env::var("OXI_FN_PROBE").is_ok() {
+                                eprintln!("[FN_EST] id={} snap={} ph_nat={:.2} ph={:.2}", id, p2.style.snap_to_grid, ph_nat, ph);
+                            }
                             // 2026-05-05 Track A continuation: removed +2.0pt
                             // per-fn marker overhead. Empirically (b837 spill data
                             // 25 fns) Oxi's est = Word actual + exactly 2.0pt for
@@ -2857,7 +2908,17 @@ impl LayoutEngine {
                             h += ph;
                             first_para = false;
                         } else {
-                            h += self.estimate_para_height(p, cw, None, None, false, None, None);
+                            let ph_nat = self.estimate_para_height(p, cw, None, None, false, None, None);
+                            h += if let (Some(pitch), true) = (fn_est_gp, p.style.snap_to_grid) {
+                                let rs = p.runs.iter().find(|r| !r.text.trim().is_empty())
+                                    .map(|r| &r.style).cloned().unwrap_or_default();
+                                let fs = self.resolve_font_size(&rs, &p.style);
+                                let m = self.metrics_for(&rs, &p.style);
+                                let per_line = m.word_line_height_table_cell(fs).max(1.0);
+                                let lines = (ph_nat / per_line).round().max(1.0);
+                                let cells = (m.word_line_height_no_grid(fs) / pitch).ceil().max(1.0);
+                                lines * cells * pitch
+                            } else { ph_nat };
                         }
                     }
                 }
