@@ -2785,10 +2785,34 @@ impl LayoutEngine {
                     footer_h += h;
                 }
             }
+            if std::env::var("OXI_DBG_FTR").is_ok() {
+                eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} reserved={:.1} bottom_margin={:.1}",
+                    page.footer.len(), footer_dist, footer_h, (footer_dist + footer_h).max(page.margin.bottom), page.margin.bottom);
+            }
             (footer_dist + footer_h).max(page.margin.bottom)
         } else {
+            if std::env::var("OXI_DBG_FTR").is_ok() {
+                eprintln!("[FTR] page.footer EMPTY -> reserved=bottom_margin {:.1}", page.margin.bottom);
+            }
             page.margin.bottom
         };
+        // S726: the body bottom is FOOTER-CONSTRAINED when the footer eats past
+        // the bottom margin — the page-bottom leniency must not overhang into
+        // footer TEXT (see the layout_paragraph param doc). ★TEXT-BEARING
+        // footers only: an EMPTY-paragraph footer has no ink, so the leniency
+        // overhang lands in blank space exactly like an empty margin — Word
+        // grants it (ed025: default footer = 2 empty paras, reserved 81.4 >
+        // margin 56.7; the blanket flag regressed its word_png SSIM −0.187 =
+        // Word keeps those page-bottom lines; scoping to text-bearing footers
+        // restores byte-identity). The probe evidence (Word breaks at the
+        // boundary) is a 6-TEXT-line footer — ink collision is the physical
+        // discriminator, not the reservation amount.
+        let footer_has_text = page.footer.iter().any(|b| matches!(b, Block::Paragraph(p)
+            if p.style.frame_pr.is_none()
+                && p.runs.iter().any(|r| !r.text.trim().is_empty())));
+        let footer_tight = footer_reserved > page.margin.bottom + 0.05
+            && footer_has_text
+            && std::env::var("OXI_S726_DISABLE").is_err();
         let content_height = page.size.height - start_y - footer_reserved;
         // Round 29 (2026-04-08): per-page dynamic footnote reservation.
         // Footnotes are reserved at the bottom of the page where their reference
@@ -3628,6 +3652,7 @@ impl LayoutEngine {
                         current_column,
                         &col_x_positions,
                         false, // S691: body context
+                        footer_tight, // S726
                     );
                     prev_space_after = sa;
                     // S637: layout_paragraph may have advanced the column (flowing
@@ -4284,6 +4309,7 @@ impl LayoutEngine {
                             &empty_fn_h_hdr,
                             1, 0, &[],
                             true, // S691: header context
+                            false, // S726: header bottom differs
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -4316,6 +4342,7 @@ impl LayoutEngine {
                             &empty_fn_h_ftr,
                             1, 0, &[],
                             true, // S691: footer context
+                            false, // S726: footer bottom differs
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -4633,6 +4660,7 @@ impl LayoutEngine {
                                         &empty_fn_h_note,
                                         1, 0, &[],
                                         false, // S691: footnote context
+                                        false, // S726
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -4925,6 +4953,7 @@ impl LayoutEngine {
                         &empty_fn_h_txbx,
                         1, 0, &[],
                         false, // S691: textbox context (in_textbox)
+                        false, // S726
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -5217,6 +5246,17 @@ impl LayoutEngine {
         // raw); the body/textbox/cell large-CJK placement is already calibrated
         // (S455/S457/S662) and must NOT get the extra shift.
         is_header_footer: bool,
+        // S726 (2026-07-03): the BODY's page bottom is FOOTER-CONSTRAINED —
+        // footer_reserved (footer_distance + footer content height) exceeds the
+        // bottom margin, so the space below the body bottom is occupied by
+        // FOOTER TEXT, not empty margin. The page-bottom ink/natural leniency
+        // (Day-33/S576 family) lets a line's line-spacing LEADING overhang the
+        // bottom — legitimate over an empty margin, but Word does NOT let it
+        // overhang into a footer area (probeftrtall: Word breaks the 703.4-COM
+        // line whose full box crosses the footer-shrunk bottom 716.6 by 2.4pt
+        // while ink fits by 2.0 — full-box at footer boundaries). false for
+        // header/footer/footnote/textbox contexts (their bottoms differ).
+        footer_tight: bool,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -6292,7 +6332,10 @@ impl LayoutEngine {
             // push-vs-keep" wall (S651). Needs Word's exact per-line ink/device-snap, not
             // a continuation-line gate. See [[tokyoshugyo_wrap_not_cellheight]].
             let break_threshold = if s548b_exact_full || s562b_empty_full
-                || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head {
+                || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head
+                // S726: footer-constrained bottom → full box (the leniency's
+                // leading overhang would land inside footer text; Word breaks).
+                || footer_tight {
                 effective_lh
             } else {
                 // S688 PROBE/SCAFFOLD (2026-06-28, default 0 = byte-identical, opt-in
