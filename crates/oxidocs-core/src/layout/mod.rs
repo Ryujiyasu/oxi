@@ -3510,8 +3510,21 @@ impl LayoutEngine {
                         }
                     }
 
-                    // Multi-column pre-check: advance column if paragraph won't fit
-                    if num_columns > 1 {
+                    // Multi-column pre-check: advance column if paragraph won't fit.
+                    // S723 (2026-07-03): DISABLED by default. This pre-S637 leftover
+                    // whole-MOVED any paragraph that didn't fit the remaining column
+                    // space to the next column — but Word line-SPLITS a normal
+                    // paragraph across a column boundary (newspaper flow), which
+                    // S637's per-line flow inside layout_paragraph already does.
+                    // keepLines paragraphs (the ones Word DOES keep together across a
+                    // column boundary) are pre-moved by the keepLines block above
+                    // (3374). Firing this on NORMAL paragraphs made each column hold
+                    // ~1 fewer paragraph → every paragraph cascaded one column forward
+                    // → +1 page delta at each page crossing (probe2col +15, probe3col
+                    // +21). Retained behind OXI_S723_DISABLE for A/B. Only kyotei /
+                    // albaluna have num_columns>1; the single-column corpus is
+                    // byte-identical (num_columns==1 → block never runs).
+                    if num_columns > 1 && std::env::var("OXI_S723_DISABLE").is_ok() {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                         let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
