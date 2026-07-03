@@ -2975,7 +2975,11 @@ impl LayoutEngine {
         // merge sections with DIFFERENT column counts) can be recomputed at
         // each section boundary inside the block loop below.
         let margin_left = page.margin.left;
-        let compute_cols = |cols: &Option<crate::ir::ColumnLayout>| -> (usize, Vec<f32>, Vec<f32>) {
+        // S729: compute_cols takes the run's HORIZONTAL margins (ml + text
+        // width) so per-section margin runs (merged continuous sections with
+        // different left/right margins) produce the correct geometry. The
+        // page-level call passes the page margins — byte-identical.
+        let compute_cols = |cols: &Option<crate::ir::ColumnLayout>, ml: f32, tcw: f32| -> (usize, Vec<f32>, Vec<f32>) {
             let num = cols.as_ref().map(|c| c.num.max(1) as usize).unwrap_or(1);
             let mut xs: Vec<f32> = Vec::with_capacity(num);
             let mut ws: Vec<f32> = Vec::with_capacity(num);
@@ -2983,7 +2987,7 @@ impl LayoutEngine {
                 if let Some(ref c) = cols {
                     if !c.columns.is_empty() {
                         // Unequal width columns: use explicit definitions
-                        let mut x = margin_left;
+                        let mut x = ml;
                         for col_def in &c.columns {
                             xs.push(x);
                             ws.push(col_def.width);
@@ -2992,8 +2996,8 @@ impl LayoutEngine {
                     } else {
                         // Equal width columns
                         let spacing = c.space.unwrap_or(36.0); // default 36pt
-                        let col_w = (total_content_width - spacing * (num - 1) as f32) / num as f32;
-                        let mut x = margin_left;
+                        let col_w = (tcw - spacing * (num - 1) as f32) / num as f32;
+                        let mut x = ml;
                         for _ in 0..num {
                             xs.push(x);
                             ws.push(col_w);
@@ -3003,8 +3007,8 @@ impl LayoutEngine {
                 }
             }
             if xs.is_empty() {
-                xs.push(margin_left);
-                ws.push(total_content_width);
+                xs.push(ml);
+                ws.push(tcw);
             }
             // Bidi (RTL) section: columns flow RIGHT-to-LEFT, so the first
             // reading column (fill order index 0) is the RIGHTMOST one.
@@ -3021,7 +3025,8 @@ impl LayoutEngine {
             (xs.len(), xs, ws)
         };
 
-        let (mut num_columns, mut col_x_positions, mut col_widths) = compute_cols(&page.columns);
+        let (mut num_columns, mut col_x_positions, mut col_widths) =
+            compute_cols(&page.columns, margin_left, total_content_width);
 
         // S560: per-section column runs. Switch per-section ONLY when the
         // merged page has HETEROGENEOUS column counts (e.g. kyotei36spec: a
@@ -3030,17 +3035,40 @@ impl LayoutEngine {
         // num=1), `heterogeneous` is false and the loop never switches → the
         // pre-S560 single-layout path runs byte-identically.
         let col_runs: Vec<(usize, usize, Vec<f32>, Vec<f32>)> = page.column_runs.iter()
-            .map(|(start, cols)| {
-                let (n, xs, ws) = compute_cols(cols);
+            .enumerate()
+            .map(|(i, (start, cols))| {
+                // S729: use the run's own margins when a parallel margin run
+                // exists (index-aligned with column_runs — both are seeded and
+                // pushed together in the parser); fall back to page margins.
+                let (ml, mr) = page.margin_runs.get(i)
+                    .filter(|(ms, _, _)| ms == start)
+                    .map(|(_, l, r)| (*l, *r))
+                    .unwrap_or((page.margin.left, page.margin.right));
+                let tcw = page.size.width - ml - mr;
+                let (n, xs, ws) = compute_cols(cols, ml, tcw);
                 (*start, n, xs, ws)
             })
             .collect();
         let heterogeneous = {
-            let mut it = col_runs.iter().map(|r| r.1);
-            match it.next() {
-                Some(first) => it.any(|n| n != first),
-                None => false,
-            }
+            let col_het = {
+                let mut it = col_runs.iter().map(|r| r.1);
+                match it.next() {
+                    Some(first) => it.any(|n| n != first),
+                    None => false,
+                }
+            };
+            // S729: margin heterogeneity also demands per-run switching (a
+            // continuous section with different left/right margins must lay
+            // out at its own text width — probexmargins). Uniform-margin
+            // corpora keep col_het semantics byte-identically.
+            let mar_het = std::env::var("OXI_S729_DISABLE").is_err() && {
+                let mut it = page.margin_runs.iter().map(|(_, l, r)| (*l, *r));
+                match it.next() {
+                    Some((l0, r0)) => it.any(|(l, r)| (l - l0).abs() > 0.01 || (r - r0).abs() > 0.01),
+                    None => false,
+                }
+            };
+            col_het || mar_het
         };
         if heterogeneous {
             // Base the page on the FIRST run's column layout; subsequent runs
@@ -3187,7 +3215,12 @@ impl LayoutEngine {
                 let run_cols = col_runs[active_run_idx].1;
                 // Only re-flow when the column COUNT changes; consecutive
                 // same-count sections keep flowing in the current column.
-                if run_cols != num_columns {
+                // S729: ALSO re-flow when the GEOMETRY changes (same column
+                // count but different x/width — a continuous section with
+                // different left/right margins, probexmargins).
+                let run_geom_differs = col_runs[active_run_idx].2 != col_x_positions
+                    || col_runs[active_run_idx].3 != col_widths;
+                if run_cols != num_columns || run_geom_differs {
                     // New section continues below ALL columns of the section
                     // it succeeds (continuous flow, same page if room).
                     section_max_y = section_max_y.max(cursor.cursor_y);
@@ -5330,6 +5363,17 @@ impl LayoutEngine {
         if std::env::var("OXI_S673V_DISABLE").is_err()
             && para.runs.iter().all(|r| r.text.is_empty())
             && para.style.ppr_rpr.as_ref().map_or(false, |r| r.vanish)
+        {
+            return (Vec::new(), prev_space_after, start_column);
+        }
+        // S730 (2026-07-03): an EMPTY paragraph that carries a CONTINUOUS
+        // section-break mark renders at ZERO height in Word (probexmargins
+        // COM: the break para's y equals the previous para's last-line row;
+        // Oxi's normal empty-para line drifted everything below +18pt).
+        // Same skip shape as S673v. Opt-out OXI_S730_DISABLE.
+        if std::env::var("OXI_S730_DISABLE").is_err()
+            && para.style.continuous_section_break
+            && para.runs.iter().all(|r| r.text.is_empty())
         {
             return (Vec::new(), prev_space_after, start_column);
         }

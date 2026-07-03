@@ -137,6 +137,15 @@ pub struct Page {
     /// whole page (single-section / non-parser constructions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub column_runs: Vec<(usize, Option<ColumnLayout>)>,
+    /// S729 (2026-07-03): per-section HORIZONTAL margins for merged
+    /// continuous sections — (block_start_index, margin_left, margin_right).
+    /// The S560 merge kept only the first section's margins, so a continuous
+    /// section with different left/right margins rendered at the wrong text
+    /// width (probexmargins {-1:6}; the documented kyotei S560 residual).
+    /// Parallel to `column_runs` (the same parser sites populate both).
+    /// Empty = uniform margins (single-section / non-parser constructions).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub margin_runs: Vec<(usize, f32, f32)>,
     /// Page number format (e.g. "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number_format: Option<String>,
@@ -1020,6 +1029,14 @@ impl Default for Alignment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyle {
+    /// S730 (2026-07-03): this paragraph carries the sectPr of a section
+    /// merged as CONTINUOUS into the same IR Page. Word renders the empty
+    /// continuous section-break paragraph at ZERO height (probexmargins
+    /// Word COM: the break para's Info(6) y equals the previous paragraph's
+    /// last-line row — no new line); Oxi gave it a normal empty-para line
+    /// (+18pt drift for everything below the break). Layout skips it.
+    #[serde(default)]
+    pub continuous_section_break: bool,
     pub heading_level: Option<u8>,
     /// Outline level from w:outlineLvl (0-8, for TOC generation, NOT for layout)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1200,6 +1217,7 @@ fn default_true() -> bool { true }
 impl Default for ParagraphStyle {
     fn default() -> Self {
         Self {
+            continuous_section_break: false,
             heading_level: None,
             outline_level: None,
             line_spacing: None,

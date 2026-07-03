@@ -195,6 +195,16 @@ impl OoxmlParser {
                 // mis-laying-out earlier sections (kyotei36spec: a 1-col form
                 // table rendered in the trailing 2-col 記載心得 context).
                 last.column_runs.push((last.blocks.len(), section.properties.columns.clone()));
+                // S729: parallel per-section margin run (left, right).
+                last.margin_runs.push((last.blocks.len(),
+                    section.properties.margin.left, section.properties.margin.right));
+                // S730: the paragraph that ENDED the previous section (it
+                // carries the in-body sectPr and is the last block merged so
+                // far) is a CONTINUOUS section-break mark — Word renders it
+                // at zero height when empty. Mark it for the layout skip.
+                if let Some(crate::ir::Block::Paragraph(bp)) = last.blocks.last_mut() {
+                    bp.style.continuous_section_break = true;
+                }
                 last.blocks.extend(section.blocks);
                 last.floating_images.extend(section.floating_images);
                 last.text_boxes.extend(section.text_boxes);
@@ -231,6 +241,9 @@ impl OoxmlParser {
                 // section's column layout at block 0. Continuous sections merged
                 // later append their own (block_start, columns) entries.
                 let column_runs = vec![(0usize, section.properties.columns.clone())];
+                // S729: seed the margin-run list with the first section's margins.
+                let margin_runs = vec![(0usize,
+                    section.properties.margin.left, section.properties.margin.right)];
                 pages.push(Page {
                     blocks: section.blocks,
                     size: section.properties.page_size,
@@ -250,6 +263,7 @@ impl OoxmlParser {
                     shapes: section.shapes,
                     columns: section.properties.columns,
                     column_runs,
+                    margin_runs,
                     header_distance: section.properties.header_distance,
                     footer_distance: section.properties.footer_distance,
                     page_number_format: section.properties.page_number_format,
