@@ -146,6 +146,12 @@ pub struct Page {
     /// Empty = uniform margins (single-section / non-parser constructions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub margin_runs: Vec<(usize, f32, f32)>,
+    /// S732 (2026-07-03): how this section STARTS relative to the previous
+    /// one — "evenPage"/"oddPage" force the section onto the next even/odd
+    /// physical page, inserting a BLANK page when the parity mismatches
+    /// (probexeo2: Word leaves pages 3 and 6 blank). None/nextPage = normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_start_type: Option<String>,
     /// Page number format (e.g. "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number_format: Option<String>,

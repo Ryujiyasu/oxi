@@ -264,6 +264,7 @@ impl OoxmlParser {
                     columns: section.properties.columns,
                     column_runs,
                     margin_runs,
+                    section_start_type: section.properties.section_type.clone(),
                     header_distance: section.properties.header_distance,
                     footer_distance: section.properties.footer_distance,
                     page_number_format: section.properties.page_number_format,

@@ -2025,6 +2025,29 @@ impl LayoutEngine {
         let mut layout_to_ir_page: Vec<usize> = Vec::new();
 
         for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
+            // S732 (2026-07-03): an evenPage/oddPage section starts on the
+            // next physical page of that parity — Word inserts a BLANK page
+            // when the parity mismatches (probexeo2: content sections at
+            // p1-2 / p4-5 / p7 with pages 3 and 6 blank; Oxi ignored the
+            // type → everything landed 2 pages early, score 0.36). Insert an
+            // empty LayoutPage carrying the new section's geometry. Corpus
+            // has ZERO evenPage/oddPage sections (scan) → byte-identical.
+            if std::env::var("OXI_S732_DISABLE").is_err() && !pages.is_empty() {
+                let next_no = pages.len() + 1; // 1-based physical page number
+                let need_blank = match page.section_start_type.as_deref() {
+                    Some("evenPage") => next_no % 2 == 1,
+                    Some("oddPage") => next_no % 2 == 0,
+                    _ => false,
+                };
+                if need_blank {
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: Vec::new(),
+                    });
+                    layout_to_ir_page.push(ir_idx);
+                }
+            }
             let laid_out = self.layout_page(page);
             for _ in &laid_out {
                 layout_to_ir_page.push(ir_idx);
