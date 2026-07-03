@@ -2653,6 +2653,7 @@ impl LayoutEngine {
         // start_y = max(margin.top, header_bottom)
         let header_bottom = if !page.header.is_empty() {
             let header_y = page.header_distance.unwrap_or(36.0);
+            let hdr_cw = page.size.width - page.margin.left - page.margin.right;
             let mut hdr_h = 0.0_f32;
             for block in &page.header {
                 if let Block::Paragraph(para) = block {
@@ -2665,6 +2666,49 @@ impl LayoutEngine {
                     let lh = metrics.word_line_height(fs, 96.0);
                     hdr_h += lh;
                     hdr_h += para.style.space_after.unwrap_or(0.0);
+                    // S731 (2026-07-03): a WRAPPING header paragraph pushes the
+                    // body top by its FULL wrapped height — the 1-line-per-para
+                    // model under-counted a 3-line header para by 2 lines, so
+                    // the body started ~2 lines too high (probexhdrwrap {-1:10};
+                    // Word body top 113.3 vs margin-top 70.9). Add the EXTRA
+                    // lines beyond the first: line count = width-aware estimate
+                    // ÷ huge-width 1-line estimate (the S635 technique). The
+                    // single-line height stays the ORIGINAL word_line_height
+                    // computation (no sub-pt shift); corpus headers have no
+                    // wrapping paras (>44ch scan: 0) → extra=0 → byte-identical.
+                    if std::env::var("OXI_S731_DISABLE").is_err() {
+                        let est = self.estimate_para_height(para, hdr_cw, None, None, false, None, None);
+                        let one = self.estimate_para_height(para, 1.0e6, None, None, false, None, None);
+                        if one > 0.1 {
+                            let extra_lines = ((est / one).round() as i32 - 1).max(0);
+                            hdr_h += extra_lines as f32 * lh;
+                        }
+                    }
+                } else if let Block::Table(t) = block {
+                    // S731: a TABLE in the header contributed ZERO height (only
+                    // Block::Paragraph was handled) — probezhdrtbl {-1:5}. Sum
+                    // the rows' natural heights (trHeight floor per row).
+                    // Corpus-safe: 0 corpus docs have tables in headers.
+                    if std::env::var("OXI_S731_DISABLE").is_err() {
+                        let col_widths = self.resolve_table_col_widths(t, hdr_cw);
+                        let dp = t.style.default_cell_margins.as_ref();
+                        let (pl, pr, pt, pb) = (
+                            dp.and_then(|m| m.left).unwrap_or(5.4),
+                            dp.and_then(|m| m.right).unwrap_or(5.4),
+                            dp.and_then(|m| m.top).unwrap_or(0.0),
+                            dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                        );
+                        for row in &t.rows {
+                            let nat = self.estimate_table_row_natural_h(
+                                row, &col_widths, pl, pr, pt, pb, t,
+                                page.grid_line_pitch, page.grid_char_pitch, None);
+                            let h = row.height.map(|th| match row.height_rule.as_deref() {
+                                Some("exact") => th,
+                                _ => th.max(nat),
+                            }).unwrap_or(nat);
+                            hdr_h += h;
+                        }
+                    }
                 }
             }
             header_y + hdr_h
