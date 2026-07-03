@@ -12620,6 +12620,21 @@ impl LayoutEngine {
         // box's white fill — the table grid lines then show THROUGH the callout. Defer
         // them to a separate vec and append AFTER the row loop so they paint last.
         let mut deferred_cell_textboxes: Vec<LayoutElement> = Vec::new();
+        // S728 (2026-07-03): w:tblHeader repeat. Word re-draws the table's
+        // LEADING header row(s) at the top of every page the table continues
+        // onto (probethdr render-truth: 項目/内容 at y=72.9 on p2-p5). The
+        // parsed TableRow.header flag was never consumed in layout. Mechanism:
+        // capture the header rows' EMITTED elements (borders/shading/text —
+        // post row-height correction) at first layout; on a mid-table page
+        // push, replay clones shifted to the new page top and advance the
+        // cursor past them. Corpus-safe: fires only when a tblHeader table
+        // SPANS pages — the only 2 corpus tblHeader docs (ailitguide, b35123)
+        // have non-spanning tables (verified) → byte-identical.
+        let s728_on = std::env::var("OXI_S728_DISABLE").is_err();
+        let mut s728_hdr_elems: Vec<LayoutElement> = Vec::new();
+        let mut s728_hdr_h: f32 = 0.0;
+        let mut s728_capture_done = false;
+        let mut s728_hdr_rows_seen: usize = 0;
         for (row_idx, row) in table.rows.iter().enumerate() {
             let mut row_height: f32 = 0.0;
             // Session 79c: visual_row_h = max cell content_h with emit-equivalent
@@ -13211,6 +13226,34 @@ impl LayoutEngine {
                     elements: std::mem::take(current_elements),
                 });
                 cursor.set(page_top);
+                // S728: replay the captured tblHeader row(s) at the new page
+                // top (mid-table continuation break; NOT a widow whole-table
+                // move, NOT above a header row itself). Clones shift by
+                // (page_top − captured min y); TableBorder carries its own
+                // content-level y1/y2 (S648: renderers draw borders from
+                // those, elem.y is secondary) so shift both.
+                if std::env::var("OXI_DBG728").is_ok() {
+                    eprintln!("[S728] PUSH row_idx={} cap_done={} n_hdr={} hdr_h={:.1} row.header={} widow={}",
+                        row_idx, s728_capture_done, s728_hdr_elems.len(), s728_hdr_h, row.header, widow_break_needed);
+                }
+                if s728_on && s728_capture_done && !s728_hdr_elems.is_empty()
+                    && !row.header && !widow_break_needed {
+                    let y0 = s728_hdr_elems.iter().map(|e| e.y)
+                        .fold(f32::INFINITY, f32::min);
+                    if y0.is_finite() {
+                        let dy = page_top - y0;
+                        for el in &s728_hdr_elems {
+                            let mut c = el.clone();
+                            c.y += dy;
+                            if let LayoutContent::TableBorder { y1, y2, .. } = &mut c.content {
+                                *y1 += dy;
+                                *y2 += dy;
+                            }
+                            elements.push(c);
+                        }
+                        cursor.set(page_top + s728_hdr_h);
+                    }
+                }
             }
 
             // Second pass: render cells
@@ -17024,6 +17067,34 @@ impl LayoutEngine {
                     cursor.advance_split(row_height, row_height + amt);
                 } else {
                     cursor.advance(row_height);
+                }
+            }
+
+            // S728: capture the LEADING w:tblHeader row(s)' emitted elements +
+            // advanced height for continuation-page replay (see the pre-loop
+            // decl). Word repeats only the table's FIRST consecutive header
+            // rows; a non-header row (or a header-flagged later row) ends the
+            // capture window. Guarded against a mid-row page push having
+            // flushed `elements` (slice would be stale — skip capture then;
+            // such a straddling header row is not replayed).
+            if s728_on && !s728_capture_done {
+                if std::env::var("OXI_DBG728").is_ok() {
+                    eprintln!("[S728] row_idx={} header={} seen={} elems_range={}..{} rh={:.1}",
+                        row_idx, row.header, s728_hdr_rows_seen, elements_before_row, elements.len(), row_height);
+                }
+                if row.header && row_idx == s728_hdr_rows_seen {
+                    if let Some(slice) = elements.get(elements_before_row..) {
+                        s728_hdr_elems.extend(slice.iter().cloned());
+                        s728_hdr_h += row_height;
+                        s728_hdr_rows_seen += 1;
+                    } else {
+                        s728_capture_done = true;
+                    }
+                    if !table.rows.get(row_idx + 1).map_or(false, |r| r.header) {
+                        s728_capture_done = true;
+                    }
+                } else {
+                    s728_capture_done = true;
                 }
             }
         }
