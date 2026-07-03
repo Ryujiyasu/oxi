@@ -920,8 +920,8 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                pi + 1, page.width, page.height).unwrap();
         let mut first = true;
         for el in &page.elements {
-            let (kind, text_json, font_size) = match &el.content {
-                LayoutContent::Text { text, font_size, .. } => {
+            let (kind, text_json, font_size, vert) = match &el.content {
+                LayoutContent::Text { text, font_size, is_vertical, .. } => {
                     let mut esc = String::with_capacity(text.len());
                     for c in text.chars() {
                         match c {
@@ -937,12 +937,12 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
                             c => esc.push(c),
                         }
                     }
-                    ("text", format!("\"{}\"", esc), *font_size)
+                    ("text", format!("\"{}\"", esc), *font_size, *is_vertical)
                 }
-                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0),
-                LayoutContent::TableBorder { .. } => ("border", "null".to_string(), 0.0),
-                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0),
-                _ => ("other", "null".to_string(), 0.0),
+                LayoutContent::Image { .. } => ("image", "null".to_string(), 0.0, false),
+                LayoutContent::TableBorder { .. } => ("border", "null".to_string(), 0.0, false),
+                LayoutContent::CellShading { .. } => ("shading", "null".to_string(), 0.0, false),
+                _ => ("other", "null".to_string(), 0.0, false),
             };
             if !first { out.push_str(",\n"); }
             first = false;
@@ -960,9 +960,15 @@ fn dump_layout_json(result: &oxidocs_core::layout::LayoutResult, path: &str) {
             // and measure_pagination_oxi.py can subtract it to compare against Word's
             // Information(6) (LINE BOX TOP convention). See
             // memory/session71_y_convention_refactor_design.md.
+            // S724: emit "vert": true for vertical-writing text elements so
+            // aggregate_dump can concatenate a paragraph's vertical lines in
+            // READING order (columns right→left) instead of (y, x) — without
+            // this the text-prefix matcher can never match vertical docs and
+            // the gate goes blind (probevert truncation scored PASS 1.0).
+            let vert_json = if vert { ", \"vert\": true" } else { "" };
             write!(&mut out,
-                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}}}",
-                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off).unwrap();
+                "      {{\"type\": \"{}\", \"x\": {:.3}, \"y\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"text\": {}, \"font_size\": {:.2}, \"para_idx\": {}, \"run_idx\": {}, \"char_offset\": {}, \"cell_para_idx\": {}, \"cell_row_idx\": {}, \"cell_col_idx\": {}, \"text_y_off\": {:.3}{}}}",
+                kind, el.x, el.y, el.width, el.height, text_json, font_size, pi_json, ri_json, co_json, cpi_json, cri_json, cci_json, el.text_y_off, vert_json).unwrap();
         }
         out.push_str("\n    ]}");
     }

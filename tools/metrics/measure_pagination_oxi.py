@@ -117,7 +117,7 @@ def aggregate_dump(dump: dict) -> dict:
                 # memory/session71_y_convention_refactor_design.md.
                 "text_y_off_at_ymin": el.get("text_y_off", 0.0),
             })
-            slot["text_parts"].append((el["y"], el["x"], el.get("text", "")))
+            slot["text_parts"].append((el["y"], el["x"], el.get("text", ""), bool(el.get("vert"))))
             if el["y"] < slot["y_min"]:
                 slot["y_min"] = el["y"]
                 slot["text_y_off_at_ymin"] = el.get("text_y_off", 0.0)
@@ -127,8 +127,17 @@ def aggregate_dump(dump: dict) -> dict:
         for key, slot in groups.items():
             # Sort by (y, x) so multi-line wrapped paragraphs concatenate
             # line-by-line top-to-bottom, not interleaved by X across lines.
-            slot["text_parts"].sort(key=lambda yxt: (yxt[0], yxt[1]))
-            text = "".join(t for _, _, t in slot["text_parts"])
+            # S724: VERTICAL-writing paragraphs (tbRl sections, "vert": true
+            # elements) read columns RIGHT→LEFT — sort those by (y, -x) so the
+            # concatenated text starts with the paragraph's first characters.
+            # Without this the text-prefix matcher could never match a vertical
+            # doc, and the gate scored only the (unrepresentative) remainder
+            # (probevert: 47/60 paragraphs DROPPED yet PASS 1.0).
+            if slot["text_parts"] and all(p[3] for p in slot["text_parts"]):
+                slot["text_parts"].sort(key=lambda yxt: (yxt[0], -yxt[1]))
+            else:
+                slot["text_parts"].sort(key=lambda yxt: (yxt[0], yxt[1]))
+            text = "".join(t for _, _, t, _ in slot["text_parts"])
             text = text.replace("\n", "").replace("\r", "")[:30]
             records.append({
                 "para_idx": slot["para_idx"],

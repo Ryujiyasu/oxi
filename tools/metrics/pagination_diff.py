@@ -42,6 +42,12 @@ MIN_MATCH_LEN = 2
 # more chance of false matches across structurally similar paragraphs.
 PAGE_SEARCH_RADIUS = 3
 
+# S724 (2026-07-03): minimum fraction of matchable Word paragraphs that must
+# find an Oxi match for the matched-only score to count. Below this, most of
+# the doc is invisible to the matcher (content dropped / dump text mangled)
+# and a "PASS" would be a lie — see probevert (13/60 rendered, scored 1.0).
+MIN_MATCH_RATE = 0.5
+
 
 def normalize_text(s: str) -> str:
     if not s:
@@ -197,15 +203,42 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     # surface in the summary.
     pass_binary = (n_matched > 0) and (n_zero == n_matched)
 
+    # S724 gate hardening (2026-07-03): the matched-only score has a BLIND
+    # SPOT — breakage that makes paragraphs UNMATCHABLE (content truncation,
+    # mangled dump text) removes them from scoring entirely, so a doc that
+    # DROPS most of its content can read as a perfect PASS (probevert:
+    # vertical section truncated to 1 page / 13-of-60 paragraphs rendered,
+    # scored PASS 1.0 off the single matched paragraph). Two structural red
+    # flags now force FAIL:
+    #   (a) match_rate < MIN_MATCH_RATE on a doc with ≥3 matchable paras —
+    #       most of the doc is invisible to the matcher, so the matched-only
+    #       score is unrepresentative. (albalunaSS, the one legit low-match
+    #       corpus doc, is fixed by the S724 vertical reading-order sort in
+    #       measure_pagination_oxi.py, keeping the 87-doc corpus clean.)
+    #   (b) |page_count_delta| ≥ 2 — a whole-page-level divergence the
+    #       matched deltas may not represent. (±1 stays allowed: Word's
+    #       n_pages is paragraph-derived and undercounts a trailing
+    #       paragraph-less form page — kyotei is word=4/oxi=5 yet correct.)
+    n_matchable = n_matched + len(unmatched)
+    match_rate = (n_matched / n_matchable) if n_matchable else 1.0
+    pcd = (oxi.get("n_pages") or 0) - (word.get("n_pages") or 0)
+    low_match = n_matchable >= 3 and match_rate < MIN_MATCH_RATE
+    big_pcd = abs(pcd) >= 2
+    if low_match or big_pcd:
+        pass_binary = False
+
     return {
         "doc_id": doc_id,
         "word_filename": word.get("filename"),
         "word_n_pages": word.get("n_pages"),
         "oxi_n_pages": oxi.get("n_pages"),
-        "page_count_delta": (oxi.get("n_pages") or 0) - (word.get("n_pages") or 0),
+        "page_count_delta": pcd,
         "n_word_paras": len(word_paras),
         "n_matched": n_matched,
         "n_unmatched": len(unmatched),
+        "match_rate": round(match_rate, 4),
+        "low_match_fail": low_match,
+        "page_count_fail": big_pcd,
         "n_page_zero": n_zero,
         "n_page_positive": n_pos,
         "n_page_negative": n_neg,
@@ -241,13 +274,21 @@ def main() -> int:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         marker = "PASS" if result["pass"] else "FAIL"
-        print(f"  [{marker}] {doc_id}: score={result['score']} matched={result['n_matched']}/{result['n_matched']+result['n_unmatched']} delta_hist={result['delta_histogram']}")
+        flags = ""
+        if result.get("low_match_fail"):
+            flags += f" LOW_MATCH(rate={result['match_rate']})"
+        if result.get("page_count_fail"):
+            flags += f" PAGE_COUNT(delta={result['page_count_delta']})"
+        print(f"  [{marker}] {doc_id}: score={result['score']} matched={result['n_matched']}/{result['n_matched']+result['n_unmatched']} delta_hist={result['delta_histogram']}{flags}")
         summary.append({
             "doc_id": doc_id,
             "pass": result["pass"],
             "score": result["score"],
             "n_matched": result["n_matched"],
             "n_unmatched": result["n_unmatched"],
+            "match_rate": result["match_rate"],
+            "low_match_fail": result["low_match_fail"],
+            "page_count_fail": result["page_count_fail"],
             "page_count_delta": result["page_count_delta"],
             "delta_histogram": result["delta_histogram"],
         })
