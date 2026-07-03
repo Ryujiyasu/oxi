@@ -3242,7 +3242,49 @@ impl LayoutEngine {
         // (anchored to the NEXT paragraph's top) and the next paragraph's body
         // is indented by `Some(indent_pt)` so it wraps to the right of the cap.
         let mut pending_dropcap: Option<f32> = None;
+        // S734 (2026-07-03): wrapTopAndBottom floating images RESERVE their
+        // vertical band in the body flow (Word: text may not sit beside them;
+        // the anchor paragraph and everything after flow BELOW the image).
+        // wrap_type was parsed but never consumed — floats painted at absolute
+        // positions with ZERO flow effect (probezwraptb {-1:8}: text flowed
+        // straight through two 126pt images). Paragraph-relative anchors only
+        // (the measured case); corpus has ZERO wrapTopAndBottom docs → the
+        // band map is empty → byte-identical. Opt-out OXI_S734_DISABLE.
+        let s734_bands: std::collections::HashMap<usize, f32> =
+            if std::env::var("OXI_S734_DISABLE").is_err() {
+                page.floating_images.iter()
+                    .filter(|img| img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                        && img.position.as_ref()
+                            .map_or(false, |p| p.v_relative.as_deref() == Some("paragraph")))
+                    .map(|img| (img.anchor_block_index,
+                        img.height + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0))))
+                    .collect()
+            } else { Default::default() };
+        // anchor_block_index → (layout page, band top y): where the band was
+        // actually reserved; the paint pass places the image THERE (the anchor
+        // paragraph now sits BELOW the image, so resolving from the paragraph's
+        // y would double-shift).
+        let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> =
+            Default::default();
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            // S734: reserve the wrapTopAndBottom band ABOVE this anchor block.
+            if let Some(&band_h) = s734_bands.get(&block_idx) {
+                let remaining = (start_y + content_height) - cursor.cursor_y;
+                if band_h > remaining && band_h <= content_height && !elements.is_empty() {
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: std::mem::take(&mut elements),
+                    });
+                    cursor.set(start_y);
+                    lm2_cells = 0;
+                    current_page_idx += 1;
+                    footnote_reserve_current = 0.0;
+                    footnote_ids_current_page.clear();
+                }
+                s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
+                cursor.advance(band_h);
+            }
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
             // this block's cursor has reached the float's region (the gap above it
             // is now consumed), skip the cursor past the float (body wraps below).
@@ -4409,12 +4451,20 @@ impl LayoutEngine {
         // Layout floating images and add to the correct layout page
         for img in &page.floating_images {
             if let Some(ref _pos) = img.position {
-                let (abs_x, abs_y) = self.resolve_floating_image_position(img, page, &block_y_positions);
+                let (abs_x, mut abs_y) = self.resolve_floating_image_position(img, page, &block_y_positions);
                 // Use the same page as the anchor block
-                let target_page = block_page_indices
+                let mut target_page = block_page_indices
                     .get(img.anchor_block_index)
                     .copied()
                     .unwrap_or(0);
+                // S734: a wrapTopAndBottom float paints at its RESERVED band
+                // position (the anchor paragraph moved below the image).
+                if let Some(&(fp, fy)) = s734_flow_pos.get(&img.anchor_block_index) {
+                    if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom) {
+                        target_page = fp;
+                        abs_y = fy + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0));
+                    }
+                }
                 let el = LayoutElement::new(abs_x, abs_y, img.width, img.height, LayoutContent::Image {
                         data: img.data.clone(),
                         content_type: img.content_type.clone(),
