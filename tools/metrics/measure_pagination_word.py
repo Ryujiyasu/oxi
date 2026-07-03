@@ -92,6 +92,43 @@ def measure_doc(word, docx_path: str) -> dict:
                     page = start_rng.Information(3)  # wdActiveEndPageNumber
                     y = start_rng.Information(6)
                     x = start_rng.Information(5)
+                # S722 (2026-07-03): SHORT-PARAGRAPH page-boundary quirk. For a
+                # 1-line paragraph pushed to the next page (tokyoshugyo wi=374
+                # （セクシュアルハラスメントの禁止）, 17 visible chars: the
+                # SCREEN render, the PDF export and Oxi all place it at p18
+                # TOP), the collapsed-START query keeps answering the PRE-BREAK
+                # logical anchor (p17, y=748.2 — reproducible even after
+                # doc.Repaginate(); (s,s+1) answers p17 too), while the
+                # active-END query answers the rendered page (p18, end-char
+                # y=102.7 = the p18 top line). A SHORT body paragraph (≤20
+                # visible chars at body width) cannot truly span two pages, so
+                # start-page+1 == end-page on one is the API quirk -> take the
+                # END page (and its y/x). Multi-line paragraphs keep the R30
+                # collapsed-start (their end legitimately falls on later
+                # pages). NOTE ComputeStatistics(wdStatisticLines) is NOT
+                # usable as the 1-line test — it answers 3 for this visibly
+                # 1-line heading. Table paragraphs are excluded (narrow cell
+                # columns can wrap a short paragraph across a real page break).
+                try:
+                    end_page = rng.Information(3)  # active end
+                    vis_chars = sum(1 for c in raw_text
+                                    if c not in ("\x0c", "\x0b", "\r", "\n", "\x07"))
+                    # Table membership via the START-collapsed range's
+                    # Information(12): rng.Tables.Count is 1 for a BODY
+                    # paragraph whose ¶ merely TOUCHES a following table
+                    # (the wi=374 heading precedes the 第１３条 box).
+                    in_tbl_start = bool(
+                        doc.Range(rng.Start, rng.Start).Information(12))
+                    if (end_page and page and end_page == page + 1
+                            and vis_chars <= 20
+                            and not in_tbl_start):
+                        epos = max(rng.Start, rng.End - 1)
+                        end_rng = doc.Range(epos, epos)
+                        page = end_page
+                        y = end_rng.Information(6)
+                        x = end_rng.Information(5)
+                except Exception:
+                    pass
             except Exception:
                 page = None
                 y = None
