@@ -8451,6 +8451,22 @@ impl LayoutEngine {
 
             // Handle explicit page/column breaks after this line
             if line.break_type == LineBreakType::PageBreak || line.break_type == LineBreakType::ColumnBreak {
+                // S733 (2026-07-03): a COLUMN break in a multi-column section
+                // advances to the NEXT COLUMN of the same page (Word semantics);
+                // only from the LAST column (or a 1-col section, where Word
+                // treats it as a page break) does it start a new page. It was
+                // handled identically to PageBreak — every <w:br type="column">
+                // pushed a whole page (probexcolbrk: 5 column breaks in a 2-col
+                // doc → Oxi 8 pages vs Word 6, score 0.375). Same column-flow
+                // shape as S637. Opt-out OXI_S733_DISABLE.
+                if line.break_type == LineBreakType::ColumnBreak
+                    && num_columns > 1 && cur_col + 1 < num_columns
+                    && std::env::var("OXI_S733_DISABLE").is_err()
+                {
+                    cur_col += 1;
+                    start_x = col_x_positions[cur_col];
+                    cursor.set(page_top);
+                } else {
                 // Day 33 part 59 (2026-05-12): the line that CARRIES the break_type
                 // has its text already rendered into `elements` and should stay on
                 // the CURRENT page (text BEFORE the `<w:br w:type="page"/>` belongs
@@ -8465,6 +8481,13 @@ impl LayoutEngine {
                     elements: page_elements,
                 });
                 cursor.set(page_top);
+                // S733: a real page push (page break, or column break from the
+                // last column) lands on column 0 of the new page.
+                cur_col = 0;
+                if num_columns > 1 {
+                    start_x = col_x_positions[0];
+                }
+                } // S733 end else
             }
         }
 
