@@ -146,6 +146,13 @@ pub struct Page {
     /// Empty = uniform margins (single-section / non-parser constructions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub margin_runs: Vec<(usize, f32, f32)>,
+    /// S735 (2026-07-03): per-section docGrid line pitch for merged continuous
+    /// sections — (block_start_index, grid_line_pitch). The merged Page kept
+    /// only the first section's pitch (probezcontgrid: pitch 360→480 change at
+    /// a continuous break was ignored → later section packed at the old pitch,
+    /// {-1:10}). Parallel to `margin_runs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_runs: Vec<(usize, Option<f32>)>,
     /// S732 (2026-07-03): how this section STARTS relative to the previous
     /// one — "evenPage"/"oddPage" force the section onto the next even/odd
     /// physical page, inserting a BLANK page when the parity mismatches

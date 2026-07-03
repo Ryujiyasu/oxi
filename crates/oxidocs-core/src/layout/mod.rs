@@ -3166,7 +3166,23 @@ impl LayoutEngine {
         // cursor lands inside [top, bottom) on that page is bumped to bottom.
         let mut text_float_region: Option<(f32, f32, usize)> = None;
 
-        let grid_pitch = page.grid_line_pitch;
+        let mut grid_pitch = page.grid_line_pitch;
+        // S735 (2026-07-03): per-section grid-pitch runs on a merged continuous
+        // page. Only active when the runs actually DIFFER (grid_het) — the
+        // uniform-pitch corpus is byte-identical. parttime (403/415) is the one
+        // corpus doc with real pitch diversity. Opt-out OXI_S735_DISABLE.
+        let s735_grid_het = std::env::var("OXI_S735_DISABLE").is_err() && {
+            let mut it = page.grid_runs.iter().map(|(_, p)| *p);
+            match it.next() {
+                Some(first) => it.any(|p| match (p, first) {
+                    (Some(a), Some(b)) => (a - b).abs() > 0.01,
+                    (None, None) => false,
+                    _ => true,
+                }),
+                None => false,
+            }
+        };
+        let mut s735_run_idx: usize = 0;
         let mut mult_cumul_raw: f32 = 0.0;
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut elements: Vec<LayoutElement> = Vec::new();
@@ -3267,6 +3283,18 @@ impl LayoutEngine {
         let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> =
             Default::default();
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            // S735: switch the active grid pitch at section-run boundaries.
+            if s735_grid_het
+                && s735_run_idx + 1 < page.grid_runs.len()
+                && block_idx >= page.grid_runs[s735_run_idx + 1].0
+            {
+                while s735_run_idx + 1 < page.grid_runs.len()
+                    && block_idx >= page.grid_runs[s735_run_idx + 1].0
+                {
+                    s735_run_idx += 1;
+                }
+                grid_pitch = page.grid_runs[s735_run_idx].1;
+            }
             // S734: reserve the wrapTopAndBottom band ABOVE this anchor block.
             if let Some(&band_h) = s734_bands.get(&block_idx) {
                 let remaining = (start_y + content_height) - cursor.cursor_y;
