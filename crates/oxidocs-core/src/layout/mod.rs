@@ -6581,7 +6581,27 @@ impl LayoutEngine {
             // at the sub-pt ink boundary — the documented "no threshold separates
             // push-vs-keep" wall (S651). Needs Word's exact per-line ink/device-snap, not
             // a continuation-line gate. See [[tokyoshugyo_wrap_not_cellheight]].
-            let break_threshold = if s548b_exact_full || s562b_empty_full
+            // S736 (2026-07-03): the S562b empty-para full box gets a small
+            // KEEP TOLERANCE — Word retains a page-bottom EMPTY paragraph whose
+            // full box overhangs the content bottom by a little. Two-sided
+            // bounds (S725-style window): probexempty's spacer empty overflows
+            // +2.0 and Word KEEPS it (i=27 at y757.0, box 772.8 > 771); the
+            // S562b roudoujoken empty is PUSHED — its measured overflow bounds
+            // the window above at ~(3.0, 3.5] (the S562-era "~5.75" was an
+            // approximation; the TOL sweep flips roudoujoken between 3.0 and
+            // 3.5). Verified clean window [2.1, 3.0]; default 2.5. Tune
+            // OXI_S736_TOL. Fires only when
+            // the empty rule is the SOLE full-box reason (exact/table-next/
+            // footer-tight etc. keep the strict box).
+            let s736_tol: f32 = std::env::var("OXI_S736_TOL").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(2.5);
+            let s736_empty_tol = s562b_empty_full
+                && !s548b_exact_full && !s603_typed_fullbox && !s605_line0_2
+                && !s_tgfull && !s651_multicell_head && !footer_tight
+                && std::env::var("OXI_S736_DISABLE").is_err();
+            let break_threshold = if s736_empty_tol {
+                (effective_lh - s736_tol).max(ink_lh)
+            } else if s548b_exact_full || s562b_empty_full
                 || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head
                 // S726: footer-constrained bottom → full box (the leniency's
                 // leading overhang would land inside footer text; Word breaks).
