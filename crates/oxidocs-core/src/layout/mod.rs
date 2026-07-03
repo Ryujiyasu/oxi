@@ -5849,6 +5849,23 @@ impl LayoutEngine {
                     _ => line_height,
                 }
             } else { line_height };
+            // S737 (2026-07-04): the marker's page-break check must not be
+            // STRICTER than the body line0's lenient threshold. For a 1-cell
+            // marker in a typed grid, marker_break_h = the FULL grid cell (18)
+            // while the body line0 uses the Day-33 natural_lh leniency (13.5)
+            // — so at a page-bottom cursor in the leniency window the MARKER
+            // alone pushed the whole numbered paragraph (problist: pi=35 at
+            // cursor 755, 755+18=773>771 pushed; Word keeps the row, body
+            // line0 over = −2.5). Use the marker's natural (un-snapped) height
+            // for the check; the S651 multi-cell heading case (snapped >
+            // 1.5×pitch) keeps its strict box. Opt-out OXI_S737_DISABLE.
+            let marker_break_h = if std::env::var("OXI_S737_DISABLE").is_err()
+                && para.style.snap_to_grid
+                && grid_pitch.map_or(false, |p| p > 0.0 && marker_break_h <= p * 1.5)
+            {
+                let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
+                nat_metrics.word_line_height_no_grid(marker_font_size).min(marker_break_h)
+            } else { marker_break_h };
             if cursor.cursor_y + marker_break_h > page_top + content_height {
                 pages.push(LayoutPage {
                     width: page.size.width,
