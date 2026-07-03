@@ -8730,6 +8730,12 @@ impl LayoutEngine {
                 (fragments[..frag_outer_idx].iter().map(|f| f.0.chars().count()).sum::<usize>(),
                  fragments[frag_outer_idx + 1..].iter().map(|f| f.0.chars().count()).sum::<usize>())
             } else { (0, 0) };
+            // S725 (2026-07-03): chars in SUBSEQUENT fragments, computed
+            // unconditionally (chars_after_frag above is orphan-gated). 0 means
+            // this fragment carries the paragraph's FINAL characters — used by
+            // the tail-natural rule at the s475 overflow test.
+            let s725_chars_after: usize = fragments[frag_outer_idx + 1..].iter()
+                .map(|f| f.0.chars().count()).sum();
 
             // fitText runs: skip GDI snap to preserve exact target width
             let cs = if style.fit_text.is_some() {
@@ -9685,6 +9691,30 @@ impl LayoutEngine {
                             - kinsoku::s475_max_compress_pt(ch, chars_vec.get(char_index + 1).copied(),
                                 s475_pair, comma_pt, s475_open_eff, period_pt, close_solo_pt, font_size))
                     } else { 0 };
+                    // S725 (2026-07-03, default ON, opt-out OXI_S725_DISABLE):
+                    // PARAGRAPH-FINAL char must fit NATURALLY — the s475 capacity
+                    // credit models JUSTIFY compression, but a paragraph's LAST
+                    // line is never justified (rendered left-aligned at natural
+                    // advances), so a final char kept via credit produces a line
+                    // the render can never compress: text overflows the right
+                    // margin (probe twin L2 x_end 543.4 = 19pt past the 524.4
+                    // margin) AND the paragraph under-counts a line vs Word
+                    // (twin: Oxi 3 lines / Word 4 → ×50 paras = −2 pages).
+                    // Word render-truth (proberubytwin): Word wraps the tail to
+                    // a natural-width final line (ない。) with zero compression;
+                    // OXI_S575_CAP=0 reproduces Word exactly — the credit is the
+                    // sole cause. SCOPE = the MODERN (compat≥15 EXPLICIT)
+                    // compressPunctuation s475 body arm only: legacy docs do the
+                    // OPPOSITE (orphan-elimination tail compression, S721/S568 —
+                    // Word 2010-mode pulls a short tail back via 約物 oikomi),
+                    // and absent-compat docs lay out as legacy (S545). s476_grid
+                    // (linesAndChars, b837) and s590 (legacy justified) keep
+                    // their calibrated behavior.
+                    let s725_final_char = std::env::var("OXI_S725_DISABLE").is_err()
+                        && self.compat_mode >= 15 && self.compat_mode_explicit
+                        && !lines_and_chars && !s476_grid && !s590_legacy_just_cap
+                        && s725_chars_after == 0
+                        && char_index + 1 == chars_vec.len();
                     let overflow_tw = if s475_break {
                         // S595 (2026-06-17): for s572 (jc=left legacy no-type oikomi),
                         // Word's per-line oikomi is a SMALL budget, not the per-約物 cap.
@@ -9705,7 +9735,8 @@ impl LayoutEngine {
                                 - available_tw - pt_to_tw(tol)
                         } else if std::env::var("OXI_S601_DISABLE").is_err()
                             && matches!(ch, '。' | '、' | '，' | '．' | '・')
-                            && current_capw_tw <= available_tw
+                            && (if s725_final_char { current_width_tw } else { current_capw_tw })
+                                <= available_tw
                         {
                             // S601 (2026-06-18, default ON, opt-out OXI_S601_DISABLE;
                             // char-budget wall): line-end 約物 ぶら下げ
@@ -9719,6 +9750,23 @@ impl LayoutEngine {
                             // content-right 510). Oxi's s475 break counted the 。 width →
                             // over-wrapped. Hanging makes overflow_tw ≤ 0 → 約物 placed.
                             current_capw_tw - available_tw
+                        } else if s725_final_char {
+                            // S725: the paragraph's final char gets a BOUNDED
+                            // tolerance instead of the full capacity credit — the
+                            // line it lands on is the (never-justified) last line,
+                            // so the render can deliver only its unconditional
+                            // 約物詰め, not the justify water-fill. Empirical
+                            // window (7-doc sweep incl 3a4f/d77a/nedo/ohnoshugyo
+                            // + the controlled twin): flat-pt [8.0, 8.46); em-
+                            // scaled (caps convention, fs/12) [8.0, 9.67) — the
+                            // corpus tails Word KEEPS overflow ≤ ~0.67em, the
+                            // twin tail Word WRAPS overflows 0.81em. Default 8.5
+                            // (12pt reference), override OXI_S725_TOL.
+                            let tol = std::env::var("OXI_S725_TOL").ok()
+                                .and_then(|v| v.parse::<f32>().ok()).unwrap_or(8.5)
+                                * font_size / 12.0;
+                            current_width_tw + pt_to_tw(char_width) - available_tw
+                                - pt_to_tw(tol)
                         } else {
                             current_capw_tw + s475_capinc - available_tw
                         }
@@ -10251,8 +10299,20 @@ impl LayoutEngine {
                             && !is_justified && s476_body
                             && self.compat_mode >= 15 && self.compat_mode_explicit
                             && !lines_and_chars;
+                        // S725: a PARAGRAPH-FINAL hangable punct may hang only when
+                        // the preceding content fits NATURALLY — the line it closes
+                        // is the (never-justified) last line, so a credit-fit
+                        // predecessor would render past the margin (the second
+                        // hang site; the S601 site above has the same gate).
+                        // S725: same bounded tail tolerance as the overflow site
+                        // (em-scaled, 12pt reference, default 8.5).
+                        let s725_hang_tol = std::env::var("OXI_S725_TOL").ok()
+                            .and_then(|v| v.parse::<f32>().ok()).unwrap_or(8.5)
+                            * font_size / 12.0;
                         let can_hang = kinsoku::is_hangable_punct(ch) && !next_is_proh
-                            && !s228_block_hang && !s506_oidashi && !s548_oidashi;
+                            && !s228_block_hang && !s506_oidashi && !s548_oidashi
+                            && !(s725_final_char
+                                && current_width_tw > available_tw + pt_to_tw(s725_hang_tol));
 
                         if can_hang {
                             current_line.fragments.push(LineFragment {
