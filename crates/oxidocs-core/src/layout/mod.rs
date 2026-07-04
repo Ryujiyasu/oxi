@@ -2732,6 +2732,16 @@ impl LayoutEngine {
                             hdr_h += h;
                         }
                     }
+                } else if let Block::Image(img) = block {
+                    // S742 (2026-07-04): an inline IMAGE in the header contributed
+                    // ZERO height (the parser extracts inline images into their own
+                    // Block::Image) — probeqhdrimg {-1:12}: Word body top 143.35 =
+                    // header_y 42.55 + image 85.04 + header text line; Oxi started
+                    // the body ~85pt too high. Corpus-safe: 0 corpus docs carry a
+                    // header image block (scan below in the ship notes).
+                    if std::env::var("OXI_S742_DISABLE").is_err() {
+                        hdr_h += img.height;
+                    }
                 }
             }
             header_y + hdr_h

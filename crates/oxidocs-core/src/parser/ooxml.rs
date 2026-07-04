@@ -6747,7 +6747,23 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                     }
                     "p" if in_root && depth == 0 => {
                         let pr = parse_paragraph(&mut reader, ctx, styles)?;
-                        blocks.push(Block::Paragraph(pr.paragraph));
+                        // S742 (2026-07-04): keep header/footer inline images —
+                        // they were silently DROPPED (only pr.paragraph was
+                        // pushed), so a header logo contributed no height and
+                        // never rendered (probeqhdrimg: Word body top 143.35 =
+                        // header_y + image 85 + text line; Oxi started ~85pt
+                        // high -> {-1:12}). Mirrors the body path: image-only
+                        // host paragraphs are suppressed (S537 twin) and the
+                        // images become sibling blocks.
+                        let image_only = !pr.inline_images.is_empty()
+                            && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                            && std::env::var("OXI_S742_DISABLE").is_err();
+                        if !image_only {
+                            blocks.push(Block::Paragraph(pr.paragraph));
+                        }
+                        if std::env::var("OXI_S742_DISABLE").is_err() {
+                            blocks.extend(pr.inline_images);
+                        }
                     }
                     "tbl" if in_root && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
