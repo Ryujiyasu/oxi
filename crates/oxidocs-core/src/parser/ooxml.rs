@@ -2908,7 +2908,20 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
             Event::Text(e) => {
                 let content = e.unescape().unwrap_or_default();
                 if in_text {
-                    text.push_str(&content);
+                    // S747 (2026-07-05): U+00AD SOFT HYPHEN is an invisible
+                    // hyphenation OPPORTUNITY — Word renders it zero-width
+                    // (a "-" appears only when a line actually breaks there).
+                    // Oxi measured/drew it as a visible hyphen-width char ->
+                    // phantom width shifted wraps (probeqbrkchars +1). Strip it
+                    // from the run text (v1: no break-at-SHY hyphenation —
+                    // rendering the hyphen on break needs the hyphenation
+                    // feature; zero-width is the dominant fidelity term).
+                    // Opt-out OXI_S747_DISABLE.
+                    if content.contains('\u{ad}') && std::env::var("OXI_S747_DISABLE").is_err() {
+                        text.push_str(&content.replace('\u{ad}', ""));
+                    } else {
+                        text.push_str(&content);
+                    }
                 } else if in_instr_text {
                     instr_text.push_str(&content);
                 }
@@ -2942,6 +2955,16 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                         }
                     }
                     "tab" => text.push('\t'),
+                    // S747: <w:noBreakHyphen/> renders as a hyphen that FORBIDS
+                    // a line break — map to U+2011 NON-BREAKING HYPHEN (the
+                    // breaker's is_break_after covers '-' only, so U+2011 adds
+                    // no break opportunity). Previously unparsed -> the visible
+                    // hyphen was silently DROPPED.
+                    "noBreakHyphen" => {
+                        if std::env::var("OXI_S747_DISABLE").is_err() {
+                            text.push('\u{2011}');
+                        }
+                    }
                     "lastRenderedPageBreak" => {
                         has_last_rendered_page_break = true;
                     }

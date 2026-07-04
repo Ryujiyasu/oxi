@@ -53,6 +53,13 @@ def normalize_text(s: str) -> str:
     if not s:
         return ""
     s = s.replace("　", " ")
+    # Word Range.Text control-char placeholders vs Oxi's parsed text (S747):
+    #    = SOFT HYPHEN (U+00AD) placeholder — Oxi strips SHY (invisible)
+    #    = <w:noBreakHyphen/> placeholder — Oxi parses it as U+2011
+    # Normalize both sides to the same form so these paragraphs actually
+    # match (they silently fell out of the gate before).
+    s = s.replace("", "").replace("­", "")
+    s = s.replace("", "‑")
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
