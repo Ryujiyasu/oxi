@@ -9157,7 +9157,12 @@ impl LayoutEngine {
                         let preceded_by_open = current_line.fragments.last()
                             .and_then(|f| f.text.chars().last())
                             .map_or(false, kinsoku::is_line_end_prohibited);
-                        if !preceded_by_open
+                        // S745: wordWrap=0 — skip the whole-token wrap (1); the
+                        // per-char opportunities recorded above make the segment
+                        // loop below pack the line to the last fitting char.
+                        let s745_char_wrap = !para_style.word_wrap
+                            && std::env::var("OXI_S745_DISABLE").is_err();
+                        if !preceded_by_open && !s745_char_wrap
                             && current_width_tw + word_width_tw > available_tw
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
@@ -11049,6 +11054,22 @@ impl LayoutEngine {
                     word.push(ch);
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
+                    // S745 (2026-07-04, default ON, opt-out OXI_S745_DISABLE):
+                    // `<w:wordWrap w:val="0"/>` = Latin text may break at ANY
+                    // character (ECMA-376 §17.3.1.40 — "allow line breaking at
+                    // the character level"). Record a break OPPORTUNITY after
+                    // every Latin char (the latin_wordwrap mechanism), so a
+                    // token crossing the line end splits at the last fitting
+                    // char instead of wrapping whole (probezwordwrap: Word
+                    // char-breaks the LONGWORDS tokens → Oxi's whole-token
+                    // wrap left the line short → +1×20). Fitting tokens are
+                    // unaffected (opportunities only matter on overflow).
+                    if latin_wordwrap && !para_style.word_wrap
+                        && std::env::var("OXI_S745_DISABLE").is_err()
+                    {
+                        word_breaks.push((word.chars().count(), word_width));
+                        seg_pending = true;
+                    }
                 }
                 char_pos_in_run += 1; // character index (not byte offset) for JS compatibility
             }
