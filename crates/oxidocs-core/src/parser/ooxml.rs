@@ -4535,6 +4535,64 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     } else {
         None
     };
+    // S746 (2026-07-04, default ON, opt-out OXI_S746_DISABLE): an INLINE
+    // (non-absolute) VML shape with v:textbox CONTENT — Word grows the host
+    // line to the shape extent and renders the box + inner text; Oxi captured
+    // text_blocks into the Shape (no layout consumer -> invisible) and
+    // reserved nothing (probezinlinetb: 120x44 boxes -> {-1:7}). Return a
+    // TextBox (renders box + text, paragraph-relative, wrap None) + the S741
+    // placeholder Image (flow reservation) instead of the dead Shape. ALL 5
+    // corpus docs with standalone VML textboxes (tokyoshugyo x35 / roudoujoken
+    // / parttime / a1d6 / de6e32) are position:absolute -> is_absolute -> this
+    // branch never fires on the corpus (byte-identical by construction);
+    // absolute VML textboxes keep the existing (dropped) behavior = the
+    // separate S746b render task.
+    let s746_inline_txbx = !is_absolute && !text_blocks.is_empty()
+        && width > 0.0 && height > 0.0 && image.is_none()
+        && std::env::var("OXI_S746_DISABLE").is_err();
+    if s746_inline_txbx {
+        let text_box = Some(TextBox {
+            blocks: text_blocks,
+            width,
+            height,
+            position: Some(FloatingPosition {
+                x: 0.0,
+                y: 0.0,
+                h_relative: Some("column".to_string()),
+                v_relative: Some("paragraph".to_string()),
+                h_align: None,
+                v_align: None,
+            }),
+            border: !no_stroke,
+            stroke_color: if no_stroke { None } else { stroke_color_val },
+            stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
+            fill: if no_fill { None } else { fill_color.or(Some("FFFFFF".to_string())) },
+            anchor_block_index: 0,
+            corner_radius: if shape_type.as_deref() == Some("roundRect") { Some(3.0) } else { None },
+            inset_left: None,
+            inset_right: None,
+            inset_top: None,
+            inset_bottom: None,
+            wrap_type: Some(WrapType::None),
+            v_text_anchor: v_text_anchor.clone(),
+            relative_height: 0,
+            behind_doc: false,
+            vert_overflow: None,
+            compat_line_spacing: false,
+        });
+        let placeholder = Some(Image {
+            data: Vec::new(),
+            width,
+            height,
+            alt_text: None,
+            content_type: None,
+            position: None,
+            wrap_type: None,
+            crop: None,
+            anchor_block_index: 0,
+        });
+        return Ok(DrawingResult { image: placeholder, shape: None, text_box });
+    }
     let shape = shape_type.as_ref().map(|st| Shape {
         shape_type: st.clone(),
         width,
