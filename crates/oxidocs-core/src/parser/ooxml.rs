@@ -1330,6 +1330,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     // ECMA-376 §17.13.5. Each element wraps runs; w:author, w:date,
                     // w:id are attributes on the wrapper. For moves, w:id pairs a
                     // moveFrom with its companion moveTo.
+                    // S744 (2026-07-04): <w:smartTag> is a TRANSPARENT wrapper —
+                    // its child runs belong to this paragraph (ECMA-376 §17.5.1).
+                    // It was falling into the unknown-element catch-all (depth+=1),
+                    // so every run inside a smart tag was DROPPED (probezsmarttag:
+                    // 「...本規程の趣[20 chars]扱うものとし...」 — the wrapped chunk
+                    // vanished; one of the probe hunt's gate-masked content losses).
+                    // No depth change: children (w:r, nested smartTags) parse at
+                    // depth 0; the matching </w:smartTag> is a no-op in the End arm
+                    // (which only decrements when depth > 0). smartTagPr's own
+                    // subtree stays skipped via the normal unknown-element path.
+                    "smartTag" if depth == 0 => {}
                     "ins" | "del" | "moveFrom" | "moveTo" if depth == 0 => {
                         let change_type = match local.as_str() {
                             "ins" => "insert",
