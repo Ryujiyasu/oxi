@@ -4118,6 +4118,12 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     // extent so the flow reserves the canvas height (renderers skip empty
     // data; Block::Image height handling exists for body and cells per S533).
     let inline_tb = !is_anchor;
+    // S741: does this drawing carry REAL textbox text (wps:txbx content)?
+    // Distinguishes an inline TEXTBOX (Word grows the host line to the
+    // wp:extent — flow reservation needed) from a merely-visual inline shape
+    // (line/bracket decorations — S535b's revert case: reserving those
+    // regressed 3a4f by 282 paras).
+    let s741_has_txbx_text = !shape_text_blocks.is_empty();
     let tb_position = position.clone().or_else(|| if inline_tb {
         Some(FloatingPosition {
             x: 0.0,
@@ -4175,7 +4181,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     // wp:extent — Word's model. The canvas content textbox (synthetic
     // paragraph-relative position above) anchors at this placeholder block
     // and renders ON the reserved area.
-    let image = if image.is_none() && inline_tb && is_canvas && text_box.is_some()
+    // S741 (2026-07-04, default ON, opt-out OXI_S741_DISABLE): extend the
+    // S537b flow-reservation placeholder from wordprocessingCanvas to any
+    // INLINE drawing with REAL textbox text (modern wps inline textboxes).
+    // Word reserves the wp:extent in the host flow (probeqwps: object para
+    // consumes 108.3 = text 54 + object 54); Oxi rendered the box overlay-
+    // only -> packed ~1 para more per page (-1x6). The S535b danger (visual
+    // shapes) is excluded by requiring shape_text_blocks non-empty.
+    let s741_reserve = s741_has_txbx_text && !is_canvas
+        && std::env::var("OXI_S741_DISABLE").is_err();
+    let image = if image.is_none() && inline_tb && (is_canvas || s741_reserve) && text_box.is_some()
         && width > 0.0 && height > 0.0
     {
         Some(Image {
