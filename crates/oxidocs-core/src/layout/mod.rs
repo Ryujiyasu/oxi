@@ -3234,6 +3234,9 @@ impl LayoutEngine {
         // b837 (-0.0828 net) due to body cascade; see
         // project_fn_reserve_option_b_step1_FALSIFIED.md.
         let mut page_fn_refs: Vec<Vec<u32>> = Vec::new();
+        // S740: block indices of tables whose cell-footnote ids were attributed
+        // per-page via layout_table (skip the coarse block-level attribution).
+        let mut s740_attributed_tables: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
         // R7.60 (Day 36 part 6, 2026-05-14): track floating-table Y ranges per page
         // for body-position (vertAnchor="page", tblpY > top_margin) full-width tables.
@@ -4066,6 +4069,62 @@ impl LayoutEngine {
                             && candidate_y_top > start_y + 0.1;
                     }
                     let pages_before = pages.len();
+                    // S740 (2026-07-04, default ON, opt-out OXI_S740_DISABLE):
+                    // footnote refs INSIDE table cells reserve footnote-area
+                    // height per ROW (Word shrinks the body area on the page of
+                    // the referencing row; probeqfncell packed 20 rows + 20
+                    // notes as if the notes took no space → −1×7). The render
+                    // side already collected cell refs (collect_footnote_refs);
+                    // the RESERVATION side only scanned Block::Paragraph runs.
+                    // Per-row (ids, height) precomputed here; layout_table
+                    // shrinks its row-fit page_bottom by the running reserve
+                    // and returns per-page ids for the footnote-area renderer.
+                    // 0 corpus docs carry footnote refs inside tables (scanned)
+                    // → None everywhere → byte-identical by construction.
+                    let mut s740_row_fn: Vec<(Vec<u32>, f32)> = Vec::new();
+                    let mut s740_any = false;
+                    if !page.footnotes.is_empty() && std::env::var("OXI_S740_DISABLE").is_err() && !is_floating {
+                        fn cell_fn_ids(blocks: &[Block], out: &mut Vec<u32>) {
+                            for b in blocks {
+                                match b {
+                                    Block::Paragraph(p) => {
+                                        for r in &p.runs {
+                                            if let Some(id) = r.footnote_ref {
+                                                if !out.contains(&id) { out.push(id); }
+                                            }
+                                        }
+                                    }
+                                    Block::Table(t) => {
+                                        for row in &t.rows {
+                                            for cell in &row.cells {
+                                                cell_fn_ids(&cell.blocks, out);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        for row in &table.rows {
+                            let mut ids: Vec<u32> = Vec::new();
+                            for cell in &row.cells { cell_fn_ids(&cell.blocks, &mut ids); }
+                            let h: f32 = ids.iter().map(|id| estimate_footnote_h(*id)).sum();
+                            if !ids.is_empty() { s740_any = true; }
+                            s740_row_fn.push((ids, h));
+                        }
+                    }
+                    // S727-derived: in a TYPED docGrid the footnote separator
+                    // consumes NO grid slot (probefn render-truth: body 607.6 →
+                    // note1 613.1) — and probeqfncell render-truth confirms the
+                    // note area starts right below the last body row with no
+                    // slot-sized gap. Reserve the separator only for no-grid /
+                    // no-type pages (where it occupies a footnote line, S596b).
+                    let s740_sep = if s740_any
+                        && !(page.grid_line_pitch.is_some() && !page.doc_grid_no_type) {
+                        let first = s740_row_fn.iter().find_map(|(ids, _)| ids.first().copied()).unwrap_or(1);
+                        footnote_sep_alloc(first)
+                    } else { 0.0 };
+                    let mut s740_fn_pages: Vec<Vec<u32>> = Vec::new();
                     let table_elements = self.layout_table(
                         table,
                         start_x,
@@ -4083,7 +4142,41 @@ impl LayoutEngine {
                         Some(block_idx),
                         page,
                         false,
+                        if s740_any { Some(&s740_row_fn) } else { None },
+                        if s740_any { Some(&mut s740_fn_pages) } else { None },
+                        s740_sep,
+                        if s740_any { footnote_reserve_current } else { 0.0 },
+                        !footnote_ids_current_page.is_empty(),
                     );
+                    // S740: merge the table's per-page note ids into page_fn_refs
+                    // (footnote-area render) + roll the LAST page's notes into the
+                    // body's running reserve so following paragraphs fit correctly.
+                    if s740_any && !s740_fn_pages.is_empty() {
+                        s740_attributed_tables.insert(block_idx);
+                        for (off, ids) in s740_fn_pages.iter().enumerate() {
+                            let page_i = current_page_idx + off;
+                            while page_fn_refs.len() <= page_i { page_fn_refs.push(Vec::new()); }
+                            for id in ids {
+                                if !page_fn_refs[page_i].contains(id) { page_fn_refs[page_i].push(*id); }
+                            }
+                        }
+                        let table_pushed = s740_fn_pages.len() > 1;
+                        if let Some(last_ids) = s740_fn_pages.last() {
+                            if table_pushed {
+                                footnote_reserve_current = 0.0;
+                                footnote_ids_current_page.clear();
+                            }
+                            for id in last_ids {
+                                if !footnote_ids_current_page.contains(id) {
+                                    if footnote_ids_current_page.is_empty() {
+                                        footnote_reserve_current += footnote_sep_alloc(*id);
+                                    }
+                                    footnote_ids_current_page.push(*id);
+                                    footnote_reserve_current += estimate_footnote_h(*id);
+                                }
+                            }
+                        }
+                    }
                     let candidate_y_bottom = cursor.cursor_y;
 
                     // R7.60: for body-position vertAnchor=page floating tables,
@@ -4641,7 +4734,12 @@ impl LayoutEngine {
                 for (i, b) in page.blocks.iter().enumerate() {
                     if block_page_indices.get(i).copied().unwrap_or(0) == page_idx {
                         if let Block::Table(_) = b {
-                            collect_footnote_refs(std::slice::from_ref(b), &mut referenced_ids);
+                            // S740: tables whose cell footnotes were attributed
+                            // per-page already live in page_fn_refs — skip the
+                            // coarse "all refs on the block's page" fallback.
+                            if !s740_attributed_tables.contains(&i) {
+                                collect_footnote_refs(std::slice::from_ref(b), &mut referenced_ids);
+                            }
                         }
                     }
                 }
@@ -5310,6 +5408,7 @@ impl LayoutEngine {
                         None,
                         page,
                         false,
+                        None, None, 0.0, 0.0, false, // S740: no cell-footnote reservation in textboxes
                     );
                     elements.extend(tb_elems);
                     elements.extend(table_elements);
@@ -12804,8 +12903,27 @@ impl LayoutEngine {
         block_idx: Option<usize>,
         page: &Page,
         is_nested: bool,
+        // S740 (2026-07-04): footnote refs INSIDE table cells. Per-row
+        // (ids, reserve_height) precomputed by the body caller; None (all other
+        // call sites / tables without cell footnotes) = byte-identical.
+        row_footnotes: Option<&[(Vec<u32>, f32)]>,
+        // Per-page (offset from the table's entry page) footnote ids placed by
+        // this table's rows — the caller merges into page_fn_refs so the
+        // footnote-area renderer draws each note on the page of its row.
+        mut fn_pages_out: Option<&mut Vec<Vec<u32>>>,
+        // Separator allocation for a page's FIRST note + the entry page's
+        // already-committed body reserve (page 0 subtracts it too).
+        fn_sep: f32,
+        fn_entry_reserve: f32,
+        fn_entry_has_notes: bool,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
+        // S740 running state: reserve on the CURRENT page + page-offset tracking.
+        let mut s740_reserve: f32 = if row_footnotes.is_some() { fn_entry_reserve } else { 0.0 };
+        let mut s740_page_has_notes: bool = fn_entry_has_notes;
+        let mut s740_pages_len: usize = pages.len();
+        let mut s740_fn_pages: Vec<Vec<u32>> = vec![Vec::new()];
+        let mut s740_pending_commit: Option<usize> = None;
 
         // Resolve column widths from grid_columns, cell widths, or equal split
         let col_widths = self.resolve_table_col_widths(table, content_width);
@@ -12960,6 +13078,31 @@ impl LayoutEngine {
         let mut s728_capture_done = false;
         let mut s728_hdr_rows_seen: usize = 0;
         for (row_idx, row) in table.rows.iter().enumerate() {
+            // S740: page-transition bookkeeping + commit of the PREVIOUS row's
+            // footnote reserve. On a page push the new page starts with zero
+            // table-note reserve; the previous row's notes are committed to the
+            // page the CURRENT row begins on (v1 approximation for split rows).
+            if let Some(rf) = row_footnotes {
+                if pages.len() != s740_pages_len {
+                    for _ in s740_pages_len..pages.len() { s740_fn_pages.push(Vec::new()); }
+                    s740_pages_len = pages.len();
+                    s740_reserve = 0.0;
+                    s740_page_has_notes = false;
+                }
+                if let Some(prev) = s740_pending_commit.take() {
+                    let (ids, h) = &rf[prev];
+                    if !ids.is_empty() {
+                        if !s740_page_has_notes {
+                            s740_reserve += fn_sep;
+                            s740_page_has_notes = true;
+                        }
+                        s740_reserve += *h;
+                        if let Some(last) = s740_fn_pages.last_mut() {
+                            for id in ids { if !last.contains(id) { last.push(*id); } }
+                        }
+                    }
+                }
+            }
             let mut row_height: f32 = 0.0;
             // Session 79c: visual_row_h = max cell content_h with emit-equivalent
             // line-height formula (grid-snapped when adjustLineHeightInTable). Used
@@ -13397,7 +13540,14 @@ impl LayoutEngine {
             // Page break check: if this row won't fit, push current page and reset
             // Allow break if there are elements from previous rows OR from before the table
             let has_content = !elements.is_empty() || !current_elements.is_empty();
-            let page_bottom = page_top + content_height;
+            // S740: shrink the page bottom by the notes committed by PRIOR rows
+            // on this page. The row's OWN notes are excluded from its fit test:
+            // Word render-truth (probeqfncell p1) keeps the referencing row and
+            // SPILLS its footnote to the next page when the note area is full
+            // (row12 stays, 表注12 renders on p2) — a line is never pushed by
+            // its own note, only by the area accrued from earlier references.
+            let page_bottom = page_top + content_height - s740_reserve;
+            s740_pending_commit = Some(row_idx);
             let row_overflows = cursor.cursor_y + row_height > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
             // ANY cell's FIRST paragraph carries `<w:lastRenderedPageBreak/>`
@@ -13828,6 +13978,7 @@ impl LayoutEngine {
                         block_idx,
                         page,
                         true,
+                        None, None, 0.0, 0.0, false, // S740: nested notes counted at the outer row
                     );
                     for elem in nested_elements {
                         cell_elements.push(elem);
@@ -17420,6 +17571,33 @@ impl LayoutEngine {
                 } else {
                     s728_capture_done = true;
                 }
+            }
+        }
+
+        // S740: final flush — trailing page transitions + the LAST row's notes,
+        // then hand the per-page ids to the caller.
+        if let Some(rf) = row_footnotes {
+            if pages.len() != s740_pages_len {
+                for _ in s740_pages_len..pages.len() { s740_fn_pages.push(Vec::new()); }
+                s740_reserve = 0.0;
+                s740_page_has_notes = false;
+            }
+            if let Some(prev) = s740_pending_commit.take() {
+                let (ids, h) = &rf[prev];
+                if !ids.is_empty() {
+                    if !s740_page_has_notes {
+                        s740_reserve += fn_sep;
+                        s740_page_has_notes = true;
+                    }
+                    s740_reserve += *h;
+                    if let Some(last) = s740_fn_pages.last_mut() {
+                        for id in ids { if !last.contains(id) { last.push(*id); } }
+                    }
+                }
+            }
+            let _ = s740_reserve;
+            if let Some(out) = fn_pages_out.as_deref_mut() {
+                *out = s740_fn_pages;
             }
         }
 
