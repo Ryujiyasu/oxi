@@ -4480,6 +4480,95 @@ impl LayoutEngine {
             }
         }
 
+        // S743 (2026-07-04, default ON, opt-out OXI_S743_DISABLE): ENDNOTE
+        // bodies flow after the last body block (Word renders them at the
+        // document end, subject to normal page breaks — probexendnote: Word 4
+        // pages with notes 1-26 on p3 + xxvii..xxx on p4; Oxi dropped them
+        // entirely = the gate-masked content loss found by the probe hunt).
+        // Marker = lowerRoman (Word's default endnote numFmt), overwriting the
+        // empty endnoteRef first run (the footnote-marker pattern). Separator =
+        // Word's default 144pt line (S479) after a one-line gap. 0 corpus docs
+        // reference endnotes (scanned) → byte-identical by construction.
+        if !page.endnotes.is_empty() && std::env::var("OXI_S743_DISABLE").is_err() {
+            fn to_lower_roman(mut n: u32) -> String {
+                if n == 0 { return "0".into(); }
+                let vals: &[(u32, &str)] = &[(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+                    (100, "c"), (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"),
+                    (5, "v"), (4, "iv"), (1, "i")];
+                let mut out = String::new();
+                for &(v, s) in vals {
+                    while n >= v { out.push_str(s); n -= v; }
+                }
+                out
+            }
+            let sep_gap = grid_pitch.unwrap_or(14.0).max(6.0);
+            if cursor.cursor_y + sep_gap * 2.0 > start_y + content_height {
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(&mut elements),
+                });
+                cursor.set(start_y);
+                current_page_idx += 1;
+            }
+            elements.push(LayoutElement::new(
+                start_x,
+                cursor.cursor_y + sep_gap * 0.5,
+                144.0_f32.min(content_width),
+                1.0,
+                LayoutContent::BoxRect {
+                    fill: Some("#000000".to_string()),
+                    stroke_color: None,
+                    stroke_width: 0.0,
+                    corner_radius: 0.0,
+                },
+            ));
+            cursor.advance(sep_gap);
+            let empty_fn_h_en = std::collections::HashMap::new();
+            for (en_seq, note) in page.endnotes.iter().enumerate() {
+                let mut first_para = true;
+                for block in &note.blocks {
+                    if let Block::Paragraph(para) = block {
+                        let para_to_render: Paragraph = if first_para {
+                            let mut p = para.clone();
+                            // Marker = the SEQUENCE position (the footnote-path
+                            // `seq` convention) — note.number is the raw XML id,
+                            // which is offset by the separator/continuation
+                            // entries (probexendnote ids start at 2 -> the
+                            // number-based marker rendered xxviii for 注27).
+                            let prefix = to_lower_roman(en_seq as u32 + 1);
+                            if let Some(first_run) = p.runs.first_mut() {
+                                if first_run.text.is_empty() {
+                                    first_run.text = prefix.clone();
+                                } else {
+                                    first_run.text = format!("{}{}", prefix, first_run.text);
+                                }
+                            }
+                            first_para = false;
+                            p
+                        } else {
+                            para.clone()
+                        };
+                        let (en_elements, _, _) = self.layout_paragraph(
+                            &para_to_render, start_x, &mut cursor, content_width, content_height,
+                            start_y, page,
+                            &mut pages, &mut elements,
+                            grid_pitch, None, false,
+                            None, false, false, 0.0, None, None, None,
+                            false, false, None,
+                            0.0,
+                            &empty_fn_h_en,
+                            1, 0, &[],
+                            false,
+                            false,
+                        );
+                        elements.extend(en_elements);
+                    }
+                }
+            }
+            let _ = current_page_idx;
+        }
+
         // Final page
         pages.push(LayoutPage {
             width: page.size.width,
