@@ -3192,6 +3192,10 @@ impl LayoutEngine {
         let mut prev_contextual_spacing: bool = false;
         // S658: the previous body paragraph's pBdr, for the border-merge gate.
         let mut prev_borders: Option<ParagraphBorders> = None;
+        // S739: the previous body paragraph has keepNext (the follower of a
+        // keepNext para gets the LENIENT natural page-bottom test, see the
+        // centered-box rule in layout_paragraph).
+        let mut prev_keep_next: bool = false;
         let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
@@ -3863,7 +3867,7 @@ impl LayoutEngine {
                         &mut elements,
                         grid_pitch,
                         prev_para_style_id.as_deref(), prev_contextual_spacing,
-                        prev_borders.as_ref(), false,
+                        prev_borders.as_ref(), prev_keep_next, false,
                         prev_space_after,
                         Some(block_idx),
                         lm2_param,
@@ -4036,6 +4040,7 @@ impl LayoutEngine {
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
                     prev_borders = para.style.borders.clone();
+                    prev_keep_next = para.style.keep_next; // S739
                 }
                 Block::Table(table) => {
                     // COM-confirmed: prev paragraph's space_after is always added before table
@@ -4210,6 +4215,7 @@ impl LayoutEngine {
                     }
                     prev_para_style_id = None;
                     prev_borders = None; // S658: a table breaks border-merge adjacency
+                    prev_keep_next = false; // S739
                     prev_space_after = 0.0;
                 }
                 Block::Image(img) => {
@@ -4256,6 +4262,7 @@ impl LayoutEngine {
                     cursor.advance(img_adv);
                     prev_para_style_id = None;
                     prev_borders = None; // S658: an image breaks border-merge adjacency
+                    prev_keep_next = false; // S739
                 }
                 Block::UnsupportedElement(_) => {
                     // Skip unsupported elements in layout
@@ -4542,7 +4549,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            None, false, 0.0, None, None, None,
+                            None, false, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
                             &empty_fn_h_hdr,
@@ -4575,7 +4582,7 @@ impl LayoutEngine {
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
                             grid_pitch, None, false,
-                            None, false, 0.0, None, None, None,
+                            None, false, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
                             &empty_fn_h_ftr,
@@ -4893,7 +4900,7 @@ impl LayoutEngine {
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
                                         grid_pitch, None, false,
-                                        None, false, 0.0, None, None, None,
+                                        None, false, false, 0.0, None, None, None,
                                         false, false, None,
                                         0.0,
                                         &empty_fn_h_note,
@@ -5185,6 +5192,7 @@ impl LayoutEngine {
                         if page.grid_char_pitch.is_some() { None } else { page.grid_line_pitch },
                         None, false, // no prev style/contextual tracking
                         None, // S658: no border-merge tracking in textboxes
+                        false, // S739: no keepNext-follower tracking in textboxes
                         true, // in_textbox: suppress CJK compression
                         0.0, None, None, None,
                         false, false, None,
@@ -5437,6 +5445,14 @@ impl LayoutEngine {
         // threads a real value; header/footer/footnote/textbox pass None (no merge
         // detection, matching the existing prev_style_id=None simplification).
         prev_para_borders: Option<&ParagraphBorders>,
+        // S739 (2026-07-04): the immediately-previous body paragraph has
+        // keepNext. Word gives the FOLLOWER of a keepNext paragraph the
+        // LENIENT natural page-bottom test for its first line (so the
+        // keep-with-next pair can place heading + >=1 follower line at the
+        // page bottom); a non-follower paragraph's first line uses the
+        // stricter centered-box rule. Only the body call site threads a real
+        // value; header/footer/footnote/textbox pass false.
+        prev_keep_next: bool,
         #[allow(unused)] in_textbox: bool,
         prev_space_after: f32,
         body_para_index: Option<usize>,
@@ -6675,7 +6691,66 @@ impl LayoutEngine {
                     && para.style.line_spacing_rule.as_deref() == Some("atLeast") {
                     para.style.line_spacing.unwrap_or(0.0)
                 } else { 0.0 };
-                (ink_lh + tgink_k).max(atleast_floor).min(effective_lh)
+                // S739 (2026-07-04, default ON, opt-out OXI_S739_DISABLE): a
+                // paragraph's FIRST line in a typed docGrid uses the CENTERED-BOX
+                // page-bottom threshold — the glyph box is vertically centered in
+                // its grid slot, and Word requires the CENTERED box's bottom
+                // (slot_top + (pitch + natural)/2) to fit the content area. Only
+                // the TOP half of the grid leading may hang past the bottom, not
+                // the full leading (the Day-33 natural rule was too lenient for
+                // first lines by (pitch−natural)/2 ≈ 1-2.2pt).
+                // ★DERIVED from a controlled capacity sweep (_pb_capacity_gen.py:
+                // uniform single-line paras, linePitch {312,360} × fs {9,10.5,11,
+                // 12}pt × bottom-margin sweep 1300..1520/20 × top-margin sweep —
+                // 38 Word COM measurements): every per-page line-capacity flip
+                // lands EXACTLY on the centered-box boundary (knife-edge checks:
+                // p312/b1400 771.91 vs bottom_eff 771.90 → push ✓; p360 b1420 keep
+                // /b1440 push bracket 770.75 ✓; fs sweep 8/8 ✓). Pure-natural and
+                // full-box models both violate multiple sweep points.
+                // ★EXCEPTION (prev_keep_next): the follower of a keepNext
+                // paragraph keeps the LENIENT natural test — Word places heading
+                // + ≥1 follower line at the page bottom (probekeepnext p2: body
+                // line0 at slot 756.15, centered 771.9 > 771 would push, Word
+                // KEEPS; the non-follower probelac line0 at 757.3 is PUSHED).
+                // ★CONTINUATION lines are NOT touched (kojin pi=52 nat_over −0.35
+                // LAST line Word KEEPS — the corpus leniency keeps live on
+                // continuation/last lines; S693's non-last hairline still applies).
+                // Fixes probekeepnext (heading nat_over −0.44 → centered +1.2 →
+                // push = Word) and probelac (line0 centered → 44 lines/page = Word).
+                // Line scope: the paragraph's EDGE lines (first AND last) use the
+                // centered-box rule; INTERIOR lines keep the natural leniency
+                // (probekeepnext body line1 at slot 756: centered 771.8 > 771
+                // would push, Word KEEPS — interior confirmed natural). The
+                // m-sweep (3-line paras, y_p2 straddle discriminator) pinned the
+                // LAST line to the same centered flip as line0 (p312 keep@14.7 /
+                // push@14.5, centered 14.61 inside; natural 13.62 excluded).
+                // compat 11/14/15 all measured IDENTICAL (compat is NOT a
+                // discriminator here).
+                let s739_edge = (line_idx == 0 && !prev_keep_next)
+                    || (line_idx > 0 && line_idx + 1 == lines.len());
+                // ★ON-SLOT gate: the centered-box rule is a property of lines
+                // SNAPPED to the page grid (the glyph centers within its slot).
+                // Apply it only when the cursor sits ON the grid phase (within
+                // 1pt of a slot boundary from page_top). kojin's pi=52 line
+                // lands 4.15pt OFF-phase (mixed snapped/unsnapped heights above)
+                // — the "Word keeps at nat_over −0.35" there is Oxi-geometry-
+                // relative; at Word's slot-aligned position the line fits its
+                // slot. A controlled PGothic (proportional) sweep ALSO measured
+                // centered (off-grid/proportional and compat were FALSIFIED as
+                // discriminators; the phase is the remaining structural
+                // difference between the probes and kojin's flip lines).
+                let s739_centered = if std::env::var("OXI_S739_DISABLE").is_err()
+                    && s739_edge
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.map_or(false, |p| p > 0.0)
+                {
+                    let pitch = grid_pitch.unwrap_or(0.0);
+                    let phase = (cursor.cursor_y - page_top).rem_euclid(pitch);
+                    let on_slot = phase < 1.0 || phase > pitch - 1.0;
+                    if on_slot { (effective_lh + natural_lh) / 2.0 } else { 0.0 }
+                } else { 0.0 };
+                (ink_lh + tgink_k).max(atleast_floor).max(s739_centered).min(effective_lh)
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
