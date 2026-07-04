@@ -6749,9 +6749,29 @@ impl LayoutEngine {
             // paras and continuation/last lines keep the leniency (S603 covers the
             // last-line-before-a-table case separately). Phase-1 75→76 (ohnoshugyo
             // FAIL→PASS), 0 PASS→FAIL.
+            // S748 (2026-07-05): S605's full-box is scoped to OFF-SLOT cursors.
+            // A controlled 2-line-para bottom sweep (_pb_capacity_gen cap2, 25
+            // COM points, 0.1pt fine flip) derived that an ON-SLOT 2-line
+            // para's line0 obeys the SAME centered-box rule as S739 — the flip
+            // lands EXACTLY in (15.8, 15.9] ∋ (pitch+nat)/2 = 15.809, and Word
+            // KEEPS line0 + splits 1+1 when the centered box fits (probeqbrkchars
+            // 第20条 at slot 754.75: centered 770.56 ≤ 771 → Word keeps; S605's
+            // full box 18 pushed it → the probe's +1×2). The earlier "S605
+            // counterexample" reading used the Info6 y (slot + ~2.25 centering
+            // offset) as the slot — the corrected arithmetic shows NO exception.
+            // ohnoshugyo pidx=203 (S605's source) is OFF-slot (phase ~6pt, mixed
+            // heights above) where the centered rule does not apply (S739's
+            // on-slot gate) — the full box stays as the off-slot approximation
+            // that reproduces Word's push there.
+            let s748_on_slot = grid_pitch.map_or(false, |p| {
+                if p <= 0.0 { return false; }
+                let phase = (cursor.cursor_y - page_top).rem_euclid(p);
+                phase < 1.0 || phase > p - 1.0
+            }) && std::env::var("OXI_S748_DISABLE").is_err();
             let s605_line0_2 = std::env::var("OXI_S605_DISABLE").is_err()
                 && line_idx == 0 && lines.len() == 2
                 && !page.doc_grid_no_type
+                && !s748_on_slot
                 && !s548b_exact_full && !s562b_empty_full;
             // S693 (2026-06-29, default ON, opt-out OXI_S693_DISABLE): generalize
             // S605 from 2-line paras to ANY NON-LAST line — a typed-grid page-bottom
