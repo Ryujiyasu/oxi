@@ -67,7 +67,14 @@ fn default_hps_raise_pt(base_pt: f32, hps_pt: f32) -> f32 {
     } else if hps_is_full_base {
         base_pt + 0.5
     } else {
-        DEFAULT_HPS_RAISE_PT
+        // S752 (2026-07-05): the fixed 9.0 fallback only holds at the 10.5pt
+        // anchor. probervsweep24 (base 12pt, hps swept 3..10.5pt, raise
+        // omitted): Word gives the ruby line 2 grid cells for EVERY hps —
+        // requiring default_raise > ~10.5 at hps=3pt, where the 9.0 constant
+        // produced expansion 0.96 -> 1 cell (the sweep's single -18pt).
+        // Generalize the fallback to the V13 dominant pattern base-1 (the
+        // 10.5pt anchor early-return above keeps the legacy 9.0 there).
+        (base_pt - 1.0).max(0.0)
     }
 }
 

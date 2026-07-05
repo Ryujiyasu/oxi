@@ -8931,7 +8931,12 @@ impl LayoutEngine {
                     let pitch = grid_pitch.unwrap();
                     let nat = natural_line_heights.get(line_idx).copied().unwrap_or(line_height);
                     let base_snapped = line_heights.get(line_idx).copied().unwrap_or(line_height);
-                    let augmented_snapped = ((nat + ruby_para_expansion_pt) / pitch).ceil() * pitch;
+                    // S752 (2026-07-05): a small tolerance on the cell ceil —
+                    // the marginal config (probervsweep24 cfg16: hps=5pt
+                    // raise=9pt at base 12: augmented 18.02) gets 1 cell in
+                    // Word, not 2; the true 2-cell configs clear the boundary
+                    // by >= 1.27pt in the sweep, so 0.5 is mid-window.
+                    let augmented_snapped = ((nat + ruby_para_expansion_pt - 0.5) / pitch).ceil() * pitch;
                     cursor.advance((augmented_snapped - base_snapped).max(0.0));
                 } else {
                     cursor.advance(ruby_para_expansion_pt);
@@ -18745,7 +18750,7 @@ impl LayoutEngine {
                     && std::env::var("OXI_S654_DISABLE").is_err();
                 if typed_grid {
                     let pitch = grid_pitch.unwrap();
-                    let augmented_snapped = ((max_line_height + ruby_exp) / pitch).ceil() * pitch;
+                    let augmented_snapped = ((max_line_height + ruby_exp - 0.5) / pitch).ceil() * pitch; // S752 tolerance
                     height += (augmented_snapped - max_line_height).max(0.0);
                 } else {
                     height += ruby_exp;
