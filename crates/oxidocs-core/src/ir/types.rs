@@ -94,12 +94,28 @@ pub struct Page {
     /// non-char-grid case; linesAndChars is grid-determined (charGrid mechanism).
     #[serde(default)]
     pub doc_grid_lines_and_chars: bool,
-    /// Header content (paragraphs from header part)
+    /// Header content (paragraphs from header part) — the DEFAULT-type header
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header: Vec<Block>,
-    /// Footer content (paragraphs from footer part)
+    /// Footer content (paragraphs from footer part) — the DEFAULT-type footer
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footer: Vec<Block>,
+    /// S755: first-page header/footer (type="first", active when title_pg)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_first: Vec<Block>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footer_first: Vec<Block>,
+    /// S755: even-page header/footer (type="even", active when even_odd_hf)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_even: Vec<Block>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footer_even: Vec<Block>,
+    /// S755: sectPr <w:titlePg/> — this section's first page uses the "first" type
+    #[serde(default)]
+    pub title_pg: bool,
+    /// S755: settings.xml <w:evenAndOddHeaders/> — even pages use the "even" type
+    #[serde(default)]
+    pub even_odd_hf: bool,
     /// Header distance from page top edge in points (w:pgMar header attr)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_distance: Option<f32>,

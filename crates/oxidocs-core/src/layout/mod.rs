@@ -1641,6 +1641,26 @@ pub struct BalloonReply {
 /// `cursor_y`. Verified by Phase 1 pagination_diff (53/55 unchanged)
 /// and SSIM verify (0 regressed).
 #[derive(Debug, Clone, Copy)]
+/// S755 (2026-07-06): per-page header/footer geometry variants (titlePg /
+/// evenAndOddHeaders). (start_y, content_height) per page class; page 1 =
+/// the section's first page ("first" variant when titlePg, else odd), even
+/// physical pages = "even" variant (blank when the flag is set but no even
+/// reference exists, per ECMA-376), other pages = the default ("odd").
+struct S755Geom {
+    first: (f32, f32),
+    odd: (f32, f32),
+    even: (f32, f32),
+}
+
+impl S755Geom {
+    fn top(&self, page_no: usize) -> f32 {
+        if page_no == 1 { self.first.0 } else if page_no % 2 == 0 { self.even.0 } else { self.odd.0 }
+    }
+    fn ch(&self, page_no: usize) -> f32 {
+        if page_no == 1 { self.first.1 } else if page_no % 2 == 0 { self.even.1 } else { self.odd.1 }
+    }
+}
+
 pub struct LayoutCursor {
     pub cursor_y: f32,
     pub visual_y: f32,
@@ -2674,81 +2694,13 @@ impl LayoutEngine {
         // body content starts below the header (header pushes body down).
         // header_distance + header_content_height = header_bottom.
         // start_y = max(margin.top, header_bottom)
-        let header_bottom = if !page.header.is_empty() {
-            let header_y = page.header_distance.unwrap_or(36.0);
-            let hdr_cw = page.size.width - page.margin.left - page.margin.right;
-            let mut hdr_h = 0.0_f32;
-            for block in &page.header {
-                if let Block::Paragraph(para) = block {
-                    let fs = para.runs.first()
-                        .and_then(|r| r.style.font_size)
-                        .unwrap_or(self.default_font_size);
-                    let metrics = para.runs.first()
-                        .map(|r| self.metrics_for(&r.style, &para.style))
-                        .unwrap_or_else(|| self.doc_default_metrics());
-                    let lh = metrics.word_line_height(fs, 96.0);
-                    hdr_h += lh;
-                    hdr_h += para.style.space_after.unwrap_or(0.0);
-                    // S731 (2026-07-03): a WRAPPING header paragraph pushes the
-                    // body top by its FULL wrapped height — the 1-line-per-para
-                    // model under-counted a 3-line header para by 2 lines, so
-                    // the body started ~2 lines too high (probexhdrwrap {-1:10};
-                    // Word body top 113.3 vs margin-top 70.9). Add the EXTRA
-                    // lines beyond the first: line count = width-aware estimate
-                    // ÷ huge-width 1-line estimate (the S635 technique). The
-                    // single-line height stays the ORIGINAL word_line_height
-                    // computation (no sub-pt shift); corpus headers have no
-                    // wrapping paras (>44ch scan: 0) → extra=0 → byte-identical.
-                    if std::env::var("OXI_S731_DISABLE").is_err() {
-                        let est = self.estimate_para_height(para, hdr_cw, None, None, false, None, None);
-                        let one = self.estimate_para_height(para, 1.0e6, None, None, false, None, None);
-                        if one > 0.1 {
-                            let extra_lines = ((est / one).round() as i32 - 1).max(0);
-                            hdr_h += extra_lines as f32 * lh;
-                        }
-                    }
-                } else if let Block::Table(t) = block {
-                    // S731: a TABLE in the header contributed ZERO height (only
-                    // Block::Paragraph was handled) — probezhdrtbl {-1:5}. Sum
-                    // the rows' natural heights (trHeight floor per row).
-                    // Corpus-safe: 0 corpus docs have tables in headers.
-                    if std::env::var("OXI_S731_DISABLE").is_err() {
-                        let col_widths = self.resolve_table_col_widths(t, hdr_cw);
-                        let dp = t.style.default_cell_margins.as_ref();
-                        let (pl, pr, pt, pb) = (
-                            dp.and_then(|m| m.left).unwrap_or(5.4),
-                            dp.and_then(|m| m.right).unwrap_or(5.4),
-                            dp.and_then(|m| m.top).unwrap_or(0.0),
-                            dp.and_then(|m| m.bottom).unwrap_or(0.0),
-                        );
-                        for row in &t.rows {
-                            let nat = self.estimate_table_row_natural_h(
-                                row, &col_widths, pl, pr, pt, pb, t,
-                                page.grid_line_pitch, page.grid_char_pitch, None);
-                            let h = row.height.map(|th| match row.height_rule.as_deref() {
-                                Some("exact") => th,
-                                _ => th.max(nat),
-                            }).unwrap_or(nat);
-                            hdr_h += h;
-                        }
-                    }
-                } else if let Block::Image(img) = block {
-                    // S742 (2026-07-04): an inline IMAGE in the header contributed
-                    // ZERO height (the parser extracts inline images into their own
-                    // Block::Image) — probeqhdrimg {-1:12}: Word body top 143.35 =
-                    // header_y 42.55 + image 85.04 + header text line; Oxi started
-                    // the body ~85pt too high. Corpus-safe: 0 corpus docs carry a
-                    // header image block (scan below in the ship notes).
-                    if std::env::var("OXI_S742_DISABLE").is_err() {
-                        hdr_h += img.height;
-                    }
-                }
-            }
-            header_y + hdr_h
-        } else {
-            0.0
-        };
-        let start_y = page.margin.top.max(header_bottom);
+        // S755: page 1 of a titlePg section uses the FIRST-type header
+        // (absent first reference = blank per ECMA-376 §17.10.2); the
+        // default header drives pages 2+ via s755_geom below.
+        let s755_on = std::env::var("OXI_S755_DISABLE").is_err();
+        let s755_first_hdr: &[Block] = if s755_on && page.title_pg { &page.header_first } else { &page.header };
+        let header_bottom = self.s755_header_bottom(s755_first_hdr, page);
+        let mut start_y = page.margin.top.max(header_bottom);
 
         // §11.2.2 LM2 unified P0 formula (Round 23, COM-confirmed 2026-04-08).
         // In linesAndChars (LM2) mode, the FIRST body paragraph is allocated a
@@ -2820,77 +2772,49 @@ impl LayoutEngine {
         // past it — causing 1 fewer page than Word.
         // Footer reservation = footer_distance + footer_height. Compare to
         // page.margin.bottom; use whichever is larger.
-        let footer_reserved = if !page.footer.is_empty() {
-            let footer_dist = page.footer_distance.unwrap_or(36.0);
-            let cw = page.size.width - page.margin.left - page.margin.right;
-            let gp = page.grid_line_pitch;
-            let mut footer_h: f32 = 0.0;
-            for block in &page.footer {
-                if let Block::Paragraph(p) = block {
-                    // Day 33 part 18 (2026-05-10): skip framePr-wrapped paragraphs.
-                    // framePr means floating-positioned frame (vAnchor/hAnchor set,
-                    // wrap=around) — Word excludes these from inline footer height
-                    // because they're positioned independently of inline flow.
-                    // COM-confirmed via 3-variant minimal repro (FP_A/B/C with
-                    // fs=80pt framePr para → all identical break boundaries).
-                    // Affects 备考 cluster: d4d126 (3.6pt over-reservation) plus
-                    // 6514, a1d6 candidates.
-                    if p.style.frame_pr.is_some() {
-                        continue;
-                    }
-                    // estimate_para_height uses word_line_height_table_cell for
-                    // empty paragraphs, which under-estimates footer empty lines.
-                    // Override for empty footer paragraphs: use no-grid line height
-                    // matching Word's actual footer rendering.
-                    let h = if p.runs.is_empty() || p.runs.iter().all(|r| r.text.is_empty()) {
-                        let empty_fs = p.style.ppr_rpr.as_ref()
-                            .and_then(|r| r.font_size)
-                            .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
-                        let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let metrics = self.metrics_for_para_mark(&rpr_ref, &p.style);
-                        // Day 33 part 11 (2026-05-10): always use natural line height
-                        // for empty footer paragraphs. Previous grid-snap (added
-                        // 2026-04-17 for 04b88e) over-reserves footer area when
-                        // grid pitch > natural line height (bd90b00: 16.5pt pitch,
-                        // ~13pt natural → 2.3pt over-reservation pushes 備考 to
-                        // page 2). The max-with-bottom-margin guard below ensures
-                        // we still reserve at least bottom_margin space.
-                        metrics.word_line_height_no_grid(empty_fs)
-                    } else {
-                        self.estimate_para_height(p, cw, gp, None, false, None, None)
-                    };
-                    footer_h += h;
-                }
-            }
-            if std::env::var("OXI_DBG_FTR").is_ok() {
-                eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} reserved={:.1} bottom_margin={:.1}",
-                    page.footer.len(), footer_dist, footer_h, (footer_dist + footer_h).max(page.margin.bottom), page.margin.bottom);
-            }
-            (footer_dist + footer_h).max(page.margin.bottom)
-        } else {
-            if std::env::var("OXI_DBG_FTR").is_ok() {
-                eprintln!("[FTR] page.footer EMPTY -> reserved=bottom_margin {:.1}", page.margin.bottom);
-            }
-            page.margin.bottom
-        };
-        // S726: the body bottom is FOOTER-CONSTRAINED when the footer eats past
-        // the bottom margin — the page-bottom leniency must not overhang into
-        // footer TEXT (see the layout_paragraph param doc). ★TEXT-BEARING
-        // footers only: an EMPTY-paragraph footer has no ink, so the leniency
-        // overhang lands in blank space exactly like an empty margin — Word
-        // grants it (ed025: default footer = 2 empty paras, reserved 81.4 >
-        // margin 56.7; the blanket flag regressed its word_png SSIM −0.187 =
-        // Word keeps those page-bottom lines; scoping to text-bearing footers
-        // restores byte-identity). The probe evidence (Word breaks at the
-        // boundary) is a 6-TEXT-line footer — ink collision is the physical
-        // discriminator, not the reservation amount.
-        let footer_has_text = page.footer.iter().any(|b| matches!(b, Block::Paragraph(p)
-            if p.style.frame_pr.is_none()
-                && p.runs.iter().any(|r| !r.text.trim().is_empty())));
+        let s755_first_ftr: &[Block] = if s755_on && page.title_pg { &page.footer_first } else { &page.footer };
+        let (footer_reserved, footer_has_text) = self.s755_footer_geom(s755_first_ftr, page);
+
         let footer_tight = footer_reserved > page.margin.bottom + 0.05
             && footer_has_text
             && std::env::var("OXI_S726_DISABLE").is_err();
-        let content_height = page.size.height - start_y - footer_reserved;
+        let mut content_height = page.size.height - start_y - footer_reserved;
+        // S755: per-page geometry variants. Some ONLY when first/even/odd
+        // actually differ (>0.05pt) — the whole corpus is None (titlePg docs
+        // have no header refs; albaluna variants are same-height 1-line;
+        // bd90b00's first/default are both 1 line) → byte-identical by
+        // construction. Page 1 = the (start_y, content_height) just computed.
+        let s755_geom: Option<S755Geom> = if s755_on && (page.title_pg || page.even_odd_hf) {
+            let hb_odd = self.s755_header_bottom(&page.header, page);
+            let sy_odd = page.margin.top.max(hb_odd);
+            let (fr_odd, _) = self.s755_footer_geom(&page.footer, page);
+            let ch_odd = page.size.height - sy_odd - fr_odd;
+            let (sy_even, ch_even) = if page.even_odd_hf {
+                // Absent even reference with the flag set = BLANK even header
+                // (ECMA-376), like the titlePg first-page rule.
+                let hb = self.s755_header_bottom(&page.header_even, page);
+                let sy = page.margin.top.max(hb);
+                let (fr, _) = self.s755_footer_geom(&page.footer_even, page);
+                (sy, page.size.height - sy - fr)
+            } else {
+                (sy_odd, ch_odd)
+            };
+            let differs = (sy_odd - start_y).abs() > 0.05
+                || (ch_odd - content_height).abs() > 0.05
+                || (sy_even - sy_odd).abs() > 0.05
+                || (ch_even - ch_odd).abs() > 0.05;
+            if differs {
+                Some(S755Geom {
+                    first: (start_y, content_height),
+                    odd: (sy_odd, ch_odd),
+                    even: (sy_even, ch_even),
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         // Round 29 (2026-04-08): per-page dynamic footnote reservation.
         // Footnotes are reserved at the bottom of the page where their reference
         // appears. The amount reserved varies per page based on which footnotes
@@ -3308,6 +3232,12 @@ impl LayoutEngine {
         let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> =
             Default::default();
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            // S755: refresh the current page's header/footer geometry (a
+            // previous block may have pushed pages internally).
+            if let Some(g) = s755_geom.as_ref() {
+                start_y = g.top(pages.len() + 1);
+                content_height = g.ch(pages.len() + 1);
+            }
             // S735: switch the active grid pitch at section-run boundaries.
             if s735_grid_het
                 && s735_run_idx + 1 < page.grid_runs.len()
@@ -3329,7 +3259,8 @@ impl LayoutEngine {
                         height: page.size.height,
                         elements: std::mem::take(&mut elements),
                     });
-                    cursor.set(start_y);
+                    if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                     lm2_cells = 0;
                     current_page_idx += 1;
                     footnote_reserve_current = 0.0;
@@ -3693,7 +3624,8 @@ impl LayoutEngine {
                             height: page.size.height,
                             elements: std::mem::take(&mut elements),
                         });
-                        cursor.set(start_y);
+                        if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                         current_column = 0;
                         start_x = col_x_positions[0];
                         content_width = col_widths[0];
@@ -3734,7 +3666,8 @@ impl LayoutEngine {
                                     height: page.size.height,
                                     elements: std::mem::take(&mut elements),
                                 });
-                                cursor.set(start_y);
+                                if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                                 current_column = 0;
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
@@ -3843,7 +3776,8 @@ impl LayoutEngine {
                                         height: page.size.height,
                                         elements: std::mem::take(&mut elements),
                                     });
-                                    cursor.set(start_y);
+                                    if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                                     current_column = 0;
                                     start_x = col_x_positions[0];
                                     content_width = col_widths[0];
@@ -3890,7 +3824,8 @@ impl LayoutEngine {
                                     height: page.size.height,
                                     elements: std::mem::take(&mut elements),
                                 });
-                                cursor.set(start_y);
+                                if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                                 current_column = 0;
                                 start_x = col_x_positions[0];
                                 content_width = col_widths[0];
@@ -3978,6 +3913,7 @@ impl LayoutEngine {
                         col_band_top, // S749
                         false, // S691: body context
                         footer_tight, // S726
+                        s755_geom.as_ref(), // S755
                     );
                     prev_space_after = sa;
                     // S637: layout_paragraph may have advanced the column (flowing
@@ -4117,7 +4053,8 @@ impl LayoutEngine {
                             height: page.size.height,
                             elements: std::mem::take(&mut elements),
                         });
-                        cursor.set(start_y);
+                        if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                         current_column = 0;
                         start_x = col_x_positions[0];
                         content_width = col_widths[0];
@@ -4426,7 +4363,8 @@ impl LayoutEngine {
                                 height: page.size.height,
                                 elements: std::mem::take(&mut elements),
                             });
-                            cursor.set(start_y);
+                            if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(start_y);
                             current_column = 0;
                             start_x = col_x_positions[0];
                             content_width = col_widths[0];
@@ -4585,6 +4523,7 @@ impl LayoutEngine {
                     height: page.size.height,
                     elements: std::mem::take(&mut elements),
                 });
+                if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(start_y);
                 current_page_idx += 1;
             }
@@ -4638,6 +4577,7 @@ impl LayoutEngine {
                             1, 0, &[], 0.0, // S749: band top unused (1-col)
                             false,
                             false,
+                            None, // S755
                         );
                         elements.extend(en_elements);
                     }
@@ -4809,9 +4749,28 @@ impl LayoutEngine {
             content_width
         };
         for (page_idx, lp) in pages.iter_mut().enumerate() {
-            if !page.header.is_empty() {
+            // S755: per-page header/footer variant selection — page 1 of a
+            // titlePg section renders the FIRST-type blocks, even physical
+            // pages render the EVEN-type blocks (blank when the flag is set
+            // but no reference exists), everything else the default.
+            let s755_pno = page_idx + 1;
+            let hdr_blocks: &[Block] = if s755_on && page.title_pg && s755_pno == 1 {
+                &page.header_first
+            } else if s755_on && page.even_odd_hf && s755_pno % 2 == 0 {
+                &page.header_even
+            } else {
+                &page.header
+            };
+            let ftr_blocks: &[Block] = if s755_on && page.title_pg && s755_pno == 1 {
+                &page.footer_first
+            } else if s755_on && page.even_odd_hf && s755_pno % 2 == 0 {
+                &page.footer_even
+            } else {
+                &page.footer
+            };
+            if !hdr_blocks.is_empty() {
                 let mut cy = LayoutCursor::new(header_y);
-                for block in &page.header {
+                for block in hdr_blocks {
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_hdr = std::collections::HashMap::new();
                         let (hdr_elements, _, _) = self.layout_paragraph(
@@ -4825,18 +4784,19 @@ impl LayoutEngine {
                             1, 0, &[], 0.0, // S749: band top unused (1-col)
                             true, // S691: header context
                             false, // S726: header bottom differs
+                            None, // S755
                         );
                         lp.elements.extend(hdr_elements);
                     }
                 }
             }
-            if !page.footer.is_empty() {
+            if !ftr_blocks.is_empty() {
                 // Estimate footer content height first.
                 // Day 33 part 18: skip framePr paragraphs (floating frames) —
                 // they're positioned independently of inline flow, so they
                 // should not shift footer_top.
                 let mut footer_h: f32 = 0.0;
-                for block in &page.footer {
+                for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
                         if para.style.frame_pr.is_some() { continue; }
                         footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
@@ -4844,7 +4804,7 @@ impl LayoutEngine {
                 }
                 let footer_top = page.size.height - footer_dist - footer_h;
                 let mut cy = LayoutCursor::new(footer_top);
-                for block in &page.footer {
+                for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_ftr = std::collections::HashMap::new();
                         let (ftr_elements, _, _) = self.layout_paragraph(
@@ -4858,6 +4818,7 @@ impl LayoutEngine {
                             1, 0, &[], 0.0, // S749: band top unused (1-col)
                             true, // S691: footer context
                             false, // S726: footer bottom differs
+                            None, // S755
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -4933,7 +4894,7 @@ impl LayoutEngine {
                             // Recompute footer top here (mirrors lines 832-839 above).
                             // Day 33 part 18: skip framePr paragraphs (floating frames).
                             let mut footer_h: f32 = 0.0;
-                            for block in &page.footer {
+                            for block in ftr_blocks {
                                 if let Block::Paragraph(para) = block {
                                     if para.style.frame_pr.is_some() { continue; }
                                     footer_h += self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None);
@@ -5181,6 +5142,7 @@ impl LayoutEngine {
                                         1, 0, &[], 0.0, // S749: band top unused (1-col)
                                         false, // S691: footnote context
                                         false, // S726
+                                        None, // S755
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -5475,6 +5437,7 @@ impl LayoutEngine {
                         1, 0, &[], 0.0, // S749: band top unused (1-col)
                         false, // S691: textbox context (in_textbox)
                         false, // S726
+                        None, // S755
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -5698,14 +5661,168 @@ impl LayoutEngine {
 
     #[allow(clippy::too_many_arguments)]
     #[allow(unused_assignments)]
+    /// S755: header-bottom (header_y + content height) for one header
+    /// variant's blocks — the extracted start_y computation (S731/S742
+    /// arms included) so first/even/odd variants share one code path.
+    fn s755_header_bottom(&self, blocks: &[Block], page: &Page) -> f32 {
+        if !blocks.is_empty() {
+            let header_y = page.header_distance.unwrap_or(36.0);
+            let hdr_cw = page.size.width - page.margin.left - page.margin.right;
+            let mut hdr_h = 0.0_f32;
+            for block in blocks {
+                if let Block::Paragraph(para) = block {
+                    let fs = para.runs.first()
+                        .and_then(|r| r.style.font_size)
+                        .unwrap_or(self.default_font_size);
+                    let metrics = para.runs.first()
+                        .map(|r| self.metrics_for(&r.style, &para.style))
+                        .unwrap_or_else(|| self.doc_default_metrics());
+                    let lh = metrics.word_line_height(fs, 96.0);
+                    hdr_h += lh;
+                    hdr_h += para.style.space_after.unwrap_or(0.0);
+                    // S731 (2026-07-03): a WRAPPING header paragraph pushes the
+                    // body top by its FULL wrapped height — the 1-line-per-para
+                    // model under-counted a 3-line header para by 2 lines, so
+                    // the body started ~2 lines too high (probexhdrwrap {-1:10};
+                    // Word body top 113.3 vs margin-top 70.9). Add the EXTRA
+                    // lines beyond the first: line count = width-aware estimate
+                    // ÷ huge-width 1-line estimate (the S635 technique). The
+                    // single-line height stays the ORIGINAL word_line_height
+                    // computation (no sub-pt shift); corpus headers have no
+                    // wrapping paras (>44ch scan: 0) → extra=0 → byte-identical.
+                    if std::env::var("OXI_S731_DISABLE").is_err() {
+                        let est = self.estimate_para_height(para, hdr_cw, None, None, false, None, None);
+                        let one = self.estimate_para_height(para, 1.0e6, None, None, false, None, None);
+                        if one > 0.1 {
+                            let extra_lines = ((est / one).round() as i32 - 1).max(0);
+                            hdr_h += extra_lines as f32 * lh;
+                        }
+                    }
+                } else if let Block::Table(t) = block {
+                    // S731: a TABLE in the header contributed ZERO height (only
+                    // Block::Paragraph was handled) — probezhdrtbl {-1:5}. Sum
+                    // the rows' natural heights (trHeight floor per row).
+                    // Corpus-safe: 0 corpus docs have tables in headers.
+                    if std::env::var("OXI_S731_DISABLE").is_err() {
+                        let col_widths = self.resolve_table_col_widths(t, hdr_cw);
+                        let dp = t.style.default_cell_margins.as_ref();
+                        let (pl, pr, pt, pb) = (
+                            dp.and_then(|m| m.left).unwrap_or(5.4),
+                            dp.and_then(|m| m.right).unwrap_or(5.4),
+                            dp.and_then(|m| m.top).unwrap_or(0.0),
+                            dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                        );
+                        for row in &t.rows {
+                            let nat = self.estimate_table_row_natural_h(
+                                row, &col_widths, pl, pr, pt, pb, t,
+                                page.grid_line_pitch, page.grid_char_pitch, None);
+                            let h = row.height.map(|th| match row.height_rule.as_deref() {
+                                Some("exact") => th,
+                                _ => th.max(nat),
+                            }).unwrap_or(nat);
+                            hdr_h += h;
+                        }
+                    }
+                } else if let Block::Image(img) = block {
+                    // S742 (2026-07-04): an inline IMAGE in the header contributed
+                    // ZERO height (the parser extracts inline images into their own
+                    // Block::Image) — probeqhdrimg {-1:12}: Word body top 143.35 =
+                    // header_y 42.55 + image 85.04 + header text line; Oxi started
+                    // the body ~85pt too high. Corpus-safe: 0 corpus docs carry a
+                    // header image block (scan below in the ship notes).
+                    if std::env::var("OXI_S742_DISABLE").is_err() {
+                        hdr_h += img.height;
+                    }
+                }
+            }
+            header_y + hdr_h
+        } else {
+            0.0
+        }
+    }
+
+    /// S755: (footer_reserved, footer_has_text) for one footer variant's
+    /// blocks (the extracted reservation incl the Day-33 empty-para and
+    /// framePr rules) so first/even/odd variants share one code path.
+    fn s755_footer_geom(&self, blocks: &[Block], page: &Page) -> (f32, bool) {
+        let footer_reserved = if !blocks.is_empty() {
+            let footer_dist = page.footer_distance.unwrap_or(36.0);
+            let cw = page.size.width - page.margin.left - page.margin.right;
+            let gp = page.grid_line_pitch;
+            let mut footer_h: f32 = 0.0;
+            for block in blocks {
+                if let Block::Paragraph(p) = block {
+                    // Day 33 part 18 (2026-05-10): skip framePr-wrapped paragraphs.
+                    // framePr means floating-positioned frame (vAnchor/hAnchor set,
+                    // wrap=around) — Word excludes these from inline footer height
+                    // because they're positioned independently of inline flow.
+                    // COM-confirmed via 3-variant minimal repro (FP_A/B/C with
+                    // fs=80pt framePr para → all identical break boundaries).
+                    // Affects 备考 cluster: d4d126 (3.6pt over-reservation) plus
+                    // 6514, a1d6 candidates.
+                    if p.style.frame_pr.is_some() {
+                        continue;
+                    }
+                    // estimate_para_height uses word_line_height_table_cell for
+                    // empty paragraphs, which under-estimates footer empty lines.
+                    // Override for empty footer paragraphs: use no-grid line height
+                    // matching Word's actual footer rendering.
+                    let h = if p.runs.is_empty() || p.runs.iter().all(|r| r.text.is_empty()) {
+                        let empty_fs = p.style.ppr_rpr.as_ref()
+                            .and_then(|r| r.font_size)
+                            .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
+                        let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let metrics = self.metrics_for_para_mark(&rpr_ref, &p.style);
+                        // Day 33 part 11 (2026-05-10): always use natural line height
+                        // for empty footer paragraphs. Previous grid-snap (added
+                        // 2026-04-17 for 04b88e) over-reserves footer area when
+                        // grid pitch > natural line height (bd90b00: 16.5pt pitch,
+                        // ~13pt natural → 2.3pt over-reservation pushes 備考 to
+                        // page 2). The max-with-bottom-margin guard below ensures
+                        // we still reserve at least bottom_margin space.
+                        metrics.word_line_height_no_grid(empty_fs)
+                    } else {
+                        self.estimate_para_height(p, cw, gp, None, false, None, None)
+                    };
+                    footer_h += h;
+                }
+            }
+            if std::env::var("OXI_DBG_FTR").is_ok() {
+                eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} reserved={:.1} bottom_margin={:.1}",
+                    blocks.len(), footer_dist, footer_h, (footer_dist + footer_h).max(page.margin.bottom), page.margin.bottom);
+            }
+            (footer_dist + footer_h).max(page.margin.bottom)
+        } else {
+            if std::env::var("OXI_DBG_FTR").is_ok() {
+                eprintln!("[FTR] page.footer EMPTY -> reserved=bottom_margin {:.1}", page.margin.bottom);
+            }
+            page.margin.bottom
+        };
+        // S726: the body bottom is FOOTER-CONSTRAINED when the footer eats past
+        // the bottom margin — the page-bottom leniency must not overhang into
+        // footer TEXT (see the layout_paragraph param doc). ★TEXT-BEARING
+        // footers only: an EMPTY-paragraph footer has no ink, so the leniency
+        // overhang lands in blank space exactly like an empty margin — Word
+        // grants it (ed025: default footer = 2 empty paras, reserved 81.4 >
+        // margin 56.7; the blanket flag regressed its word_png SSIM −0.187 =
+        // Word keeps those page-bottom lines; scoping to text-bearing footers
+        // restores byte-identity). The probe evidence (Word breaks at the
+        // boundary) is a 6-TEXT-line footer — ink collision is the physical
+        // discriminator, not the reservation amount.
+        let footer_has_text = blocks.iter().any(|b| matches!(b, Block::Paragraph(p)
+            if p.style.frame_pr.is_none()
+                && p.runs.iter().any(|r| !r.text.trim().is_empty())));
+        (footer_reserved, footer_has_text)
+    }
+
     fn layout_paragraph(
         &self,
         para: &Paragraph,
         mut start_x: f32,
         cursor: &mut LayoutCursor,
         content_width: f32,
-        content_height: f32,
-        page_top: f32,
+        mut content_height: f32,
+        mut page_top: f32,
         page: &Page,
         pages: &mut Vec<LayoutPage>,
         current_elements: &mut Vec<LayoutElement>,
@@ -5795,6 +5912,12 @@ impl LayoutEngine {
         // while ink fits by 2.0 — full-box at footer boundaries). false for
         // header/footer/footnote/textbox contexts (their bottoms differ).
         footer_tight: bool,
+        // S755 (2026-07-06): per-page header/footer geometry (titlePg /
+        // evenAndOddHeaders). Some ONLY when the first/even/odd variants
+        // actually DIFFER in height (the whole corpus is None). On an
+        // internal page push, page_top/content_height switch to the NEW
+        // page's variant. Only the body call site threads a real value.
+        s755_geom: Option<&S755Geom>,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -6176,6 +6299,7 @@ impl LayoutEngine {
                 });
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
+                if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
             }
 
@@ -7329,6 +7453,7 @@ impl LayoutEngine {
                 });
                 current_elements.extend(std::mem::take(&mut elements));
                 elements = std::mem::take(current_elements);
+                if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
                 // Session 107: half-leading at page top (see mid-para break
                 // note for full rationale).
@@ -7392,7 +7517,8 @@ impl LayoutEngine {
                         height: page.size.height,
                         elements: std::mem::take(current_elements),
                     });
-                    cursor.set(page_top);
+                    if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(page_top);
                     return (Vec::new(), 0.0, 0);
                 }
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
@@ -7403,6 +7529,7 @@ impl LayoutEngine {
                     height: page.size.height,
                     elements: std::mem::take(current_elements),
                 });
+                if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
                 // S637: a real page push lands on column 0 of the new page.
                 cur_col = 0;
@@ -8981,6 +9108,7 @@ impl LayoutEngine {
                     height: page.size.height,
                     elements: page_elements,
                 });
+                if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
                 // S733: a real page push (page break, or column break from the
                 // last column) lands on column 0 of the new page.

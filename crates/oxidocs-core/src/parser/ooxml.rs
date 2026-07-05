@@ -77,6 +77,8 @@ impl OoxmlParser {
         // OOXML: sections without explicit header/footer inherit from previous section
         let mut prev_header_refs: Vec<HdrFtrRef> = Vec::new();
         let mut prev_footer_refs: Vec<HdrFtrRef> = Vec::new();
+        // S755: doc-level even/odd header flag (settings.xml).
+        let even_odd_hf = self.parse_even_odd_headers();
         for mut section in sections {
             let effective_header_refs = if section.properties.header_refs.is_empty() {
                 &prev_header_refs
@@ -88,9 +90,16 @@ impl OoxmlParser {
             } else {
                 &section.properties.footer_refs
             };
-            // Determine which header/footer type to use
-            // First page of a section with title_pg uses "first" type
-            let hdr_type = if section.properties.title_pg && page_index == 0 { "first" } else { "default" };
+            // Determine which header/footer type to use.
+            // S755 (2026-07-06): `header`/`footer` always carry the DEFAULT
+            // type; the "first" (titlePg) and "even" (evenAndOddHeaders)
+            // variants are parsed into header_first/header_even etc. and the
+            // LAYOUT selects per rendered page (the old code baked the
+            // first-type header into the whole section → a tall first-page
+            // header was applied to every page, probextitlepg +1×6).
+            // OXI_S755_DISABLE restores the legacy bake-first-into-section.
+            let hdr_type = if std::env::var("OXI_S755_DISABLE").is_ok()
+                && section.properties.title_pg && page_index == 0 { "first" } else { "default" };
             let use_headers: Vec<HdrFtrRef> = effective_header_refs.iter()
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
@@ -136,6 +145,27 @@ impl OoxmlParser {
                     Vec::new()
                 }
             };
+            // S755: parse the first/even variants (no fallback — an absent
+            // variant means the layout falls back to the default blocks).
+            let hf_variant = |refs: &[HdrFtrRef], t: &str| -> Vec<HdrFtrRef> {
+                refs.iter().filter(|r| r.ref_type == t).cloned().collect()
+            };
+            let fh = hf_variant(effective_header_refs, "first");
+            let header_first = if section.properties.title_pg && !fh.is_empty() {
+                self.parse_header_footer_blocks(&fh, &ctx, &styles)
+            } else { Vec::new() };
+            let ff = hf_variant(effective_footer_refs, "first");
+            let footer_first = if section.properties.title_pg && !ff.is_empty() {
+                self.parse_header_footer_blocks(&ff, &ctx, &styles)
+            } else { Vec::new() };
+            let eh = hf_variant(effective_header_refs, "even");
+            let header_even = if even_odd_hf && !eh.is_empty() {
+                self.parse_header_footer_blocks(&eh, &ctx, &styles)
+            } else { Vec::new() };
+            let ef = hf_variant(effective_footer_refs, "even");
+            let footer_even = if even_odd_hf && !ef.is_empty() {
+                self.parse_header_footer_blocks(&ef, &ctx, &styles)
+            } else { Vec::new() };
 
             // Collect referenced footnotes and endnotes for this section
             let mut footnotes_list = Vec::new();
@@ -260,6 +290,12 @@ impl OoxmlParser {
                     doc_grid_lines_and_chars: section.properties.doc_grid_lines_and_chars,
                     header,
                     footer,
+                    header_first,
+                    footer_first,
+                    header_even,
+                    footer_even,
+                    title_pg: section.properties.title_pg,
+                    even_odd_hf,
                     footnotes: footnotes_list,
                     endnotes: endnotes_list,
                     floating_images: section.floating_images,
@@ -685,6 +721,23 @@ impl OoxmlParser {
             Err(_) => return false,
         };
         xml.contains("adjustLineHeightInTable")
+    }
+
+    /// S755: settings.xml `<w:evenAndOddHeaders/>` (CT_OnOff: bare/omitted
+    /// val = true; val="0"/"false"/"off" = false). Even pages then use the
+    /// type="even" header/footer references.
+    fn parse_even_odd_headers(&mut self) -> bool {
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        if let Some(i) = xml.find("evenAndOddHeaders") {
+            let tail = &xml[i..(i + 60).min(xml.len())];
+            let tag = &tail[..tail.find('>').unwrap_or(tail.len())];
+            !(tag.contains("\"0\"") || tag.contains("\"false\"") || tag.contains("\"off\""))
+        } else {
+            false
+        }
     }
 
     /// Parse word/settings.xml for compatibilityMode.
