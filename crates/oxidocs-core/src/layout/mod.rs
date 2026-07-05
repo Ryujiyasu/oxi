@@ -3206,6 +3206,14 @@ impl LayoutEngine {
         // keepNext para gets the LENIENT natural page-bottom test, see the
         // centered-box rule in layout_paragraph).
         let mut prev_keep_next: bool = false;
+        // S749 (2026-07-05): the vertical TOP of the current multi-column BAND.
+        // A continuous multi-col section starting MID-PAGE flows its columns
+        // from the section boundary (the SWITCH cursor), not the page top —
+        // column 2 previously reset to page_top and gained the whole upper
+        // page (probexcont2col: col2 filled from y=71 while col1's band began
+        // at 503 → +432pt phantom capacity → -1x12). Reset to start_y on page
+        // transitions (the band continues at the page top on later pages).
+        let mut col_band_top: f32 = start_y;
         let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
@@ -3350,6 +3358,7 @@ impl LayoutEngine {
             if heterogeneous && current_page_idx != section_prev_page {
                 section_max_y = start_y;
                 section_prev_page = current_page_idx;
+                col_band_top = start_y; // S749: band continues at the page top
             }
             // S560: switch column geometry at a section boundary within a
             // merged continuous-section page (only when heterogeneous, i.e.
@@ -3387,8 +3396,16 @@ impl LayoutEngine {
                     start_x = col_x_positions[0];
                     content_width = col_widths[0];
                     section_max_y = cursor.cursor_y;
+                    // S749: the multi-col band starts HERE; column advances on
+                    // this page return to this y, not the page top.
+                    col_band_top = if num_columns > 1
+                        && std::env::var("OXI_S749_DISABLE").is_err() {
+                        cursor.cursor_y
+                    } else {
+                        start_y
+                    };
                     if std::env::var("OXI_DBG_COL").is_ok() {
-                        eprintln!("[COL] SWITCH block_idx={} -> ncol={} at page={} cursor_y={:.1}", block_idx, num_columns, current_page_idx, cursor.cursor_y);
+                        eprintln!("[COL] SWITCH block_idx={} -> ncol={} at page={} cursor_y={:.1} band_top={:.1}", block_idx, num_columns, current_page_idx, cursor.cursor_y, col_band_top);
                     }
                 }
             }
@@ -3651,7 +3668,7 @@ impl LayoutEngine {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
                                 content_width = col_widths[current_column];
-                                cursor.set(start_y);
+                                cursor.set(col_band_top);
                             } else {
                                 pages.push(LayoutPage {
                                     width: page.size.width,
@@ -3760,7 +3777,7 @@ impl LayoutEngine {
                                     current_column += 1;
                                     start_x = col_x_positions[current_column];
                                     content_width = col_widths[current_column];
-                                    cursor.set(start_y);
+                                    cursor.set(col_band_top);
                                 } else {
                                     pages.push(LayoutPage {
                                         width: page.size.width,
@@ -3807,7 +3824,7 @@ impl LayoutEngine {
                                 current_column += 1;
                                 start_x = col_x_positions[current_column];
                                 content_width = col_widths[current_column];
-                                cursor.set(start_y);
+                                cursor.set(col_band_top);
                             } else {
                                 pages.push(LayoutPage {
                                     width: page.size.width,
@@ -3899,6 +3916,7 @@ impl LayoutEngine {
                         num_columns,
                         current_column,
                         &col_x_positions,
+                        col_band_top, // S749
                         false, // S691: body context
                         footer_tight, // S726
                     );
@@ -4342,7 +4360,7 @@ impl LayoutEngine {
                             current_column += 1;
                             start_x = col_x_positions[current_column];
                             content_width = col_widths[current_column];
-                            cursor.set(start_y);
+                            cursor.set(col_band_top);
                         } else {
                             pages.push(LayoutPage {
                                 width: page.size.width,
@@ -4558,7 +4576,7 @@ impl LayoutEngine {
                             false, false, None,
                             0.0,
                             &empty_fn_h_en,
-                            1, 0, &[],
+                            1, 0, &[], 0.0, // S749: band top unused (1-col)
                             false,
                             false,
                         );
@@ -4745,7 +4763,7 @@ impl LayoutEngine {
                             false, false, None,
                             0.0,
                             &empty_fn_h_hdr,
-                            1, 0, &[],
+                            1, 0, &[], 0.0, // S749: band top unused (1-col)
                             true, // S691: header context
                             false, // S726: header bottom differs
                         );
@@ -4778,7 +4796,7 @@ impl LayoutEngine {
                             false, false, None,
                             0.0,
                             &empty_fn_h_ftr,
-                            1, 0, &[],
+                            1, 0, &[], 0.0, // S749: band top unused (1-col)
                             true, // S691: footer context
                             false, // S726: footer bottom differs
                         );
@@ -5101,7 +5119,7 @@ impl LayoutEngine {
                                         false, false, None,
                                         0.0,
                                         &empty_fn_h_note,
-                                        1, 0, &[],
+                                        1, 0, &[], 0.0, // S749: band top unused (1-col)
                                         false, // S691: footnote context
                                         false, // S726
                                     );
@@ -5395,7 +5413,7 @@ impl LayoutEngine {
                         false, false, None,
                         0.0,
                         &empty_fn_h_txbx,
-                        1, 0, &[],
+                        1, 0, &[], 0.0, // S749: band top unused (1-col)
                         false, // S691: textbox context (in_textbox)
                         false, // S726
                     );
@@ -5693,6 +5711,14 @@ impl LayoutEngine {
         num_columns: usize,
         start_column: usize,
         col_x_positions: &[f32],
+        // S749 (2026-07-05): the vertical top of the current multi-column BAND
+        // on the paragraph's first page. A continuous multi-col section that
+        // starts MID-PAGE flows its columns from the section boundary — a
+        // column advance returns the cursor HERE, not to page_top (col2 was
+        // gaining the whole upper page: probexcont2col -1x12). After an
+        // internal page push the band continues at page_top (the local
+        // band_top resets). Non-band callers pass page_top (byte-identical).
+        col_band_top: f32,
         // S691 (2026-06-29): this paragraph is laid out in a HEADER or FOOTER.
         // Scopes the large-CJK 83/64 baseline placement (the header/footer
         // snapToGrid=0 context Word places at 83/64 but Oxi's renderer drew at
@@ -5725,6 +5751,9 @@ impl LayoutEngine {
         {
             return (Vec::new(), prev_space_after, start_column);
         }
+        // S749: page-push detection for the column band top — once this
+        // paragraph pushes a page, the multi-col band continues at page_top.
+        let s749_pages_at_entry = pages.len();
         // S730 (2026-07-03): an EMPTY paragraph that carries a CONTINUOUS
         // section-break mark renders at ZERO height in Word (probexmargins
         // COM: the break para's y equals the previous para's last-line row;
@@ -7287,7 +7316,7 @@ impl LayoutEngine {
                     && std::env::var("OXI_S637_DISABLE").is_err() {
                     cur_col += 1;
                     start_x = col_x_positions[cur_col];
-                    cursor.set(page_top);
+                    cursor.set(if pages.len() > s749_pages_at_entry { page_top } else { col_band_top });
                 } else {
                 // Phantom-blank-page fix (2026-04-23): when an empty paragraph
                 // with page_break_after overflows and would produce an empty
@@ -8873,7 +8902,7 @@ impl LayoutEngine {
                 {
                     cur_col += 1;
                     start_x = col_x_positions[cur_col];
-                    cursor.set(page_top);
+                    cursor.set(if pages.len() > s749_pages_at_entry { page_top } else { col_band_top });
                 } else {
                 // Day 33 part 59 (2026-05-12): the line that CARRIES the break_type
                 // has its text already rendered into `elements` and should stay on
