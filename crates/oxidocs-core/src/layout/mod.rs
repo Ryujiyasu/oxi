@@ -13482,6 +13482,18 @@ impl LayoutEngine {
                     cell_w.max(0.0)
                 };
                 let mut cell_content_h = pad_t;
+                // S751 (2026-07-05, default ON, opt-out OXI_S751_DISABLE): an
+                // EMPTY cell with <w:hideMark/> contributes ZERO content height
+                // (ECMA-376 17.4.22 — the end-of-cell mark is excluded from the
+                // row height; the thin-spacer-row idiom). Word collapses an
+                // auto row of empty hideMark cells to ~borders-only; Oxi gave
+                // the empty paragraph a full line (probeqhidemk2 {+1:1}).
+                // Cells with real text are untouched (the corpus's hideMark
+                // rows are all trHeight-bound mixed rows -> byte-identical).
+                let s751_hide_empty = cell.hide_mark
+                    && std::env::var("OXI_S751_DISABLE").is_err()
+                    && cell.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
+                        if p.runs.iter().all(|r| r.text.is_empty())));
                 // Session 79c: parallel emit-equivalent content_h for visual_row_h
                 let mut cell_content_h_visual = pad_t;
                 // S503: extra height vs visual when using the render line-height (per-cell
@@ -13509,6 +13521,7 @@ impl LayoutEngine {
                 // S716: the post-nested-table stub paragraph contributes no height.
                 let s716_stub = self.nested_table_stub_pos(cell);
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
+                    if s751_hide_empty { break; } // S751: empty hideMark cell = no content height
                     if Some(block_pos) == s716_stub {
                         continue;
                     }
@@ -14176,6 +14189,14 @@ impl LayoutEngine {
                 // S716: the post-nested-table stub paragraph is skipped entirely
                 // (no element, no content_h advance) — Word collapses it to ~0.
                 let s716_stub_render = self.nested_table_stub_pos(cell);
+                // S751: empty hideMark cell renders nothing (matches the
+                // pre-pass zero-height; without this the placement pass grew
+                // max_actual_cell_h back and the S648 correction re-inflated
+                // the row).
+                let s751_hide_render = cell.hide_mark
+                    && std::env::var("OXI_S751_DISABLE").is_err()
+                    && cell.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
+                        if p.runs.iter().all(|r| r.text.is_empty())));
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
                 // S488: snapshot this block's content_h-relative top (aligns with
                 // block_pos via enumerate; pushed before the exact-clip break so
@@ -14188,6 +14209,9 @@ impl LayoutEngine {
                 }
                 if Some(block_pos) == s716_stub_render {
                     continue;
+                }
+                if s751_hide_render {
+                    continue; // S751
                 }
                 match block {
                 Block::Table(nested) => {
@@ -18338,6 +18362,11 @@ impl LayoutEngine {
             }
             let inner_w = cell_w.max(0.0);
             let mut cell_content_h = pad_t;
+            // S751: empty hideMark cell contributes zero content height (see pre-pass).
+            let s751_hide_empty = cell.hide_mark
+                && std::env::var("OXI_S751_DISABLE").is_err()
+                && cell.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
+                    if p.runs.iter().all(|r| r.text.is_empty())));
             let vert_writing_active = self.is_vert_writing_active(cell);
             // S427 (2026-05-29): adjacent-paragraph spacing collapse (see pre-pass
             // comment at the cell_content_h loop). Keeps this row-fit estimate
@@ -18351,6 +18380,7 @@ impl LayoutEngine {
             // S716: the post-nested-table stub paragraph contributes no height.
             let s716_stub_nat = self.nested_table_stub_pos(cell);
             for (block_pos, block) in cell.blocks.iter().enumerate() {
+                if s751_hide_empty { break; } // S751
                 if Some(block_pos) == s716_stub_nat {
                     continue;
                 }

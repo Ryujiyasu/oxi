@@ -542,6 +542,11 @@ pub struct TableCell {
     /// S486: floating shapes anchored inside this cell (same drop as above).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cell_shapes: Vec<Shape>,
+    /// w:hideMark (ECMA-376 17.4.22): ignore the end-of-cell mark for row
+    /// height — an EMPTY hideMark cell contributes zero content height
+    /// (the thin-spacer-row idiom; S751).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_mark: bool,
 }
 
 /// Cell border definitions

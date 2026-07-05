@@ -6117,6 +6117,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
         text_direction: cell_props.text_direction,
         cell_text_boxes,
         cell_shapes,
+        hide_mark: cell_props.hide_mark,
     })
 }
 
@@ -6130,6 +6131,7 @@ struct CellProperties {
     borders: Option<CellBorders>,
     margins: Option<CellMargins>,
     text_direction: Option<String>,
+    hide_mark: bool, // S751: w:hideMark
 }
 
 /// Parse w:tcPr (table cell properties)
@@ -6212,6 +6214,9 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
                             }
                         }
                     }
+                    // S751: w:hideMark — the end-of-cell mark is excluded from
+                    // row-height (an empty hideMark cell = zero content height).
+                    "hideMark" => { props.hide_mark = true; }
                     "textDirection" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
