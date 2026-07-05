@@ -13953,8 +13953,52 @@ impl LayoutEngine {
 
             // needs_row_split: only when overflow + table allows split.
             // widow_break_needed overrides split — we want the whole table on next page.
+            // S754 (2026-07-06, default ON, opt-out OXI_S754_DISABLE): Word's default
+            // "allow row to break across pages" SPLITS a multi-cell row at the
+            // page boundary whenever at least one line of it fits above
+            // (probethdr/probevmerge/probezgridspan/probeztbrlv Word truth —
+            // fresh docx carry NO LRPB so the mid-row-LRPB evidence gate left
+            // them whole-moving, +1 cascades). Guards: (a) respect explicit
+            // whole-push evidence (row-start LRPB = Word pushed this row
+            // whole); (b) require one grid line of room above the boundary
+            // (Word moves the row whole when not even one line fits).
+            // ★DISCRIMINATOR (Word PDF render truth, 7 specimens): Word splits
+            // only AUTO-height rows (no explicit trHeight). All 4 probe row
+            // families (auto) split; 29dc6e ③ row (trH 63.3 atLeast, fits 21.1),
+            // de6e32 （３） row (trH 290.65 exact, fits 24.2) AND tokyoshugyo's
+            // （参考） box row (trH 474.4 atLeast, fits 295.9!) are all pushed
+            // WHOLE — Word starts a trHeight row on a fresh page even when
+            // 296pt of the current page is free (p19 left ~330pt empty).
+            // Fit threshold, TWO-TIER: a SINGLE-COLUMN row (cells==1, a prose
+            // box — Word applies a widow-like keep) pushes whole below the S694
+            // window pitch×2.2 (tokyoshugyo 遅刻早退 box fits=27.4=1.52 lines
+            // PUSHED; 3a4f box 29.9 PUSHED; 精勤手当 59.9 SPLIT); a MULTI-CELL
+            // data row splits with just one line of room (all 4 probe families).
+            let s754_min_fit = if row.cells.len() == 1 {
+                table_grid_pitch.map(|p| p * 2.2).unwrap_or(58.0)
+            } else {
+                table_grid_pitch.unwrap_or(14.0)
+            };
+            let s754_split = std::env::var("OXI_S754_DISABLE").is_err()
+                && row.height.is_none()
+                && !row_has_lrpb_at_cell_start
+                && (page_bottom - cursor.cursor_y) >= s754_min_fit;
+            if std::env::var("OXI_DBG754").is_ok() && s754_split && row_overflows
+                && !row.cant_split && has_content
+                && !(is_single_cell_row || has_lrpb_mid_row)
+                && !widow_break_needed && !image_atomic_push {
+                let txt: String = row.cells.iter().flat_map(|c| c.blocks.iter()).find_map(|b| match b {
+                    Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.is_empty()) =>
+                        Some(p.runs.iter().flat_map(|r| r.text.chars()).take(16).collect::<String>()),
+                    _ => None,
+                }).unwrap_or_default();
+                eprintln!("[DBG754] FIRE row={} cells={} trH={:?}/{:?} row_h={:.1} cur={:.1} pbot={:.1} fits={:.1} float={} txt={:?}",
+                    row_idx, row.cells.len(), row.height, row.height_rule,
+                    row_height, cursor.cursor_y, page_bottom, page_bottom - cursor.cursor_y,
+                    table.style.position.is_some(), txt);
+            }
             let needs_row_split = row_overflows && !row.cant_split && has_content
-                && (is_single_cell_row || has_lrpb_mid_row)
+                && (is_single_cell_row || has_lrpb_mid_row || s754_split)
                 && !widow_break_needed
                 && !image_atomic_push;
 
@@ -17473,6 +17517,46 @@ impl LayoutEngine {
                 // post-loop `elements` handling (S269/Day34 multi-layer split).
                 // Deferred — multi-session. Reverted (byte-identical).
                 let mut remaining = next_page_elems;
+                // S754b: replay the captured tblHeader at the top of EVERY
+                // split-continuation page (Word repeats it above the continued
+                // row content — probethdr: each continuation missing the header
+                // packed ~1 header-height too much → −1×3/−3). The continuation
+                // content shifts down by hdr_h and the header clones sit at
+                // page_top; the loop's fit test then accounts for the header
+                // automatically. Applied after the first split and after each
+                // loop push (headers already placed stay above next_split so
+                // they never re-enter overflow).
+                let s754_hdr_replay = std::env::var("OXI_S754_DISABLE").is_err()
+                    && s728_on && s728_capture_done && !s728_hdr_elems.is_empty()
+                    && !row.header;
+                let s754_apply_hdr = |els: &mut Vec<LayoutElement>,
+                                      hdr: &Vec<LayoutElement>,
+                                      hdr_h: f32,
+                                      pt: f32| {
+                    for e in els.iter_mut() {
+                        e.y += hdr_h;
+                        if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = e.content {
+                            *y1 += hdr_h;
+                            *y2 += hdr_h;
+                        }
+                    }
+                    let y0 = hdr.iter().map(|e| e.y).fold(f32::INFINITY, f32::min);
+                    if y0.is_finite() {
+                        let dy = pt - y0;
+                        for el in hdr {
+                            let mut c = el.clone();
+                            c.y += dy;
+                            if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = c.content {
+                                *y1 += dy;
+                                *y2 += dy;
+                            }
+                            els.push(c);
+                        }
+                    }
+                };
+                if s754_hdr_replay {
+                    s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h, page_top);
+                }
                 loop {
                     // Find the maximum Y in remaining elements.
                     // R7.77 (Session 62, 2026-05-16): exclude PresetShape elements
@@ -17666,6 +17750,10 @@ impl LayoutEngine {
                         elements: this_page,
                     });
                     remaining = overflow;
+                    // S754b: header on the next continuation page too.
+                    if s754_hdr_replay {
+                        s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h, page_top);
+                    }
                 }
 
                 if std::env::var("OXI_DBG_SPLIT").is_ok() {
@@ -17775,6 +17863,25 @@ impl LayoutEngine {
                         }
                     } else {
                         // No text on final page (border-only): geometric fallback.
+                        let overflow_on_next = row_bottom - split_y;
+                        let pages_used = ((overflow_on_next) / content_height).floor() as usize;
+                        cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                    }
+                } else if s754_split && !is_single_cell_row && !has_lrpb_mid_row {
+                    // S754: multi-cell content split — the geometric fallback
+                    // (row_bottom − split_y) lands the cursor ABOVE the actual
+                    // continuation bottom (probethdr: row 11 at y=93 OVERLAPPED
+                    // row 10's continuation ending 112 — the formula knows
+                    // neither the replayed header (+hdr_h) nor line granularity).
+                    // Use the measured continuation extent instead.
+                    let cont_max_y = elements.iter().map(|e| match &e.content {
+                        LayoutContent::TableBorder { y2, .. } => *y2,
+                        LayoutContent::PresetShape { .. } => e.y,
+                        _ => e.y + e.height,
+                    }).fold(f32::NEG_INFINITY, f32::max);
+                    if cont_max_y.is_finite() {
+                        cursor.set(cont_max_y);
+                    } else {
                         let overflow_on_next = row_bottom - split_y;
                         let pages_used = ((overflow_on_next) / content_height).floor() as usize;
                         cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
