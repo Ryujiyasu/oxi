@@ -3384,6 +3384,65 @@ impl LayoutEngine {
                 let run_geom_differs = col_runs[active_run_idx].2 != col_x_positions
                     || col_runs[active_run_idx].3 != col_widths;
                 if run_cols != num_columns || run_geom_differs {
+                    // S750 (2026-07-05, default ON, opt-out OXI_S750_DISABLE):
+                    // Word BALANCES the columns of a continuous multi-column
+                    // section on its FINAL page (equal column heights, splitting
+                    // mid-paragraph) before the next continuous section flows
+                    // below. Oxi's newspaper fill left col1 at full page depth
+                    // (probexcont2col {+1:5} after S749). Post-hoc rebalance:
+                    // the final band page's elements are still in `elements`,
+                    // so move the tail rows of col1 to col2 until the columns
+                    // are within one row of equal, then continue below the
+                    // balanced band. v1 scope: 2 columns.
+                    if num_columns == 2 && run_cols != num_columns
+                        && std::env::var("OXI_S750_DISABLE").is_err()
+                    {
+                        let col1_x0 = col_x_positions[0];
+                        let col2_x0 = col_x_positions[1];
+                        let split_x = col2_x0 - 1.0;
+                        let mut rows1: Vec<f32> = Vec::new();
+                        let mut rows2: Vec<f32> = Vec::new();
+                        for e in elements.iter() {
+                            if e.y < col_band_top - 0.1 { continue; }
+                            let dst = if e.x < split_x { &mut rows1 } else { &mut rows2 };
+                            let yk = (e.y * 10.0).round() / 10.0;
+                            if !dst.iter().any(|v| (v - yk).abs() < 0.5) { dst.push(yk); }
+                        }
+                        rows1.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        rows2.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        let n1 = rows1.len();
+                        let n2 = rows2.len();
+                        if n1 >= 2 && n1 > n2 + 1 {
+                            // uniform row pitch from col1's row diffs (median)
+                            let mut diffs: Vec<f32> = rows1.windows(2)
+                                .map(|w| w[1] - w[0]).filter(|d| *d > 1.0).collect();
+                            diffs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                            let pitch = diffs.get(diffs.len() / 2).copied().unwrap_or(0.0);
+                            if pitch > 1.0 {
+                                let k = (n1 - n2) / 2;
+                                if k > 0 {
+                                    let cut_y = rows1[n1 - k] - 0.5;
+                                    let dx = col2_x0 - col1_x0;
+                                    let col2_next = col_band_top + n2 as f32 * pitch;
+                                    let dy = col2_next - rows1[n1 - k];
+                                    for e in elements.iter_mut() {
+                                        if e.y >= cut_y && e.x < split_x
+                                            && e.y >= col_band_top - 0.1 {
+                                            e.x += dx;
+                                            e.y += dy;
+                                        }
+                                    }
+                                    let new_len = ((n1 - k).max(n2 + k)) as f32 * pitch;
+                                    let balanced_bottom = col_band_top + new_len;
+                                    if std::env::var("OXI_DBG_COL").is_ok() {
+                                        eprintln!("[COL] S750 balance n1={} n2={} k={} pitch={:.1} bottom={:.1}", n1, n2, k, pitch, balanced_bottom);
+                                    }
+                                    cursor.set(balanced_bottom);
+                                    section_max_y = balanced_bottom;
+                                }
+                            }
+                        }
+                    }
                     // New section continues below ALL columns of the section
                     // it succeeds (continuous flow, same page if room).
                     section_max_y = section_max_y.max(cursor.cursor_y);
