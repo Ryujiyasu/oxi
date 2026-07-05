@@ -13523,6 +13523,13 @@ impl LayoutEngine {
                 // (chars × font_size), not the wrapped-horizontal line count.
                 // Gated by OXI_VERT_WRITING env var.
                 let vert_writing_active = self.is_vert_writing_active(cell);
+                // S753 (2026-07-05, opt-out OXI_S753_DISABLE): a tbRlV cell does
+                // NOT grow an auto row for its text — columns consume WIDTH, the
+                // flow wraps into whatever row height the OTHER cells / trHeight
+                // produce. Contribution = ONE line (first paragraph only). Full
+                // derivation at s753_vert_cell_columns.
+                let s753_vert = vert_writing_active && std::env::var("OXI_S753_DISABLE").is_err();
+                let mut s753_first_done = false;
                 // S716: the post-nested-table stub paragraph contributes no height.
                 let s716_stub = self.nested_table_stub_pos(cell);
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
@@ -13533,7 +13540,16 @@ impl LayoutEngine {
                     match block {
                         Block::Paragraph(para) => {
                             let (para_h, para_h_visual, para_h_center) = if vert_writing_active {
-                                let h = self.vert_para_height(para);
+                                let h = if s753_vert {
+                                    if s753_first_done {
+                                        0.0
+                                    } else {
+                                        s753_first_done = true;
+                                        self.estimate_para_height(para, 100_000.0, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio)
+                                    }
+                                } else {
+                                    self.vert_para_height(para)
+                                };
                                 (h, h, h)
                             } else {
                                 let p1 = self.estimate_para_height(para, inner_w, row_line_pitch, table.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
@@ -13561,6 +13577,10 @@ impl LayoutEngine {
                             // never executed). S151 default ON since 2026-05-21.
                             cell_content_h += para_h;
                             cell_content_h_visual += para_h_visual;
+                            // S753: vert-cell paragraph spacing maps to the WIDTH
+                            // direction (each paragraph is a new column) — no height
+                            // bookkeeping.
+                            if !s753_vert {
                             // S427: collapse this paragraph's space_before against
                             // the previous paragraph's space_after.
                             let (cur_sb, cur_sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), row_line_pitch);
@@ -13584,6 +13604,7 @@ impl LayoutEngine {
                                 }
                             }
                             prev_sa = Some(cur_sa);
+                            }
                         }
                         Block::Table(nested) => {
                             prev_sa = None;
@@ -14166,6 +14187,9 @@ impl LayoutEngine {
                 // carried a `<w:lastRenderedPageBreak/>` on a non-run-0 run.
                 // Reset to false at each cell start.
                 let mut prev_cell_para_had_mid_lrpb: bool = false;
+                // S753: lazily-computed column layout for a tbRlV cell
+                // ((cols, max_col_len); see s753_vert_cell_columns).
+                let mut s753_vert_cols: Option<(Vec<(usize, String, f32, f32, f32)>, f32)> = None;
                 // S427 (2026-05-29): track previous cell paragraph's space_after
                 // for adjacent-paragraph spacing collapse (see pre-pass comment).
                 let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
@@ -14254,6 +14278,109 @@ impl LayoutEngine {
                     // The renderer (S132 GDI, S133 DWrite) is responsible for
                     // actual 90° CW rotation when emitting glyphs; this layout
                     // step only ensures positional correctness for pagination.
+                    if self.is_vert_writing_active(cell) && std::env::var("OXI_S753_DISABLE").is_err() {
+                        // S753 (2026-07-05): multi-column wrapped vert-cell emit —
+                        // the text wraps into the FINAL row height (chars per
+                        // column = floor((row_h−1)/fs)), columns advance
+                        // RIGHT→LEFT, each paragraph starts a new column, the
+                        // block is horizontally centred in the cell (overflow
+                        // past the cell border allowed = Word). content_h = the
+                        // real flow extent so the existing vAlign v_offset
+                        // centres the block vertically like Word (2ea81a top gap
+                        // 22.25 ≈ (row 120.6 − maxcol 72.1)/2). Derivation at
+                        // s753_vert_cell_columns.
+                        if s753_vert_cols.is_none() {
+                            // vMerge=restart: the flow height = the MERGED span,
+                            // not the single row (7ead52b 連絡担当窓口 spans 3
+                            // rows — single-row capacity wrongly wrapped its 6
+                            // chars into 2 columns where Word paints 1). Walk the
+                            // continue-rows (same grid-position logic as the
+                            // vAlign span walk at ~16715) summing declared
+                            // trHeights (row_height as fallback per row).
+                            let mut s753_avail = row_height;
+                            if cell.v_merge.as_deref() == Some("restart") {
+                                let target_grid = cell_start_grid;
+                                for next_ri in (row_idx + 1)..table.rows.len() {
+                                    let next_row = &table.rows[next_ri];
+                                    let mut next_grid = next_row.grid_before as usize;
+                                    let mut continues = false;
+                                    for next_cell in &next_row.cells {
+                                        let next_span = next_cell.grid_span.max(1) as usize;
+                                        if next_grid == target_grid {
+                                            if matches!(next_cell.v_merge.as_deref(),
+                                                        Some("continue") | Some("")) {
+                                                continues = true;
+                                            }
+                                            break;
+                                        }
+                                        next_grid += next_span;
+                                    }
+                                    if !continues { break; }
+                                    s753_avail += next_row.height.unwrap_or(row_height);
+                                }
+                            }
+                            let (cols, max_len) = self.s753_vert_cell_columns(
+                                cell, cell_w, s753_avail, table_grid_pitch,
+                                table.style.para_style.as_ref(),
+                                grid_char_pitch, grid_char_cw_ratio);
+                            // Cap at the single-row content box: a merged-span
+                            // flow (max_len > row) must not re-inflate THIS row
+                            // via max_actual_cell_h/S648 (the S751 lesson).
+                            content_h += max_len.min((row_height - pad_t - pad_b).max(0.0));
+                            s753_vert_cols = Some((cols, max_len));
+                        }
+                        let first_run_style = para.runs.first()
+                            .map(|r| r.style.clone())
+                            .unwrap_or_default();
+                        let first_run_fs = self.resolve_font_size(&first_run_style, &para.style);
+                        let para_text: String = para.runs.iter()
+                            .flat_map(|r| r.text.chars())
+                            .collect();
+                        let font_family = self.resolve_font_family_for_text(
+                            &para_text, &first_run_style, &para.style,
+                        ).map(|s| s.to_string());
+                        if let Some((cols, _)) = s753_vert_cols.as_ref() {
+                            for (bp, col_text, x_rel, col_w, _len) in cols.iter() {
+                                if *bp != block_pos || col_text.is_empty() {
+                                    continue;
+                                }
+                                let mut elem = LayoutElement::new(
+                                    cell_x + x_rel,
+                                    0.0,
+                                    *col_w,
+                                    first_run_fs,
+                                    LayoutContent::Text {
+                                        text: col_text.clone(),
+                                        font_size: first_run_fs,
+                                        font_family: font_family.clone(),
+                                        bold: self.resolve_bold(&first_run_style, &para.style),
+                                        italic: first_run_style.italic,
+                                        underline: first_run_style.underline,
+                                        underline_style: first_run_style.underline_style.clone(),
+                                        strikethrough: first_run_style.strikethrough,
+                                        double_strikethrough: first_run_style.double_strikethrough,
+                                        color: first_run_style.color.clone(),
+                                        highlight: first_run_style.highlight.clone(),
+                                        character_spacing: 0.0,
+                                        field_type: None,
+                                        text_scale: first_run_style.text_scale.unwrap_or(100.0),
+                                        is_vertical: true,
+                                        effects: TextEffects {
+                                            shadow: first_run_style.shadow, emboss: first_run_style.emboss,
+                                            imprint: first_run_style.imprint, outline: first_run_style.outline,
+                                        },
+                                    },
+                                );
+                                elem.paragraph_index = block_idx;
+                                elem.cell_paragraph_index = Some(cell_para_counter);
+                                elem.cell_row_index = Some(row_idx);
+                                elem.cell_col_index = Some(cell_idx);
+                                cell_elements.push(elem);
+                            }
+                        }
+                        cell_para_counter += 1;
+                        continue;
+                    }
                     if self.is_vert_writing_active(cell) {
                         let vert_h = self.vert_para_height(para);
                         let first_run_style = para.runs.first()
@@ -18304,6 +18431,89 @@ impl LayoutEngine {
         h
     }
 
+    /// S753 (2026-07-05, default ON, opt-out OXI_S753_DISABLE): Word's tbRlV
+    /// AUTO row-height + column-wrap model, DERIVED from a controlled sweep
+    /// (15 configs: n_chars {1..36} × cell_w {600..2400tw} × fs {8,10.5pt} ×
+    /// neighbor {1-line "あ"..9-line} × trHeight × vAlign × solo row, Word
+    /// PDF border truth): a tbRlV cell contributes ~ONE LINE to an auto row
+    /// REGARDLESS of text length and cell width (n=1..36 all → the 14.16
+    /// one-line row; solo 22-char row 14.64; a taller neighbor or trHeight
+    /// always drives). The vertical text WRAPS into the available row
+    /// height — chars per column = floor((row_h−1)/fs) — with columns
+    /// advancing RIGHT→LEFT (probeztbrlv Word PDF: text starts in the
+    /// rightmost column; 2ea81a rt.pdf: para1 予納する理由 x=76.0, para2
+    /// （いずれかを選択） x=64.0), each PARAGRAPH starting a new column,
+    /// column pitch = the paragraph's one-line height (2ea81a paras carry
+    /// line=240 exact → measured pitch 12.0; probe natural 10.5pt → 14.1),
+    /// and the column BLOCK horizontally CENTRED in the cell (2ea81a
+    /// predicted 63.98 vs measured 64.00) — overflowing the cell border
+    /// when the columns don't fit (the probe paints 9pt LEFT of the cell:
+    /// 5 columns × 14.1 in a 60pt cell). The old S131 model (Σ n_chars×fs
+    /// single column) was calibrated on a trHeight-BOUND row (2ea81a
+    /// trHeight=2263tw=113.15pt; 14×8=112 was a coincidental match) and
+    /// over-sized auto rows ~2.5× (probeztbrlv: Word 2pg / Oxi 5pg, rows
+    /// 231pt vs Word 55).
+    ///
+    /// Returns (columns, max_col_len): columns = (block_pos, text, x_rel to
+    /// cell_x, width = pitch, flow length); the renderers centre each glyph
+    /// within [x, x+w] and stack downward by fs (S489), so one element per
+    /// column needs no renderer change.
+    fn s753_vert_cell_columns(
+        &self,
+        cell: &TableCell,
+        cell_w: f32,
+        row_height: f32,
+        grid_pitch: Option<f32>,
+        table_para_style: Option<&ParagraphStyle>,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> (Vec<(usize, String, f32, f32, f32)>, f32) {
+        let mut cols: Vec<(usize, String, f32, f32, f32)> = Vec::new();
+        for (block_pos, block) in cell.blocks.iter().enumerate() {
+            let para = match block {
+                Block::Paragraph(p) => p,
+                _ => continue,
+            };
+            let fs = para
+                .runs
+                .iter()
+                .find(|r| !r.text.is_empty())
+                .map(|r| self.resolve_font_size(&r.style, &para.style))
+                .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &para.style));
+            let pitch = self
+                .estimate_para_height(para, 100_000.0, grid_pitch, table_para_style, true,
+                    grid_char_pitch, grid_char_cw_ratio)
+                .max(fs);
+            let text: String = para.runs.iter().flat_map(|r| r.text.chars()).collect();
+            let cap = (((row_height - 1.0) / fs).floor() as usize).max(1);
+            let chars: Vec<char> = text.chars().collect();
+            if chars.is_empty() {
+                // An empty vert paragraph still consumes a column's width.
+                cols.push((block_pos, String::new(), 0.0, pitch, 0.0));
+            } else {
+                for chunk in chars.chunks(cap) {
+                    cols.push((
+                        block_pos,
+                        chunk.iter().collect(),
+                        0.0,
+                        pitch,
+                        chunk.len() as f32 * fs,
+                    ));
+                }
+            }
+        }
+        let block_w: f32 = cols.iter().map(|c| c.3).sum();
+        let max_len = cols.iter().map(|c| c.4).fold(0.0_f32, f32::max);
+        // Columns advance right→left; the block is centred horizontally in
+        // the cell (may overflow both edges — Word paints outside the cell).
+        let mut x_right = (cell_w + block_w) * 0.5;
+        for col in cols.iter_mut() {
+            x_right -= col.3;
+            col.2 = x_right;
+        }
+        (cols, max_len)
+    }
+
     fn estimate_para_height(
         &self,
         para: &Paragraph,
@@ -18373,6 +18583,9 @@ impl LayoutEngine {
                 && cell.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
                     if p.runs.iter().all(|r| r.text.is_empty())));
             let vert_writing_active = self.is_vert_writing_active(cell);
+            // S753: see the pre-pass comment — vert cell contributes one line only.
+            let s753_vert = vert_writing_active && std::env::var("OXI_S753_DISABLE").is_err();
+            let mut s753_first_done = false;
             // S427 (2026-05-29): adjacent-paragraph spacing collapse (see pre-pass
             // comment at the cell_content_h loop). Keeps this row-fit estimate
             // consistent with the row-height pre-pass and content placement.
@@ -18392,7 +18605,18 @@ impl LayoutEngine {
                 match block {
                     Block::Paragraph(para) => {
                         let para_h = if vert_writing_active {
-                            self.vert_para_height(para)
+                            if s753_vert {
+                                if s753_first_done {
+                                    0.0
+                                } else {
+                                    s753_first_done = true;
+                                    self.estimate_para_height(para, 100_000.0, table_grid_pitch,
+                                        table.style.para_style.as_ref(), true,
+                                        grid_char_pitch, grid_char_cw_ratio)
+                                }
+                            } else {
+                                self.vert_para_height(para)
+                            }
                         } else {
                             self.estimate_para_height_emit(para, inner_w, table_grid_pitch,
                                 table.style.para_style.as_ref(), true,
@@ -18402,6 +18626,9 @@ impl LayoutEngine {
                         // OXI_SB_NO_SUPPRESS legacy env-var fallbacks (dead code
                         // since LEGACY var default false). S151 default ON.
                         cell_content_h += para_h;
+                        // S753: no spacing bookkeeping for vert-cell paragraphs
+                        // (spacing maps to the width direction).
+                        if s753_vert { continue; }
                         let (cur_sb, cur_sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), table_grid_pitch);
                         // Cell-autospace override: estimate_para_height_emit added the
                         // explicit (cur_sb, cur_sa) to para_h; replace with the
