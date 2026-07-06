@@ -2530,9 +2530,30 @@ impl LayoutEngine {
         let line_pitch = page.grid_line_pitch.unwrap_or(self.default_font_size * 1.2);
 
         let mut elements: Vec<LayoutElement> = Vec::new();
+        let mut pages_out: Vec<LayoutPage> = Vec::new();
         let mut band = 0usize;
         let mut line_x = right - line_pitch; // leftmost x of the rightmost line
-        let page_full = |b: usize| b >= num_bands;
+        // S759 (2026-07-06): multi-page vertical writing. The v1 (S679) BROKE
+        // out of the loops when the last band filled — a 5-page probevert
+        // rendered 1 page and DROPPED 47/60 paragraphs (the gate-masked
+        // content-loss class, honest FAIL since S724). Now a full page is
+        // finalized (with its band separators) and layout continues on a
+        // fresh page. Single-page docs (albaluna×3) never overflow → the
+        // finalize path never runs → byte-identical.
+        let sep_needed = page.columns.as_ref().map_or(false, |c| c.separator) && num_bands > 1;
+        let push_separators = |els: &mut Vec<LayoutElement>| {
+            if !sep_needed { return; }
+            for b in 0..num_bands - 1 {
+                let sep_y = band_bottom(b) + band_space / 2.0;
+                els.push(LayoutElement::new(
+                    left, sep_y, (right - left).max(0.0), 0.0,
+                    LayoutContent::TableBorder {
+                        x1: left, y1: sep_y, x2: right, y2: sep_y,
+                        color: None, width: 0.5, style: None,
+                    },
+                ));
+            }
+        };
 
         for (block_idx, block) in page.blocks.iter().enumerate() {
             let para = match block {
@@ -2551,16 +2572,20 @@ impl LayoutEngine {
             // calibration pass with precise band geometry.)
             let char_adv = fs;
 
-            if page_full(band) {
-                break;
-            }
-
             // Empty paragraph: occupies one (blank) line.
             if para_text.chars().all(|c| c.is_whitespace()) {
                 line_x -= line_pitch;
                 if line_x < left - 0.01 {
                     band += 1;
                     line_x = right - line_pitch;
+                    if band >= num_bands {
+                        push_separators(&mut elements);
+                        pages_out.push(LayoutPage {
+                            width: page_w, height: page_h,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        band = 0;
+                    }
                 }
                 continue;
             }
@@ -2582,17 +2607,23 @@ impl LayoutEngine {
                     line_x -= line_pitch;
                     if line_x < left - 0.01 {
                         band += 1;
-                        if page_full(band) { break; }
                         line_x = right - line_pitch;
+                        if band >= num_bands {
+                            push_separators(&mut elements);
+                            pages_out.push(LayoutPage {
+                                width: page_w, height: page_h,
+                                elements: std::mem::take(&mut elements),
+                            });
+                            band = 0;
+                        }
                     }
                     cur_y = band_top(band);
                     buf_top = cur_y;
                 }
-                if page_full(band) { break; }
                 buf.push(ch);
                 cur_y += char_adv;
             }
-            if !buf.is_empty() && !page_full(band) {
+            if !buf.is_empty() {
                 let n = buf.len() as f32;
                 elements.push(self.vertical_line_element(
                     buf.iter().collect(), line_x, buf_top, line_pitch,
@@ -2604,25 +2635,24 @@ impl LayoutEngine {
             if line_x < left - 0.01 {
                 band += 1;
                 line_x = right - line_pitch;
+                if band >= num_bands {
+                    push_separators(&mut elements);
+                    pages_out.push(LayoutPage {
+                        width: page_w, height: page_h,
+                        elements: std::mem::take(&mut elements),
+                    });
+                    band = 0;
+                }
             }
         }
 
-        // w:sep="1": a separator line between bands, at each band-gap centre,
-        // spanning the content width. (Word draws it for vertical multi-band.)
-        if page.columns.as_ref().map_or(false, |c| c.separator) && num_bands > 1 {
-            for b in 0..num_bands - 1 {
-                let sep_y = band_bottom(b) + band_space / 2.0;
-                elements.push(LayoutElement::new(
-                    left, sep_y, (right - left).max(0.0), 0.0,
-                    LayoutContent::TableBorder {
-                        x1: left, y1: sep_y, x2: right, y2: sep_y,
-                        color: None, width: 0.5, style: None,
-                    },
-                ));
-            }
+        // Final page (separators included; empty trailing pages are not pushed
+        // unless the document produced no pages at all).
+        if !elements.is_empty() || pages_out.is_empty() {
+            push_separators(&mut elements);
+            pages_out.push(LayoutPage { width: page_w, height: page_h, elements });
         }
-
-        vec![LayoutPage { width: page_w, height: page_h, elements }]
+        pages_out
     }
 
     /// Build one vertical-line Text element (is_vertical=true). The renderer
