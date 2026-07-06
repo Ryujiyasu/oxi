@@ -7185,26 +7185,29 @@ impl LayoutEngine {
             // no-type docGrid uses the natural device-snapped advance (S571b),
             // so its leading genuinely overhangs the margin like LM0.
             let ink_lh = if std::env::var("OXI_S576_DISABLE").is_ok() || !page.doc_grid_no_type {
-                // OXI_OFFSLOT_INK (opt-in experiment, ROWBOX2 companion): a
-                // TYPED-grid line whose cursor sits OFF the grid phase is not
-                // slot-bound — its page-bottom fit is governed by the glyph
-                // INK (like no-type grids / LM0); ON-slot lines keep the
-                // natural base + S739 centered floor. Specimen: kojin pi=52
-                // last line under ROWBOX2 (+2pt correct table heights, still
-                // 8-10pt OFF-phase): Word keeps it at natural-over +1.65 —
-                // ink (~em 11.8) fits where natural (13.5) pushes. The
-                // S576-era "typed grids regressed ikujikaigo/model" blanket
-                // test predates S739; those lines are slot-aligned and now
-                // keep natural/centered under this phase scoping.
-                let offslot_ink = std::env::var("OXI_OFFSLOT_INK").is_ok()
+                // OXI_OFFSLOT_INK (opt-in experiment, ROWBOX2 companion): an
+                // OFF-GRID paragraph (the S592 class — proportional CJK font
+                // in a linesAndChars grid; its lines do NOT snap to slots)
+                // uses the glyph-INK page-bottom threshold (like no-type
+                // grids / LM0); grid-snapped monospace bodies keep natural +
+                // the S739 centered floor. Specimen: kojin pi=52 last line
+                // under ROWBOX2 (Word-correct +2pt table heights): Word
+                // keeps it at natural-over +1.65 — ink (~em 11.8) fits where
+                // natural (13.5) pushes. ★A first cut scoped by CURSOR PHASE
+                // (off-slot within the page) also fixed kojin but flipped
+                // tokyoshugyo (alone) + kyotei36spec (with ROWBOX2): the
+                // phase is Oxi-geometry-relative (the S739 fragility). The
+                // S592 font-class scope is docx-derivable: only kojin +
+                // parttime (HGPGothicM) match in the corpus.
+                let offgrid_ink = std::env::var("OXI_OFFSLOT_INK").is_ok()
                     && !page.doc_grid_no_type
-                    && para.style.snap_to_grid
-                    && grid_pitch.map_or(false, |p| {
-                        if p <= 0.0 { return false; }
-                        let phase = (cursor.cursor_y - page_top).rem_euclid(p);
-                        phase >= 1.0 && phase <= p - 1.0
-                    });
-                if offslot_ink {
+                    && page.doc_grid_lines_and_chars
+                    && para.runs.iter()
+                        .find(|r| r.text.chars().any(|c| !c.is_whitespace() && c != '\u{3000}'))
+                        .and_then(|r| self.metrics_for_cjk(&r.style, &para.style))
+                        .map_or(false, |m| matches!(m.family.as_str(),
+                            "MS PGothic" | "MS PMincho" | "HGPGothicM"));
+                if offgrid_ink {
                     ink_line_heights.get(line_idx).copied().unwrap_or(natural_lh).min(natural_lh)
                 } else {
                     natural_lh
