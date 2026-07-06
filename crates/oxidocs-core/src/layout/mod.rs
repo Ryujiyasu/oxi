@@ -10559,9 +10559,32 @@ impl LayoutEngine {
                                  std::env::var("OXI_PT_CLOSE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.84),
                                  std::env::var("OXI_PT_COMMA").ok().and_then(|v| v.parse().ok()).unwrap_or(s475_solo))
                             } else { (s475_solo, s475_solo, s475_solo) };
+                        // S757 (2026-07-06, default ON, opt-out OXI_S757_DISABLE): a
+                        // LINE-INITIAL opening bracket has NO compressible left-aki —
+                        // the line-start position already absorbs it (JIS X 4051
+                        // 行頭括弧). Crediting it over-fit kyodoken05's line-1
+                        // «（所属機関名…» (fit け where Word wraps) = the S684-NPERIOD
+                        // −0.0393 audit regression; nedo's fits (子/令/甲) are all
+                        // MID-line openings → unaffected.
+                        // Line-initial = nothing placed on this line yet (fragments
+                        // empty + word buffer empty; current_width_tw is unusable —
+                        // it is seeded with the first-line indent). The line-initial
+                        // opening keeps the BASE cap (3.1) — exempt from the NPERIOD
+                        // HI escalation, not zeroed: c7b9 outline_06 needs the base
+                        // credit (a zero under-fit it −0.0065), kyodoken05 needs
+                        // ≤ base (the HI 3.4 over-fit け, −0.0393).
+                        let s757_open_eff = if kinsoku::is_yakumono_opening(ch)
+                            && current_line.fragments.is_empty() && word.is_empty()
+                            && std::env::var("OXI_S757_DISABLE").is_err() {
+                            s475_open_eff.min(s475_open)
+                        } else { s475_open_eff };
+                        if std::env::var("OXI_DBG757").is_ok() && kinsoku::is_yakumono_opening(ch) {
+                            eprintln!("[DBG757] ch={:?} cw_tw={} nfrag={} word_len={} capw_tw={} open_eff={:.2}",
+                                ch, current_width_tw, current_line.fragments.len(), word.chars().count(), current_capw_tw, s757_open_eff);
+                        }
                         pt_to_tw(pre_yakumono_width
                             - kinsoku::s475_max_compress_pt(ch, chars_vec.get(char_index + 1).copied(),
-                                s475_pair, comma_pt, s475_open_eff, period_pt, close_solo_pt, font_size))
+                                s475_pair, comma_pt, s757_open_eff, period_pt, close_solo_pt, font_size))
                     } else { 0 };
                     // S725 (2026-07-03, default ON, opt-out OXI_S725_DISABLE):
                     // PARAGRAPH-FINAL char must fit NATURALLY — the s475 capacity
