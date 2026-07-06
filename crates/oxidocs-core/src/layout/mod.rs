@@ -18399,7 +18399,17 @@ impl LayoutEngine {
                 // (trPr=None; the raw-estimate skew ~+0.5 falsely read "sparse") are
                 // excluded while 191cb's genuine trHeight-bound labels (trHeight=724)
                 // keep Word's +0.5.
+                // S760 (2026-07-06, opt-out OXI_S760_DISABLE): hRule=EXACT rows
+                // get NO +0.5 — the rowbox sweep (_rowbox_sweep.py, Word PDF
+                // border truth) shows exact rows render at trHeight EXACTLY
+                // (45.00; the border eats into the box) while atLeast rows are
+                // trH + bw (45.48). Oxi's cursor pitch was already exact-correct
+                // (45.0, TBL_DUMP) — the S661 sparse +0.5 was firing on the
+                // VISUAL track for exact rows too (painted pitch 45.5).
+                let s760_exact = row.height_rule.as_deref() == Some("exact")
+                    && std::env::var("OXI_S760_DISABLE").is_err();
                 let s661_sparse_trheight = std::env::var("OXI_S661_DISABLE").is_err()
+                    && !s760_exact
                     && (!self.cellpair_active() || row.height.is_some())
                     && table_grid_pitch.map(|p|
                         visual_row_h > 0.1 && visual_row_h + 0.4 < row_height && row_height < p * 3.0
