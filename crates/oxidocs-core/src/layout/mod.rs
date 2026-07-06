@@ -7185,7 +7185,30 @@ impl LayoutEngine {
             // no-type docGrid uses the natural device-snapped advance (S571b),
             // so its leading genuinely overhangs the margin like LM0.
             let ink_lh = if std::env::var("OXI_S576_DISABLE").is_ok() || !page.doc_grid_no_type {
-                natural_lh
+                // OXI_OFFSLOT_INK (opt-in experiment, ROWBOX2 companion): a
+                // TYPED-grid line whose cursor sits OFF the grid phase is not
+                // slot-bound — its page-bottom fit is governed by the glyph
+                // INK (like no-type grids / LM0); ON-slot lines keep the
+                // natural base + S739 centered floor. Specimen: kojin pi=52
+                // last line under ROWBOX2 (+2pt correct table heights, still
+                // 8-10pt OFF-phase): Word keeps it at natural-over +1.65 —
+                // ink (~em 11.8) fits where natural (13.5) pushes. The
+                // S576-era "typed grids regressed ikujikaigo/model" blanket
+                // test predates S739; those lines are slot-aligned and now
+                // keep natural/centered under this phase scoping.
+                let offslot_ink = std::env::var("OXI_OFFSLOT_INK").is_ok()
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.map_or(false, |p| {
+                        if p <= 0.0 { return false; }
+                        let phase = (cursor.cursor_y - page_top).rem_euclid(p);
+                        phase >= 1.0 && phase <= p - 1.0
+                    });
+                if offslot_ink {
+                    ink_line_heights.get(line_idx).copied().unwrap_or(natural_lh).min(natural_lh)
+                } else {
+                    natural_lh
+                }
             } else {
                 ink_line_heights.get(line_idx).copied().unwrap_or(natural_lh).min(natural_lh)
             };
@@ -12057,7 +12080,15 @@ impl LayoutEngine {
                 // oscillation is a later cosmetic refinement.
                 // ROWBOX2 (opt-in experiment): raw heights corpus-wide — the
                 // _rowbox_sweep.py model (row pitch = n×13.60 RAW, uniform).
-                if self.cellpair_active() || self.rowbox2_raw() {
+                // ★METRICS-exact, not GDI-px: the GDI integer-pixel tmHeight
+                // quantizes small sizes (8pt → 11px = 8.25pt → raw 10.70 vs
+                // Word's true 83/64×8 = 10.375 — bd90b00's +0.32/row
+                // residual); 10.5pt coincides (14px) which is why the
+                // CELLPAIR 10.5pt validation never saw it. Word's row
+                // arithmetic uses the un-quantized win_sum×fs×83/64.
+                if self.rowbox2_raw() {
+                    metrics.word_line_height_no_grid(font_size)
+                } else if self.cellpair_active() {
                     raw
                 } else {
                     (raw * 8.0).floor() / 8.0
