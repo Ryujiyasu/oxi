@@ -3564,6 +3564,54 @@ impl LayoutEngine {
                         // Float: do NOT advance the cursor; skip normal block processing.
                         continue;
                     }
+                    // S758c (2026-07-06): a PAGE-anchored framePr paragraph is a
+                    // fixed-position frame — the body flows AROUND it (side-wrap
+                    // band) and the frame consumes NO flow height (probeqframepg:
+                    // Word frame box [340..476.7]×[225..338] with body lines
+                    // narrowed to x1≈333 beside it; Oxi laid it in-flow full-width
+                    // → −1×3). The vAnchor="text" frames keep the existing
+                    // in-flow path (probexframes PASSES with it).
+                    if std::env::var("OXI_S758_DISABLE").is_err()
+                        && para.style.frame_pr.as_ref().map_or(false, |fp|
+                            fp.drop_cap.is_none()
+                            && fp.v_anchor.as_deref() == Some("page")
+                            && fp.wrap.as_deref() != Some("none"))
+                    {
+                        let fp = para.style.frame_pr.as_ref().unwrap();
+                        let fx = if fp.h_anchor.as_deref() == Some("page") {
+                            fp.x
+                        } else {
+                            page.margin.left + fp.x
+                        };
+                        let fy = fp.y;
+                        let fw = fp.width.unwrap_or(content_width * 0.3).max(20.0);
+                        let mut fcy = LayoutCursor::new(fy + 3.0);
+                        let empty_fn_frame = std::collections::HashMap::new();
+                        let (frame_els, _, _) = self.layout_paragraph(
+                            para, fx + 1.5, &mut fcy, (fw - 3.0).max(10.0),
+                            page.size.height, fy, page,
+                            &mut Vec::new(), &mut Vec::new(),
+                            grid_pitch, None, false,
+                            None, false, false, 0.0, Some(block_idx), None, None,
+                            false, false, None,
+                            0.0,
+                            &empty_fn_frame,
+                            1, 0, &[], 0.0,
+                            false,
+                            false,
+                            None, // S755
+                            None, // S758
+                        );
+                        elements.extend(frame_els);
+                        // Band height: framePr h (hRule atLeast semantics — the
+                        // content may exceed it).
+                        let content_h_frame = (fcy.cursor_y - fy).max(14.0);
+                        let fh = fp.height.unwrap_or(0.0).max(content_h_frame);
+                        s758_bands.push((current_page_idx, fy, fy + fh, fx, fx + fw));
+                        // Float: no flow consumption.
+                        prev_space_after = 0.0;
+                        continue;
+                    }
                     // Round 29: compute footnote contribution if this paragraph is
                     // laid out on the CURRENT page (delta added) vs a NEW page
                     // (full from-scratch). Used by overflow checks below.
@@ -4405,6 +4453,57 @@ impl LayoutEngine {
                             cursor.set(candidate_y_bottom + 1.5);
                         } else {
                             // Original behavior: floating tables don't advance text flow
+                            // S758b: a NARROW vertAnchor="text" float leaves room
+                            // beside it — Word wraps the following text NEXT TO the
+                            // table (probexfloattbl: body lines narrowed to x1≈347
+                            // beside the tblpXSpec=right box [354.7..524.7]). Push a
+                            // side-wrap band over the table's rect; the S758
+                            // paragraph machinery does the narrowing/rebreak. Wide
+                            // floats keep the wrap-below paths above.
+                            // v1 scope: ALIGN-positioned floats only (tblpXSpec —
+                            // the probe uses "right"). ed025c's OFFSET-positioned
+                            // floats (tblpX 32-100pt, h_align None) banded at
+                            // −0.0019 vs its word_png — whether Word narrows
+                            // beside offset floats (and at what geometry) is
+                            // unpinned; excluded until measured.
+                            if std::env::var("OXI_S758_DISABLE").is_err()
+                                && v_anchor_text && !wide_table && table_w_pt > 6.0
+                                && table.style.position.as_ref()
+                                    .map_or(false, |tp| tp.h_align.is_some())
+                            {
+                                let band_x0 = if let Some(ref tpos) = table.style.position {
+                                    if let Some(ref ha) = tpos.h_align {
+                                        let (rl, rw) = match tpos.h_anchor.as_deref() {
+                                            Some("page") => (0.0, page.size.width),
+                                            _ => (start_x, content_width),
+                                        };
+                                        match ha.as_str() {
+                                            "center" => rl + (rw - table_w_pt) * 0.5,
+                                            "right" => rl + rw - table_w_pt,
+                                            _ => rl,
+                                        }
+                                    } else {
+                                        match tpos.h_anchor.as_deref() {
+                                            Some("page") => tpos.x,
+                                            _ => start_x + tpos.x,
+                                        }
+                                    }
+                                } else {
+                                    start_x
+                                };
+                                // Column containment: Word wraps text beside a float
+                                // that sits INSIDE the text column (probexfloattbl
+                                // x[354.7..524.7] = flush to content-right). ed025c's
+                                // OFF-column floats (large tblpX, overflowing the
+                                // column) get no wrap in Word — banding them
+                                // regressed its word_png −0.0019.
+                                if band_x0 >= start_x - 1.0
+                                    && band_x0 + table_w_pt <= start_x + content_width + 6.0
+                                {
+                                    s758_bands.push((current_page_idx, candidate_y_top,
+                                        candidate_y_bottom, band_x0, band_x0 + table_w_pt));
+                                }
+                            }
                             cursor.set(saved_cursor_y);
                         }
                     } else {
