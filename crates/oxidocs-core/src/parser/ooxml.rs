@@ -2026,6 +2026,32 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
+    // RUN-PRESENCE rule (2026-07-07, _gridquant_sweep.py + _emptyquant_sweep.py
+    // + the 2ea81a anatomy): a paragraph whose runs are ALL text-empty but
+    // which HAS at least one run (e.g. a text-less run holding a floating
+    // drawing anchor) sizes its line from the RUN's (inherited) properties,
+    // NOT the paragraph-mark rPr. Word truth: 2ea81a's ＜＜記載例＞＞ anchor
+    // paras (¶ sz28=14pt, anchor run rPr=noProof → inherits Normal 10.5pt)
+    // render ONE 16.15 grid cell; run-LESS empties keep the ¶-mark rPr
+    // (controlled-confirmed: run-less sz28 empties = 2 cells at pitch
+    // 323/330/360 — the S583/S195/S707 family is untouched). Centralized at
+    // parse so every ppr_rpr height site inherits the rule. NOTE: a hidden-¶
+    // (S673v vanish) para with an anchor run would lose the ¶ vanish flag
+    // here — no corpus doc combines them.
+    // ★BUNDLED with the ROWBOX2 experiment (or standalone OXI_RUNPRESENCE=1),
+    // default OFF: RP ALONE regresses 2ea81a SSIM −0.1263 — the old default
+    // was a compensating balance (wrong anchor page + oversized empties ≈
+    // word_png); the Word-correct state needs RP + the correct ROWBOX2 row
+    // heights TOGETHER (then 2ea81a is PASS all-zero, 2 pages = Word).
+    // Opt-out within the bundle: OXI_RUNPRESENCE_DISABLE.
+    if (std::env::var("OXI_ROWBOX2").is_ok() || std::env::var("OXI_RUNPRESENCE").is_ok())
+        && std::env::var("OXI_RUNPRESENCE_DISABLE").is_err()
+        && !runs.is_empty()
+        && runs.iter().all(|r| r.text.is_empty())
+    {
+        style.ppr_rpr = Some(runs[0].style.clone());
+    }
+
     Ok(ParagraphResult {
         paragraph: Paragraph {
             runs,
