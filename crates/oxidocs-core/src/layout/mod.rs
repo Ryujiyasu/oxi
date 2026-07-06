@@ -3231,6 +3231,31 @@ impl LayoutEngine {
         // y would double-shift).
         let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> =
             Default::default();
+        // S758 (2026-07-06, default ON, opt-out OXI_S758_DISABLE): wrapSquare
+        // floating-IMAGE side-wrap. Word narrows every LINE whose y-range
+        // intersects the float's band to (float_left − distL) [right-side
+        // floats] — imgfloat truth: image [382.7..524.4]×[286.9..400.2],
+        // 7 lines narrowed to x1≈374, the band cuts MID-paragraph. v1 scope =
+        // paragraph-anchored wrapSquare IMAGES only (every corpus wrapSquare
+        // anchor is a TEXTBOX → the registry is empty for the whole corpus =
+        // byte-identical by construction; only probeximgfloat activates).
+        // distL/distR are not parsed yet — Word's default 114300EMU = 9.0pt
+        // (matches the measured 8.7pt gap).
+        let s758_on = std::env::var("OXI_S758_DISABLE").is_err();
+        let s758_squares: std::collections::HashMap<usize, Vec<usize>> = if s758_on {
+            let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            for (ii, img) in page.floating_images.iter().enumerate() {
+                if img.wrap_type == Some(crate::ir::WrapType::Square)
+                    && img.position.as_ref()
+                        .map_or(false, |ip| ip.v_relative.as_deref() == Some("paragraph"))
+                {
+                    m.entry(img.anchor_block_index).or_default().push(ii);
+                }
+            }
+            m
+        } else { Default::default() };
+        // resolved bands: (page_idx, top, bottom, x0, x1)
+        let mut s758_bands: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // S755: refresh the current page's header/footer geometry (a
             // previous block may have pushed pages internally).
@@ -3268,6 +3293,53 @@ impl LayoutEngine {
                 }
                 s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
                 cursor.advance(band_h);
+            }
+            // S758: resolve wrapSquare bands anchored to this block (band top =
+            // the anchor paragraph's first-line top = the cursor here).
+            if let Some(iis) = s758_squares.get(&block_idx) {
+                // Word pushes the float AND its anchor paragraph to the next
+                // page when the band would cross the page bottom (a wrapSquare
+                // float never splits): probeximgfloat float#2 anchored at
+                // 第25条 — Word starts p3 with the paragraph + image at the
+                // top. Same push shape as the S734 wrapTopAndBottom arm.
+                let s758_max_bottom = iis.iter()
+                    .filter_map(|&ii| page.floating_images[ii].position.as_ref()
+                        .map(|ip| cursor.cursor_y + ip.y.max(0.0)
+                            + page.floating_images[ii].height))
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let s758_remaining = (start_y + content_height) - cursor.cursor_y;
+                if s758_max_bottom.is_finite()
+                    && s758_max_bottom - cursor.cursor_y > s758_remaining
+                    && s758_max_bottom - cursor.cursor_y <= content_height
+                    && !elements.is_empty()
+                {
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: std::mem::take(&mut elements),
+                    });
+                    if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                    cursor.set(start_y);
+                    lm2_cells = 0;
+                    current_page_idx += 1;
+                    footnote_reserve_current = 0.0;
+                    footnote_ids_current_page.clear();
+                }
+                for &ii in iis {
+                    let img = &page.floating_images[ii];
+                    if let Some(ipos) = img.position.as_ref() {
+                        let top = cursor.cursor_y + ipos.y.max(0.0);
+                        let bottom = top + img.height;
+                        let content_left = page.margin.left;
+                        let x0 = match ipos.h_align.as_deref() {
+                            Some("right") => content_left + total_content_width - img.width,
+                            Some("center") => content_left + (total_content_width - img.width) * 0.5,
+                            Some("left") => content_left,
+                            _ => content_left + ipos.x,
+                        };
+                        s758_bands.push((current_page_idx, top, bottom, x0, x0 + img.width));
+                    }
+                }
             }
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
             // this block's cursor has reached the float's region (the gap above it
@@ -3840,6 +3912,23 @@ impl LayoutEngine {
                     }
 
                     let pages_before = pages.len();
+                    // S758: does this paragraph START inside a wrapSquare band on
+                    // the current page? Right-side bands only (v1): pass
+                    // (band_bottom, width_reduction). Reduction = the part of the
+                    // column the float + its 9pt distL eat; requires a real
+                    // horizontal overlap so decorative off-column floats stay
+                    // inert.
+                    let s758_para_band: Option<(f32, f32)> = s758_bands.iter()
+                        .filter(|(pg, top, bot, bx0, bx1)| *pg == current_page_idx
+                            && cursor.cursor_y >= *top - 0.5
+                            && cursor.cursor_y < *bot - 0.5
+                            && *bx0 < start_x + content_width - 6.0
+                            && *bx1 > start_x + 6.0)
+                        .map(|(_, _, bot, bx0, _)| {
+                            let reduction = ((start_x + content_width) - (bx0 - 9.0)).max(0.0);
+                            (*bot, reduction)
+                        })
+                        .find(|(_, red)| *red > 6.0);
                     // Round 29: pass the per-page effective content height so the
                     // paragraph's internal line-by-line page-break logic accounts
                     // for the footnote area below. Multi-page paragraphs with
@@ -3914,6 +4003,7 @@ impl LayoutEngine {
                         false, // S691: body context
                         footer_tight, // S726
                         s755_geom.as_ref(), // S755
+                        s758_para_band, // S758
                     );
                     prev_space_after = sa;
                     // S637: layout_paragraph may have advanced the column (flowing
@@ -4578,6 +4668,7 @@ impl LayoutEngine {
                             false,
                             false,
                             None, // S755
+                            None, // S758
                         );
                         elements.extend(en_elements);
                     }
@@ -4785,6 +4876,7 @@ impl LayoutEngine {
                             true, // S691: header context
                             false, // S726: header bottom differs
                             None, // S755
+                            None, // S758
                         );
                         lp.elements.extend(hdr_elements);
                     }
@@ -4819,6 +4911,7 @@ impl LayoutEngine {
                             true, // S691: footer context
                             false, // S726: footer bottom differs
                             None, // S755
+                            None, // S758
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -5143,6 +5236,7 @@ impl LayoutEngine {
                                         false, // S691: footnote context
                                         false, // S726
                                         None, // S755
+                                        None, // S758
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -5438,6 +5532,7 @@ impl LayoutEngine {
                         false, // S691: textbox context (in_textbox)
                         false, // S726
                         None, // S755
+                        None, // S758
                     );
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
@@ -5918,6 +6013,15 @@ impl LayoutEngine {
         // internal page push, page_top/content_height switch to the NEW
         // page's variant. Only the body call site threads a real value.
         s755_geom: Option<&S755Geom>,
+        // S758 (2026-07-06): wrapSquare side-wrap band the paragraph STARTS
+        // inside: (band_bottom_abs, width_reduction_pt). The paragraph breaks
+        // at (wrap_width − reduction); when the cursor exits the band the
+        // placement loop REBREAKS the remaining lines' fragments at the full
+        // width (the imgfloat truth: the band cuts MID-paragraph — para 6 has
+        // 2 narrow + 2 full lines). None everywhere except the body call site;
+        // v1 = floating IMAGES only (all corpus wrapSquare anchors are
+        // textboxes → corpus-inert by construction).
+        s758_band: Option<(f32, f32)>,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -6494,10 +6598,16 @@ impl LayoutEngine {
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
         let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
+        // S758: the paragraph starts inside a wrapSquare band — break at the
+        // narrowed width; s758_wrap_full is the rebreak target at band exit.
+        let s758_wrap_full = wrap_width;
+        let wrap_width = if let Some((_, red)) = s758_band {
+            (wrap_width - red).max(30.0)
+        } else { wrap_width };
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
         let para_has_lrpb = para.runs.iter().any(|r| r.has_last_rendered_page_break);
-        let lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
+        let mut lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
         // S721 body arm (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
         // PARAGRAPH-TAIL ORPHAN ELIMINATION via a two-pass re-break. Word accepts
         // ABOVE-normal 約物 compression (~3.9/約物 vs the s590 break cap 1.5) when
@@ -6510,7 +6620,7 @@ impl LayoutEngine {
         // re-break ONLY when it saves a line (ikujidetail る。: demand ~11 > 3.9 →
         // count unchanged → keep the first pass, matching Word's oidashi there;
         // nedo 子: 1-glyph tail, fits at open 3.4 → saved → matches Word).
-        let lines = {
+        let mut lines = {
             let last_glyphs: usize = lines.last()
                 .map(|l| l.fragments.iter().map(|f| f.text.chars().count()).sum())
                 .unwrap_or(0);
@@ -6832,7 +6942,37 @@ impl LayoutEngine {
         // splice the remaining lines at a float-band exit (byte-identical
         // when no rebreak fires — same order, same borrows).
         let mut line_idx = 0usize;
+        let mut s758_rebroken = s758_band.is_none();
+        let s758_entry_pages = pages.len();
         while line_idx < lines.len() {
+            // S758: the cursor exited the band (or a page push left it behind)
+            // → rebreak the remaining lines' fragments at the full width.
+            if !s758_rebroken {
+                if let Some((band_bot, _)) = s758_band {
+                    if (cursor.cursor_y >= band_bot - 0.5 || pages.len() > s758_entry_pages)
+                        && line_idx < lines.len() {
+                        s758_rebroken = true;
+                        let rem: Vec<(String, RunStyle, Option<FieldType>, usize, usize)> =
+                            lines[line_idx..].iter()
+                                .flat_map(|l| l.fragments.iter().map(|f| (
+                                    f.text.clone(), f.style.clone(), f.field_type.clone(),
+                                    f.run_index, f.char_offset)))
+                                .collect();
+                        let refs: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> =
+                            rem.iter()
+                                .map(|(t, st, ft, ri, co)| (t.as_str(), st, ft.clone(), *ri, *co))
+                                .collect();
+                        let nl = self.break_into_lines(&refs, s758_wrap_full, 0.0, &para.style,
+                            effective_char_pitch, effective_cw_ratio,
+                            page.doc_grid_lines_and_chars, true,
+                            matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
+                            page.doc_grid_no_type, para_has_lrpb, caps_active);
+                        lines.truncate(line_idx);
+                        lines.extend(nl);
+                        if line_idx >= lines.len() { break; }
+                    }
+                }
+            }
             let line = &lines[line_idx];
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
