@@ -6828,7 +6828,12 @@ impl LayoutEngine {
                 !self.metrics_for_text(&f.text, &f.style, &para.style).is_cjk_83_64_font()
             });
 
-        for (line_idx, line) in lines.iter().enumerate() {
+        // S758 refactor: index-based iteration so the side-wrap rebreak can
+        // splice the remaining lines at a float-band exit (byte-identical
+        // when no rebreak fires — same order, same borrows).
+        let mut line_idx = 0usize;
+        while line_idx < lines.len() {
+            let line = &lines[line_idx];
             let _first_style = line.fragments.first().map(|f| &f.style).unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
             // BODYLINE instrument: reliable per-LINE body text + char count + cursor_y
@@ -9118,6 +9123,7 @@ impl LayoutEngine {
                 }
                 } // S733 end else
             }
+            line_idx += 1;
         }
 
         // COM-confirmed (2026-04-16, 683f p2 + minimal repro): content paragraphs
