@@ -11954,6 +11954,52 @@ impl LayoutEngine {
         }
     }
 
+    /// ROWBOX2 experiment (opt-in OXI_ROWBOX2=1, default OFF/byte-identical):
+    /// the DERIVED Word row-height border-box model (_rowbox_sweep.py +
+    /// text-ink offsets, 2026-07-06) made CURSOR-real. The border width is a
+    /// TOP CONTENT PAD, additive with explicit cellMar (Word ink offsets:
+    /// sz4→+0.5, sz8→+1.0, sz12→+1.5; sz4+cellMar3 → +3.5): row pitch =
+    /// bw + cellMar_t + n×RAW line heights + cellMar_b; hRule=exact =
+    /// trHeight exactly; atLeast = max(content, trHeight + bw). Cell-level
+    /// tcBorders ≡ table insideH. Replaces the render-only visual pluses
+    /// (S200/S661/S666/S682 advance_split) with cursor==visual. S375-class
+    /// pagination risk → full-corpus blast measurement before any default-ON.
+    fn rowbox2_active(&self) -> bool {
+        std::env::var("OXI_ROWBOX2").is_ok()
+    }
+
+    /// ROWBOX2 decomposition knobs (analysis only): disable one component
+    /// at a time to attribute per-doc regressions.
+    fn rowbox2_raw(&self) -> bool {
+        self.rowbox2_active() && std::env::var("OXI_ROWBOX2_NORAW").is_err()
+    }
+    fn rowbox2_pad_on(&self) -> bool {
+        self.rowbox2_active() && std::env::var("OXI_ROWBOX2_NOPAD").is_err()
+    }
+    fn rowbox2_trh(&self) -> bool {
+        self.rowbox2_active() && std::env::var("OXI_ROWBOX2_NOTRH").is_err()
+    }
+
+    /// ROWBOX2: the border width that pads the cell content top (generalized
+    /// Round30 — fires additively with explicit cellMar, and for cell-level
+    /// tcBorders too). 0.0 when the experiment is off or the row is unbordered.
+    fn rowbox2_border_pad(&self, table: &Table, cell: &TableCell) -> f32 {
+        if !self.rowbox2_pad_on() {
+            return 0.0;
+        }
+        if table.style.border || table.style.has_inside_h {
+            return table.style.border_width.unwrap_or(0.5);
+        }
+        if let Some(b) = &cell.borders {
+            if b.top.is_some() || b.bottom.is_some() {
+                let w = b.top.as_ref().map(|d| d.width).unwrap_or(0.0)
+                    .max(b.bottom.as_ref().map(|d| d.width).unwrap_or(0.0));
+                return if w > 0.0 { w } else { 0.5 };
+            }
+        }
+        0.0
+    }
+
     fn line_height_inner(
         &self,
         font_size: f32,
@@ -12009,7 +12055,9 @@ impl LayoutEngine {
                 // b35123 r4 = 17.5+17.5+11.67+11.67+3.5 = 62.4 EXACT; the flat floor
                 // under-counts −0.05..−0.25/line). The intra-row 0.12 device
                 // oscillation is a later cosmetic refinement.
-                if self.cellpair_active() {
+                // ROWBOX2 (opt-in experiment): raw heights corpus-wide — the
+                // _rowbox_sweep.py model (row pitch = n×13.60 RAW, uniform).
+                if self.cellpair_active() || self.rowbox2_raw() {
                     raw
                 } else {
                     (raw * 8.0).floor() / 8.0
@@ -12096,7 +12144,7 @@ impl LayoutEngine {
                             // total = the raw sum; the S492y 0.75-floor (17.25) under-counts
                             // −0.25/grid-line (the b35123 p1 monotone bias).
                             if in_table_cell && std::env::var("OXI_S492Y_DISABLE").is_err()
-                                && !self.cellpair_active() {
+                                && !self.cellpair_active() && !self.rowbox2_raw() {
                                 return ((snapped / 0.75).round() * 0.75).max(1.0);
                             }
                             return snapped;
@@ -13781,6 +13829,9 @@ impl LayoutEngine {
             // cell-border table. Corrects S477's "CJK line-height" misattribution (the
             // per-line height MATCHES Word at 14.0 — the drift is the missed border-box).
             let mut row_cell_hborder = false;
+            // ROWBOX2: max cell-level horizontal border width seen in the row
+            // (for the border-box overhead when the table has no insideH).
+            let mut row_cell_hborder_w: f32 = 0.0;
             // S503 (2026-06-08): centering-only row height using the ACTUAL GDI render
             // line-height (line_height_inner ~13.5) instead of the estimate's
             // word_line_height_table_cell (~12.625). visual_row_h under-counts when the
@@ -13828,6 +13879,11 @@ impl LayoutEngine {
                     if let Some(b) = &cell.borders {
                         if b.top.is_some() || b.bottom.is_some() {
                             row_cell_hborder = true;
+                            for d in [&b.top, &b.bottom].into_iter().flatten() {
+                                if d.width > row_cell_hborder_w {
+                                    row_cell_hborder_w = d.width;
+                                }
+                            }
                         }
                     }
                 }
@@ -13858,7 +13914,11 @@ impl LayoutEngine {
                 // → 0.9521 (-0.0082, pass 18→17), and b5f706 barely moved
                 // (0.9715→0.9707) because the iou_yrange_adj median absorbs
                 // uniform per-table shifts. Round30 on row 0 is load-bearing.
-                if pad_t == 0.0 && table.style.border {
+                if self.rowbox2_pad_on() {
+                    // ROWBOX2: generalized Round30 — bw pads the content top
+                    // ADDITIVELY with explicit cellMar, incl. cell tcBorders.
+                    pad_t += self.rowbox2_border_pad(table, cell);
+                } else if pad_t == 0.0 && table.style.border {
                     pad_t = table.style.border_width.unwrap_or(0.4);
                 }
                 // COM-confirmed (2026-04-09, 10 minimal repros + 3 real docs):
@@ -14214,7 +14274,34 @@ impl LayoutEngine {
                     // DIFFERENT class (content-line-height, pitch 21>trH, b35
                     // class) — the "convergent negative-drift" assumption was
                     // false. Do NOT re-attempt a global atLeast bump.
-                    _ => { row_height = row_height.max(h); }
+                    _ => {
+                        // ROWBOX2: a binding atLeast trHeight renders at
+                        // trHeight + bw (_rowbox_sweep.py: 900tw=45.0 →
+                        // Word 45.48; the bw pad sits on top of the
+                        // trHeight box). Content already carries the bw
+                        // via the generalized Round30 pad, so compare
+                        // against trH + bw.
+                        // (TRHCELL hypothesis FALSIFIED 2026-07-06: gating
+                        // cell-tcBorders out of the trH+bw did NOT fix the
+                        // kojin/2ea81a/bd90b00 flips — their rows are in
+                        // table-bordered tables, and Word's OWN PDF renders
+                        // their binding rows at trH+bw (kojin p3: 38.4/41.3/
+                        // 49.56 vs trH 37.9/40.75/49.0; 2ea81a p1: 26.0 vs
+                        // 25.5) — the flips are compensating-error exposures,
+                        // not model errors. Cell tcBorders ≡ table insideH.)
+                        let rb2_bw = if self.rowbox2_trh() {
+                            if table.style.border || table.style.has_inside_h {
+                                table.style.border_width.unwrap_or(0.5)
+                            } else if row_cell_hborder {
+                                if row_cell_hborder_w > 0.0 { row_cell_hborder_w } else { 0.5 }
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+                        row_height = row_height.max(h + rb2_bw);
+                    }
                 }
             }
 
@@ -14606,7 +14693,10 @@ impl LayoutEngine {
                 // (OXI_S359_NO_ROUND30=1 caused -0.0186 corpus regression).
                 // S386 (2026-05-27): double-border-count hypothesis FALSIFIED
                 // (see height-calc site above; -0.0082 corpus regression).
-                if pad_t == 0.0 && table.style.border {
+                if self.rowbox2_pad_on() {
+                    // ROWBOX2: generalized Round30 (see the first-pass site).
+                    pad_t += self.rowbox2_border_pad(table, cell);
+                } else if pad_t == 0.0 && table.style.border {
                     let bw = table.style.border_width.unwrap_or(0.4);
                     pad_t = bw;
                 }
@@ -18469,7 +18559,12 @@ impl LayoutEngine {
                         row.height.map(|h| h >= p * 3.0).unwrap_or(false)
                         && visual_row_h > 0.1 && visual_row_h + 0.4 < row_height
                     ).unwrap_or(false);
-                if apply_plus_half || s661_sparse_trheight || s666_cellborder {
+                if self.rowbox2_active() {
+                    // ROWBOX2: the border-box is already IN row_height
+                    // (cursor-real); the render-only visual pluses
+                    // (S200/S661/S666/S682) would double-count.
+                    cursor.advance(row_height);
+                } else if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else if bbox_large {
                     if std::env::var("OXI_DBG_BBOX").is_ok() {
@@ -19136,7 +19231,10 @@ impl LayoutEngine {
             let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
             let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
             let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
-            if pad_t == 0.0 && table.style.border {
+            if self.rowbox2_pad_on() {
+                // ROWBOX2: generalized Round30 (see the first-pass site).
+                pad_t += self.rowbox2_border_pad(table, cell);
+            } else if pad_t == 0.0 && table.style.border {
                 pad_t = table.style.border_width.unwrap_or(0.4);
             }
             let inner_w = cell_w.max(0.0);
