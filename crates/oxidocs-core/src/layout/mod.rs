@@ -14433,10 +14433,31 @@ impl LayoutEngine {
                         true,
                         None, None, 0.0, 0.0, false, // S740: nested notes counted at the outer row
                     );
+                    if std::env::var("OXI_DBG_NEST").is_ok() {
+                        let emax = nested_elements.iter().map(|e| match &e.content {
+                            LayoutContent::TableBorder { y2, .. } => *y2,
+                            _ => e.y + e.height,
+                        }).fold(f32::NEG_INFINITY, f32::max);
+                        eprintln!("[NEST_DBG] cursor_y={:.2} visual_y={:.2} elem_max={:.2} n_elems={}",
+                            nested_y.cursor_y, nested_y.visual_y, emax, nested_elements.len());
+                    }
                     for elem in nested_elements {
                         cell_elements.push(elem);
                     }
-                    content_h = nested_y.cursor_y;
+                    // S756 (2026-07-06, default ON, opt-out OXI_S756_DISABLE):
+                    // anchor the cell content FOLLOWING a nested table at the
+                    // VISUAL track, not the cursor track. The render-only
+                    // per-row overheads (S200/S661/S666 advance_split +0.5)
+                    // accumulate on visual_y only — probenest's 20-row inner
+                    // table painted to 843.5 while cursor_y said 834.0, so the
+                    // following （続き） paragraph was placed 9.5pt INSIDE the
+                    // nested table's last row (row-split continuation showed
+                    // it overlapping at y=752.5 vs the row line at 748.5).
+                    content_h = if std::env::var("OXI_S756_DISABLE").is_err() {
+                        nested_y.visual_y
+                    } else {
+                        nested_y.cursor_y
+                    };
                     prev_cell_sa = None; // S427: nested table breaks paragraph adjacency
                 }
                 Block::Paragraph(para) => {
