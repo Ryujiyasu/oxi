@@ -22,6 +22,7 @@ d['keywords'] = ['docx', 'word', 'ooxml', 'layout', 'wasm', 'document', 'pdf']
 if 'README.md' not in d['files']:
     d['files'].append('README.md')
 d['homepage'] = 'https://gitlab.com/Ryujiyasu/oxi'
+d['repository'] = {'type': 'git', 'url': 'git+https://gitlab.com/Ryujiyasu/oxi.git'}
 json.dump(d, open(p, 'w', encoding='utf-8', newline=''), indent=2, ensure_ascii=False)
 print('package.json patched (name=oxidocs)')
 PY
