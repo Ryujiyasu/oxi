@@ -5773,9 +5773,24 @@ impl LayoutEngine {
         let corner_inset = text_box.corner_radius
             .map(|r| r * (1.0 - std::f32::consts::FRAC_1_SQRT_2))
             .unwrap_or(0.0);
+        // S761 (2026-07-08): the preset-geometry text rectangle applies on ALL
+        // FOUR sides (roundRect: il=it=ir=ib = r×(1−cos45°)), but Oxi applied
+        // it horizontally only. The missing TOP inset was 1ec1's per-box
+        // "+3.4 asc anomaly": a dual-box control (the verbatim 1ec1 roundRect
+        // box + a rect-geometry twin on the SAME anchor/posV) measured the
+        // first baseline +3.36pt lower for roundRect, and geometry variants
+        // matched the formula quantitatively (rect −3.12/exp −3.21, adj16667
+        // +3.24/exp +3.16, adj4000 −1.56/exp −1.68, cy×2 +3.24/exp +3.21).
+        // Corpus scope: exactly 2 docs carry roundRect textboxes (1ec1 ×4,
+        // 2ea81a ×4), both word_png → honest SSIM gate. Opt-out OXI_S761_DISABLE.
+        let v_corner_inset = if std::env::var("OXI_S761_DISABLE").is_ok() {
+            0.0
+        } else {
+            corner_inset
+        };
         let inner_x = abs_x + inset_l + corner_inset;
         let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
-        let inner_height = (text_box.height - inset_t - inset_b).max(0.0);
+        let inner_height = (text_box.height - inset_t - inset_b - 2.0 * v_corner_inset).max(0.0);
         // S481 (REVERTED, finding only): rendering vertOverflow="overflow" lines
         // (e.g. 2ea81a "＜＜記載例＞＞", dropped via avail=0) REGRESSED p2 −0.0009 —
         // the box's anchor Y is itself mis-positioned (S478/S469 float-anchor
@@ -5786,7 +5801,7 @@ impl LayoutEngine {
         // Initial cursor at top; for middle/bottom, compute content height first,
         // then offset all elements after layout.
         let v_anchor = text_box.v_text_anchor.as_deref().unwrap_or("t");
-        let mut cursor = LayoutCursor::new(abs_y + inset_t);
+        let mut cursor = LayoutCursor::new(abs_y + inset_t + v_corner_inset);
 
         // We layout content inside the text box without page-breaking.
         // Use dummy page/elements vecs since we don't want page breaks inside text boxes.
@@ -5798,7 +5813,7 @@ impl LayoutEngine {
 
         for block in &text_box.blocks {
             // Stop if we've exceeded the text box bounds
-            if cursor.cursor_y > abs_y + text_box.height - inset_b {
+            if cursor.cursor_y > abs_y + text_box.height - inset_b - v_corner_inset {
                 break;
             }
 
@@ -5904,7 +5919,7 @@ impl LayoutEngine {
                     // For multi-line overflow (2ea81a tbx 5: 3 lines, only 2 fit), this
                     // correctly drops the 3rd line while keeping the first 2.
                     // line_height is taken from the first text element in para_elements.
-                    let inner_h = (text_box.height - inset_t - inset_b).max(0.0);
+                    let inner_h = (text_box.height - inset_t - inset_b - 2.0 * v_corner_inset).max(0.0);
                     let line_h = para_elements.iter()
                         .find_map(|pe| match &pe.content {
                             LayoutContent::Text { .. } if pe.height > 0.5 => Some(pe.height),
@@ -5913,7 +5928,7 @@ impl LayoutEngine {
                         .unwrap_or(0.0);
                     let line_cutoff_y = if line_h > 0.5 && inner_h > 0.0 {
                         let avail = (inner_h / line_h).floor();
-                        abs_y + inset_t + avail * line_h
+                        abs_y + inset_t + v_corner_inset + avail * line_h
                     } else {
                         clip_bottom
                     };
@@ -6007,7 +6022,7 @@ impl LayoutEngine {
                     }
                 }
             }
-            if min_y < max_y { max_y - min_y } else { cursor.cursor_y - (abs_y + inset_t) }
+            if min_y < max_y { max_y - min_y } else { cursor.cursor_y - (abs_y + inset_t + v_corner_inset) }
         };
         let v_shift = match v_anchor {
             "ctr" | "middle" | "middle-center" => ((inner_height - content_h) / 2.0).max(0.0),
@@ -6061,9 +6076,19 @@ impl LayoutEngine {
         // Paragraph spacing rules were captured per-para during the block
         // loop (clnsp_paras). Scope: anchor="t" boxes (1ec1's case), text
         // elements only — render-only like S662.
+        // SHIPPED default-ON 2026-07-08 (opt-out OXI_CLNSP_DISABLE) together
+        // with S761: the v5 absolute law anchor only became correct once the
+        // roundRect vertical text-rect inset (S761) completed the law — the
+        // earlier v5 "−0.0609 / Oxi abs_y ~5pt off" verdict was the MISSING
+        // INSET, not a frame error. Gate: 1ec1 0.7652 (S662 flat +2.0 era)
+        // → 0.7991 (S761 + CLNSP v5); scope = compatLnSpc anchor-t boxes
+        // whose blocks are ALL paragraphs (clnsp_line_specs is captured per
+        // paragraph line — a table/image block would desync the order-based
+        // mapping, so mixed boxes keep the S662 path).
         if text_box.compat_line_spacing
-            && std::env::var("OXI_CLNSP").is_ok()
+            && std::env::var("OXI_CLNSP_DISABLE").is_err()
             && matches!(v_anchor, "t" | "" | "top")
+            && text_box.blocks.iter().all(|b| matches!(b, Block::Paragraph(_)))
         {
             // group text elements into lines by y
             use std::collections::BTreeMap;
@@ -6167,7 +6192,7 @@ impl LayoutEngine {
                     let mean_law: f32 = per_line.iter().map(|(_, _, l)| *l).sum::<f32>() / n;
                     mean_cur - mean_law
                 } else {
-                    abs_y + inset_t + first_asc
+                    abs_y + inset_t + v_corner_inset + first_asc
                 };
                 for (idxs, cur_base, law_rel) in &per_line {
                     let shift = (anchor + law_rel) - cur_base;
@@ -6177,16 +6202,17 @@ impl LayoutEngine {
                 }
             }
         } else if text_box.compat_line_spacing && std::env::var("OXI_S662_DISABLE").is_err() {
-            // 2.0 chosen over 1ec1's solo SSIM peak (2.5): it is 2ea81a's
-            // per-doc-mean OPTIMUM (the other compat doc) and near the joint
-            // corpus-SSIM peak (~2.25), giving 1ec1 +0.055 / 2ea81a mean +0.009
-            // while minimizing 2ea81a p2's per-page dip. The exact per-line
-            // compat offset is font-leading-dependent (a constant over-corrects
-            // some lines, e.g. 2ea81a p2) — the deeper refinement.
+            // S662 flat DY RETIRED to 0.0 (2026-07-08): the +2.0 was calibrated
+            // in the pre-ROWBOX2/pre-S638_ALL/pre-S761 geometry and was partly
+            // COMPENSATING the missing roundRect text-rect inset (S559 pattern).
+            // Post-S761 the DY sweep is MONOTONIC toward 0 on BOTH remaining
+            // S662-path docs (1ec1 CLNSP-off: 0.7780@0 vs 0.7162@2.0; 2ea81a
+            // [anchor≠t boxes, still this path]: 0.8353@0 vs 0.8221@2.0).
+            // Machinery + env override kept for A/B (OXI_S662_DY).
             let dy = std::env::var("OXI_S662_DY")
                 .ok()
                 .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(2.0);
+                .unwrap_or(0.0);
             if dy != 0.0 {
                 for el in elements.iter_mut() {
                     if matches!(el.content, LayoutContent::Text { .. }) {
