@@ -6133,11 +6133,42 @@ impl LayoutEngine {
                     prev_desc = desc;
                 }
             }
-            if per_line.len() > 1 {
-                let n = per_line.len() as f32;
-                let mean_cur: f32 = per_line.iter().map(|(_, c, _)| *c).sum::<f32>() / n;
-                let mean_law: f32 = per_line.iter().map(|(_, _, l)| *l).sum::<f32>() / n;
-                let anchor = mean_cur - mean_law;
+            if !per_line.is_empty() {
+                // v5 (2026-07-08): ABSOLUTE anchor — the _txbx_anchor_sweep
+                // derivation: box frame top = anchor-para line top + posV
+                // (Oxi's abs_y already implements this), and the first
+                // baseline = frame_top + tIns + law_asc(first). law_rel
+                // holds Σ gaps from line 1, and per_line[0]'s law_rel is 0
+                // with asc(first) folded in here.
+                let first_asc = {
+                    // recompute asc of the FIRST line (its law asc was not
+                    // stored; derive from its spec + fs)
+                    let (idxs0, _, _) = &per_line[0];
+                    let mut fs = 0.0f32;
+                    for &i in idxs0 {
+                        if let LayoutContent::Text { font_size, .. } = &elements[i].content {
+                            if *font_size > fs { fs = *font_size; }
+                        }
+                    }
+                    let (rule, val, _sb) = clnsp_line_specs.first()
+                        .map(|(r, v, sb)| (r.clone(), *v, *sb))
+                        .unwrap_or((None, None, 0.0));
+                    let nat = 1.27 * fs + 0.25;
+                    match (rule.as_deref(), val) {
+                        (Some("exact"), Some(v)) => 13.0 / 16.0 * v,
+                        (Some("atLeast"), Some(v)) => nat.max(v) - 0.27 * fs,
+                        _ => fs + 0.25,
+                    }
+                };
+                let mode = std::env::var("OXI_CLNSP_ANCHOR").unwrap_or_default();
+                let anchor = if mode == "mean" {
+                    let n = per_line.len() as f32;
+                    let mean_cur: f32 = per_line.iter().map(|(_, c, _)| *c).sum::<f32>() / n;
+                    let mean_law: f32 = per_line.iter().map(|(_, _, l)| *l).sum::<f32>() / n;
+                    mean_cur - mean_law
+                } else {
+                    abs_y + inset_t + first_asc
+                };
                 for (idxs, cur_base, law_rel) in &per_line {
                     let shift = (anchor + law_rel) - cur_base;
                     for &i in idxs {
