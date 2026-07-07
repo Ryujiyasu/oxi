@@ -646,6 +646,12 @@ pub struct FloatingPosition {
     /// Vertical alignment (e.g. "top", "center", "bottom")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v_align: Option<String>,
+    /// wrapSquare keep-out distance left of the float (wp:anchor distL, pt)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dist_l: Option<f32>,
+    /// wrapSquare keep-out distance right of the float (wp:anchor distR, pt)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dist_r: Option<f32>,
 }
 
 /// Text wrapping mode for floating elements

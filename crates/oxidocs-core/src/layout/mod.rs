@@ -3423,16 +3423,17 @@ impl LayoutEngine {
             }
             // S758: resolve wrapSquare bands anchored to this block (band top =
             // the anchor paragraph's first-line top = the cursor here).
-            let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32)> = {
-                // unified (pos_y, width, height, h_align, x) over image +
-                // textbox wrapSquare sources anchored to this block
-                let mut v: Vec<(f32, f32, f32, Option<String>, f32)> = Vec::new();
+            let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32)> = {
+                // unified (pos_y, width, height, h_align, x, dist_l, dist_r)
+                // over image + textbox wrapSquare sources anchored to this block
+                let mut v: Vec<(f32, f32, f32, Option<String>, f32, f32, f32)> = Vec::new();
                 if let Some(iis) = s758_squares.get(&block_idx) {
                     for &ii in iis {
                         let img = &page.floating_images[ii];
                         if let Some(ip) = img.position.as_ref() {
                             v.push((ip.y, img.width, img.height,
-                                    ip.h_align.clone(), ip.x));
+                                    ip.h_align.clone(), ip.x,
+                                    ip.dist_l.unwrap_or(9.0), ip.dist_r.unwrap_or(9.0)));
                         }
                     }
                 }
@@ -3441,7 +3442,8 @@ impl LayoutEngine {
                         let tb = &page.text_boxes[ti];
                         if let Some(tp) = tb.position.as_ref() {
                             v.push((tp.y, tb.width, tb.height,
-                                    tp.h_align.clone(), tp.x));
+                                    tp.h_align.clone(), tp.x,
+                                    tp.dist_l.unwrap_or(9.0), tp.dist_r.unwrap_or(9.0)));
                         }
                     }
                 }
@@ -3457,13 +3459,13 @@ impl LayoutEngine {
                 // PUSH only when some source cannot be clamped below the
                 // anchor line (derived rule branch (b)); a clampable
                 // overflow keeps the anchor (branch (a)).
-                let s758_needs_push = s758_srcs.iter().any(|(py, _w, h, _a, _x)| {
+                let s758_needs_push = s758_srcs.iter().any(|(py, _w, h, _a, _x, _dl, _dr)| {
                     let nat_bottom = cursor.cursor_y + py.max(0.0) + h;
                     nat_bottom > s758_content_bottom
                         && (s758_content_bottom - h) < cursor.cursor_y - 0.1
                 });
                 let s758_max_bottom = s758_srcs.iter()
-                    .map(|(py, _w, h, _a, _x)| cursor.cursor_y + py.max(0.0) + h)
+                    .map(|(py, _w, h, _a, _x, _dl, _dr)| cursor.cursor_y + py.max(0.0) + h)
                     .fold(f32::NEG_INFINITY, f32::max);
                 if s758_needs_push
                     && s758_max_bottom - cursor.cursor_y <= content_height
@@ -3481,7 +3483,7 @@ impl LayoutEngine {
                     footnote_reserve_current = 0.0;
                     footnote_ids_current_page.clear();
                 }
-                for (py, w, h, h_align, px) in &s758_srcs {
+                for (py, w, h, h_align, px, dl, dr) in &s758_srcs {
                     let nat_top = cursor.cursor_y + py.max(0.0);
                     let cb = start_y + content_height;
                     // derived rule branch (a): clamp an overflowing float up
@@ -3499,7 +3501,10 @@ impl LayoutEngine {
                         Some("left") => content_left,
                         _ => content_left + px,
                     };
-                    s758_bands.push((current_page_idx, top, bottom, x0, x0 + w));
+                    // the keep-out rect includes the wp:anchor distL/distR
+                    // margins (default 114300EMU = 9.0pt); the consumption
+                    // side then narrows exactly to the rect edge.
+                    s758_bands.push((current_page_idx, top, bottom, x0 - dl, x0 + w + dr));
                 }
             }
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
@@ -3768,7 +3773,7 @@ impl LayoutEngine {
                         // content may exceed it).
                         let content_h_frame = (fcy.cursor_y - fy).max(14.0);
                         let fh = fp.height.unwrap_or(0.0).max(content_h_frame);
-                        s758_bands.push((current_page_idx, fy, fy + fh, fx, fx + fw));
+                        s758_bands.push((current_page_idx, fy, fy + fh, fx - 9.0, fx + fw + 9.0));
                         // Float: no flow consumption.
                         prev_space_after = 0.0;
                         continue;
@@ -4134,7 +4139,7 @@ impl LayoutEngine {
                             && *bx0 < start_x + content_width - 6.0
                             && *bx1 > start_x + 6.0)
                         .map(|(_, _, bot, bx0, _)| {
-                            let reduction = ((start_x + content_width) - (bx0 - 9.0)).max(0.0);
+                            let reduction = ((start_x + content_width) - bx0).max(0.0);
                             (*bot, reduction)
                         })
                         .find(|(_, red)| *red > 6.0);
@@ -4676,7 +4681,8 @@ impl LayoutEngine {
                                     && band_x0 + table_w_pt <= start_x + content_width + 6.0
                                 {
                                     s758_bands.push((current_page_idx, candidate_y_top,
-                                        candidate_y_bottom, band_x0, band_x0 + table_w_pt));
+                                        candidate_y_bottom, band_x0 - 9.0,
+                                        band_x0 + table_w_pt + 9.0));
                                 }
                             }
                             cursor.set(saved_cursor_y);

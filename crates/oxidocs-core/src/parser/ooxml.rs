@@ -3429,6 +3429,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut depth = 0;
     // Floating image info
     let mut is_anchor = false;
+    let mut dist_l: Option<f32> = None;
+    let mut dist_r: Option<f32> = None;
     // S478: wp:anchor z-order. Word draws floating objects in ascending
     // relativeHeight (highest = on top). behindDoc=1 places the object
     // behind body text. Default 0 (in front, ordered by relativeHeight).
@@ -3493,6 +3495,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             match key.as_str() {
                                 "relativeHeight" => { relative_height = val.parse::<u32>().unwrap_or(0); }
                                 "behindDoc" => { behind_doc = val == "1" || val == "true"; }
+                                "distL" => { dist_l = val.parse::<f32>().ok().map(|v| v / 12700.0); }
+                                "distR" => { dist_r = val.parse::<f32>().ok().map(|v| v / 12700.0); }
                                 _ => {}
                             }
                         }
@@ -4142,7 +4146,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     }
 
     let position = if is_anchor {
-        Some(FloatingPosition { x: pos_x, y: pos_y, h_relative, v_relative, h_align, v_align })
+        Some(FloatingPosition { x: pos_x, y: pos_y, h_relative, v_relative, h_align, v_align, dist_l, dist_r })
     } else {
         None
     };
@@ -4242,7 +4246,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             v_relative: Some("paragraph".to_string()),
             h_align: None,
             v_align: None,
-        })
+            dist_l: None, dist_r: None })
     } else { None });
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
@@ -4600,7 +4604,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             v_relative: Some("text".to_string()),
             h_align: None,
             v_align: None,
-        })
+            dist_l: None, dist_r: None })
     } else {
         None
     };
@@ -4661,7 +4665,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                 v_relative: Some("paragraph".to_string()),
                 h_align: None,
                 v_align: None,
-            }),
+            dist_l: None, dist_r: None }),
             border: !no_stroke,
             stroke_color: if no_stroke { None } else { stroke_color_val },
             stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
