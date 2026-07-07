@@ -2026,25 +2026,22 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    // RUN-PRESENCE rule (2026-07-07, _gridquant_sweep.py + _emptyquant_sweep.py
-    // + the 2ea81a anatomy): a paragraph whose runs are ALL text-empty but
-    // which HAS at least one run (e.g. a text-less run holding a floating
-    // drawing anchor) sizes its line from the RUN's (inherited) properties,
-    // NOT the paragraph-mark rPr. Word truth: 2ea81a's ＜＜記載例＞＞ anchor
-    // paras (¶ sz28=14pt, anchor run rPr=noProof → inherits Normal 10.5pt)
-    // render ONE 16.15 grid cell; run-LESS empties keep the ¶-mark rPr
-    // (controlled-confirmed: run-less sz28 empties = 2 cells at pitch
-    // 323/330/360 — the S583/S195/S707 family is untouched). Centralized at
-    // parse so every ppr_rpr height site inherits the rule. NOTE: a hidden-¶
-    // (S673v vanish) para with an anchor run would lose the ¶ vanish flag
-    // here — no corpus doc combines them.
-    // ★BUNDLED with the ROWBOX2 experiment (or standalone OXI_RUNPRESENCE=1),
-    // default OFF: RP ALONE regresses 2ea81a SSIM −0.1263 — the old default
-    // was a compensating balance (wrong anchor page + oversized empties ≈
-    // word_png); the Word-correct state needs RP + the correct ROWBOX2 row
-    // heights TOGETHER (then 2ea81a is PASS all-zero, 2 pages = Word).
-    // Opt-out within the bundle: OXI_RUNPRESENCE_DISABLE.
-    if (std::env::var("OXI_ROWBOX2").is_ok() || std::env::var("OXI_RUNPRESENCE").is_ok())
+    // RUN-PRESENCE rule — ★FALSIFIED (2026-07-07 level 10; kept as a
+    // standalone opt-in tombstone). Hypothesis: a paragraph whose runs are
+    // ALL text-empty but non-empty (a text-less anchor-run holder) sizes
+    // its line from the RUN's inherited properties instead of the ¶-mark
+    // rPr. The 2ea81a "1-cell stack" reading that motivated it was an
+    // Information(6) CENTERING mis-read (the documented Info6 trap): the
+    // real Word stack is pi28 = TWO plain ¶-sz28 grid cells (32.3) with
+    // the line box CENTERED in the 2-cell space (Info6 reports 43.85 =
+    // 36.85 + (32.3−18.16)/2 = 43.92, and pi29 starts exactly at the cell
+    // boundary 69.15). Controlled proof: _anchorclamp_sweep.py's anchor
+    // paras (¶sz28 + anchor run inheriting 10.5pt) advance 32.6 ≈ 2
+    // RELATIVE cells of the ¶ size — the ¶-mark rPr WINS even with an
+    // anchor run present; no special rule exists. 2ea81a's real residual
+    // is a ~10pt upstream p1 accumulation (pi27 cursor Oxi 789.95 vs Word
+    // 779.5). OXI_RUNPRESENCE=1 keeps the falsified behavior for A/B.
+    if std::env::var("OXI_RUNPRESENCE").is_ok()
         && std::env::var("OXI_RUNPRESENCE_DISABLE").is_err()
         && !runs.is_empty()
         && runs.iter().all(|r| r.text.is_empty())
