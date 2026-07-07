@@ -9843,6 +9843,23 @@ impl LayoutEngine {
         // pagination moves), SSIM 0 regressed (all previously-changed word_png docs
         // byte-identical via the seg-meta + kinsoku gate). See [[char_budget_wall]].
         let latin_wordwrap = std::env::var("OXI_LATIN_WORDWRAP_DISABLE").is_err();
+        // KERNBREAK space-compression credit (2026-07-07, ★default ON,
+        // opt-out OXI_KERNBREAK_DISABLE):
+        // Word's JUSTIFIED Latin fit test allows squeezing word spaces below
+        // natural — db9ca render-truth: 16/73 full lines have natural(em+kern)
+        // width EXCEEDING the column (max +0.581/space = 22% of the 2.625
+        // TNR space; min word space ≈ 0.78×natural). The overflow tests below
+        // extend `available` by the accumulated per-space credit
+        // (cap × space_width, OXI_KERNBREAK_CAP default 0.25); reset with the
+        // line. The Latin analog of the CJK 約物 oikomi capacity credit.
+        let kernbreak_para = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+            && is_justified
+            && para_style.default_run_style.as_ref()
+                .and_then(|rs| rs.kern)
+                .map_or(false, |k| k > 0.0);
+        let kernbreak_cap: f32 = std::env::var("OXI_KERNBREAK_CAP").ok()
+            .and_then(|v| v.parse().ok()).unwrap_or(0.25);
+        let mut latin_space_credit_tw: i32 = 0;
         let mut word_breaks: Vec<(usize, f32)> = Vec::new();
         // Per-SEGMENT (run_idx, char_offset) so a split token keeps the EXACT run
         // metadata of the default per-«/» fragmentation (DWrite re-derives glyph
@@ -9888,10 +9905,10 @@ impl LayoutEngine {
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw
+                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                         }
                         // Place the token as SEGMENTS split at the recorded break
                         // opportunities — IDENTICAL fragmentation to the default path (which
@@ -9913,10 +9930,10 @@ impl LayoutEngine {
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
-                            if current_width_tw + seg_w_tw > available_tw
+                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 lines.push(std::mem::take(&mut current_line));
-                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                             }
                             // Exact run metadata for this segment (matches the default
                             // per-«/» fragmentation), so DWrite shapes it identically.
@@ -9938,10 +9955,10 @@ impl LayoutEngine {
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
@@ -10034,7 +10051,7 @@ impl LayoutEngine {
                 if current_width_tw + vw_tw > available_tw
                     && !current_line.fragments.is_empty() && !para_all_whitespace {
                     lines.push(std::mem::take(&mut current_line));
-                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                 }
                 current_line.fragments.push(LineFragment {
                     text: text.to_string(), width: font_size, natural_width: font_size,
@@ -10068,7 +10085,7 @@ impl LayoutEngine {
                 if current_width_tw + cw_tw > available_tw
                     && !current_line.fragments.is_empty() && !para_all_whitespace {
                     lines.push(std::mem::take(&mut current_line));
-                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                 }
                 current_line.fragments.push(LineFragment {
                     text: text.to_string(), width: cw, natural_width: cw,
@@ -10620,7 +10637,8 @@ impl LayoutEngine {
                     (latin_metrics, latin_gdi_map)
                 };
                 let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map);
-                // KERNBREAK (2026-07-07, opt-in OXI_KERNBREAK=1): a
+                // KERNBREAK (2026-07-07, ★default ON, opt-out
+                // OXI_KERNBREAK_DISABLE): a
                 // KERN-ACTIVE Latin char (w:kern set, fs >= threshold —
                 // Word applies font kerning to both RENDER and BREAK) breaks
                 // at the UNROUNDED em advance PLUS the font's kern-pair
@@ -10634,8 +10652,10 @@ impl LayoutEngine {
                 // quotes). Scope: kern-active runs only — no-kern docs
                 // (gen/gen2/test authored without w:kern) keep the
                 // S672-validated com_tw break.
-                let kern_active = std::env::var("OXI_KERNBREAK").is_ok()
-                    && style.kern.map_or(false, |k| k > 0.0 && font_size >= k);
+                let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                    && style.kern
+                        .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                        .map_or(false, |k| k > 0.0 && font_size >= k);
                 if kern_active
                     && (!kinsoku::is_cjk(ch) || latin_ctx_quote)
                     && char_metrics.char_widths.contains_key(&ch)
@@ -10914,7 +10934,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -10965,6 +10985,9 @@ impl LayoutEngine {
                             });
                             current_width += char_width; current_width_tw += pt_to_tw(char_width);
                             current_capw_tw += pt_to_tw(char_width); // S475: space, no punct capacity
+                            if kernbreak_para && ch == ' ' {
+                                latin_space_credit_tw += pt_to_tw(char_width * kernbreak_cap);
+                            }
                         }
                     }
                 } else if is_break_after(ch) {
@@ -11765,7 +11788,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                             continue;
                         }
 
@@ -11790,7 +11813,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
