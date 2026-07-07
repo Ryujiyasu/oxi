@@ -3286,6 +3286,30 @@ impl LayoutEngine {
         } else { Default::default() };
         // resolved bands: (page_idx, top, bottom, x0, x1)
         let mut s758_bands: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
+        // ANCHORPUSH experiment (opt-in OXI_ANCHORPUSH=1, ROWBOX2-family):
+        // Word keeps an anchored drawing on the SAME PAGE as its anchor
+        // paragraph — when the float's extent (anchor_y + posOffsetV + cy)
+        // would cross the PHYSICAL page bottom, Word pushes the ANCHOR
+        // paragraph to the next page (2ea81a pi27/pi28: the 34.4×30.4 stamp
+        // circle at posV 47.5 and the ＜＜記載例＞＞ 42×57.85 box at posV 8
+        // both land past p1's page edge at their anchors' natural position
+        // → Word starts p2 with them; S758 shipped the wrapSquare variant).
+        // PHYSICAL page bottom (not the content bottom): corpus stamps/seals
+        // legitimately hang into the bottom MARGIN and Word keeps them.
+        let anchorpush: std::collections::HashMap<usize, f32> =
+            if std::env::var("OXI_ANCHORPUSH").is_ok() {
+                let mut m: std::collections::HashMap<usize, f32> = Default::default();
+                for tb in &page.text_boxes {
+                    if let Some(p) = &tb.position {
+                        if p.v_relative.as_deref() == Some("paragraph") && p.y >= 0.0 {
+                            let need = p.y + tb.height;
+                            let e = m.entry(tb.anchor_block_index).or_insert(0.0_f32);
+                            if need > *e { *e = need; }
+                        }
+                    }
+                }
+                m
+            } else { Default::default() };
         for (block_idx, block) in page.blocks.iter().enumerate() {
             // S755: refresh the current page's header/footer geometry (a
             // previous block may have pushed pages internally).
@@ -3323,6 +3347,26 @@ impl LayoutEngine {
                 }
                 s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
                 cursor.advance(band_h);
+            }
+            // ANCHORPUSH: push the anchor block to the next page when its
+            // paragraph-anchored float would cross the PHYSICAL page bottom.
+            if let Some(&need) = anchorpush.get(&block_idx) {
+                if cursor.cursor_y + need > page.size.height
+                    && need <= content_height
+                    && !elements.is_empty()
+                {
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: std::mem::take(&mut elements),
+                    });
+                    if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                    cursor.set(start_y);
+                    lm2_cells = 0;
+                    current_page_idx += 1;
+                    footnote_reserve_current = 0.0;
+                    footnote_ids_current_page.clear();
+                }
             }
             // S758: resolve wrapSquare bands anchored to this block (band top =
             // the anchor paragraph's first-line top = the cursor here).
