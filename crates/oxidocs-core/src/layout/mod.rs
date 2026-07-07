@@ -5792,6 +5792,9 @@ impl LayoutEngine {
         // Use dummy page/elements vecs since we don't want page breaks inside text boxes.
         let mut dummy_pages: Vec<LayoutPage> = Vec::new();
         let mut dummy_elements: Vec<LayoutElement> = Vec::new();
+        // CLNSP: per-paragraph (start_y, line_spacing_rule, line_spacing,
+        // space_before) captured for the compat law chain below.
+        let mut clnsp_paras: Vec<(f32, Option<String>, Option<f32>, f32)> = Vec::new();
 
         for block in &text_box.blocks {
             // Stop if we've exceeded the text box bounds
@@ -5805,6 +5808,11 @@ impl LayoutEngine {
                     // Capture para start Y before layout_paragraph advances cursor_y.
                     // Used below to anchor inner-paragraph shapes at their declared offset.
                     let para_start_y = cursor.cursor_y;
+                    // CLNSP: capture the paragraph's spacing law inputs
+                    clnsp_paras.push((para_start_y,
+                        para.style.line_spacing_rule.clone(),
+                        para.style.line_spacing,
+                        para.style.space_before.unwrap_or(0.0)));
                     let empty_fn_h_txbx = std::collections::HashMap::new();
                     let (para_elements, _, _) = self.layout_paragraph(
                         para,
@@ -6019,7 +6027,77 @@ impl LayoutEngine {
         // unaffected (verified: 2ea81a body-para + textbox-text page
         // distribution byte-identical ON/OFF). Default ON, opt-out
         // OXI_S662_DISABLE, override OXI_S662_DY.
-        if text_box.compat_line_spacing && std::env::var("OXI_S662_DISABLE").is_err() {
+        // CLNSP (2026-07-08, opt-in OXI_CLNSP=1): the DERIVED compatLnSpc
+        // line-stacking law (_compatlnspc_sweep.py, 13 controlled configs,
+        // ±0.2pt) replaces the S662 flat +2.0. Law (CJK fonts, sg0 boxes):
+        //   EXACT line:  asc = 13/16 × line_value, desc = 3/16 × line_value
+        //                (the Word-6 legacy 13:3 split)
+        //   auto/atLeast: asc = box − desc, desc = 0.27 × fs,
+        //                 box = max(nat, val), nat = 1.27×fs + 0.25
+        //   chain: first baseline = box_top + tIns + asc(first);
+        //          next = prev + desc(prev) + asc(cur).
+        // Implementation: per-LINE re-placement of the text elements' y so
+        // the RENDERED baseline (el.y + text_y_off − 1.0 + win_ascent×fs,
+        // the documented DWrite convention) lands on the law baseline.
+        // Paragraph spacing rules were captured per-para during the block
+        // loop (clnsp_paras). Scope: anchor="t" boxes (1ec1's case), text
+        // elements only — render-only like S662.
+        if text_box.compat_line_spacing
+            && std::env::var("OXI_CLNSP").is_ok()
+            && matches!(v_anchor, "t" | "" | "top")
+        {
+            // group text elements into lines by y
+            use std::collections::BTreeMap;
+            let mut lines: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+            for (i, el) in elements.iter().enumerate() {
+                if matches!(el.content, LayoutContent::Text { .. }) {
+                    lines.entry((el.y * 10.0).round() as i64).or_default().push(i);
+                }
+            }
+            let mut baseline: Option<f32> = None;
+            let mut prev_desc = 0.0f32;
+            for (_, idxs) in lines.iter() {
+                // line fs = max font_size; law params from the owning para
+                let mut fs = 0.0f32;
+                for &i in idxs {
+                    if let LayoutContent::Text { font_size, .. } = &elements[i].content {
+                        if *font_size > fs { fs = *font_size; }
+                    }
+                }
+                if fs <= 0.0 { continue; }
+                let ly = elements[idxs[0]].y;
+                let (rule, val, sb) = clnsp_paras.iter().rev()
+                    .find(|(sy, _, _, _)| *sy <= ly + 0.25)
+                    .map(|(_, r, v, sb)| (r.clone(), *v, *sb))
+                    .unwrap_or((None, None, 0.0));
+                let nat = 1.27 * fs + 0.25;
+                let (asc, desc) = match (rule.as_deref(), val) {
+                    (Some("exact"), Some(v)) => (13.0 / 16.0 * v, 3.0 / 16.0 * v),
+                    (Some("atLeast"), Some(v)) => {
+                        let boxh = nat.max(v);
+                        (boxh - 0.27 * fs, 0.27 * fs)
+                    }
+                    _ => (fs + 0.25, 0.27 * fs),
+                };
+                let b = match baseline {
+                    None => abs_y + inset_t + sb + asc,
+                    Some(prev) => prev + prev_desc + sb + asc,
+                };
+                // shift the line so the rendered baseline hits `b`
+                for &i in idxs {
+                    let (efs, tyo) = match &elements[i].content {
+                        LayoutContent::Text { font_size, .. } => (*font_size, elements[i].text_y_off),
+                        _ => (fs, 0.0),
+                    };
+                    let metrics = self.registry.default_metrics();
+                    let win_asc = metrics.win_ascent; // CJK 0.859 for MS Gothic/Mincho class
+                    let cur_baseline = elements[i].y + tyo - 1.0 + win_asc * efs;
+                    elements[i].y += b - cur_baseline;
+                }
+                baseline = Some(b);
+                prev_desc = desc;
+            }
+        } else if text_box.compat_line_spacing && std::env::var("OXI_S662_DISABLE").is_err() {
             // 2.0 chosen over 1ec1's solo SSIM peak (2.5): it is 2ea81a's
             // per-doc-mean OPTIMUM (the other compat doc) and near the joint
             // corpus-SSIM peak (~2.25), giving 1ec1 +0.055 / 2ea81a mean +0.009
