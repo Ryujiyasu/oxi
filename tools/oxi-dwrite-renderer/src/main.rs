@@ -9,6 +9,13 @@
 
 use std::path::Path;
 
+/// RENDER_KERN experiment (2026-07-07, opt-in OXI_RENDER_KERN=1): the doc's
+/// docDefaults carries an active w:kern (Word kerns its Latin text — the
+/// KERNBREAK derivation; S668's "no doc sets w:kern" check missed the
+/// docDefaults level). When set AND the env is on, the S668 kerning disable
+/// is skipped so DWrite kerns like Word.
+static DOC_KERN_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 // S494: per-glyph dump buffer (thread-local to avoid threading through render_text's
 // many params). Each page: (width_pt, height_pt, Vec<(char, x_pt, top_pt, baseline_pt, fs_pt, family)>).
 // baseline_pt (S494 gate fix) = the EXACT y where DWrite draws the glyph origin
@@ -82,6 +89,10 @@ fn main() {
 
     let data = std::fs::read(docx_path).expect("Cannot read docx file");
     let doc = oxidocs_core::parser::parse_docx(&data).expect("Cannot parse docx");
+    DOC_KERN_ACTIVE.store(
+        doc.styles.doc_default_run_style.as_ref().and_then(|r| r.kern).map_or(false, |k| k > 0.0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 
     // S483: render in Word's "final" view (accept revisions: hide <w:del>
     // content, show <w:ins> as normal text) to match the Word ground-truth
@@ -941,7 +952,9 @@ unsafe fn render_text(
     // Latin text drifts left across the line (gen_tables: Oxi 'R' adv 6.6 vs Word
     // 6.9, → 6.83 with kern off). Disable kerning to match Word's default.
     // Default ON, opt-out OXI_S668_DISABLE.
-    if std::env::var("OXI_S668_DISABLE").is_err() {
+    let render_kern = std::env::var("OXI_RENDER_KERN").is_ok()
+        && DOC_KERN_ACTIVE.load(std::sync::atomic::Ordering::Relaxed);
+    if std::env::var("OXI_S668_DISABLE").is_err() && !render_kern {
         if let Ok(typo) = dwrite_factory.CreateTypography() {
             let _ = typo.AddFontFeature(DWRITE_FONT_FEATURE {
                 nameTag: DWRITE_FONT_FEATURE_TAG_KERNING,
