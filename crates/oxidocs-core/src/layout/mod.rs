@@ -6027,7 +6027,8 @@ impl LayoutEngine {
                                 page.grid_line_pitch, page.grid_char_pitch, None);
                             let h = row.height.map(|th| match row.height_rule.as_deref() {
                                 Some("exact") => th,
-                                _ => th.max(nat),
+                                // ROWBOX2: binding atLeast = trH + bw (border-box)
+                                _ => (th + self.rowbox2_trh_bw(t, row)).max(nat),
                             }).unwrap_or(nat);
                             hdr_h += h;
                         }
@@ -12115,6 +12116,37 @@ impl LayoutEngine {
         0.0
     }
 
+    /// ROWBOX2: the border width added to a BINDING atLeast trHeight
+    /// (row pitch = trH + bw; hRule=exact stays trH exactly — the derived
+    /// border-box model, _rowbox_sweep.py). Row-level: table border /
+    /// insideH, else the widest cell-level horizontal tcBorder in the row.
+    /// Used by the primary row-height site and the secondary trHeight
+    /// consumers (nested rows, vMerge span walks, header table estimate).
+    fn rowbox2_trh_bw(&self, table: &Table, row: &TableRow) -> f32 {
+        if !self.rowbox2_trh() {
+            return 0.0;
+        }
+        if table.style.border || table.style.has_inside_h {
+            return table.style.border_width.unwrap_or(0.5);
+        }
+        let mut w: f32 = 0.0;
+        let mut any = false;
+        for cell in &row.cells {
+            if let Some(b) = &cell.borders {
+                if b.top.is_some() || b.bottom.is_some() {
+                    any = true;
+                    w = w.max(b.top.as_ref().map(|d| d.width).unwrap_or(0.0))
+                        .max(b.bottom.as_ref().map(|d| d.width).unwrap_or(0.0));
+                }
+            }
+        }
+        if any {
+            if w > 0.0 { w } else { 0.5 }
+        } else {
+            0.0
+        }
+    }
+
     fn line_height_inner(
         &self,
         font_size: f32,
@@ -14278,7 +14310,8 @@ impl LayoutEngine {
                                 if let Some(h) = nr.height {
                                     match nr.height_rule.as_deref() {
                                         Some("exact") => { nr_h = h; }
-                                        Some("atLeast") => { nr_h = nr_h.max(h); }
+                                        // ROWBOX2: binding atLeast = trH + bw (border-box)
+                                        Some("atLeast") => { nr_h = nr_h.max(h + self.rowbox2_trh_bw(nested, nr)); }
                                         _ => {}
                                     }
                                 }
@@ -14456,17 +14489,7 @@ impl LayoutEngine {
                         // 49.56 vs trH 37.9/40.75/49.0; 2ea81a p1: 26.0 vs
                         // 25.5) — the flips are compensating-error exposures,
                         // not model errors. Cell tcBorders ≡ table insideH.)
-                        let rb2_bw = if self.rowbox2_trh() {
-                            if table.style.border || table.style.has_inside_h {
-                                table.style.border_width.unwrap_or(0.5)
-                            } else if row_cell_hborder {
-                                if row_cell_hborder_w > 0.0 { row_cell_hborder_w } else { 0.5 }
-                            } else {
-                                0.0
-                            }
-                        } else {
-                            0.0
-                        };
+                        let rb2_bw = self.rowbox2_trh_bw(table, row);
                         row_height = row_height.max(h + rb2_bw);
                     }
                 }
@@ -17577,7 +17600,8 @@ impl LayoutEngine {
                                         );
                                         match (r.height, r.height_rule.as_deref()) {
                                             (Some(h), Some("exact")) => h,
-                                            (Some(h), _) => nat.max(h),
+                                            // ROWBOX2: binding atLeast = trH + bw
+                                            (Some(h), _) => nat.max(h + self.rowbox2_trh_bw(table, r)),
                                             (None, _) => nat,
                                         }
                                     };
@@ -17614,7 +17638,8 @@ impl LayoutEngine {
                                     );
                                     match (r.height, r.height_rule.as_deref()) {
                                         (Some(h), Some("exact")) => h,
-                                        (Some(h), _) => nat.max(h),
+                                        // ROWBOX2: binding atLeast = trH + bw
+                                        (Some(h), _) => nat.max(h + self.rowbox2_trh_bw(table, r)),
                                         (None, _) => nat,
                                     }
                                 };
@@ -19496,7 +19521,8 @@ impl LayoutEngine {
                             if let Some(h) = nr.height {
                                 match nr.height_rule.as_deref() {
                                     Some("exact") => { nr_h = h; }
-                                    Some("atLeast") => { nr_h = nr_h.max(h); }
+                                    // ROWBOX2: binding atLeast = trH + bw (border-box)
+                                    Some("atLeast") => { nr_h = nr_h.max(h + self.rowbox2_trh_bw(nested, nr)); }
                                     _ => {}
                                 }
                             }
