@@ -4132,17 +4132,30 @@ impl LayoutEngine {
                     // column the float + its 9pt distL eat; requires a real
                     // horizontal overlap so decorative off-column floats stay
                     // inert.
-                    let s758_para_band: Option<(f32, f32)> = s758_bands.iter()
+                    let s758_para_band: Option<(f32, f32, f32)> = s758_bands.iter()
                         .filter(|(pg, top, bot, bx0, bx1)| *pg == current_page_idx
                             && cursor.cursor_y >= *top - 0.5
                             && cursor.cursor_y < *bot - 0.5
                             && *bx0 < start_x + content_width - 6.0
                             && *bx1 > start_x + 6.0)
-                        .map(|(_, _, bot, bx0, _)| {
-                            let reduction = ((start_x + content_width) - bx0).max(0.0);
-                            (*bot, reduction)
+                        .map(|(_, _, bot, bx0, bx1)| {
+                            // wrapText SIDE: text flows in the WIDER free
+                            // segment. Right float -> left segment (shift 0,
+                            // current behavior); LEFT float -> text starts at
+                            // the band's right edge (probeqtbleft Word truth:
+                            // lines beside the box span [box_right+distR,
+                            // content_right], x0=221.93 = 70.94+142+9.0).
+                            let content_right = start_x + content_width;
+                            let left_gap = (bx0 - start_x).max(0.0);
+                            let right_gap = (content_right - bx1).max(0.0);
+                            if right_gap > left_gap {
+                                let shift = (bx1 - start_x).max(0.0);
+                                (*bot, shift, shift)
+                            } else {
+                                (*bot, (content_right - bx0).max(0.0), 0.0)
+                            }
                         })
-                        .find(|(_, red)| *red > 6.0);
+                        .find(|(_, red, _)| *red > 6.0);
                     // Round 29: pass the per-page effective content height so the
                     // paragraph's internal line-by-line page-break logic accounts
                     // for the footnote area below. Multi-page paragraphs with
@@ -6307,7 +6320,7 @@ impl LayoutEngine {
         // 2 narrow + 2 full lines). None everywhere except the body call site;
         // v1 = floating IMAGES only (all corpus wrapSquare anchors are
         // textboxes → corpus-inert by construction).
-        s758_band: Option<(f32, f32)>,
+        s758_band: Option<(f32, f32, f32)>,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -6887,7 +6900,7 @@ impl LayoutEngine {
         // S758: the paragraph starts inside a wrapSquare band — break at the
         // narrowed width; s758_wrap_full is the rebreak target at band exit.
         let s758_wrap_full = wrap_width;
-        let wrap_width = if let Some((_, red)) = s758_band {
+        let wrap_width = if let Some((_, red, _)) = s758_band {
             (wrap_width - red).max(30.0)
         } else { wrap_width };
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
@@ -7234,7 +7247,7 @@ impl LayoutEngine {
             // S758: the cursor exited the band (or a page push left it behind)
             // → rebreak the remaining lines' fragments at the full width.
             if !s758_rebroken {
-                if let Some((band_bot, _)) = s758_band {
+                if let Some((band_bot, _, _)) = s758_band {
                     if (cursor.cursor_y >= band_bot - 0.5 || pages.len() > s758_entry_pages)
                         && line_idx < lines.len() {
                         s758_rebroken = true;
@@ -8110,7 +8123,18 @@ impl LayoutEngine {
             // indent DOES shift line_x. Word places line 1 at margin+indent_left+
             // first_line_indent, continuation lines at margin+indent_left. Applies
             // to both positive firstLine (e.g. +21pt) and hanging (negative, e.g. -9pt).
-            let line_x = start_x + indent_left + extra_indent;
+            // S758 side-wrap: an in-band line (not yet rebroken at the band
+            // exit) shifts to the free segment's start (left float -> text
+            // flows right of the box) and justifies within the NARROWED
+            // width (previously the paint stretched a narrowed line to the
+            // full width -- the documented paint-only flaw).
+            let s758_line_shift = if !s758_rebroken {
+                s758_band.map(|(_, _, sh)| sh).unwrap_or(0.0)
+            } else { 0.0 };
+            let s758_line_red = if !s758_rebroken {
+                s758_band.map(|(_, red, _)| red).unwrap_or(0.0)
+            } else { 0.0 };
+            let line_x = start_x + indent_left + extra_indent + s758_line_shift;
 
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
@@ -8119,7 +8143,7 @@ impl LayoutEngine {
             // Justify/alignment uses indent-adjusted width. In charGrid mode,
             // break_into_lines may put more chars than fit in the indented area;
             // negative slack triggers punctuation compression to fit.
-            let render_width = content_width - indent_left - indent_right;
+            let render_width = content_width - indent_left - indent_right - s758_line_red;
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
                 Alignment::Center => {
