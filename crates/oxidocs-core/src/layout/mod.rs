@@ -3312,17 +3312,16 @@ impl LayoutEngine {
         // which the image registry ignores. Word truth (probeqtxbxwrap):
         // text flows BESIDE the box exactly like the image variant (Word 5
         // pages vs Oxi 4 without the band; FAIL 0.86 -> PASS 1.0).
-        // ★SCOPE = NEAR-ANCHOR floats only (0 <= posV <= 30pt, tune
-        // OXI_S758_TB_POSV): a FAR float (2ea81a's stamp boxes, posV +53.2
-        // /+171.2pt) is CLAMPED by Word at the physical page bottom with
-        // the anchor KEPT (the ROWBOX2-saga level-8 measurement) — the
-        // probe-derived push rule mis-pushed it (2ea81a 2->3 pages, title
-        // +46.3). The clamp-vs-push discriminator for far floats is the
-        // documented open wall; near-anchor (probe posV=0 pushes, 29dc6e
-        // posV=11.6 band PASS 1.0 / SSIM +-0.0002) is the safe validated
-        // half. Window [11.6, 53.2] -> threshold 30.
-        let s758_tb_posv: f32 = std::env::var("OXI_S758_TB_POSV").ok()
-            .and_then(|v| v.parse().ok()).unwrap_or(30.0);
+        // ★DERIVED clamp-vs-push rule (2026-07-07 _sidewrap_clamp_sweep.py,
+        // 20/20 configs): a wrapSquare float that does not fit at its
+        // natural position (anchor + posV + h > content_bottom) is
+        // (a) CLAMPED up against the CONTENT bottom with the anchor KEPT
+        // when the clamped top stays at-or-below the anchor line
+        // (content_bottom - h >= anchor_y), else (b) PUSHED to the next
+        // page with its anchor. This unifies the probe push (tall box:
+        // clamp would rise above the anchor) with 2ea81a's kept stamp
+        // boxes (short box far below the anchor: clamp keeps it under).
+        // The earlier posV<=30 registration gate is replaced by this rule.
         let s758_tbs: std::collections::HashMap<usize, Vec<usize>> = if s758_on
             && std::env::var("OXI_S758_TB_DISABLE").is_err()
         {
@@ -3331,7 +3330,7 @@ impl LayoutEngine {
                 if tb.wrap_type == Some(crate::ir::WrapType::Square)
                     && tb.position.as_ref()
                         .map_or(false, |tp| tp.v_relative.as_deref() == Some("paragraph")
-                            && tp.y >= 0.0 && tp.y <= s758_tb_posv)
+                            && tp.y >= 0.0)
                 {
                     m.entry(tb.anchor_block_index).or_default().push(ti);
                 }
@@ -3454,12 +3453,19 @@ impl LayoutEngine {
                 // float never splits): probeximgfloat float#2 anchored at
                 // 第25条 — Word starts p3 with the paragraph + image at the
                 // top. Same push shape as the S734 wrapTopAndBottom arm.
+                let s758_content_bottom = start_y + content_height;
+                // PUSH only when some source cannot be clamped below the
+                // anchor line (derived rule branch (b)); a clampable
+                // overflow keeps the anchor (branch (a)).
+                let s758_needs_push = s758_srcs.iter().any(|(py, _w, h, _a, _x)| {
+                    let nat_bottom = cursor.cursor_y + py.max(0.0) + h;
+                    nat_bottom > s758_content_bottom
+                        && (s758_content_bottom - h) < cursor.cursor_y - 0.1
+                });
                 let s758_max_bottom = s758_srcs.iter()
                     .map(|(py, _w, h, _a, _x)| cursor.cursor_y + py.max(0.0) + h)
                     .fold(f32::NEG_INFINITY, f32::max);
-                let s758_remaining = (start_y + content_height) - cursor.cursor_y;
-                if s758_max_bottom.is_finite()
-                    && s758_max_bottom - cursor.cursor_y > s758_remaining
+                if s758_needs_push
                     && s758_max_bottom - cursor.cursor_y <= content_height
                     && !elements.is_empty()
                 {
@@ -3476,7 +3482,15 @@ impl LayoutEngine {
                     footnote_ids_current_page.clear();
                 }
                 for (py, w, h, h_align, px) in &s758_srcs {
-                    let top = cursor.cursor_y + py.max(0.0);
+                    let nat_top = cursor.cursor_y + py.max(0.0);
+                    let cb = start_y + content_height;
+                    // derived rule branch (a): clamp an overflowing float up
+                    // against the content bottom (never above the anchor).
+                    let top = if nat_top + h > cb {
+                        (cb - h).max(cursor.cursor_y)
+                    } else {
+                        nat_top
+                    };
                     let bottom = top + h;
                     let content_left = page.margin.left;
                     let x0 = match h_align.as_deref() {
