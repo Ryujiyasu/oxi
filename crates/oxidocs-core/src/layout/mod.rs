@@ -4501,7 +4501,16 @@ impl LayoutEngine {
                             *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         } else if needs_wrap_below && std::env::var("OXI_S638_DISABLE").is_err()
                             && (candidate_y_top - saved_cursor_y) > 6.0
-                            && (candidate_y_bottom - candidate_y_top) > 250.0 {
+                            && ((candidate_y_bottom - candidate_y_top) > 250.0
+                                // OXI_S638_ALL (2026-07-07 experiment): drop the
+                                // height>250 gate. The gate excluded 2ea81a to
+                                // protect its SSIM under the OLD compensating
+                                // geometry; under ROWBOX2 the gap-flow is what
+                                // Word does there (level 12: Word keeps the
+                                // anchor-side para in the gap and resumes pi27
+                                // at the float bottom 772.4; the S469 path put
+                                // the anchor para below the float = +16).
+                                || std::env::var("OXI_S638_ALL").is_ok()) {
                             // S638 (kyotei): the float leaves a GAP above it
                             // (>250pt height = a FULL-PAGE form float, the kyotei
                             // case; excludes 2ea81a's shorter multi-float forms whose
