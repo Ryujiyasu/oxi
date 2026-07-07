@@ -10580,7 +10580,37 @@ impl LayoutEngine {
             };
 
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
-                let (char_metrics, gdi_map) = if kinsoku::is_cjk(ch) {
+                // LATINQUOTE (2026-07-07, default ON, opt-out
+                // OXI_LATINQUOTE_DISABLE): a curly
+                // quote (U+2018/2019/201C/201D) ADJACENT to an ASCII
+                // alphanumeric is LATIN punctuation, not a CJK fullwidth char.
+                // is_cjk()'s blanket General-Punctuation range classified it
+                // CJK, which (a) split the Latin token at the quote (db9ca:
+                // Oxi broke the token after the closing quote where Word keeps
+                // the whole space-delimited token together and wraps it) and
+                // (b) priced it at the 0.5em unknown-char fallback (5.25pt vs
+                // TNR's true 909/2048em = 4.66; tables now carry the measured
+                // advances). Word segments script runs by adjacency; a quote
+                // glued to Latin letters joins the Latin run.
+                let latin_ctx_quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
+                    && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
+                    && {
+                        // neighbors ACROSS fragment boundaries (db9ca's quotes
+                        // sit at run boundaries: «…as “» | «This…» | «”). …»);
+                        // a glued non-space ASCII neighbor makes it Latin
+                        // («Use”)» — the ')' is ASCII punctuation, still Latin).
+                        let prev = char_index.checked_sub(1)
+                            .and_then(|i| chars_vec.get(i)).copied()
+                            .or_else(|| fragments[..frag_outer_idx].iter().rev()
+                                .find_map(|f| f.0.chars().last()));
+                        let next = chars_vec.get(char_index + 1).copied()
+                            .or_else(|| fragments[frag_outer_idx + 1..].iter()
+                                .find_map(|f| f.0.chars().next()));
+                        let latin_side = |c: Option<char>| c.map_or(false,
+                            |c| c.is_ascii() && !c.is_ascii_whitespace());
+                        latin_side(prev) || latin_side(next)
+                    };
+                let (char_metrics, gdi_map) = if kinsoku::is_cjk(ch) && !latin_ctx_quote {
                     if let Some(cjk_m) = cjk_metrics {
                         (cjk_m, cjk_gdi_map)
                     } else {
@@ -10933,7 +10963,7 @@ impl LayoutEngine {
                     } else {
                         flush_word!(style);
                     }
-                } else if kinsoku::is_cjk(ch) {
+                } else if kinsoku::is_cjk(ch) && !latin_ctx_quote {
                     // CJK characters always break at char boundaries (subject to kinsoku).
                     // ECMA-376 §17.3.1.40: wordWrap controls LATIN word-break only.
                     // V_JJ measurement (2026-05-02) confirmed: V_JJ2 (wordWrap=on) and
