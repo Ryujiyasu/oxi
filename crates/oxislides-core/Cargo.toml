@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Core presentation processing engine for OxiSlides (.pptx)"
 
 [dependencies]
-oxi-common = { path = "../oxi-common" }
+oxidocs-common = { path = "../oxidocs-common" }
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }

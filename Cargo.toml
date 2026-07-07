@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/oxi-common", "crates/oxicells-core", "crates/oxidocs-core", "crates/oxihanko", "crates/oxipdf-core", "crates/oxi-wasm", "crates/oxislides-core", "crates/oxi-cli"]
+members = ["crates/oxidocs", "crates/oxidocs-common", "crates/oxicells-core", "crates/oxidocs-core", "crates/oxihanko", "crates/oxipdf-core", "crates/oxidocs-wasm", "crates/oxislides-core", "crates/oxidocs-cli"]
 exclude = ["tools/font-metrics-gen", "tools/golden-test", "crates/oxi-desktop", "tools/oxi-gdi-renderer", "tools/oxi-dwrite-renderer", "tools/emf-to-png"]
 resolver = "2"
 

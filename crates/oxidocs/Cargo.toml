@@ -1,0 +1,13 @@
+[package]
+name = "oxidocs"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Word-compatible .docx layout and rendering engine — parse, lay out, and render Microsoft Word documents"
+repository = "https://gitlab.com/Ryujiyasu/oxi"
+readme = "README.md"
+keywords = ["docx", "word", "ooxml", "layout", "document"]
+categories = ["parser-implementations", "text-processing"]
+
+[dependencies]
+oxidocs-core = { path = "../oxidocs-core", version = "0.1.0" }

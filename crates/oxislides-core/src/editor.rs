@@ -18,9 +18,9 @@ use zip::{ZipArchive, ZipWriter};
 
 use crate::ir::Presentation;
 use crate::parser::{parse_pptx, PptxError};
-use oxi_common::archive::OoxmlArchive;
-use oxi_common::relationships::parse_relationships;
-use oxi_common::xml_utils::local_name;
+use oxidocs_common::archive::OoxmlArchive;
+use oxidocs_common::relationships::parse_relationships;
+use oxidocs_common::xml_utils::local_name;
 
 /// A slide text edit operation.
 #[derive(Debug, Clone)]
@@ -197,7 +197,7 @@ impl PptxEditor {
         let mut paths = Vec::new();
         for r_id in &r_ids {
             if let Some(target) = rid_to_path.get(r_id) {
-                let path = oxi_common::security::sanitize_rel_target("ppt", target)
+                let path = oxidocs_common::security::sanitize_rel_target("ppt", target)
                     .unwrap_or_default();
                 paths.push(path);
             } else {

@@ -1,0 +1,13 @@
+[package]
+name = "oxidocs-common"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Shared OOXML utilities for Oxidocs (ZIP archive, XML, relationships)"
+repository = "https://gitlab.com/Ryujiyasu/oxi"
+
+[dependencies]
+quick-xml = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+thiserror = "1"
+log = "0.4"

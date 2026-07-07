@@ -6,9 +6,9 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use thiserror::Error;
 
-use oxi_common::archive::OoxmlArchive;
-use oxi_common::relationships::parse_relationships;
-use oxi_common::xml_utils::{emu_to_pt, get_attr, local_name};
+use oxidocs_common::archive::OoxmlArchive;
+use oxidocs_common::relationships::parse_relationships;
+use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
     Presentation, Shape, ShapeContent, Slide, SlideAlignment, SlideParagraph, SlideRun,
@@ -17,7 +17,7 @@ use crate::ir::{
 #[derive(Error, Debug)]
 pub enum PptxError {
     #[error("Archive error: {0}")]
-    Archive(#[from] oxi_common::OxiError),
+    Archive(#[from] oxidocs_common::OxiError),
 
     #[error("XML error: {0}")]
     Xml(#[from] quick_xml::Error),

@@ -498,11 +498,20 @@ impl FontMetricsRegistry {
 
         // Load GDI-measured character width overrides
         // These correct for GDI hinting that round(advance * ppem / upm) cannot reproduce
+        // Stored gzipped (30.5MB JSON -> 5.5MB): crates.io caps packages at 10MB
+        // and the raw table dominated the crate size. Same bytes after inflate.
         let gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>> = {
-            let gdi_json = include_str!("data/gdi_width_overrides.json");
+            let gdi_gz: &[u8] = include_bytes!("data/gdi_width_overrides.json.gz");
+            let mut gdi_json = String::new();
+            {
+                use std::io::Read;
+                let mut dec = flate2::read::GzDecoder::new(gdi_gz);
+                dec.read_to_string(&mut gdi_json)
+                    .expect("gdi_width_overrides.json.gz: inflate failed");
+            }
             // Parse: font_name -> ppem_str -> {codepoint_str: width_px}
             let raw: HashMap<String, HashMap<String, HashMap<String, u32>>> =
-                serde_json::from_str(gdi_json).unwrap_or_default();
+                serde_json::from_str(&gdi_json).unwrap_or_default();
             // Convert string keys to numeric
             let mut result = HashMap::new();
             for (font, ppem_map) in raw {

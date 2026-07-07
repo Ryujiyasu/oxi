@@ -525,7 +525,7 @@ impl OoxmlParser {
                     continue;
                 }
                 // Validate relationship target path against traversal attacks
-                let path = match oxi_common::security::sanitize_rel_target("word", &rel.target) {
+                let path = match oxidocs_common::security::sanitize_rel_target("word", &rel.target) {
                     Ok(p) => p,
                     Err(_e) => {
                         continue;

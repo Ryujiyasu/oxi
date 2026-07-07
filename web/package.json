@@ -5,12 +5,12 @@
   "version": "0.1.0",
   "license": "MIT",
   "files": [
-    "oxi_wasm_bg.wasm",
-    "oxi_wasm.js",
-    "oxi_wasm.d.ts"
+    "oxidocs_wasm_bg.wasm",
+    "oxidocs_wasm.js",
+    "oxidocs_wasm.d.ts"
   ],
-  "main": "oxi_wasm.js",
-  "types": "oxi_wasm.d.ts",
+  "main": "oxidocs_wasm.js",
+  "types": "oxidocs_wasm.d.ts",
   "sideEffects": [
     "./snippets/*"
   ]
