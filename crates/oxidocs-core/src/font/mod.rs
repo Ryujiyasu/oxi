@@ -387,6 +387,10 @@ pub struct FontMetricsRegistry {
     /// LayoutMode=0 (no docGrid type). The downstream `* line_spacing_factor`
     /// multiplication and round-to-0.5pt logic handles 1.15× / 1.5× / etc.
     lm0_lineauto_base: HashMap<String, HashMap<String, f32>>,
+    /// Latin kern pairs per family: "cpA,cpB" -> kern in font units
+    /// (legacy kern table, ASCII + curly-quote scope; fontTools-extracted
+    /// from the installed fonts, 2026-07-07).
+    latin_kern: HashMap<String, HashMap<String, i32>>,
 }
 
 impl FontMetricsRegistry {
@@ -586,6 +590,13 @@ impl FontMetricsRegistry {
             serde_json::from_str(lm0_json).unwrap_or_default()
         };
 
+        // Latin kern pairs (KERNBREAK: Word breaks kern-active Latin text at
+        // em + kern; db9ca derivation 2026-07-07).
+        let latin_kern: HashMap<String, HashMap<String, i32>> = {
+            let kern_json = include_str!("data/latin_kern_pairs.json");
+            serde_json::from_str(kern_json).unwrap_or_default()
+        };
+
         Self {
             fonts,
             default_family: "Calibri".to_string(),
@@ -594,6 +605,7 @@ impl FontMetricsRegistry {
             gdi_heights,
             com_twips_widths,
             lm0_lineauto_base,
+            latin_kern,
         }
     }
 
@@ -601,6 +613,16 @@ impl FontMetricsRegistry {
     /// Returns the COM-measured value at line=240 (single spacing) if present;
     /// the caller multiplies by `line_spacing_factor` and rounds to 0.5pt.
     /// Falls back to None for fonts/sizes not in the table.
+    /// Kern adjustment (in em units) for the pair (a, b) in `family`'s
+    /// legacy kern table; 0.0 when absent.
+    pub fn latin_kern_em(&self, family: &str, upm: u16, a: char, b: char) -> f32 {
+        self.latin_kern
+            .get(family)
+            .and_then(|m| m.get(&format!("{},{}", a as u32, b as u32)))
+            .map(|&units| units as f32 / upm as f32)
+            .unwrap_or(0.0)
+    }
+
     pub fn lm0_lineauto_base(&self, family: &str, font_size: f32) -> Option<f32> {
         let normalized = normalize_family_name(family);
         let font_data = self.lm0_lineauto_base.get(family)

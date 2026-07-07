@@ -10620,6 +10620,35 @@ impl LayoutEngine {
                     (latin_metrics, latin_gdi_map)
                 };
                 let mut char_width = self.registry.char_width_pt_with_gdi_map(ch, font_size, char_metrics, gdi_map);
+                // KERNBREAK (2026-07-07, opt-in OXI_KERNBREAK=1): a
+                // KERN-ACTIVE Latin char (w:kern set, fs >= threshold —
+                // Word applies font kerning to both RENDER and BREAK) breaks
+                // at the UNROUNDED em advance PLUS the font's kern-pair
+                // adjustment. db9ca derivation (TNR 10.5, docDefaults
+                // kern=2): Word PDF non-space advance sum over a line =
+                // em+kern within -0.20pt/71 advances; the com_tw model runs
+                // ~4.5pt/line NARROW (over-packs ~1 word), plain em runs
+                // +0.5 letters + kern-less WIDE (under-packs 1-2 words,
+                // the falsified LATIN_TRUE_BREAK experiment). Kern pairs =
+                // fontTools-extracted legacy kern tables (ASCII + curly
+                // quotes). Scope: kern-active runs only — no-kern docs
+                // (gen/gen2/test authored without w:kern) keep the
+                // S672-validated com_tw break.
+                let kern_active = std::env::var("OXI_KERNBREAK").is_ok()
+                    && style.kern.map_or(false, |k| k > 0.0 && font_size >= k);
+                if kern_active
+                    && (!kinsoku::is_cjk(ch) || latin_ctx_quote)
+                    && char_metrics.char_widths.contains_key(&ch)
+                {
+                    char_width = char_metrics.char_width_em(ch) * font_size;
+                    if let Some(&nxt) = chars_vec.get(char_index + 1) {
+                        if !kinsoku::is_cjk(nxt) {
+                            char_width += self.registry.latin_kern_em(
+                                &char_metrics.family, char_metrics.units_per_em, ch, nxt)
+                                * font_size;
+                        }
+                    }
+                }
                 if let Some(scale) = style.text_scale {
                     if (scale - 100.0).abs() > 0.01 {
                         char_width *= scale / 100.0;
