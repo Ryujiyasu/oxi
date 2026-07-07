@@ -3,18 +3,25 @@ name = "oxidocs-wasm"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "WebAssembly bindings for the Oxi document processing suite"
+description = "WebAssembly bindings for Oxidocs — Word-compatible .docx parsing, layout, rendering and PDF export"
+repository = "https://gitlab.com/Ryujiyasu/oxi"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 oxidocs-core = { path = "../oxidocs-core" }
-oxicells-core = { path = "../oxicells-core" }
-oxislides-core = { path = "../oxislides-core" }
+oxicells-core = { path = "../oxicells-core", optional = true }
+oxislides-core = { path = "../oxislides-core", optional = true }
 oxipdf-core = { path = "../oxipdf-core" }
-oxihanko = { path = "../oxihanko" }
+oxihanko = { path = "../oxihanko", optional = true }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
+
+[features]
+default = []
+# Full-suite bindings (spreadsheet/presentation/generic-PDF/hanko) used by the
+# in-repo web editor; the published npm package is the default docs-only build.
+suite = ["dep:oxicells-core", "dep:oxislides-core", "dep:oxihanko"]

@@ -60,6 +60,7 @@ pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&doc).map_err(|e| JsError::new(&e.to_string()))
 }
 
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn parse_spreadsheet(data: &[u8]) -> Result<JsValue, JsError> {
     let workbook = oxicells_core::parse_xlsx(data)
@@ -67,6 +68,7 @@ pub fn parse_spreadsheet(data: &[u8]) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&workbook).map_err(|e| JsError::new(&e.to_string()))
 }
 
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn parse_presentation(data: &[u8]) -> Result<JsValue, JsError> {
     let pres = oxislides_core::parse_pptx(data)
@@ -453,6 +455,7 @@ fn base64_decode(input: &str) -> Vec<u8> {
 }
 
 /// A single cell edit operation from JavaScript.
+#[cfg(feature = "suite")]
 #[derive(Deserialize)]
 struct JsCellEdit {
     sheet_index: usize,
@@ -462,6 +465,7 @@ struct JsCellEdit {
 }
 
 /// Edit a .xlsx file and return the modified bytes.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsCellEdit> = serde_wasm_bindgen::from_value(edits)
@@ -488,6 +492,7 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
 }
 
 /// A single slide text edit operation from JavaScript.
+#[cfg(feature = "suite")]
 #[derive(Deserialize)]
 struct JsSlideTextEdit {
     slide_index: usize,
@@ -498,6 +503,7 @@ struct JsSlideTextEdit {
 }
 
 /// Edit a .pptx file and return the modified bytes.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn edit_pptx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsSlideTextEdit> = serde_wasm_bindgen::from_value(edits)
@@ -1116,6 +1122,7 @@ fn parse_hex_color(hex: &str) -> Option<oxipdf_core::ir::Color> {
 // ---------------------------------------------------------------------------
 
 /// Parse a PDF file and return its structure as a JS object.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn parse_pdf(data: &[u8]) -> Result<JsValue, JsError> {
     let doc = oxipdf_core::parse_pdf(data)
@@ -1124,6 +1131,7 @@ pub fn parse_pdf(data: &[u8]) -> Result<JsValue, JsError> {
 }
 
 /// Extract all text from a PDF as a single string.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn pdf_extract_text(data: &[u8]) -> Result<String, JsError> {
     let doc = oxipdf_core::parse_pdf(data)
@@ -1133,6 +1141,7 @@ pub fn pdf_extract_text(data: &[u8]) -> Result<String, JsError> {
 
 /// Generate a PDF from scratch with the given text content.
 /// Returns the PDF bytes.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn create_pdf(title: &str, text: &str) -> Vec<u8> {
     use oxipdf_core::ir::*;
@@ -1166,6 +1175,7 @@ pub fn create_pdf(title: &str, text: &str) -> Vec<u8> {
 }
 
 /// Verify signatures in a PDF. Returns an array of signature info objects.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn pdf_verify_signatures(data: &[u8]) -> Result<JsValue, JsError> {
     let sigs = oxipdf_core::verify_pdf_signatures(data)
@@ -1181,6 +1191,7 @@ pub fn pdf_verify_signatures(data: &[u8]) -> Result<JsValue, JsError> {
 ///
 /// `config`: JS object with StampConfig fields:
 ///   { name: "山田", style: "Round"|"Square"|"Oval", size: 100, date?: "2026.03.13" }
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn generate_hanko_svg(config: JsValue) -> Result<String, JsError> {
     let stamp_config: oxihanko::StampConfig = serde_wasm_bindgen::from_value(config)
@@ -1189,6 +1200,7 @@ pub fn generate_hanko_svg(config: JsValue) -> Result<String, JsError> {
 }
 
 /// Preview a hanko stamp SVG with default config for the given name.
+#[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn preview_hanko(name: &str) -> String {
     let config = oxihanko::StampConfig {
