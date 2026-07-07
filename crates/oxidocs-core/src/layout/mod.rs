@@ -1874,6 +1874,27 @@ thread_local! {
     /// (see the caller near break_into_lines) so the cap computation inside
     /// break_into_lines escalates the 約物 caps for the retry pass only.
     static S721_ORPHAN_RETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// SG0RAW footnote scope-out (2026-07-07): the raw-natural sg0 line
+    /// height is a BODY-flow convention (border-bracketed derivation);
+    /// FOOTNOTE-area sg0 lines follow the separately-derived footnote
+    /// conventions (2026-04-20 six-repro calibration) — applying SG0RAW
+    /// there regressed b837's word_png −0.0228 (25 sg0 footnotes). Set
+    /// around footnote layout/estimate calls to suppress the SG0RAW branch.
+    static IN_FOOTNOTE_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII guard for IN_FOOTNOTE_LAYOUT (SG0RAW footnote scope-out).
+struct FnLayoutGuard;
+impl FnLayoutGuard {
+    fn new() -> Self {
+        IN_FOOTNOTE_LAYOUT.with(|c| c.set(true));
+        FnLayoutGuard
+    }
+}
+impl Drop for FnLayoutGuard {
+    fn drop(&mut self) {
+        IN_FOOTNOTE_LAYOUT.with(|c| c.set(false));
+    }
 }
 
 fn snap_character_spacing(cs_pt: f32) -> f32 {
@@ -2872,6 +2893,7 @@ impl LayoutEngine {
                 fn_est_gp, page.grid_line_pitch, page.doc_grid_no_type);
         }
         let estimate_footnote_h = move |id: u32| -> f32 {
+            let _fng = FnLayoutGuard::new();
             if let Some(note) = page.footnotes.iter().find(|n| n.number == id) {
                 let cw = page.size.width - page.margin.left - page.margin.right;
                 let mut h: f32 = 0.0;
@@ -4502,15 +4524,20 @@ impl LayoutEngine {
                         } else if needs_wrap_below && std::env::var("OXI_S638_DISABLE").is_err()
                             && (candidate_y_top - saved_cursor_y) > 6.0
                             && ((candidate_y_bottom - candidate_y_top) > 250.0
-                                // OXI_S638_ALL (2026-07-07 experiment): drop the
-                                // height>250 gate. The gate excluded 2ea81a to
-                                // protect its SSIM under the OLD compensating
-                                // geometry; under ROWBOX2 the gap-flow is what
-                                // Word does there (level 12: Word keeps the
-                                // anchor-side para in the gap and resumes pi27
-                                // at the float bottom 772.4; the S469 path put
-                                // the anchor para below the float = +16).
-                                || std::env::var("OXI_S638_ALL").is_ok()) {
+                                // ★S638 height>250 gate DROPPED by default
+                                // (2026-07-07, ROWBOX2 bundle; opt-out
+                                // OXI_S638_HGATE=1 restores the strict gate).
+                                // The gate excluded 2ea81a to protect its SSIM
+                                // under the OLD compensating geometry; under
+                                // ROWBOX2 the gap-flow is what Word does there
+                                // (level 12: Word keeps the anchor-side para in
+                                // the gap and resumes pi27 at the float bottom
+                                // 772.4; the S469 path put the anchor para below
+                                // the float = +16). 2ea81a: PASS 1.0 all-zero +
+                                // SSIM +0.0149 under gap-flow. The gap>6 gate
+                                // above stays (excludes kyotei/3a4f/ed025c
+                                // anchor-adjacent floats).
+                                || std::env::var("OXI_S638_HGATE").is_err()) {
                             // S638 (kyotei): the float leaves a GAP above it
                             // (>250pt height = a FULL-PAGE form float, the kyotei
                             // case; excludes 2ea81a's shorter multi-float forms whose
@@ -5163,6 +5190,11 @@ impl LayoutEngine {
                         .collect();
 
                     if !notes.is_empty() {
+                        // SG0RAW footnote scope-out: the whole footnote-area
+                        // placement (grid_snap_para estimates + the note
+                        // layout_paragraph render calls) uses the footnote
+                        // conventions, not the body sg0 raw-natural.
+                        let _fng = FnLayoutGuard::new();
                         // Footnote area bottom: just above the footer, or at the
                         // bottom margin if no footer is present.
                         let footnote_bottom = if !page.footer.is_empty() {
@@ -7252,7 +7284,9 @@ impl LayoutEngine {
                 // phase is Oxi-geometry-relative (the S739 fragility). The
                 // S592 font-class scope is docx-derivable: only kojin +
                 // parttime (HGPGothicM) match in the corpus.
-                let offgrid_ink = std::env::var("OXI_OFFSLOT_INK").is_ok()
+                // ★SHIPPED default ON 2026-07-07 (opt-out OXI_OFFSLOT_INK_DISABLE)
+                // as part of the ROWBOX2 bundle.
+                let offgrid_ink = std::env::var("OXI_OFFSLOT_INK_DISABLE").is_err()
                     && !page.doc_grid_no_type
                     && page.doc_grid_lines_and_chars
                     && para.runs.iter()
@@ -12033,7 +12067,7 @@ impl LayoutEngine {
         }
     }
 
-    /// ROWBOX2 experiment (opt-in OXI_ROWBOX2=1, default OFF/byte-identical):
+    /// ROWBOX2 (★SHIPPED default ON 2026-07-07, opt-out OXI_ROWBOX2_DISABLE):
     /// the DERIVED Word row-height border-box model (_rowbox_sweep.py +
     /// text-ink offsets, 2026-07-06) made CURSOR-real. The border width is a
     /// TOP CONTENT PAD, additive with explicit cellMar (Word ink offsets:
@@ -12041,10 +12075,12 @@ impl LayoutEngine {
     /// bw + cellMar_t + n×RAW line heights + cellMar_b; hRule=exact =
     /// trHeight exactly; atLeast = max(content, trHeight + bw). Cell-level
     /// tcBorders ≡ table insideH. Replaces the render-only visual pluses
-    /// (S200/S661/S666/S682 advance_split) with cursor==visual. S375-class
-    /// pagination risk → full-corpus blast measurement before any default-ON.
+    /// (S200/S661/S666/S682 advance_split) with cursor==visual (those
+    /// branches remain live only under the opt-out). Ship gate: full-corpus
+    /// pagination 0 real flips (bundle {ROWBOX2, OFFSLOT_INK, S638_ALL,
+    /// SG0RAW}); SSIM net +0.71 (21 improved, e3c545 +0.384).
     fn rowbox2_active(&self) -> bool {
-        std::env::var("OXI_ROWBOX2").is_ok()
+        std::env::var("OXI_ROWBOX2_DISABLE").is_err()
     }
 
     /// ROWBOX2 decomposition knobs (analysis only): disable one component
@@ -12766,6 +12802,50 @@ impl LayoutEngine {
                         .and_then(|v| v.parse::<f32>().ok())
                         .unwrap_or(0.0);
                     return if delta > 0.0 { (nat / delta).round() * delta } else { nat };
+                }
+                // SG0RAW (★SHIPPED default ON 2026-07-07, opt-out
+                // OXI_SG0RAW_DISABLE, ROWBOX2 bundle): a snapToGrid=0 line in
+                // a TYPED docGrid uses the RAW win natural (unrounded 83/64 for
+                // CJK), NOT the pixel-rounded run_base CEILed to 0.5pt. DERIVED
+                // border-bracketed (_sg0_boundary_sweep): Word's sg0 line ≈
+                // 13.62 (= win_sum×fs×83/64 raw, MS Mincho/Gothic 10.5pt) vs
+                // Oxi 14.0 (run_base 13.852 pixel-rounded → CEIL). The same
+                // raw-unrounded convention as CELLPAIR cell heights + S671
+                // exact-accumulate, applied to the typed-grid body sg0 path.
+                // bd90b00's checklist header (pi=30) is the corpus specimen —
+                // its 備考 flip (over +0.16 → −1.03) closed the last ROWBOX2
+                // bundle blocker. ★bd90's earlier "+1.5 大臣殿-region" reading
+                // was a PHANTOM (anchor-class ink-offset trap, 3rd variant:
+                // Word centers a snapped line's glyph in the cell; a
+                // snapped-vs-exact anchor pair differs by the centering slack
+                // ~1.48 with zero layout difference).
+                if !snap_to_grid
+                    && !grid_no_type
+                    && grid_pitch.map_or(false, |p| p > 0.0)
+                    && !in_table_cell
+                    && !IN_FOOTNOTE_LAYOUT.with(|c| c.get())
+                    && std::env::var("OXI_SG0RAW_DISABLE").is_err()
+                {
+                    let mut raw_max: f32 = 0.0;
+                    if line.fragments.is_empty() {
+                        let font_size = para_style.ppr_rpr.as_ref()
+                            .and_then(|r| r.font_size)
+                            .unwrap_or(para_font_size);
+                        let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
+                        raw_max = metrics.word_line_height_no_grid(font_size);
+                    } else {
+                        for frag in &line.fragments {
+                            let font_size = frag.style.font_size.unwrap_or(para_font_size);
+                            let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
+                            let f = metrics.word_line_height_no_grid(font_size);
+                            if f > raw_max { raw_max = f; }
+                        }
+                    }
+                    if raw_max > 0.0 {
+                        let factor = line_spacing.unwrap_or(1.0);
+                        return raw_max * factor;
+                    }
                 }
                 // COM-confirmed (2026-04-03): grid snap only for Single (factor=1.0) or unset.
                 // Multiple spacing (factor≠1.0) does NOT get grid-snapped.
