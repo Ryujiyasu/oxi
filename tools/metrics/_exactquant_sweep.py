@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Controlled sweep: Word's EXACT-lineRule cursor quantization (the bd90b00
-備考 knife-edge's largest component). Runs of identical exact-N empty
-paragraphs bracketed by text anchors; COM Information(6) per paragraph.
+"""Controlled sweep: Word's EXACT-lineRule empty-paragraph runs — COM
+Information(6) per paragraph.
 
-FINDING (2026-07-07): steady advances oscillate N / N+0.05 with ONE −0.6
-outlier per run (phase-dependent; the 4th of five in bd90b00, the 1st here);
-a 10-line run sums to nominal −0.3 — Word accumulates exact-line cursor
-positions on a device quantum (the S629 render-snap phenomenon at the
-CURSOR level). Info6's 0.05 rounding hides the exact law: derive it from
-PDF-fine anchor positions (the text paras bracketing the runs) × run length
-× exact values.
+★FINDING CORRECTED (2026-07-07, the PDF-fine anchor variant): the COM
+advances oscillate N / N+0.05 with a −0.6 outlier — but PDF ink positions
+of bracketing text anchors show run sums = NOMINAL ±0.1 for every value
+{200,220,254,300,330} × run {5,10}. **The oscillation and the −0.6 are
+Information(6) REPORTING artifacts, not layout** (they even reproduce in
+this controlled sweep's COM while vanishing in the PDF). META-LESSON:
+confirm any COM-derived "law" against PDF ink positions before
+implementing — Info6 wobble can masquerade as a reproducible rule.
 
 Run: python tools/metrics/_exactquant_sweep.py
 """
