@@ -5792,9 +5792,9 @@ impl LayoutEngine {
         // Use dummy page/elements vecs since we don't want page breaks inside text boxes.
         let mut dummy_pages: Vec<LayoutPage> = Vec::new();
         let mut dummy_elements: Vec<LayoutElement> = Vec::new();
-        // CLNSP: per-paragraph (start_y, line_spacing_rule, line_spacing,
-        // space_before) captured for the compat law chain below.
-        let mut clnsp_paras: Vec<(f32, Option<String>, Option<f32>, f32)> = Vec::new();
+        // CLNSP: ordered per-LINE (line_spacing_rule, line_spacing,
+        // space_before[first-line-only]) captured for the compat law chain.
+        let mut clnsp_line_specs: Vec<(Option<String>, Option<f32>, f32)> = Vec::new();
 
         for block in &text_box.blocks {
             // Stop if we've exceeded the text box bounds
@@ -5808,11 +5808,12 @@ impl LayoutEngine {
                     // Capture para start Y before layout_paragraph advances cursor_y.
                     // Used below to anchor inner-paragraph shapes at their declared offset.
                     let para_start_y = cursor.cursor_y;
-                    // CLNSP: capture the paragraph's spacing law inputs
-                    clnsp_paras.push((para_start_y,
-                        para.style.line_spacing_rule.clone(),
-                        para.style.line_spacing,
-                        para.style.space_before.unwrap_or(0.0)));
+                    // CLNSP: per-line specs are captured AFTER layout below
+                    // (order-based mapping; cursor-y vs el.y coordinate frames
+                    // are inconsistent — the v2 y-based mapping misassigned
+                    // specs at paragraph boundaries).
+                    let clnsp_mark = ();
+                    let _ = clnsp_mark;
                     let empty_fn_h_txbx = std::collections::HashMap::new();
                     let (para_elements, _, _) = self.layout_paragraph(
                         para,
@@ -5840,6 +5841,24 @@ impl LayoutEngine {
                         None, // S755
                         None, // S758
                     );
+                    // CLNSP: count this paragraph's rendered LINES (text
+                    // elements grouped by y) and push one spec per line —
+                    // space_before only on the paragraph's first line.
+                    {
+                        let mut ys: Vec<i64> = para_elements.iter()
+                            .filter(|e| matches!(e.content, LayoutContent::Text { .. }))
+                            .map(|e| (e.y * 10.0).round() as i64)
+                            .collect();
+                        ys.sort_unstable();
+                        ys.dedup();
+                        for (li, _) in ys.iter().enumerate() {
+                            clnsp_line_specs.push((
+                                para.style.line_spacing_rule.clone(),
+                                para.style.line_spacing,
+                                if li == 0 { para.style.space_before.unwrap_or(0.0) } else { 0.0 },
+                            ));
+                        }
+                    }
                     // Emit PresetShape elements for shapes attached to this inner
                     // paragraph. Without this, floating shapes (e.g. DML:line
                     // dividers, brackets) declared inside <w:txbxContent> never
@@ -6054,48 +6073,77 @@ impl LayoutEngine {
                     lines.entry((el.y * 10.0).round() as i64).or_default().push(i);
                 }
             }
-            let mut baseline: Option<f32> = None;
-            let mut prev_desc = 0.0f32;
-            for (_, idxs) in lines.iter() {
-                // line fs = max font_size; law params from the owning para
-                let mut fs = 0.0f32;
-                for &i in idxs {
-                    if let LayoutContent::Text { font_size, .. } = &elements[i].content {
-                        if *font_size > fs { fs = *font_size; }
+            // v2 (2026-07-08): RELATIVE chain — the first line KEEPS its
+            // current position (Oxi's box anchoring, whatever its error, is
+            // the S662 status quo; the borderless-box anchor truth is a
+            // separate wall) and subsequent lines follow the LAW GAPS
+            // (validated 5/5 ±0.2 on 1ec1 box#2 real specs: exact480 □ +
+            // atLeast340 ・ + auto □2 + before). Rendered-baseline reads use
+            // the ELEMENT's font metrics (v1 wrongly used default=Calibri).
+            // v4 (2026-07-08): MEAN-PRESERVING anchor — first pass computes
+            // the law-chain positions relative to line 1 and each line's
+            // CURRENT rendered baseline; the chain is then shifted so the
+            // box's MEAN baseline is unchanged (keeps the current anchoring
+            // quality — the borderless-box anchor truth is a separate wall —
+            // while zeroing the internal scatter the law predicts exactly).
+            let mut per_line: Vec<(Vec<usize>, f32 /*cur_base*/, f32 /*law_rel*/)> = Vec::new();
+            {
+                let mut law_pos = 0.0f32;
+                let mut prev_desc = 0.0f32;
+                let mut first = true;
+                for (line_no, (_, idxs)) in lines.iter().enumerate() {
+                    let mut fs = 0.0f32;
+                    for &i in idxs {
+                        if let LayoutContent::Text { font_size, .. } = &elements[i].content {
+                            if *font_size > fs { fs = *font_size; }
+                        }
                     }
-                }
-                if fs <= 0.0 { continue; }
-                let ly = elements[idxs[0]].y;
-                let (rule, val, sb) = clnsp_paras.iter().rev()
-                    .find(|(sy, _, _, _)| *sy <= ly + 0.25)
-                    .map(|(_, r, v, sb)| (r.clone(), *v, *sb))
-                    .unwrap_or((None, None, 0.0));
-                let nat = 1.27 * fs + 0.25;
-                let (asc, desc) = match (rule.as_deref(), val) {
-                    (Some("exact"), Some(v)) => (13.0 / 16.0 * v, 3.0 / 16.0 * v),
-                    (Some("atLeast"), Some(v)) => {
-                        let boxh = nat.max(v);
-                        (boxh - 0.27 * fs, 0.27 * fs)
-                    }
-                    _ => (fs + 0.25, 0.27 * fs),
-                };
-                let b = match baseline {
-                    None => abs_y + inset_t + sb + asc,
-                    Some(prev) => prev + prev_desc + sb + asc,
-                };
-                // shift the line so the rendered baseline hits `b`
-                for &i in idxs {
-                    let (efs, tyo) = match &elements[i].content {
-                        LayoutContent::Text { font_size, .. } => (*font_size, elements[i].text_y_off),
-                        _ => (fs, 0.0),
+                    if fs <= 0.0 { continue; }
+                    let (rule, val, sb) = clnsp_line_specs.get(line_no)
+                        .map(|(r, v, sb)| (r.clone(), *v, *sb))
+                        .unwrap_or((None, None, 0.0));
+                    let nat = 1.27 * fs + 0.25;
+                    let (asc, desc) = match (rule.as_deref(), val) {
+                        (Some("exact"), Some(v)) => (13.0 / 16.0 * v, 3.0 / 16.0 * v),
+                        (Some("atLeast"), Some(v)) => {
+                            let boxh = nat.max(v);
+                            (boxh - 0.27 * fs, 0.27 * fs)
+                        }
+                        _ => (fs + 0.25, 0.27 * fs),
                     };
-                    let metrics = self.registry.default_metrics();
-                    let win_asc = metrics.win_ascent; // CJK 0.859 for MS Gothic/Mincho class
-                    let cur_baseline = elements[i].y + tyo - 1.0 + win_asc * efs;
-                    elements[i].y += b - cur_baseline;
+                    let cur_base = {
+                        let i0 = idxs[0];
+                        let (efs, fam) = match &elements[i0].content {
+                            LayoutContent::Text { font_size, font_family, .. } =>
+                                (*font_size, font_family.clone()),
+                            _ => (fs, None),
+                        };
+                        let m = fam.as_deref()
+                            .map(|f| self.registry.get_with_bold(f, false))
+                            .unwrap_or_else(|| self.registry.default_metrics());
+                        elements[i0].y + elements[i0].text_y_off - 1.0 + m.win_ascent * efs
+                    };
+                    if first {
+                        first = false;
+                        law_pos = 0.0;
+                    } else {
+                        law_pos += prev_desc + sb + asc;
+                    }
+                    per_line.push((idxs.clone(), cur_base, law_pos));
+                    prev_desc = desc;
                 }
-                baseline = Some(b);
-                prev_desc = desc;
+            }
+            if per_line.len() > 1 {
+                let n = per_line.len() as f32;
+                let mean_cur: f32 = per_line.iter().map(|(_, c, _)| *c).sum::<f32>() / n;
+                let mean_law: f32 = per_line.iter().map(|(_, _, l)| *l).sum::<f32>() / n;
+                let anchor = mean_cur - mean_law;
+                for (idxs, cur_base, law_rel) in &per_line {
+                    let shift = (anchor + law_rel) - cur_base;
+                    for &i in idxs {
+                        elements[i].y += shift;
+                    }
+                }
             }
         } else if text_box.compat_line_spacing && std::env::var("OXI_S662_DISABLE").is_err() {
             // 2.0 chosen over 1ec1's solo SSIM peak (2.5): it is 2ea81a's
