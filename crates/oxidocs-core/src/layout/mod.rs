@@ -8696,10 +8696,22 @@ impl LayoutEngine {
             // etc.) has special positioning — the true-cumulative render_x would
             // mis-place everything after them. (Corpus A/B: test_tabs −0.0023 without
             // this guard.)
+            // S762 (2026-07-08): CURLY QUOTES (U+2018-201D) do not disqualify a
+            // line — is_cjk() classifies General Punctuation as CJK, so ONE
+            // apostrophe («Contractor’s», nyserda/real English legal text)
+            // killed S672 for the whole line and the com-compressed words
+            // swallowed their following spaces («executedand deliveredto»).
+            // In an otherwise-Latin line the quotes are Latin-context by
+            // construction (the LATINQUOTE break side already widths them as
+            // Latin), so exempt exactly these four chars here. Default ON,
+            // opt-out OXI_S762_DISABLE.
+            let s762_quote_ok = std::env::var("OXI_S762_DISABLE").is_err();
             let s672_candidate = std::env::var("OXI_S672_DISABLE").is_err()
                 && matches!(para.alignment, Alignment::Left)
                 && !line.fragments.is_empty()
-                && line.fragments.iter().all(|f| !f.text.chars().any(kinsoku::is_cjk)
+                && line.fragments.iter().all(|f| !f.text.chars().any(|c| kinsoku::is_cjk(c)
+                        && !(s762_quote_ok
+                            && matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')))
                     && f.tab_alignment.is_none() && f.field_type.is_none());
             // TRUE-WIDER gate: apply render-x ONLY when the line's true em width
             // EXCEEDS its com_tw (break) width — i.e. Word renders it TRUE-WIDE and
@@ -16952,6 +16964,97 @@ impl LayoutEngine {
                                         is_first_line = false;
                                         continue;
                                     }
+                                    // CELLWORD (2026-07-08, default ON, opt-out
+                                    // OXI_CELLWORD_DISABLE): Latin WORD wrap in the cell
+                                    // wrapper. The greedy per-char fill breaks English
+                                    // mid-word («Activi|ty», «h|armed», «ris|k» —
+                                    // uk_risk_assessment headers; Word/LibreOffice both
+                                    // wrap at the word boundary; column geometry is
+                                    // IDENTICAL across all three so the per-char break is
+                                    // the sole divergence). When the overflowing char is
+                                    // a Latin word char and the line tail is a Latin word
+                                    // run, pull the WHOLE partial word down (S421-oikomi
+                                    // carry mechanics, crossing run boundaries via
+                                    // current_line like S443). Fall through to the plain
+                                    // char-break when the line would empty (word longer
+                                    // than the line = Word char-breaks too).
+                                    // PURE-LATIN-paragraph scope (v1): the mixed CJK+Latin
+                                    // cell case regressed the calibrated tokumei form
+                                    // family (6514 −0.1096 / d4d126 −0.0965, the S559
+                                    // balanced-compensation wall) — their embedded Latin
+                                    // tokens' char-break behavior is part of the tuned
+                                    // row-height balance. A paragraph with ANY CJK char
+                                    // keeps the legacy per-char fill; pure-Latin
+                                    // paragraphs (English forms) get the word wrap.
+                                    let cellword_ok = std::env::var("OXI_CELLWORD_DISABLE").is_err()
+                                        && ch.is_ascii_alphanumeric()
+                                        && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk));
+                                    if cellword_ok {
+                                        let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
+                                        let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
+                                        let mut hit_boundary = false;
+                                        loop {
+                                            let tail = buf.chars().last()
+                                                .or_else(|| current_line.last().and_then(|f| f.0.chars().last()));
+                                            let remaining_on_line = buf.chars().count()
+                                                + current_line.iter().map(|f| f.0.chars().count()).sum::<usize>();
+                                            if !tail.map_or(false, |c| c.is_ascii_alphanumeric()) {
+                                                hit_boundary = remaining_on_line >= 1;
+                                                break;
+                                            }
+                                            if remaining_on_line <= 1 { break; }
+                                            if buf.pop().is_some() {
+                                                if let Some(pc) = buf_chars.pop() {
+                                                    buf_w -= pc.natural_advance;
+                                                    carry.insert(0, pc);
+                                                }
+                                            } else if let Some(pc) = current_line_chars.pop() {
+                                                if let Some(frag) = current_line.last_mut() {
+                                                    if frag.0.pop().is_some() {
+                                                        frag.2 -= pc.natural_advance;
+                                                        if frag.0.is_empty() {
+                                                            current_line.pop();
+                                                        }
+                                                    }
+                                                }
+                                                carry.insert(0, pc);
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        if hit_boundary && carry.len() >= 2 {
+                                            if !buf.is_empty() {
+                                                current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                                buf.clear();
+                                                buf_w = 0.0;
+                                                current_line_chars.extend(buf_chars.drain(..));
+                                            }
+                                            lines.push(std::mem::take(&mut current_line));
+                                            line_x = 0.0;
+                                            current_line_chars.clear();
+                                            is_first_line = false;
+                                            for c in &carry {
+                                                buf.push(c.ch);
+                                                buf_w += c.natural_advance;
+                                            }
+                                            buf_chars.extend(carry);
+                                            prev_char_emitted = Some(ch);
+                                            continue;
+                                        }
+                                        // un-carry: restore anything popped (carry[..len-1],
+                                        // in reading order — popping drained buf's TAIL then
+                                        // current_line's tail, so appending keeps order) back
+                                        // onto buf so the plain wrap sees the original text
+                                        // (only reachable when the word fills the whole line).
+                                        if carry.len() >= 2 {
+                                            let n = carry.len() - 1;
+                                            for c in carry.drain(..n) {
+                                                buf.push(c.ch);
+                                                buf_w += c.natural_advance;
+                                                buf_chars.push(c);
+                                            }
+                                        }
+                                    }
                                     // Flush buffer to current line, then wrap
                                     if !buf.is_empty() {
                                         current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
@@ -19517,18 +19620,70 @@ impl LayoutEngine {
                         current_line_chars.clear();
                         continue;
                     }
-                    if buf_nonempty {
-                        line_x += buf_w;
-                        line_nonempty = true;
-                        buf_w = 0.0;
-                        buf_nonempty = false;
-                        current_line_chars.extend(buf_chars.drain(..));
+                    // CELLWORD estimate mirror (see the render-loop comment):
+                    // pull the trailing Latin word down whole so the line count
+                    // matches the render's word wrap (Fix C invariant). Same
+                    // pure-Latin-paragraph scope as the render site.
+                    let mut cellword_done = false;
+                    if std::env::var("OXI_CELLWORD_DISABLE").is_err()
+                        && ch.is_ascii_alphanumeric()
+                        && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
+                    {
+                        let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
+                        let mut hit_boundary = false;
+                        loop {
+                            let tail = buf_chars.last().map(|c| c.ch)
+                                .or_else(|| current_line_chars.last().map(|c| c.ch));
+                            let remaining = buf_chars.len() + current_line_chars.len();
+                            if !tail.map_or(false, |c| c.is_ascii_alphanumeric()) {
+                                hit_boundary = remaining >= 1;
+                                break;
+                            }
+                            if remaining <= 1 { break; }
+                            if let Some(pc) = buf_chars.pop() {
+                                buf_w -= pc.natural_advance;
+                                carry.insert(0, pc);
+                            } else if let Some(pc) = current_line_chars.pop() {
+                                line_x -= pc.natural_advance;
+                                carry.insert(0, pc);
+                            } else {
+                                break;
+                            }
+                        }
+                        if hit_boundary && !carry.is_empty() {
+                            lines += 1;
+                            line_x = 0.0;
+                            line_nonempty = false;
+                            is_first_line = false;
+                            current_line_chars.clear();
+                            for pc in carry {
+                                buf_w += pc.natural_advance;
+                                buf_chars.push(pc);
+                            }
+                            buf_nonempty = true;
+                            cellword_done = true;
+                        } else {
+                            for pc in carry {
+                                buf_w += pc.natural_advance;
+                                buf_chars.push(pc);
+                            }
+                            if !buf_chars.is_empty() { buf_nonempty = true; }
+                        }
                     }
-                    lines += 1;
-                    line_x = 0.0;
-                    line_nonempty = false;
-                    is_first_line = false;
-                    current_line_chars.clear();
+                    if !cellword_done {
+                        if buf_nonempty {
+                            line_x += buf_w;
+                            line_nonempty = true;
+                            buf_w = 0.0;
+                            buf_nonempty = false;
+                            current_line_chars.extend(buf_chars.drain(..));
+                        }
+                        lines += 1;
+                        line_x = 0.0;
+                        line_nonempty = false;
+                        is_first_line = false;
+                        current_line_chars.clear();
+                    }
                 }
                 buf_w += cw;
                 buf_nonempty = true;
