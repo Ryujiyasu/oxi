@@ -15289,7 +15289,34 @@ impl LayoutEngine {
                 if cell_start_grid == 0 && !is_nested && lead_absorb
                     && std::env::var("OXI_S496_TBLIND_DISABLE").is_err() {
                     cell_x -= pad_l;
-                    cell_w += pad_l;
+                    // S766 = the S585c 本体 (root) fix (2026-07-08, default ON,
+                    // opt-out OXI_S766_DISABLE). The S496 lead_absorb outsets the
+                    // leading cell's LEFT border by cellMar (cell_x -= pad_l). For a
+                    // MULTI-cell row the leading cell's RIGHT edge is a column
+                    // boundary Word keeps, so also widen (cell_w += pad_l = keep the
+                    // right edge). But for a SINGLE-cell row the leading cell IS the
+                    // whole table and there is no column boundary to the right:
+                    //   • tblW=dxa/pct → Word shifts the WHOLE table left by cellMar
+                    //     (BOTH borders −cellMar, declared width KEPT, overflowing the
+                    //     page). Widening the sole cell instead put its RIGHT border
+                    //     +1 cellMar too far (tokyoshugyo dxa note Oxi 527.05/W522.2)
+                    //     AND the S713 wrap that subtracts pads from cell_w over-wide
+                    //     (435−9.9=425.1 vs Word 430.05−9.9=420.15). Not widening
+                    //     makes cell_w = declared → border and wrap both = Word.
+                    //   • tblW=auto → Word CLAMPS the box to the page (S591); s585c's
+                    //     eff_cell_w clamp handles it, and its over-wide TRIGGER
+                    //     (cell_w > content_width) RELIES on the widen (the tokyoshugyo
+                    //     条文 boxes: declared 422.90 < content 425.2, only the widen
+                    //     427.85 crosses the threshold). So KEEP the widen for auto —
+                    //     removing it drops the clamp+compression → over-wrap (0.56).
+                    // See [[tokyoshugyo_wrap_not_cellheight]] (S713 "no-widen remains
+                    // a follow-up") / [[tokumei_form_family_ssim]].
+                    let s766_shift_whole = row.cells.len() == 1
+                        && matches!(table.style.width_type.as_deref(), Some("dxa") | Some("pct"))
+                        && std::env::var("OXI_S766_DISABLE").is_err();
+                    if !s766_shift_whole {
+                        cell_w += pad_l;
+                    }
                 }
 
                 // S585c (2026-07-01, default ON, opt-out OXI_S585C_DISABLE): the
@@ -15314,7 +15341,7 @@ impl LayoutEngine {
                 // [[tokyoshugyo_wrap_not_cellheight]] (S585c).
                 let content_right_edge = start_x + content_width;
                 let s585c_over = cell_w - content_width;
-                let s585c_clamp = std::env::var("OXI_S585C_DISABLE").is_err()
+                let s585c_clamp_base = std::env::var("OXI_S585C_DISABLE").is_err()
                     && !is_nested
                     && row.cells.len() == 1
                     && !table.style.has_explicit_cellmar
@@ -15322,6 +15349,30 @@ impl LayoutEngine {
                     && (s585c_over < 5.0
                         || (table.style.width_type.as_deref() == Some("auto") && s585c_over < 11.0))
                     && cell_x + cell_w > content_right_edge + pad_r + 0.5;
+                // S767b = the S585c 本体 detection completion (2026-07-08, default ON,
+                // opt-out OXI_S767_DISABLE). s585c's over-wide TRIGGER is
+                // `cell_w > content_width` — POSITION-AGNOSTIC: it measures the cell's
+                // width against the full page content, ignoring that a large tblInd
+                // pushes the cell RIGHT. A single-cell AUTO box whose declared width
+                // FITS the page (cell_w ≤ content_width) but is shifted over the
+                // page-right by a big tblInd (cell_x + cell_w > page content-right +
+                // cellMar) is MISSED — its border overflows the page and Word clamps
+                // it, but s585c never fires. e3c545's tblInd=18 RDF code boxes:
+                // border 549.4 / wrap 469.30 vs Word 544.0 / 463.90 (rt.pdf-confirmed
+                // right border 543.8). ADDITIVE (only fires where s585c_clamp_base is
+                // FALSE) so it cannot change any currently-clamped cell — it only adds
+                // the tblInd-overshoot case s585c missed. Border-overshoot amount gate
+                // (< 11 = the auto-fit envelope) mirrors the eff_cell_w clamp geometry.
+                let s585c_border_over = (cell_x + cell_w) - (content_right_edge + pad_r);
+                let s767b_tblind = std::env::var("OXI_S767_DISABLE").is_err()
+                    && !s585c_clamp_base
+                    && !is_nested
+                    && row.cells.len() == 1
+                    && !table.style.has_explicit_cellmar
+                    && table.style.width_type.as_deref() == Some("auto")
+                    && s585c_border_over > 0.5
+                    && s585c_border_over < 11.0;
+                let s585c_clamp = s585c_clamp_base || s767b_tblind;
                 let eff_cell_w = if s585c_clamp {
                     (content_right_edge + pad_r - cell_x).min(cell_w).max(0.0)
                 } else {
@@ -16186,6 +16237,25 @@ impl LayoutEngine {
                             && row.cells.len() == 1
                             && table.style.has_explicit_cellmar
                             && self.compat_mode <= 14;
+                        // S767 = the S585c 本体 wrap-consistency (2026-07-08, default ON,
+                        // opt-out OXI_S767_DISABLE). S585c clamps the BORDER of an over-wide
+                        // AUTO cell to the page (eff_cell_w) but the WRAP kept subtracting pads
+                        // from the PRE-CLAMP cell_w — so a clamped cell that is NOT the
+                        // justified-compress narrow case (which already uses eff_cell_w above)
+                        // wrapped ~1 cellMar too wide. e3c545's LEFT-aligned Latin RDF code
+                        // blocks (compressPunctuation off → s585c_narrow=false): border clamped
+                        // to 544.0 but wrap = cell_w-pads = 469.30 vs Word's eff_cell_w-pads =
+                        // 463.90 → Oxi packed ~1 char/line more, mis-breaking the long @prefix
+                        // lines. Use eff_cell_w (== cell_w when NOT clamped, so non-clamped
+                        // cells are byte-identical) in the pad-subtracting branches; the
+                        // `else { cell_w }` text-into-margins case (S562) is left untouched.
+                        // This completes S585c's stated "one eff_cell_w → border AND wrap"
+                        // for the non-compress path. See [[tokumei_form_family_ssim]].
+                        let wrap_cell_w = if std::env::var("OXI_S767_DISABLE").is_ok() {
+                            cell_w
+                        } else {
+                            eff_cell_w
+                        };
                         let wrap_base = if s585c_narrow
                             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute) {
                             // S585c: the clamped box wraps within its Word content area
@@ -16197,11 +16267,11 @@ impl LayoutEngine {
                             // fits Word's line counts via cell 約物 compression + ぶら下げ.
                             (eff_cell_w - pad_l - pad_r).max(0.0)
                         } else if s585_cellmar {
-                            (cell_w - pad_l - pad_r - s594_extra).max(0.0)
+                            (wrap_cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested
                             || self.cellpair_active()
                             || s713_cellmar_render {
-                            (cell_w - pad_l - pad_r).max(0.0)
+                            (wrap_cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
                         };
