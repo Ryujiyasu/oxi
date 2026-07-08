@@ -110,6 +110,12 @@ pub struct Page {
     pub header_even: Vec<Block>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footer_even: Vec<Block>,
+    /// WATERMARK (2026-07-08): a VML WordArt watermark from a header part
+    /// (`v:shape type="#_x0000_t136"` + `v:textpath string=…`, the Word
+    /// PowerPlusWaterMarkObject idiom — «SAMPLE»/«DRAFT» diagonal text on
+    /// every page, centered on the margin box, painted BEHIND the body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<Watermark>,
     /// S755: sectPr <w:titlePg/> — this section's first page uses the "first" type
     #[serde(default)]
     pub title_pg: bool,
@@ -1502,6 +1508,24 @@ pub struct TableConditionalFormat {
     /// Cell margins override
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_margins: Option<CellMargins>,
+}
+
+/// A VML WordArt page watermark (see Page.watermark).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Watermark {
+    pub text: String,
+    /// Shape box size in points (pre-rotation), from the v:shape style attr.
+    pub width: f32,
+    pub height: f32,
+    /// VML rotation in degrees CLOCKWISE (style `rotation:315` = 45° CCW visual).
+    #[serde(default)]
+    pub rotation: f32,
+    /// Resolved fill color hex (e.g. "808080" for fillcolor="gray [...]").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// v:textpath style font-family, if declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

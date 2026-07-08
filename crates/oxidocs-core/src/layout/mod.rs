@@ -1575,6 +1575,18 @@ pub enum LayoutContent {
         arrow_head: bool,
         arrow_tail: bool,
     },
+    /// WATERMARK (2026-07-08): a VML WordArt page watermark («SAMPLE» etc.) —
+    /// element (x,y,w,h) is the UNROTATED shape box centered on the margin
+    /// box; renderers draw `text` stretched to fill the box (WordArt
+    /// fitshape) and rotated by `rotation` degrees CLOCKWISE about the box
+    /// center (VML style rotation:315 = diagonal bottom-left→top-right),
+    /// painted at z-bottom (the layout inserts it at element index 0).
+    WatermarkText {
+        text: String,
+        color: Option<String>,
+        rotation: f32,
+        font_family: Option<String>,
+    },
     /// Begin a clipping region. All subsequent elements until ClipEnd are clipped to this rect.
     ClipStart,
     /// End the current clipping region (restore graphics state).
@@ -5133,6 +5145,27 @@ impl LayoutEngine {
             content_width
         };
         for (page_idx, lp) in pages.iter_mut().enumerate() {
+            // WATERMARK: one element per page, centered on the MARGIN box
+            // (mso-position-horizontal/vertical-relative:margin, the Word
+            // watermark idiom), inserted at index 0 = painted BEHIND the body
+            // (VML z-index < 0). Parser scope: only headers carrying a
+            // v:textpath string produce Page.watermark (JP corpus: 0 docs).
+            if let Some(wm) = &page.watermark {
+                let mx0 = page.margin.left;
+                let mx1 = page.size.width - page.margin.right;
+                let my0 = page.margin.top;
+                let my1 = page.size.height - page.margin.bottom;
+                let cx = (mx0 + mx1) / 2.0;
+                let cy = (my0 + my1) / 2.0;
+                lp.elements.insert(0, LayoutElement::new(
+                    cx - wm.width / 2.0, cy - wm.height / 2.0, wm.width, wm.height,
+                    LayoutContent::WatermarkText {
+                        text: wm.text.clone(),
+                        color: wm.color.clone(),
+                        rotation: wm.rotation,
+                        font_family: wm.font_family.clone(),
+                    }));
+            }
             // S755: per-page header/footer variant selection — page 1 of a
             // titlePg section renders the FIRST-type blocks, even physical
             // pages render the EVEN-type blocks (blank when the flag is set

@@ -98,6 +98,8 @@ impl OoxmlParser {
             // first-type header into the whole section → a tall first-page
             // header was applied to every page, probextitlepg +1×6).
             // OXI_S755_DISABLE restores the legacy bake-first-into-section.
+            // WATERMARK: collected from any of this section's header parts.
+            let mut watermark_found: Option<crate::ir::Watermark> = None;
             let hdr_type = if std::env::var("OXI_S755_DISABLE").is_ok()
                 && section.properties.title_pg && page_index == 0 { "first" } else { "default" };
             let use_headers: Vec<HdrFtrRef> = effective_header_refs.iter()
@@ -126,21 +128,21 @@ impl OoxmlParser {
                 refs.iter().filter(|r| r.ref_type != "first").cloned().collect()
             }
             let header = if !use_headers.is_empty() {
-                self.parse_header_footer_blocks(&use_headers, &ctx, &styles)
+                self.parse_header_footer_blocks(&use_headers, &ctx, &styles, &mut watermark_found)
             } else {
                 let fallback = pick_fallback(effective_header_refs);
                 if !fallback.is_empty() {
-                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                    self.parse_header_footer_blocks(&fallback, &ctx, &styles, &mut watermark_found)
                 } else {
                     Vec::new()
                 }
             };
             let footer = if !use_footers.is_empty() {
-                self.parse_header_footer_blocks(&use_footers, &ctx, &styles)
+                self.parse_header_footer_blocks(&use_footers, &ctx, &styles, &mut watermark_found)
             } else {
                 let fallback = pick_fallback(effective_footer_refs);
                 if !fallback.is_empty() {
-                    self.parse_header_footer_blocks(&fallback, &ctx, &styles)
+                    self.parse_header_footer_blocks(&fallback, &ctx, &styles, &mut watermark_found)
                 } else {
                     Vec::new()
                 }
@@ -152,19 +154,19 @@ impl OoxmlParser {
             };
             let fh = hf_variant(effective_header_refs, "first");
             let header_first = if section.properties.title_pg && !fh.is_empty() {
-                self.parse_header_footer_blocks(&fh, &ctx, &styles)
+                self.parse_header_footer_blocks(&fh, &ctx, &styles, &mut watermark_found)
             } else { Vec::new() };
             let ff = hf_variant(effective_footer_refs, "first");
             let footer_first = if section.properties.title_pg && !ff.is_empty() {
-                self.parse_header_footer_blocks(&ff, &ctx, &styles)
+                self.parse_header_footer_blocks(&ff, &ctx, &styles, &mut watermark_found)
             } else { Vec::new() };
             let eh = hf_variant(effective_header_refs, "even");
             let header_even = if even_odd_hf && !eh.is_empty() {
-                self.parse_header_footer_blocks(&eh, &ctx, &styles)
+                self.parse_header_footer_blocks(&eh, &ctx, &styles, &mut watermark_found)
             } else { Vec::new() };
             let ef = hf_variant(effective_footer_refs, "even");
             let footer_even = if even_odd_hf && !ef.is_empty() {
-                self.parse_header_footer_blocks(&ef, &ctx, &styles)
+                self.parse_header_footer_blocks(&ef, &ctx, &styles, &mut watermark_found)
             } else { Vec::new() };
 
             // Collect referenced footnotes and endnotes for this section
@@ -290,6 +292,7 @@ impl OoxmlParser {
                     doc_grid_lines_and_chars: section.properties.doc_grid_lines_and_chars,
                     header,
                     footer,
+                    watermark: watermark_found.clone(),
                     header_first,
                     footer_first,
                     header_even,
@@ -448,12 +451,15 @@ impl OoxmlParser {
         }
     }
 
-    /// Parse header or footer XML parts referenced by relationship IDs
+    /// Parse header or footer XML parts referenced by relationship IDs.
+    /// `watermark_out`: a VML WordArt watermark found in any part is stored
+    /// here (first one wins) — see extract_vml_watermark.
     fn parse_header_footer_blocks(
         &mut self,
         refs: &[HdrFtrRef],
         ctx: &ParseContext,
         styles: &StyleSheet,
+        watermark_out: &mut Option<crate::ir::Watermark>,
     ) -> Vec<Block> {
         let mut blocks = Vec::new();
         for hdr_ref in refs {
@@ -467,6 +473,9 @@ impl OoxmlParser {
                     format!("word/{}", target)
                 };
                 if let Ok(xml) = self.read_part(&part_path) {
+                    if watermark_out.is_none() && std::env::var("OXI_WATERMARK_DISABLE").is_err() {
+                        *watermark_out = extract_vml_watermark(&xml);
+                    }
                     if let Ok(parsed) = parse_header_footer_xml(&xml, ctx, styles) {
                         blocks.extend(parsed);
                     }
@@ -6906,7 +6915,87 @@ fn parse_section_properties(
     })
 }
 
-/// Parse a header or footer XML part (w:hdr or w:ftr element)
+/// WATERMARK (2026-07-08): extract a VML WordArt watermark from a header
+/// part — the Word idiom `<v:shape type="#_x0000_t136" style="…rotation:315…"
+/// fillcolor="gray [1629]"><v:textpath … string="SAMPLE"/></v:shape>`
+/// (PowerPlusWaterMarkObject). Only a textpath WITH a `string` attribute
+/// counts (the shapetype defines a bare `<v:textpath on="t"/>`). String-level
+/// scan: the markup is machine-generated and the JP corpus carries ZERO
+/// t136/textpath docs (scanned), so this is corpus-inert by construction.
+fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
+    // find a v:textpath with a string attribute
+    let mut search_from = 0usize;
+    let (tp_start, tp_tag) = loop {
+        let i = xml[search_from..].find("<v:textpath ")? + search_from;
+        let end = xml[i..].find('>')? + i;
+        let tag = &xml[i..=end];
+        if tag.contains("string=\"") {
+            break (i, tag.to_string());
+        }
+        search_from = end + 1;
+    };
+    let attr = |tag: &str, name: &str| -> Option<String> {
+        let pat = format!("{}=\"", name);
+        let s = tag.find(&pat)? + pat.len();
+        let e = tag[s..].find('"')? + s;
+        Some(tag[s..e].to_string())
+    };
+    let text = attr(&tp_tag, "string")?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    // the owning v:shape is the last one opened before the textpath
+    let shape_start = xml[..tp_start].rfind("<v:shape ")?;
+    let shape_end = xml[shape_start..].find('>')? + shape_start;
+    let shape_tag = &xml[shape_start..=shape_end];
+    let style = attr(shape_tag, "style").unwrap_or_default();
+    let style_val = |key: &str| -> Option<String> {
+        for part in style.split(';') {
+            let mut kv = part.splitn(2, ':');
+            if kv.next()?.trim() == key {
+                return kv.next().map(|v| v.trim().to_string());
+            }
+        }
+        None
+    };
+    let pt = |v: Option<String>| -> Option<f32> {
+        v.and_then(|s| s.trim_end_matches("pt").parse::<f32>().ok())
+    };
+    let width = pt(style_val("width"))?;
+    let height = pt(style_val("height"))?;
+    let rotation = style_val("rotation")
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    // fillcolor: "#RRGGBB" | "name" | "name [themeidx]"
+    let color = attr(shape_tag, "fillcolor").map(|c| {
+        let base = c.split_whitespace().next().unwrap_or("").trim_start_matches('#');
+        match base.to_ascii_lowercase().as_str() {
+            "gray" | "grey" => "808080".to_string(),
+            "silver" => "C0C0C0".to_string(),
+            "black" => "000000".to_string(),
+            "red" => "FF0000".to_string(),
+            "blue" => "0000FF".to_string(),
+            h if h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()) => h.to_uppercase(),
+            _ => "C0C0C0".to_string(),
+        }
+    });
+    // textpath style font-family:"CG Times" (entities already decoded? raw
+    // part text has &quot; — strip both)
+    let font_family = attr(&tp_tag, "style").and_then(|s| {
+        for part in s.split(';') {
+            let mut kv = part.splitn(2, ':');
+            if kv.next().map(|k| k.trim()) == Some("font-family") {
+                let v = kv.next().unwrap_or("").trim()
+                    .replace("&quot;", "").replace('"', "");
+                return Some(v);
+            }
+        }
+        None
+    });
+    Some(crate::ir::Watermark { text, width, height, rotation, color, font_family })
+}
+
+// Parse a header or footer XML part (w:hdr or w:ftr element)
 fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<Block>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut blocks = Vec::new();

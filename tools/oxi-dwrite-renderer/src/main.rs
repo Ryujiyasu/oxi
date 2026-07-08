@@ -424,10 +424,102 @@ unsafe fn render_page_elements(
                 render_preset_shape(rt, el.x, el.y, el.width, el.height,
                     shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v, *arrow_head, *arrow_tail)?;
             }
+            LayoutContent::WatermarkText { text, color, rotation, font_family } => {
+                if exclude.iter().any(|e| e == "watermark") { continue; }
+                render_watermark(rt, dwrite_factory, el.x, el.y, el.width, el.height,
+                    text, color.as_deref(), *rotation, font_family.as_deref())?;
+            }
             // TODO Step 7: Balloon, BalloonConnector (low priority for SSIM)
             _ => {}
         }
     }
+    Ok(())
+}
+
+/// WATERMARK (2026-07-08): draw a VML WordArt watermark — `text` stretched
+/// to fill the (x,y,w,h) box (WordArt fitshape: caps ink fits the box) and
+/// rotated `rotation` degrees clockwise about the box center (VML style
+/// rotation:315 = the diagonal SAMPLE/DRAFT idiom). Painted first (element
+/// index 0) = behind the body.
+#[cfg(windows)]
+unsafe fn render_watermark(
+    rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    x_pt: f32, y_pt: f32, w_pt: f32, h_pt: f32,
+    text: &str, color: Option<&str>, rotation: f32, font_family: Option<&str>,
+) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    use windows::Win32::Graphics::DirectWrite::*;
+    use windows::core::PCWSTR;
+    // CG Times (a PS Times clone, not installed) → Times New Roman.
+    let fam = match font_family {
+        Some(f) if !f.trim().is_empty() && !f.eq_ignore_ascii_case("CG Times") => f,
+        _ => "Times New Roman",
+    };
+    let fam_w: Vec<u16> = fam.encode_utf16().chain(std::iter::once(0)).collect();
+    let empty_w: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
+    let trial_size_dip = 100.0 * PT_TO_DIP;
+    let format = dwrite_factory.CreateTextFormat(
+        PCWSTR(fam_w.as_ptr()), None,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        trial_size_dip, PCWSTR(empty_w.as_ptr()))?;
+    let text_w: Vec<u16> = text.encode_utf16().collect();
+    let layout = dwrite_factory.CreateTextLayout(&text_w, &format, 1.0e6, 1.0e6)?;
+    let mut metrics = DWRITE_TEXT_METRICS::default();
+    layout.GetMetrics(&mut metrics)?;
+    if metrics.width <= 0.0 { return Ok(()); }
+    // fitshape: stretch the text INK box to fill the shape box. Measure the
+    // ink via OverhangMetrics on a tight layout (no font-fraction guessing —
+    // the asc/cap-fraction first cut landed the ink +34pt low pre-rotation).
+    let layout = dwrite_factory.CreateTextLayout(
+        &text_w, &format, metrics.width + 1.0, metrics.height + 1.0)?;
+    let om: DWRITE_OVERHANG_METRICS = layout.GetOverhangMetrics()?;
+    let ink_l = -om.left;
+    let ink_t = -om.top;
+    let ink_r = (metrics.width + 1.0) + om.right;
+    let ink_b = (metrics.height + 1.0) + om.bottom;
+    let (ink_w, ink_h) = (ink_r - ink_l, ink_b - ink_t);
+    if ink_w <= 0.0 || ink_h <= 0.0 { return Ok(()); }
+    let sx = (w_pt * PT_TO_DIP) / ink_w;
+    let sy = (h_pt * PT_TO_DIP) / ink_h;
+    let cx = (x_pt + w_pt / 2.0) * PT_TO_DIP;
+    let cy = (y_pt + h_pt / 2.0) * PT_TO_DIP;
+    // scale about (cx,cy), then rotate about (cx,cy)
+    let scale = windows::Foundation::Numerics::Matrix3x2 {
+        M11: sx, M12: 0.0, M21: 0.0, M22: sy,
+        M31: cx * (1.0 - sx), M32: cy * (1.0 - sy),
+    };
+    let mut rot = windows::Foundation::Numerics::Matrix3x2::default();
+    windows::Win32::Graphics::Direct2D::D2D1MakeRotateMatrix(
+        rotation, D2D_POINT_2F { x: cx, y: cy }, &mut rot);
+    let m = windows::Foundation::Numerics::Matrix3x2 {
+        M11: scale.M11 * rot.M11 + scale.M12 * rot.M21,
+        M12: scale.M11 * rot.M12 + scale.M12 * rot.M22,
+        M21: scale.M21 * rot.M11 + scale.M22 * rot.M21,
+        M22: scale.M21 * rot.M12 + scale.M22 * rot.M22,
+        M31: scale.M31 * rot.M11 + scale.M32 * rot.M21 + rot.M31,
+        M32: scale.M31 * rot.M12 + scale.M32 * rot.M22 + rot.M32,
+    };
+    let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+    rt.GetTransform(&mut saved);
+    rt.SetTransform(&m);
+    // position the un-scaled layout so its INK center sits at (cx,cy)
+    let origin = D2D_POINT_2F {
+        x: cx - (ink_l + ink_w / 2.0),
+        y: cy - (ink_t + ink_h / 2.0),
+    };
+    let hex = color.unwrap_or("C0C0C0");
+    let (r, g, b) = (
+        u8::from_str_radix(&hex[0..2], 16).unwrap_or(0xC0),
+        u8::from_str_radix(&hex[2..4], 16).unwrap_or(0xC0),
+        u8::from_str_radix(&hex[4..6], 16).unwrap_or(0xC0),
+    );
+    let brush = rt.CreateSolidColorBrush(&D2D1_COLOR_F {
+        r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: 1.0,
+    }, None)?;
+    rt.DrawTextLayout(origin, &layout, &brush,
+        windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE);
+    rt.SetTransform(&saved);
     Ok(())
 }
 

@@ -149,6 +149,10 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     // the GDI renderer will gain real handlers in R-05g.
                     oxidocs_core::layout::LayoutContent::Balloon { .. } => "balloon",
                     oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => "balloon_connector",
+                    // WATERMARK (2026-07-08): drawn by the DWrite renderer
+                    // (the SSIM pipeline); GDI (pagination dump / fallback)
+                    // skips it — no flow impact either way.
+                    oxidocs_core::layout::LayoutContent::WatermarkText { .. } => "watermark",
                 };
                 if exclude.iter().any(|e| e == type_name) {
                     continue;
@@ -714,6 +718,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             _ => {}
                         }
                     }
+                    // WATERMARK: GDI no-op (DWrite draws it; see type_name map).
+                    oxidocs_core::layout::LayoutContent::WatermarkText { .. } => {}
                     // R-05g: render comment balloon as a rounded-rect filled
                     // with the author's tint, then draw author header line +
                     // body + indented reply blocks inside.
