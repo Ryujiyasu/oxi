@@ -1386,6 +1386,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             }
                         }
                         let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url)?;
+                        // Word does NOT apply the "Hyperlink" character style inside a
+                        // TOC entry: ToC links render in the paragraph text colour
+                        // (black), no underline — while body hyperlinks with the SAME
+                        // rStyle="Hyperlink" stay blue+underlined (measured: this doc's
+                        // body cross-refs are #0000FF, its ToC entries #000000).
+                        // Discriminator = the paragraph is a TOC style (TOC1-9).
+                        let toc_para = style_id.as_deref()
+                            .map_or(false, |s| s.to_ascii_lowercase().starts_with("toc"));
                         // Apply the same field-boundary handling as top-level runs so
                         // fields INSIDE a hyperlink (ToC entries wrap the PAGEREF page
                         // number in <w:hyperlink>) get their fldChar sentinels stripped
@@ -1411,6 +1419,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     Some(FieldType::CrossRef) | Some(FieldType::Cached))
                             {
                                 run.text.clear();
+                            }
+                            if toc_para && run.url.is_some() {
+                                run.style.color = None;
+                                run.style.underline = false;
+                                run.style.underline_style = None;
                             }
                             runs.push(run);
                         }
@@ -3159,7 +3172,13 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
             text = "#".to_string();
             field_type = Some(FieldType::NumPages);
         } else if field.contains("TOC") || field.contains("HYPERLINK") {
-            // Table of contents / hyperlink fields — keep existing text (result display)
+            // Table of contents / hyperlink fields — Oxi can't regenerate them, so
+            // KEEP the cached result (Word's rendered ToC / link text). Marking the
+            // field Cached stops the result-suppression pass from dropping the FIRST
+            // ToC entry title, which sits inside the TOC field result region BEFORE
+            // any nested PAGEREF sets current_field_type (later entries survived only
+            // because current_field_type stayed stuck at CrossRef).
+            field_type = Some(FieldType::Cached);
         } else if field.contains("REF") || field.contains("NOTEREF") || field.contains("PAGEREF") {
             // S685 (2026-06-28, default ON, opt-out OXI_CROSSREF_DISABLE): cross-reference
             // fields render the CACHED RESULT (the run between fldChar separate and end),
