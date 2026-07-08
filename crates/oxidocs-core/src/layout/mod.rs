@@ -2228,8 +2228,45 @@ impl LayoutEngine {
     }
 
     /// Resolve font family considering East Asian font for CJK characters.
+    /// RENDER-font resolution (applies the S763 quote-as-Latin rule; use for
+    /// the family that DRAWS an element).
     fn resolve_font_family_for_text<'a>(&'a self, text: &str, run_style: &'a RunStyle, para_style: &'a ParagraphStyle) -> Option<&'a str> {
-        let has_cjk = text.chars().any(|c| kinsoku::is_cjk(c));
+        self.resolve_font_family_for_text_g(text, run_style, para_style, true)
+    }
+
+    /// S763 (2026-07-08, default ON, opt-out OXI_S763_DISABLE): CURLY QUOTES
+    /// (U+2018-201D, is_cjk-classified via General Punctuation) route to the
+    /// eastAsia font ONLY when the text also contains a REAL CJK char. One
+    /// apostrophe in an English run («you’re») poisoned the WHOLE run into
+    /// the eastAsia font (uk_hmrc_checklist statement cells rendered serif;
+    /// nyserda «(“NYSERDA”)» fullwidth quotes). Word's rule for the ambiguous
+    /// class is w:hint-driven (unparsed); real-CJK-companion is the JP-safe
+    /// approximation. `quote_latin=true` = RENDER-font semantics; METRICS
+    /// callers (metrics_for_text) pass false — flipping the metrics half blew
+    /// uk_hmrc_checklist 2→4 pages through its fragile form table, so it is
+    /// deferred until that table bug is dissected.
+    fn resolve_font_family_for_text_g<'a>(&'a self, text: &str, run_style: &'a RunStyle, para_style: &'a ParagraphStyle, quote_latin: bool) -> Option<&'a str> {
+        let s763 = quote_latin && std::env::var("OXI_S763_DISABLE").is_err();
+        let is_q = |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}');
+        let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
+        let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
+        // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
+        // an explicit REAL-CJK eastAsia font (db9ca «“…”» runs name
+        // ＭＳ Ｐゴシック; Word renders those quotes eastAsia — the flat
+        // quote-as-Latin rule regressed db9ca −0.0094) keeps eastAsia; a
+        // Latin-only eastAsia (nyserda/health_form "Times New Roman") or an
+        // absent one goes Latin. is_latin_only_font = the S634 discriminator.
+        let has_cjk = if has_real_cjk {
+            true
+        } else if has_quote && s763 {
+            let ea = run_style.font_family_east_asia.as_deref()
+                .or_else(|| para_style.default_run_style.as_ref()
+                    .and_then(|d| d.font_family_east_asia.as_deref()))
+                .or(self.default_font_family_east_asia.as_deref());
+            ea.map_or(false, |f| !crate::font::is_latin_only_font(f))
+        } else {
+            has_quote
+        };
         if has_cjk {
             // Prefer East Asian font for CJK text: run → paragraph → docDefaults
             if let Some(ref ff) = run_style.font_family_east_asia {
@@ -2260,8 +2297,10 @@ impl LayoutEngine {
     }
 
     /// Get font metrics considering East Asian font for CJK text.
+    /// S763: metrics keep the LEGACY quote classification (quote_latin=false)
+    /// — see resolve_font_family_for_text_g.
     fn metrics_for_text(&self, text: &str, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
-        match self.resolve_font_family_for_text(text, run_style, para_style) {
+        match self.resolve_font_family_for_text_g(text, run_style, para_style, false) {
             Some(family) => self.registry.get_with_bold(family, self.resolve_bold(run_style, para_style)),
             None => self.registry.default_metrics(),
         }
@@ -2302,7 +2341,17 @@ impl LayoutEngine {
 
     /// Get font metrics for a single character, using East Asian font for CJK.
     fn metrics_for_char(&self, ch: char, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
-        if kinsoku::is_cjk(ch) {
+        self.metrics_for_char_in(ch, true, run_style, para_style)
+    }
+
+    /// S763: `run_has_real_cjk` = the surrounding run contains a CJK char
+    /// that is NOT a curly quote. A quote char alone (English «you’re») uses
+    /// the Latin metrics; with real CJK companions it stays eastAsia.
+    fn metrics_for_char_in(&self, ch: char, run_has_real_cjk: bool, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
+        let s763 = std::env::var("OXI_S763_DISABLE").is_err();
+        let quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}');
+        let cjk_class = kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk);
+        if cjk_class {
             if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
                 return m;
             }
@@ -16504,7 +16553,7 @@ impl LayoutEngine {
                                     prev_char_emitted = Some(ch);
                                     continue;
                                 }
-                                let cm = self.metrics_for_char(ch, &run.style, &para.style);
+                                let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                                 // S691 (2026-06-29) FALSIFIED: forcing full-width digits (U+FF1x)
                                 // to font_size in the cell break (OXI_FWDIGIT) was a NO-OP — the
@@ -19505,7 +19554,7 @@ impl LayoutEngine {
                     prev_char_emitted = Some(ch);
                     continue;
                 }
-                let cm = self.metrics_for_char(ch, &run.style, &para.style);
+                let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
