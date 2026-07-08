@@ -4174,6 +4174,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             wrap_type,
             crop,
             anchor_block_index: 0,
+            relative_height,
+            behind_doc,
         })
     } else {
         None
@@ -4326,6 +4328,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             wrap_type: None,
             crop: None,
             anchor_block_index: 0,
+            relative_height,
+            behind_doc,
         })
     } else {
         image
@@ -4596,6 +4600,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                 wrap_type: None,
                 crop: None,
                 anchor_block_index: 0,
+                relative_height: 0,
+                behind_doc: false,
             }),
             shape: None,
             text_box: None,
@@ -4643,6 +4649,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             wrap_type: img_wrap,
             crop: None,
             anchor_block_index: 0,
+            relative_height: 0,
+            behind_doc: false,
         })
     } else {
         None
@@ -4702,6 +4710,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             wrap_type: None,
             crop: None,
             anchor_block_index: 0,
+            relative_height: 0,
+            behind_doc: false,
         });
         return Ok(DrawingResult { image: placeholder, shape: None, text_box });
     }
@@ -4831,6 +4841,8 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Dr
             wrap_type: None,
             crop: None,
             anchor_block_index: 0,
+            relative_height: 0,
+            behind_doc: false,
         })
     } else {
         None

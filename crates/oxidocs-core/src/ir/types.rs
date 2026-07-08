@@ -618,6 +618,15 @@ pub struct Image {
     /// Index of the anchor paragraph block (for paragraph-relative positioning)
     #[serde(default)]
     pub anchor_block_index: usize,
+    /// S765 (2026-07-08): wp:anchor z-order — Word draws floating objects
+    /// (images AND textboxes) in ascending relativeHeight (highest on top);
+    /// carried so the layout can interleave images and textboxes in ONE
+    /// z-order pass. Default 0.
+    #[serde(default)]
+    pub relative_height: u32,
+    /// behindDoc=1 places the object behind body text. Default false.
+    #[serde(default)]
+    pub behind_doc: bool,
 }
 
 /// Image crop rectangle (percentages from each edge)

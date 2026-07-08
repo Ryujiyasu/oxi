@@ -5104,72 +5104,93 @@ impl LayoutEngine {
         //       standalone VML text box would parse relHeight=0 and be forced to
         //       the bottom of every overlap; give it a doc-order-derived key then.
         let s478_zorder = std::env::var("OXI_S478_DISABLE").is_err();
-        let tb_order: Vec<usize> = {
-            let mut idx: Vec<usize> = (0..page.text_boxes.len()).collect();
-            if s478_zorder {
-                idx.sort_by_key(|&i| page.text_boxes[i].relative_height);
-            }
-            idx
-        };
-        for &tbi in &tb_order {
-            let text_box = &page.text_boxes[tbi];
-            let target_page = block_page_indices
-                .get(text_box.anchor_block_index)
-                .copied()
-                .unwrap_or(0);
-            // S535: env-gated anchor-resolution tracing (figure-collage overlap).
-            if std::env::var("OXI_DEBUG_TB").is_ok() {
-                let (rx, ry) = self.resolve_textbox_position(text_box, page, &block_y_positions);
-                let anchor_in_range = text_box.anchor_block_index < block_y_positions.len();
-                let preview: String = text_box.blocks.iter().filter_map(|b| match b {
-                    Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(8).collect::<String>()),
-                    _ => None,
-                }).find(|s| !s.is_empty()).unwrap_or_default();
-                eprintln!("[TB] tbi={} anchor={} in_range={} tgt_page={} resolved=({:.1},{:.1}) wh=({:.0},{:.0}) vrel={:?} text={:?}",
-                    tbi, text_box.anchor_block_index, anchor_in_range, target_page, rx, ry,
-                    text_box.width, text_box.height,
-                    text_box.position.as_ref().and_then(|p| p.v_relative.clone()),
-                    preview);
-            }
-            let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
-            if let Some(lp) = pages.get_mut(target_page) {
-                lp.elements.extend(tb_elements);
-            }
+        // S765 (2026-07-08, default ON, opt-out OXI_S765_DISABLE): draw
+        // floating IMAGES and TEXTBOXES in ONE z-order pass keyed by
+        // (behind_doc first, then relativeHeight ascending) — Word draws all
+        // floating objects in one relativeHeight order, but Oxi historically
+        // drew ALL textboxes then ALL images, so a lower-relHeight image
+        // always covered a higher-relHeight textbox. uk_local_spending's
+        // cover: the title textbox (relHeight 251662848, WHITE text on the
+        // purple banner) sits ABOVE two purple picture graphics (relHeight
+        // 251660800/251661824) — Oxi drew the pictures last → they buried the
+        // title + subtitle + date text (the whole cover text vanished).
+        // Verified language-independent (framework's giant crest = same).
+        let s765 = s478_zorder && std::env::var("OXI_S765_DISABLE").is_err();
+        // Build a unified float list: (behind_doc, relative_height, kind, idx).
+        enum FloatKind { Tb, Img }
+        let mut floats: Vec<(bool, u32, FloatKind, usize)> = Vec::new();
+        for (i, tb) in page.text_boxes.iter().enumerate() {
+            floats.push((tb.behind_doc, tb.relative_height, FloatKind::Tb, i));
         }
-
-        // Layout floating images and add to the correct layout page
-        for img in &page.floating_images {
-            if let Some(ref _pos) = img.position {
-                let (abs_x, mut abs_y) = self.resolve_floating_image_position(img, page, &block_y_positions);
-                // Use the same page as the anchor block
-                let mut target_page = block_page_indices
-                    .get(img.anchor_block_index)
-                    .copied()
-                    .unwrap_or(0);
-                // S734: a wrapTopAndBottom float paints at its RESERVED band
-                // position (the anchor paragraph moved below the image).
-                if let Some(&(fp, fy)) = s734_flow_pos.get(&img.anchor_block_index) {
-                    if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom) {
-                        target_page = fp;
-                        abs_y = fy + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0));
+        for (i, img) in page.floating_images.iter().enumerate() {
+            floats.push((img.behind_doc, img.relative_height, FloatKind::Img, i));
+        }
+        if s765 {
+            // behind_doc=true (behind text) first, then by relativeHeight asc.
+            floats.sort_by_key(|&(bd, rh, _, _)| (!bd, rh));
+        } else {
+            // Legacy order: all textboxes (relHeight-sorted) then all images.
+            floats.sort_by_key(|&(_, rh, ref k, i)| {
+                let tb_first = matches!(k, FloatKind::Tb);
+                (!tb_first, if s478_zorder && tb_first { rh } else { 0 }, i as u32)
+            });
+        }
+        for (_, _, kind, fi) in &floats {
+            match kind {
+                FloatKind::Tb => {
+                    let tbi = *fi;
+                    let text_box = &page.text_boxes[tbi];
+                    let target_page = block_page_indices
+                        .get(text_box.anchor_block_index)
+                        .copied()
+                        .unwrap_or(0);
+                    if std::env::var("OXI_DEBUG_TB").is_ok() {
+                        let (rx, ry) = self.resolve_textbox_position(text_box, page, &block_y_positions);
+                        let anchor_in_range = text_box.anchor_block_index < block_y_positions.len();
+                        let preview: String = text_box.blocks.iter().filter_map(|b| match b {
+                            Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(8).collect::<String>()),
+                            _ => None,
+                        }).find(|s| !s.is_empty()).unwrap_or_default();
+                        eprintln!("[TB] tbi={} anchor={} in_range={} tgt_page={} resolved=({:.1},{:.1}) wh=({:.0},{:.0}) vrel={:?} text={:?}",
+                            tbi, text_box.anchor_block_index, anchor_in_range, target_page, rx, ry,
+                            text_box.width, text_box.height,
+                            text_box.position.as_ref().and_then(|p| p.v_relative.clone()),
+                            preview);
+                    }
+                    let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
+                    if let Some(lp) = pages.get_mut(target_page) {
+                        lp.elements.extend(tb_elements);
                     }
                 }
-                let el = LayoutElement::new(abs_x, abs_y, img.width, img.height, LayoutContent::Image {
-                        data: img.data.clone(),
-                        content_type: img.content_type.clone(),
-                });
-                if let Some(lp) = pages.get_mut(target_page) {
-                    lp.elements.push(el);
-                } else if let Some(lp) = pages.last_mut() {
-                    lp.elements.push(el);
-                }
-            } else {
-                // No position info — treat as inline at end of last page
-                if let Some(lp) = pages.last_mut() {
-                    lp.elements.push(LayoutElement::new(start_x, 0.0, img.width, img.height, LayoutContent::Image {
-                            data: img.data.clone(),
-                            content_type: img.content_type.clone(),
-                    }));
+                FloatKind::Img => {
+                    let img = &page.floating_images[*fi];
+                    if let Some(ref _pos) = img.position {
+                        let (abs_x, mut abs_y) = self.resolve_floating_image_position(img, page, &block_y_positions);
+                        let mut target_page = block_page_indices
+                            .get(img.anchor_block_index)
+                            .copied()
+                            .unwrap_or(0);
+                        if let Some(&(fp, fy)) = s734_flow_pos.get(&img.anchor_block_index) {
+                            if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom) {
+                                target_page = fp;
+                                abs_y = fy + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0));
+                            }
+                        }
+                        let el = LayoutElement::new(abs_x, abs_y, img.width, img.height, LayoutContent::Image {
+                                data: img.data.clone(),
+                                content_type: img.content_type.clone(),
+                        });
+                        if let Some(lp) = pages.get_mut(target_page) {
+                            lp.elements.push(el);
+                        } else if let Some(lp) = pages.last_mut() {
+                            lp.elements.push(el);
+                        }
+                    } else if let Some(lp) = pages.last_mut() {
+                        lp.elements.push(LayoutElement::new(start_x, 0.0, img.width, img.height, LayoutContent::Image {
+                                data: img.data.clone(),
+                                content_type: img.content_type.clone(),
+                        }));
+                    }
                 }
             }
         }
