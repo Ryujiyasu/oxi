@@ -19759,6 +19759,17 @@ impl LayoutEngine {
                             line_nonempty = false;
                             is_first_line = false;
                             current_line_chars.clear();
+                            // The committed portion of the line (buf minus the
+                            // pulled word) was just counted — discard it. Without
+                            // this the buffer kept the whole committed line and
+                            // re-added the word, so it overflowed again on the very
+                            // next char → runaway line count (~2.5× the render's,
+                            // inflating table row heights: uk_local_spending Annex
+                            // tables 69→~55 pages). The pull loop already removed the
+                            // carried word from buf_chars/buf_w, leaving the counted
+                            // line here.
+                            buf_chars.clear();
+                            buf_w = 0.0;
                             for pc in carry {
                                 buf_w += pc.natural_advance;
                                 buf_chars.push(pc);

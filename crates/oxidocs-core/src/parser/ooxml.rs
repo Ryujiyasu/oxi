@@ -1386,7 +1386,34 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             }
                         }
                         let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url)?;
-                        runs.extend(hyperlink_runs);
+                        // Apply the same field-boundary handling as top-level runs so
+                        // fields INSIDE a hyperlink (ToC entries wrap the PAGEREF page
+                        // number in <w:hyperlink>) get their fldChar sentinels stripped
+                        // and their cached result kept/suppressed correctly. Without
+                        // this the ToC page numbers rendered with U+FFFE/U+FFFF tofu.
+                        for mut run in hyperlink_runs {
+                            if run.field_type.is_some() {
+                                current_field_type = run.field_type.clone();
+                            }
+                            if run.text.contains('\u{FFFE}') {
+                                run.text = run.text.replace('\u{FFFE}', "");
+                                field_result_depth += 1;
+                            }
+                            if run.text.contains('\u{FFFF}') {
+                                run.text = run.text.replace('\u{FFFF}', "");
+                                field_result_depth -= 1;
+                                if field_result_depth <= 0 {
+                                    current_field_type = None;
+                                }
+                            }
+                            if field_result_depth > 0 && run.field_type.is_none()
+                                && !matches!(current_field_type,
+                                    Some(FieldType::CrossRef) | Some(FieldType::Cached))
+                            {
+                                run.text.clear();
+                            }
+                            runs.push(run);
+                        }
                     }
                     // Track changes: inserted / deleted / moved content.
                     // ECMA-376 §17.13.5. Each element wraps runs; w:author, w:date,
@@ -2159,13 +2186,15 @@ fn parse_paragraph_properties(
                                             }
                                         }
                                     } else if l == "b" { ppr_rpr.bold = true; }
-                                    else if l == "vanish" || l == "webHidden" {
+                                    else if l == "vanish" {
                                         // S673v (2026-06-26): the ¶ MARK is hidden. An empty
                                         // paragraph with a hidden mark COLLAPSES to 0 height in
                                         // Word (invisible separator before a table idiom —
                                         // 3a4f/model/tokyoshugyo). The pPr/rPr parser handled
                                         // only font/bold; vanish was dropped. layout_paragraph
                                         // reads ppr_rpr.vanish to skip the para.
+                                        // NOTE: webHidden is web-only (rendered in print), so it
+                                        // does NOT trigger the collapse — only true w:vanish does.
                                         ppr_rpr.vanish = true;
                                     }
                                     else if (l == "ins" || l == "del") && paragraph_mark_revision.is_none() {
@@ -3123,7 +3152,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
     let mut field_type: Option<FieldType> = None;
     if !instr_text.is_empty() {
         let field = instr_text.trim();
-        if field.contains("PAGE") && !field.contains("NUMPAGES") {
+        if field.contains("PAGE") && !field.contains("NUMPAGES") && !field.contains("PAGEREF") {
             text = "#".to_string();
             field_type = Some(FieldType::Page);
         } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
@@ -5333,9 +5362,14 @@ fn parse_run_properties(
                     "rtl" => {
                         style.rtl = true;
                     }
-                    "vanish" | "webHidden" => {
+                    "vanish" => {
                         style.vanish = true;
                     }
+                    // w:webHidden (ECMA-376 §17.3.2.44) hides text ONLY in Web
+                    // Layout view — print/PDF renders it normally. ToC tab-leaders
+                    // and PAGEREF page-number runs are marked webHidden; treating
+                    // it as vanish dropped every ToC page number.
+                    "webHidden" => {}
                     "outline" => {
                         style.outline = true;
                     }

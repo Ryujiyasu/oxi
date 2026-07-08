@@ -602,7 +602,9 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             }
         }
         "rtl" => rs.rtl = true,
-        "vanish" | "webHidden" => rs.vanish = true,
+        "vanish" => rs.vanish = true,
+        // w:webHidden is Web-Layout-only; print/PDF renders it (ToC page numbers).
+        "webHidden" => {}
         "outline" => rs.outline = true,
         "shadow" => rs.shadow = true,
         "emboss" => rs.emboss = true,
