@@ -1424,7 +1424,14 @@ unsafe fn render_text(
             } else { font_size_pt * PT_TO_DIP * 0.8 }
         } else { font_size_pt * PT_TO_DIP * 0.8 };
         let (off_ratio, th_ratio) = font_underline_ratios(dwrite_factory, font_family, bold, italic);
-        let ul_y = y_pt * PT_TO_DIP + baseline_dip + off_ratio * font_size_pt * PT_TO_DIP;
+        // OXI_UL_YADJ (pt): position nudge for experiments. Default 0 = the raw
+        // font-metric position, which is the best SIMPLE version (canary net
+        // +0.0037). A global nudge does NOT clean it up: −0.75 aligns 2ea81a
+        // (DWrite underlinePosition ~0.75pt low there) but BREAKS d77a/c7b923/
+        // ed025 (correct at 0) → net −0.0345. The correct offset is per-font/
+        // per-doc, so clean default-ON needs per-font handling, not one nudge.
+        let yadj: f32 = std::env::var("OXI_UL_YADJ").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let ul_y = y_pt * PT_TO_DIP + baseline_dip + (off_ratio * font_size_pt + yadj) * PT_TO_DIP;
         let thickness = (th_ratio * font_size_pt * PT_TO_DIP).max(1.0);
         rt.DrawLine(
             D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: ul_y },
