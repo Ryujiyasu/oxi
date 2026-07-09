@@ -5309,6 +5309,24 @@ impl LayoutEngine {
                             None, // S758
                         );
                         lp.elements.extend(hdr_elements);
+                    } else if let Block::Image(img) = block {
+                        // S759 (2026-07-09): a FLOATING header image (wp:anchor,
+                        // page-relative — uk_health_form's Ofsted logo) draws at
+                        // its absolute page position on every page. Inline header
+                        // images (position None) keep the existing height-only
+                        // behavior (s755_header_bottom). Opt-out OXI_HDRFLOAT_DISABLE.
+                        if img.position.is_some()
+                            && std::env::var("OXI_HDRFLOAT_DISABLE").is_err()
+                        {
+                            let (ax, ay) = self.resolve_floating_image_position(img, page, &[]);
+                            lp.elements.push(LayoutElement::new(
+                                ax, ay, img.width, img.height,
+                                LayoutContent::Image {
+                                    data: img.data.clone(),
+                                    content_type: img.content_type.clone(),
+                                },
+                            ));
+                        }
                     }
                 }
             }
@@ -6444,7 +6462,9 @@ impl LayoutEngine {
                     // header_y 42.55 + image 85.04 + header text line; Oxi started
                     // the body ~85pt too high. Corpus-safe: 0 corpus docs carry a
                     // header image block (scan below in the ship notes).
-                    if std::env::var("OXI_S742_DISABLE").is_err() {
+                    // S759: a FLOATING image (position Some) is page-absolute —
+                    // it must NOT push the body down; only inline images add height.
+                    if std::env::var("OXI_S742_DISABLE").is_err() && img.position.is_none() {
                         hdr_h += img.height;
                     }
                 }

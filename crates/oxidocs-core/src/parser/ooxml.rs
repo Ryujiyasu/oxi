@@ -560,6 +560,50 @@ impl OoxmlParser {
             }
         }
 
+        // S759 (2026-07-09): pre-load HEADER/FOOTER part media. A header/footer
+        // image (e.g. uk_health_form's Ofsted logo) uses the PART's own rels
+        // (word/_rels/header1.xml.rels), NOT the document rels, so its r:embed
+        // resolves to empty data unless we load them. The rId namespace is
+        // per-part; add only image rIds not already present (document images
+        // win — a header image rId rarely collides with a document image rId).
+        let header_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
+        let footer_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
+        let hf_targets: Vec<String> = rels.values()
+            .filter(|r| r.rel_type == header_rel_type || r.rel_type == footer_rel_type)
+            .map(|r| r.target.clone())
+            .collect();
+        for target in hf_targets {
+            let part_name = target.rsplit('/').next().unwrap_or(&target);
+            let rels_path = format!("word/_rels/{}.rels", part_name);
+            let hrels = match self.read_part(&rels_path) {
+                Ok(xml) => match parse_relationships(&xml) { Ok(r) => r, Err(_) => continue },
+                Err(_) => continue,
+            };
+            for (hid, hrel) in &hrels {
+                if hrel.rel_type != image_rel_type || media.contains_key(hid) { continue; }
+                if hrel.target.starts_with("file:") || hrel.target.starts_with("http:") || hrel.target.starts_with("https:") { continue; }
+                let path = match oxidocs_common::security::sanitize_rel_target("word", &hrel.target) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                if let Ok(data) = self.read_binary_part(&path) {
+                    let ct = match hrel.target.rsplit('.').next().map(|s| s.to_lowercase()).as_deref() {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("bmp") => "image/bmp",
+                        Some("svg") => "image/svg+xml",
+                        Some("tiff") | Some("tif") => "image/tiff",
+                        Some("wmf") => "image/x-wmf",
+                        Some("emf") => "image/x-emf",
+                        _ => "application/octet-stream",
+                    };
+                    media_types.insert(hid.clone(), ct.to_string());
+                    media.insert(hid.clone(), data);
+                }
+            }
+        }
+
         // Parse footnotes (Round 29: pass styles for pStyle inheritance —
         // footnote text style "a8" sets snapToGrid=0, which without
         // inheritance leaves footnote paragraphs grid-snapped to body
@@ -7123,6 +7167,19 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         }
                         if std::env::var("OXI_S742_DISABLE").is_err() {
                             blocks.extend(pr.inline_images);
+                        }
+                        // S759 (2026-07-09): keep FLOATING header/footer images
+                        // (wp:anchor) — like inline (S742) they were DROPPED
+                        // (only pr.inline_images was kept). A logo header
+                        // (uk_health_form Ofsted) is a wp:anchor image
+                        // positioned relative to the PAGE. Push it as a
+                        // Block::Image carrying its FloatingPosition; the header
+                        // render draws it at the absolute page position and
+                        // excludes it from header height (position.is_some()).
+                        if std::env::var("OXI_HDRFLOAT_DISABLE").is_err() {
+                            for img in pr.floating_images {
+                                blocks.push(Block::Image(img));
+                            }
                         }
                     }
                     "tbl" if in_root && depth == 0 => {
