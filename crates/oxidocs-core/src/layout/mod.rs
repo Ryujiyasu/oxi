@@ -4276,6 +4276,8 @@ impl LayoutEngine {
                     // S676: a pending drop-cap indents THIS paragraph's body to the right
                     // of the floated cap (start shifted, available width reduced).
                     let dc_indent = pending_dropcap.take().unwrap_or(0.0);
+                    let dbg_para_start_y = cursor.cursor_y;
+                    let dbg_para_start_pages = pages.len();
                     let (para_elements, sa, final_col) = self.layout_paragraph(
                         para,
                         start_x + dc_indent,
@@ -4314,6 +4316,18 @@ impl LayoutEngine {
                         s758_para_band, // S758
                     );
                     prev_space_after = sa;
+                    if std::env::var("OXI_DBG_PARA").is_ok() {
+                        let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(22).collect();
+                        let (mut ymin, mut ymax) = (f32::INFINITY, f32::NEG_INFINITY);
+                        for e in &para_elements {
+                            if matches!(e.content, LayoutContent::Text { .. }) {
+                                ymin = ymin.min(e.y); ymax = ymax.max(e.y);
+                            }
+                        }
+                        eprintln!("[PARA] blk={} start_y={:.1} end_cur={:.1} pages+={} el_y=[{:.1},{:.1}] n={} txt={:?}",
+                            block_idx, dbg_para_start_y, cursor.cursor_y, pages.len()-dbg_para_start_pages,
+                            ymin, ymax, para_elements.len(), txt);
+                    }
                     // S637: layout_paragraph may have advanced the column (flowing
                     // an overflowing line into the next column on the same page)
                     // or page-pushed (resetting to column 0). Sync the loop state.
@@ -8233,6 +8247,38 @@ impl LayoutEngine {
                 elements = std::mem::take(current_elements);
                 if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
+                // S770 (2026-07-09): the widow/orphan break MOVES this paragraph's
+                // already-laid lines to the next page but they KEPT their OLD y
+                // (bottom of the previous page) while the cursor reset to page_top.
+                // For a paragraph that starts near the page bottom and fills to it
+                // before the last line triggers the widow (nyserda Exhibit C "2. WAGE"
+                // = 13 lines from y518: 11 laid at y518-683, widow at line 11), the 11
+                // moved lines stay at y518-683 on the NEW page while the last 2 lay at
+                // y72-99 and the cursor ends at y99 — so the FOLLOWING blocks flow from
+                // y99 OVER the orphaned y518-683 lines (the p37 "text overlap collapse").
+                // Re-position the moved lines to page_top and advance the cursor PAST
+                // them so the whole paragraph sits cleanly on the new page and the next
+                // block flows after it. Scoped to !doc_body_has_real_cjk (pure-Latin
+                // docs) so the JP corpus is byte-identical while this is verified; the
+                // bug is Phase-1-INVISIBLE (page index is correct, only the within-page
+                // y is wrong) so JP passed 87/87 despite it. See [[english_corpus_bug_mine]].
+                if !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S770_DISABLE").is_err()
+                    && !elements.is_empty()
+                {
+                    let min_y = elements.iter().map(|e| e.y).fold(f32::INFINITY, f32::min);
+                    let shift = page_top - min_y;
+                    if shift.abs() > 0.01 {
+                        for e in elements.iter_mut() {
+                            e.y += shift;
+                            if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                *y1 += shift; *y2 += shift;
+                            }
+                        }
+                        let max_y = elements.iter().map(|e| e.y).fold(f32::NEG_INFINITY, f32::max);
+                        cursor.set(max_y + line_height);
+                    }
+                }
                 // Session 107: half-leading at page top (see mid-para break
                 // note for full rationale).
                 let rule_w = para.style.line_spacing_rule.as_deref();
