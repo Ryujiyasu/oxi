@@ -2019,7 +2019,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // Note: COM Format.LeftIndent / Information(5) for Range.Characters
             // are unreliable for hanging-indent paragraphs — pixel measurement
             // of Word PNG required to verify visual position.
-            // S771 (HELD OPT-IN, OXI_S771=1, default OFF = old behavior): only
+            // S771 (2026-07-09, ★default ON, opt-out OXI_S771_DISABLE): only
             // override the style/inherited indent with the numbering level's indent
             // when the numPr is DIRECT on the paragraph. A style-inherited numPr
             // whose style carries its own w:ind should keep that style ind
@@ -2027,14 +2027,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // ListBullet2 = style-inherited numPr(9), style ind left=57.6pt but
             // numbering level ind left=274.5pt; Word uses 57.6, Oxi applies 274.5 →
             // sub-bullets over-indented ~200pt → narrow wrap → +2 pages in Exhibit E.
-            // ★The fix is ECMA-CORRECT + JP byte-identical (238 word_png, +0.0000)
-            // BUT net-regresses nyserda SSIM −0.0047: it fixes the Exhibit E +2 drift
-            // and EXPOSES a separate pre-Exhibit-C −1 drift (Oxi packs that content
-            // ~1 line/28pages tighter than Word), flipping nyserda 57→55 (Word 56) so
-            // it stays 1 page misaligned. Held opt-in until the pre-C drift is also
-            // closed (both → nyserda 56 = Word, net-positive). framework neutral.
+            // ★ECMA-CORRECT + JP byte-identical (238 word_png, +0.0000). Fixes the
+            // Exhibit E +2 drift; the separate pre-Exhibit-C −1 drift it exposed is now
+            // closed by LATINEM (no-kern Latin em break), so S771 + LATINEM = nyserda
+            // 56 = Word (Exhibit boundaries aligned). framework neutral.
             // See [[english_corpus_bug_mine]].
-            let s771_on = std::env::var("OXI_S771").ok().as_deref() == Some("1");
+            let s771_on = std::env::var("OXI_S771_DISABLE").is_err();
             let s771_apply_num_ind = !s771_on
                 || num_pr_is_direct
                 || style.indent_left.is_none();

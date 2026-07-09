@@ -11033,6 +11033,28 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // LATINEM (2026-07-09, ★default ON, opt-out OXI_LATINEM_DISABLE): a
+                // NO-KERN pure-Latin char breaks at the UN-ROUNDED em advance. Word
+                // breaks no-kern Latin (Times New Roman etc.) at the true em; Oxi's
+                // com_tw (10tw-per-char round) sums ~4.5pt/line NARROW → over-packs ~1
+                // word/line. This is the break-boundary fix S672 deferred (S672 fixed
+                // the RENDER x to true-em but kept the com_tw BREAK). The old blanket
+                // "LATIN_TRUE_BREAK" was falsified because it also hit KERN-ACTIVE runs
+                // (which need em+kern, now KERNBREAK); scoped to !kern_active, KERNBREAK
+                // handles kern-active and LATINEM handles no-kern — no exceptions.
+                // Scope: non-CJK docs (!doc_body_has_real_cjk → JP byte-identical,
+                // Phase-1 safe) + metric fonts. GATE: tracked corpus ssim_ab +0.0624
+                // (test_line_heights +0.0428, test_lists, gen_headings, gen_long),
+                // 5 improved / 0 regressed / 0 page-count shifts; real_en mean +0.0002;
+                // fixes nyserda pagination (57→56=Word, Exhibit boundaries aligned).
+                if !kern_active
+                    && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                    && !self.doc_body_has_real_cjk
+                    && !kinsoku::is_cjk(ch)
+                    && char_metrics.char_widths.contains_key(&ch)
+                {
+                    char_width = char_metrics.char_width_em(ch) * font_size;
+                }
                 if let Some(scale) = style.text_scale {
                     if (scale - 100.0).abs() > 0.01 {
                         char_width *= scale / 100.0;
