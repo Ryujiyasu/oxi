@@ -343,7 +343,7 @@ unsafe fn render_page_elements(
         match &el.content {
             LayoutContent::Text {
                 text, font_size, font_family, bold, italic, color,
-                underline: _, underline_style, strikethrough, double_strikethrough,
+                underline: single_underline, underline_style, strikethrough, double_strikethrough,
                 highlight, character_spacing,
                 text_scale, is_vertical, effects, ..
             } => {
@@ -382,6 +382,7 @@ unsafe fn render_page_elements(
                     text, fam,
                     *font_size, *bold, *italic, color.as_deref(),
                     *strikethrough, *double_strikethrough, is_double_underline,
+                    *single_underline && !is_double_underline,
                     highlight.as_deref(), *character_spacing,
                     *is_vertical, *text_scale,
                     effects.shadow, effects.emboss, effects.imprint, effects.outline,
@@ -937,6 +938,47 @@ unsafe fn font_ascent_pt(
     font_size_pt * 0.8
 }
 
+/// S771u (2026-07-09): the font's underline geometry as em fractions —
+/// (offset_below_baseline, thickness). Mirrors GDI's OTM otmsUnderscorePosition/
+/// Size path (which matches Word) via IDWriteFontFace::GetMetrics, so the single
+/// underline is drawn at the font-correct y/thickness (fix-path B from
+/// dwrite_underline_investigation_2026-05-02.md — the SetUnderline auto-draw it
+/// replaces regressed −0.18). Falls back to a TNR-measured heuristic.
+unsafe fn font_underline_ratios(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    font_family: &str, bold: bool, italic: bool,
+) -> (f32, f32) {
+    use windows::Win32::Graphics::DirectWrite::*;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::BOOL;
+    let fb = (0.14_f32, 0.05_f32); // measured Word TNR 12pt: ~2pt below, ~0.5pt thick
+    let mut coll: Option<IDWriteFontCollection> = None;
+    if dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_err() { return fb; }
+    let coll = match coll { Some(c) => c, None => return fb };
+    let fw: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut idx = 0u32;
+    let mut exists = BOOL(0);
+    if coll.FindFamilyName(PCWSTR(fw.as_ptr()), &mut idx, &mut exists).is_err() || !exists.as_bool() {
+        return fb;
+    }
+    let fam = match coll.GetFontFamily(idx) { Ok(f) => f, Err(_) => return fb };
+    let weight = if bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
+    let style = if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL };
+    let font = match fam.GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH_NORMAL, style) {
+        Ok(f) => f, Err(_) => return fb,
+    };
+    let face = match font.CreateFontFace() { Ok(f) => f, Err(_) => return fb };
+    let mut m = DWRITE_FONT_METRICS::default();
+    face.GetMetrics(&mut m);
+    let em = m.designUnitsPerEm as f32;
+    if em <= 0.0 { return fb; }
+    // underlinePosition is the top of the underline in design units, negative =
+    // below baseline. Use |position| as the distance below the baseline (GDI's .abs()).
+    let off = (-(m.underlinePosition as f32) / em).max(0.03);
+    let th = (m.underlineThickness as f32 / em).max(0.02);
+    (off, th)
+}
+
 unsafe fn render_text(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
@@ -950,6 +992,7 @@ unsafe fn render_text(
     strikethrough: bool,
     double_strikethrough: bool,
     double_underline: bool,
+    underline: bool,
     highlight: Option<&str>,
     character_spacing_pt: f32,
     is_vertical: bool,
@@ -1363,6 +1406,31 @@ unsafe fn render_text(
                 &brush, thickness, None,
             );
         }
+    }
+
+    // S771u (2026-07-09): single underline via explicit DrawLine at the font's
+    // underline position (fix-path B — mirrors GDI, which matches Word). The
+    // per-element DrawLine underlines whitespace/tab elements too (the
+    // signature-line idiom: underlined U+0020/U+3000/tab runs), which DWrite's
+    // SetUnderline auto-draw (the reverted −0.18 patch) got wrong. Opt-in
+    // OXI_UNDERLINE while canary-validating the 19 underline docs.
+    if underline && std::env::var("OXI_UNDERLINE").ok().as_deref() == Some("1") {
+        let mut count: u32 = 0;
+        let _ = layout.GetLineMetrics(None, &mut count);
+        let baseline_dip = if count > 0 {
+            let mut metrics = vec![DWRITE_LINE_METRICS::default(); count as usize];
+            if layout.GetLineMetrics(Some(&mut metrics), &mut count).is_ok() {
+                metrics[0].baseline
+            } else { font_size_pt * PT_TO_DIP * 0.8 }
+        } else { font_size_pt * PT_TO_DIP * 0.8 };
+        let (off_ratio, th_ratio) = font_underline_ratios(dwrite_factory, font_family, bold, italic);
+        let ul_y = y_pt * PT_TO_DIP + baseline_dip + off_ratio * font_size_pt * PT_TO_DIP;
+        let thickness = (th_ratio * font_size_pt * PT_TO_DIP).max(1.0);
+        rt.DrawLine(
+            D2D_POINT_2F { x: x_pt * PT_TO_DIP, y: ul_y },
+            D2D_POINT_2F { x: (x_pt + w_pt) * PT_TO_DIP, y: ul_y },
+            &brush, thickness, None,
+        );
     }
 
     if double_underline {
