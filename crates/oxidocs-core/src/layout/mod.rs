@@ -7096,14 +7096,22 @@ impl LayoutEngine {
         // caps/smallCaps runs are transformed and the corpus's caps/smallCaps live
         // ENTIRELY in UNUSED built-in styles (Subtle/Intense Reference, Book Title,
         // Calendar2 — used=0) → byte-identical. Opt-out OXI_S677_DISABLE.
+        // S677b (2026-07-09): resolve caps from the RUN or the paragraph STYLE
+        // (para.style.default_run_style, the merged pStyle char props — like
+        // resolve_bold). nyserda's Exhibit headings are pStyle=Heading3 whose
+        // style rPr sets <w:smallCaps/> with NO direct run rPr; the old
+        // run-only check missed them (rendered mixed-case, not SMALL CAPS).
+        let para_sc = para.style.default_run_style.as_ref().map_or(false, |d| d.small_caps);
+        let para_ac = para.style.default_run_style.as_ref().map_or(false, |d| d.all_caps);
         let caps_active = std::env::var("OXI_S677_DISABLE").is_err()
-            && para.runs.iter().any(|r| r.style.all_caps || r.style.small_caps);
+            && (para_sc || para_ac
+                || para.runs.iter().any(|r| r.style.all_caps || r.style.small_caps));
         // (text, style, field_type, run_index) — owned, outlives `fragments`.
         let caps_segments: Vec<(String, RunStyle, Option<FieldType>, usize)> = if caps_active {
             let mut segs = Vec::new();
             for (i, r) in para.runs.iter().enumerate() {
                 if s673vi && r.style.vanish { continue; }
-                if r.style.small_caps {
+                if r.style.small_caps || para_sc {
                     let small = self.resolve_font_size(&r.style, &para.style) * 0.8;
                     let mut cur = String::new();
                     let mut cur_lower: Option<bool> = None;
@@ -7122,7 +7130,7 @@ impl LayoutEngine {
                         if cur_lower == Some(true) { st.font_size = Some(small); }
                         segs.push((cur, st, r.field_type, i));
                     }
-                } else if r.style.all_caps {
+                } else if r.style.all_caps || para_ac {
                     segs.push((r.text.to_uppercase(), r.style.clone(), r.field_type, i));
                 } else {
                     segs.push((r.text.clone(), r.style.clone(), r.field_type, i));

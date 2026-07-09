@@ -984,6 +984,17 @@ unsafe fn render_text(
     // Create IDWriteTextFormat. font_size in DIPs at 96 DPI standard.
     let weight = if bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
     let style = if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL };
+    // CG Times (a PostScript Times clone, not installed) → Times New Roman.
+    // Without this, DWrite gets the missing "CG Times" and, under the ja-jp
+    // locale, its per-char fallback renders CURLY QUOTES (U+2018-201D) in a
+    // Japanese font at FULLWIDTH advance (nyserda «(“NYSERDA”)» — the ASCII
+    // maps to a Latin fallback but the ambiguous quotes go CJK). Real TNR has
+    // the narrow quotes so no fallback fires. Matches render_watermark's map.
+    let font_family = if font_family.eq_ignore_ascii_case("CG Times")
+        && std::env::var("OXI_CGTIMES_DISABLE").is_err()
+    {
+        "Times New Roman"
+    } else { font_family };
     let family_wide: Vec<u16> = font_family.encode_utf16()
         .chain(std::iter::once(0)).collect();
     let locale_wide: Vec<u16> = "ja-jp".encode_utf16()
