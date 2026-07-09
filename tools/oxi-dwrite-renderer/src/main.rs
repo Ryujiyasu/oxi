@@ -177,6 +177,23 @@ fn render_pages_dwrite(
     use windows::Win32::Graphics::DirectWrite::*;
     use windows::Win32::Graphics::Imaging::*;
 
+    // S771u-scope (2026-07-10): single underline ships default-ON for LATIN
+    // documents only (no real-CJK char anywhere) — every canary doc the
+    // font-metric underline traded (helps c7b923/d77a, hurts ed025/2ea81a) is
+    // CJK; their underline correctness is gated on the CJK text-baseline work.
+    // A Latin doc's underline is correct now (nyserda signature lines = Word).
+    // Same discriminator as the layout's doc_body_has_real_cjk (LATINEM/TABTW).
+    let doc_has_cjk = result.pages.iter().any(|p| p.elements.iter().any(|el| {
+        if let oxidocs_core::layout::LayoutContent::Text { text, .. } = &el.content {
+            text.chars().any(|c| matches!(c as u32,
+                0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF |
+                0xF900..=0xFAFF | 0xFF66..=0xFF9F))
+        } else { false }
+    }));
+    if !doc_has_cjk && std::env::var("OXI_UNDERLINE_DISABLE").is_err() {
+        std::env::set_var("OXI_UNDERLINE", "1");
+    }
+
     unsafe {
         // 1. Initialize COM (for WIC factory)
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
