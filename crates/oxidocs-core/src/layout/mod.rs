@@ -11417,6 +11417,31 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             current_width += w;
+                            // TABTW (2026-07-10, default ON, opt-out OXI_TABTW_DISABLE):
+                            // a tab re-anchors the position at its ABSOLUTE tab stop, but
+                            // only the float track advanced — current_width_tw (the track
+                            // EVERY overflow check uses) stayed at the pre-tab text width,
+                            // so a line with tabs followed by long text wrapped LATE by
+                            // the whole tab advance (nyserda «[CONTRACTOR] ⇥⇥⇥⇥⇥ NEW YORK
+                            // STATE…» ran ~50pt past the right margin, 2 lines vs Word 3).
+                            // Re-anchor the tw track at the exact post-tab position; the
+                            // capacity track too (compression of pre-tab punctuation
+                            // cannot move post-tab text — the tab gap absorbs it).
+                            // ★SCOPE !doc_body_has_real_cjk (the LATINEM discriminator):
+                            // on JP justified-CJK tab lines the missing tab-tw was
+                            // COMPENSATING the under-credited 約物 capacity (ohnochingin
+                            // 第１５条 line: Word fits to the margin 518.8 by compressing
+                            // ~18pt Oxi's capacity model doesn't credit — counting the
+                            // tab without that credit over-wraps → PASS→FAIL). The JP
+                            // side needs tab-tw + the full per-line 約物 credit TOGETHER
+                            // (the char-budget wall); until then JP keeps the
+                            // compensating pair, byte-identical by construction.
+                            if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_TABTW_DISABLE").is_err()
+                            {
+                                current_width_tw = pt_to_tw(current_width);
+                                current_capw_tw = current_width_tw;
+                            }
                         } else {
                             // Regular space
                             current_line.fragments.push(LineFragment {
