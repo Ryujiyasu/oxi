@@ -360,6 +360,12 @@ pub struct RunStyle {
     /// runtime-saved equivalent: only docs with explicit eastAsia widen).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_explicit_east_asia: bool,
+    /// East-Asian language tag (`<w:lang w:eastAsia="ja-JP">`). Drives Word's
+    /// ambiguous-quote font choice: a CJK eastAsia lang (ja/zh/ko) renders
+    /// curly quotes in the eastAsia font; a Latin one (en-US) renders them in
+    /// the Latin font. S763c.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_asia_lang: Option<String>,
     pub font_size: Option<f32>,
     pub bold: bool,
     pub italic: bool,
@@ -454,6 +460,7 @@ impl Default for RunStyle {
             font_family: None,
             font_family_east_asia: None,
             has_explicit_east_asia: false,
+            east_asia_lang: None,
             font_size: None,
             bold: false,
             italic: false,

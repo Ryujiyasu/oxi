@@ -580,6 +580,16 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 }
             }
         }
+        "lang" => {
+            // S763c: capture the East-Asian language (w:lang w:eastAsia) — drives
+            // Word's ambiguous curly-quote font choice (CJK lang → eastAsia font,
+            // Latin lang → Latin font).
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "eastAsia" {
+                    rs.east_asia_lang = Some(String::from_utf8_lossy(&attr.value).to_string());
+                }
+            }
+        }
         "spacing" => {
             for attr in e.attributes().flatten() {
                 if local_name(attr.key.as_ref()) == "val" {

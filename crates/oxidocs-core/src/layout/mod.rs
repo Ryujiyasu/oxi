@@ -1722,6 +1722,9 @@ pub struct LayoutEngine {
     default_font_size: f32,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
+    /// docDefaults East-Asian language is CJK (ja/zh/ko) — drives S763c ambiguous
+    /// curly-quote font choice.
+    doc_east_asia_lang_cjk: bool,
     registry: FontMetricsRegistry,
     /// Compatibility: adjustLineHeightInTable=true disables grid snap in table cells.
     adjust_line_height_in_table: bool,
@@ -1946,6 +1949,7 @@ impl LayoutEngine {
             default_font_size: 11.0,
             default_font_family: None,
             default_font_family_east_asia: None,
+            doc_east_asia_lang_cjk: false,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
@@ -2016,10 +2020,21 @@ impl LayoutEngine {
         let default_font_family_east_asia = doc.styles.doc_default_run_style
             .as_ref()
             .and_then(|s| s.font_family_east_asia.clone());
+        // S763c: the docDefaults East-Asian language (default en-US per OOXML)
+        // decides Word's ambiguous curly-quote font. A CJK lang (ja/zh/ko) keeps
+        // quotes in the eastAsia font; a Latin lang renders them in the Latin font.
+        let doc_east_asia_lang_cjk = doc.styles.doc_default_run_style
+            .as_ref()
+            .and_then(|s| s.east_asia_lang.as_deref())
+            .map_or(false, |l| {
+                let l = l.to_ascii_lowercase();
+                l.starts_with("ja") || l.starts_with("zh") || l.starts_with("ko") || l.starts_with("yue")
+            });
         Self {
             default_font_size,
             default_font_family,
             default_font_family_east_asia,
+            doc_east_asia_lang_cjk,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
@@ -2279,11 +2294,25 @@ impl LayoutEngine {
         let has_cjk = if has_real_cjk {
             true
         } else if has_quote && s763 {
-            let ea = run_style.font_family_east_asia.as_deref()
-                .or_else(|| para_style.default_run_style.as_ref()
-                    .and_then(|d| d.font_family_east_asia.as_deref()))
-                .or(self.default_font_family_east_asia.as_deref());
-            ea.map_or(false, |f| !crate::font::is_latin_only_font(f))
+            // S763c (2026-07-09): the docDefaults East-Asian LANGUAGE decides the
+            // ambiguous curly-quote font, NOT the eastAsia font name. nyserda's
+            // title run has eastAsia=MS Mincho (a real CJK font) yet Word draws
+            // «(“NYSERDA”)» quotes NARROW in TNR because its eastAsia lang is
+            // en-US; db9ca (eastAsia lang ja-JP) draws its «“…”» quotes FULLWIDTH
+            // in MS PGothic (the flat quote-as-Latin rule regressed db9ca
+            // −0.0094). So a NON-CJK eastAsia lang → Latin quote; a CJK lang →
+            // eastAsia chain (S763b). Opt-out OXI_S763C_DISABLE.
+            if !self.doc_east_asia_lang_cjk
+                && std::env::var("OXI_S763C_DISABLE").is_err()
+            {
+                false
+            } else {
+                let ea = run_style.font_family_east_asia.as_deref()
+                    .or_else(|| para_style.default_run_style.as_ref()
+                        .and_then(|d| d.font_family_east_asia.as_deref()))
+                    .or(self.default_font_family_east_asia.as_deref());
+                ea.map_or(false, |f| !crate::font::is_latin_only_font(f))
+            }
         } else {
             has_quote
         };
