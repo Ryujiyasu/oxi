@@ -1780,6 +1780,12 @@ pub struct LayoutEngine {
     /// error below the table, so applying the (otherwise-correct) overhead
     /// there regresses SSIM (gen2 Japanese-template family −0.01..−0.035).
     doc_body_has_cjk: bool,
+    /// S768: doc-level "has REAL CJK" — Han/Kana ideographs only (strict
+    /// `is_cjk_ideograph_or_kana`), EXCLUDING CJK/General punctuation. Distinct
+    /// from `doc_body_has_cjk` (which uses the broad `is_cjk` that misclassifies
+    /// curly quotes ’ “ ” as CJK, S762) — a UK gov doc with curly quotes but no
+    /// kanji must read as a PURE-LATIN document for the cell wrap-margin fix.
+    doc_body_has_real_cjk: bool,
 }
 
 /// S463: recursive CJK scan over a block (paragraph runs + nested table cells).
@@ -1788,6 +1794,18 @@ fn block_has_cjk(block: &Block) -> bool {
         Block::Paragraph(p) => p.runs.iter().any(|r| r.text.chars().any(kinsoku::is_cjk)),
         Block::Table(t) => t.rows.iter().any(|row| {
             row.cells.iter().any(|c| c.blocks.iter().any(block_has_cjk))
+        }),
+        _ => false,
+    }
+}
+
+/// S768: strict "has REAL CJK" scan — Han/Kana only, excluding punctuation
+/// (so curly quotes / General Punctuation do NOT make an English doc read as CJK).
+fn block_has_real_cjk(block: &Block) -> bool {
+    match block {
+        Block::Paragraph(p) => p.runs.iter().any(|r| r.text.chars().any(kinsoku::is_cjk_ideograph_or_kana)),
+        Block::Table(t) => t.rows.iter().any(|row| {
+            row.cells.iter().any(|c| c.blocks.iter().any(block_has_real_cjk))
         }),
         _ => false,
     }
@@ -1941,6 +1959,7 @@ impl LayoutEngine {
             show_comments: true,
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: false,
+            doc_body_has_real_cjk: false,
         }
     }
 
@@ -2021,6 +2040,7 @@ impl LayoutEngine {
             show_comments: true,
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_cjk)),
+            doc_body_has_real_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_real_cjk)),
         }
     }
 
@@ -14641,7 +14661,34 @@ impl LayoutEngine {
                     && row.cells.len() == 1
                     && table.style.has_explicit_cellmar
                     && self.compat_mode <= 14;
-                let inner_w = if self.cellpair_active() || s713_cellmar {
+                // S768 = the S585c 本体 wrap-margin fix for PURE-LATIN documents
+                // (2026-07-08, default ON, opt-out OXI_S768_DISABLE). Oxi's default
+                // cell wrap is the FULL cell_w (Word wraps at cell_w − cellMar on both
+                // sides); the JP corpus calibrated around this over-wide wrap because
+                // cell_w is over-computed and the full-width wrap COMPENSATES (the
+                // S585c/S562 wall — narrowing it regresses JP SSIM, LATINCELLWRAP was
+                // reverted for net −0.0069). But for a NO-CJK document (uk_local_
+                // spending etc.) the column widths already MATCH Word exactly (measured:
+                // char-width + col-width RULED OUT) so the ONLY error is the missing
+                // margin subtract → Oxi packs ~1 char/line more → Annex table rows
+                // under-wrap by ~20%. Scope to `!doc_body_has_cjk` (a doc-level flag
+                // true for EVERY JP doc → byte-identical for the whole JP corpus by
+                // construction; the per-para Latin scope was NOT clean because JP forms
+                // have Latin-only numeric/date cells sharing this path). Mirrored at the
+                // render wrap_base (Fix C estimate==render invariant). See
+                // [[english_corpus_bug_mine]] / [[tokumei_form_family_ssim]].
+                // ★HELD OPT-IN (OXI_S768=1, default OFF = byte-identical everywhere).
+                // The doc-level strict-CJK scope RESOLVES the JP-safety block that
+                // reverted LATINCELLWRAP (tracked 238-doc corpus byte-identical, net
+                // +0.0000), but the ENGLISH corpus is ITSELF heterogeneous — the S562
+                // wrap-budget wall persists within Latin: uk_local_spending +0.0018 /
+                // health_form +0.0014 improve, BUT risk_assessment −0.0027 regresses
+                // (no tblLayout/cellMar discriminator; risk_assessment is the CELLWORD
+                // showcase doc calibrated at the FULL cell_w wrap). Ships default-ON
+                // once a per-table discriminator (or CELLWORD co-calibration) is found.
+                let s768_latin_wrap = std::env::var("OXI_S768").ok().as_deref() == Some("1")
+                    && !self.doc_body_has_real_cjk;
+                let inner_w = if self.cellpair_active() || s713_cellmar || s768_latin_wrap {
                     (cell_w - _pad_l - _pad_r).max(0.0)
                 } else {
                     cell_w.max(0.0)
@@ -16270,7 +16317,10 @@ impl LayoutEngine {
                             (wrap_cell_w - pad_l - pad_r - s594_extra).max(0.0)
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested
                             || self.cellpair_active()
-                            || s713_cellmar_render {
+                            || s713_cellmar_render
+                            || (std::env::var("OXI_S768").ok().as_deref() == Some("1") && !self.doc_body_has_real_cjk) {
+                            // S768 (opt-in): pure-Latin document → wrap at cell_w − cellMar
+                            // (Word's content area). See the estimate-side s768_latin_wrap comment.
                             (wrap_cell_w - pad_l - pad_r).max(0.0)
                         } else {
                             cell_w
