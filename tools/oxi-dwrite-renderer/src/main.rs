@@ -480,8 +480,17 @@ unsafe fn render_watermark(
     let ink_b = (metrics.height + 1.0) + om.bottom;
     let (ink_w, ink_h) = (ink_r - ink_l, ink_b - ink_t);
     if ink_w <= 0.0 || ink_h <= 0.0 { return Ok(()); }
-    let sx = (w_pt * PT_TO_DIP) / ink_w;
-    let sy = (h_pt * PT_TO_DIP) / ink_h;
+    // WordArt t136 (2026-07-09): fit the font's EM box (height) and ADVANCE
+    // (width) to the shape box — NOT the visible cap-ink. Fitting ink_h→box_h
+    // (the prior code) made the caps ~1.38x too tall/bold: measured nyserda p1
+    // Oxi cap/box=0.968 vs Word 0.699. em-fit gives cap/box = ink_h/em = 0.724
+    // (== the 0.72 empirical sweep winner = Word); advance-fit gives width 0.97x
+    // the ink-fit (= Word, ink_w/adv=0.972). The ink_l/ink_t/ink_w/ink_h
+    // centering below stays (measured correct, "center 5pt 以内").
+    let mut sx = (w_pt * PT_TO_DIP) / metrics.width;
+    let mut sy = (h_pt * PT_TO_DIP) / trial_size_dip;
+    if let Ok(v) = std::env::var("OXI_WM_SX") { if let Ok(f) = v.parse::<f32>() { sx *= f; } }
+    if let Ok(v) = std::env::var("OXI_WM_SY") { if let Ok(f) = v.parse::<f32>() { sy *= f; } }
     let cx = (x_pt + w_pt / 2.0) * PT_TO_DIP;
     let cy = (y_pt + h_pt / 2.0) * PT_TO_DIP;
     // scale about (cx,cy), then rotate about (cx,cy)
