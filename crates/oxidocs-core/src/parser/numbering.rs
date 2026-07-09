@@ -193,17 +193,26 @@ fn map_symbol_bullets(text: &str) -> String {
     // rendered as a small high dot). The S484 glyph-swap to U+25CF in the BODY
     // font over-sized; rendering U+F0B7 in the SYMBOL font is the right layer.
     let keep_f0b7 = std::env::var("OXI_S491_DISABLE").is_err();
+    // Wingdings-bullet (2026-07-09, default ON, opt-out OXI_WINGBULLET_DISABLE): keep the
+    // raw Wingdings PUA bullet U+F06E so the layout renders it in the WINGDINGS
+    // font (0x6E = ■ black square) — the same "render in the symbol font, not a
+    // body-font Unicode swap" layer as S491's U+F0B7. The old map U+F06E → ●
+    // (U+25CF) was WRONG (it's a Wingdings SQUARE, not a Symbol circle; the
+    // comment mislabelled it) AND over-sized in the body font (the S484 lesson).
+    // uk_health_form's bullets are U+F06E/Wingdings, rendered ● not ■.
+    let keep_f06e = std::env::var("OXI_WINGBULLET_DISABLE").is_err();
     text.chars().map(|ch| {
         match ch {
             '\u{F0B7}' if keep_f0b7 => '\u{F0B7}', // rendered in Symbol font (S491)
             '\u{F0B7}' => '\u{2022}', // Symbol bullet → • (closest small Unicode; see S484 note)
+            '\u{F06E}' if keep_f06e => '\u{F06E}', // rendered in Wingdings font (■)
             '\u{F06F}' => '\u{25CB}', // Symbol circle → ○
             '\u{F0A7}' => '\u{25AA}', // Symbol square → ▪
             '\u{F0FC}' => '\u{2713}', // Wingdings checkmark → ✓
             '\u{F0D8}' => '\u{25B6}', // Symbol arrow → ▶
             '\u{F076}' => '\u{2756}', // Wingdings diamond → ◆ (approx)
             '\u{F0A8}' => '\u{25A0}', // Symbol filled square → ■
-            '\u{F06E}' => '\u{25CF}', // Symbol filled circle → ●
+            '\u{F06E}' => '\u{25CF}', // Symbol filled circle → ● (Wingbullet disabled)
             other => other,
         }
     }).collect()

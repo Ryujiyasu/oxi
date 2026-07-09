@@ -7042,6 +7042,10 @@ impl LayoutEngine {
                 // OXI_S491_SYMBOL_BULLET) must render in the Symbol font — the
                 // numbering level's rFonts is Symbol, not the paragraph's CJK font.
                 Some("Symbol".to_string())
+            } else if marker_text.contains('\u{F06E}') {
+                // Wingdings-bullet: a raw Wingdings PUA bullet (kept by map_symbol_bullets)
+                // renders in the Wingdings font (0x6E = ■), not the body font.
+                Some("Wingdings".to_string())
             } else {
                 self.resolve_font_family_for_text(&marker_text, marker_style, &para.style)
                     .map(|s| s.to_string())
