@@ -1955,6 +1955,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
+    // S771: was this numPr set DIRECTLY on the paragraph's pPr, or inherited
+    // from the paragraph style? The R12 numbering-indent-override below is only
+    // correct for a DIRECT numPr (d77a). When the numPr is STYLE-inherited AND
+    // the style also defines its own `w:ind`, the style indent wins (ECMA-376 /
+    // LibreOffice AreListLevelIndentsApplicable). nyserda ListBullet2 =
+    // style-inherited numPr(9) with style ind left=1152tw=57.6pt but numbering
+    // level ind left=5490tw=274.5pt; Word uses 57.6, Oxi was applying 274.5 →
+    // sub-bullets over-indented ~200pt → wrap to a narrow column → +2 pages.
+    let num_pr_is_direct = num_pr_ref.is_some();
     // Inherit numPr from style definition if paragraph doesn't have its own
     if num_pr_ref.is_none() {
         if let Some(ref nid) = style.num_id {
@@ -2010,13 +2019,35 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // Note: COM Format.LeftIndent / Information(5) for Range.Characters
             // are unreliable for hanging-indent paragraphs — pixel measurement
             // of Word PNG required to verify visual position.
-            if !ppr_explicit_indent_left {
+            // S771 (HELD OPT-IN, OXI_S771=1, default OFF = old behavior): only
+            // override the style/inherited indent with the numbering level's indent
+            // when the numPr is DIRECT on the paragraph. A style-inherited numPr
+            // whose style carries its own w:ind should keep that style ind
+            // (ECMA-376 / LibreOffice AreListLevelIndentsApplicable). nyserda
+            // ListBullet2 = style-inherited numPr(9), style ind left=57.6pt but
+            // numbering level ind left=274.5pt; Word uses 57.6, Oxi applies 274.5 →
+            // sub-bullets over-indented ~200pt → narrow wrap → +2 pages in Exhibit E.
+            // ★The fix is ECMA-CORRECT + JP byte-identical (238 word_png, +0.0000)
+            // BUT net-regresses nyserda SSIM −0.0047: it fixes the Exhibit E +2 drift
+            // and EXPOSES a separate pre-Exhibit-C −1 drift (Oxi packs that content
+            // ~1 line/28pages tighter than Word), flipping nyserda 57→55 (Word 56) so
+            // it stays 1 page misaligned. Held opt-in until the pre-C drift is also
+            // closed (both → nyserda 56 = Word, net-positive). framework neutral.
+            // See [[english_corpus_bug_mine]].
+            let s771_on = std::env::var("OXI_S771").ok().as_deref() == Some("1");
+            let s771_apply_num_ind = !s771_on
+                || num_pr_is_direct
+                || style.indent_left.is_none();
+            if !ppr_explicit_indent_left && s771_apply_num_ind {
                 if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
                     style.indent_left = Some(left);
                     style.indent_left_chars = None;
                 }
             }
-            if !ppr_explicit_first_line {
+            let s771_apply_num_hang = !s771_on
+                || num_pr_is_direct
+                || style.indent_first_line.is_none();
+            if !ppr_explicit_first_line && s771_apply_num_hang {
                 if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
                     style.indent_first_line = Some(-hanging);
                     style.indent_first_line_chars = None;
