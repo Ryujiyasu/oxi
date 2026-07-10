@@ -2035,6 +2035,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             }
             style.list_suff = Some(resolved.suff);
             style.list_tab_stop = resolved.tab_stop;
+            // S778 gate = the S771 discriminator: the level ind acts as the
+            // suffix-tab stop only for a DIRECT numPr (style-inherited lists
+            // keep the style ind — nyserda ListBullet2 level left=274.5pt as
+            // a stop re-created the S771 over-indent, Exhibit E +1 page).
+            style.list_level_left = if num_pr_is_direct { resolved.level_left } else { None };
             if let Some(ind) = resolved.hanging {
                 // Paragraph's explicit hanging indent overrides numbering level's hanging.
                 // COM-confirmed (LOD_Handbook P3: XML hanging=426tw=21.3pt overrides

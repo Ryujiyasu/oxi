@@ -7139,6 +7139,29 @@ impl LayoutEngine {
         // body's first line starts right after it (effective_first_indent +=
         // marker_width, which also narrows line 0's wrap width like Word).
         let mut s776_marker_extra: f32 = 0.0;
+        // S778 (2026-07-10, opt-out OXI_S778_DISABLE): the numbering LEVEL's
+        // w:ind left is the marker SUFFIX-TAB stop, and it SURVIVES a direct
+        // w:ind override on the paragraph. nyserda's definition list (level
+        // left=720tw=36pt hanging=720, direct ind left=0 firstLine=360):
+        // Word places the (empty, numFmt=none) marker at the first-line x
+        // (=108) and TABS the text to margin+36 = 126; Oxi started the text
+        // at 108 -> line 1 was 18pt WIDER -> fit "paid in cash." where Word
+        // wraps -> the per-page line-phase shifts behind nyserda's worst
+        // pages (0.54 vs Libra 0.95). extra = level_left - indent_left -
+        // first_line (positive part) is 0 for the standard adopted-level
+        // case (indent_left == level_left) -> byte-identical there.
+        // ★Latin scope (the TABTW/LATINEM discriminator): JP direct-numPr
+        // lists (3a4f/model/harassmanual/tokyoshugyo 第X条) do NOT tab to the
+        // level left in Word — unscoped, all four flipped PASS→FAIL. The JP
+        // suffix-tab model needs its own derivation (recorded).
+        let s778_stop_extra: f32 = if std::env::var("OXI_S778_DISABLE").is_err()
+            && !self.doc_body_has_real_cjk
+            && para.style.list_suff.as_deref() == Some("tab")
+        {
+            para.style.list_level_left
+                .map(|ll| (ll - indent_left - first_line_indent).max(0.0))
+                .unwrap_or(0.0)
+        } else { 0.0 };
         if let Some(ref marker) = para.style.list_marker {
             let default_style = RunStyle::default();
             let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
@@ -7179,6 +7202,11 @@ impl LayoutEngine {
                 // S776: number sits at the first-line position, text right after.
                 marker_x = start_x + indent_left + first_line_indent;
                 s776_marker_extra = marker_width;
+            }
+            if s778_stop_extra > 0.0 {
+                // S778: the marker sits at the paragraph's first-line indent;
+                // the suffix tab sends the text to the level-left stop.
+                marker_x = start_x + indent_left + first_line_indent;
             }
             let marker_text = match suff {
                 "space" => format!("{} ", marker),
@@ -7447,7 +7475,7 @@ impl LayoutEngine {
         // S241 (2026-05-23): removed OXI_LEGACY_NO_B2_BUNDLE legacy
         // env-var fallback during hardening pass. S168 Phase B-2 bundle
         // is the canonical path.
-        let effective_first_indent = first_line_indent + s776_marker_extra;
+        let effective_first_indent = first_line_indent + s776_marker_extra + s778_stop_extra;
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
         let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);

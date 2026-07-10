@@ -1153,6 +1153,9 @@ pub struct ParagraphStyle {
     /// Tab stop position for list numbering (in points)
     #[serde(default)]
     pub list_tab_stop: Option<f32>,
+    /// S778: the numbering LEVEL's ind left (pt) — the marker suffix-tab stop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_level_left: Option<f32>,
     /// Whether this paragraph snaps to the document grid (default: true).
     #[serde(default = "default_true")]
     pub snap_to_grid: bool,
@@ -1301,6 +1304,7 @@ impl Default for ParagraphStyle {
             list_indent: None,
             list_suff: None,
             list_tab_stop: None,
+            list_level_left: None,
             snap_to_grid: true,
             has_explicit_snap_to_grid: false,
             contextual_spacing: false,

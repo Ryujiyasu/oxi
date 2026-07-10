@@ -56,6 +56,11 @@ pub struct ResolvedMarker {
     pub hanging: Option<f32>,
     pub suff: String,
     pub tab_stop: Option<f32>,
+    /// S778: the LEVEL's w:ind w:left (pt) — survives as the marker
+    /// suffix-tab stop even when the paragraph's direct w:ind overrides
+    /// the indents (nyserda: level left=36pt, direct ind left=0
+    /// firstLine=18 → Word tabs the first-line text to x=left+36).
+    pub level_left: Option<f32>,
 }
 
 impl NumberingDefinitions {
@@ -82,6 +87,7 @@ impl NumberingDefinitions {
         let fallback = ResolvedMarker {
             text: "\u{2022}".to_string(),
             hanging: Some(18.0),
+            level_left: None,
             suff: "tab".to_string(),
             tab_stop: None,
         };
@@ -112,7 +118,7 @@ impl NumberingDefinitions {
                 // Map Symbol font private use area characters to standard Unicode
                 map_symbol_bullets(&level.lvl_text)
             };
-            return ResolvedMarker { text: marker, hanging, suff, tab_stop };
+            return ResolvedMarker { text: marker, hanging, suff, tab_stop, level_left: level.indent_left };
         }
 
         // Numbered list: increment counter
@@ -162,7 +168,7 @@ impl NumberingDefinitions {
             text
         };
 
-        ResolvedMarker { text: marker, hanging, suff, tab_stop }
+        ResolvedMarker { text: marker, hanging, suff, tab_stop, level_left: level.indent_left }
     }
 
     /// Get the left indent for a given numId and ilvl
