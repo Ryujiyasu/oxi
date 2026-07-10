@@ -4249,23 +4249,67 @@ impl LayoutEngine {
                             && *bx0 < start_x + content_width - 6.0
                             && *bx1 > start_x + 6.0)
                         .map(|(_, _, bot, bx0, bx1)| {
-                            // wrapText SIDE: text flows in the WIDER free
-                            // segment. Right float -> left segment (shift 0,
-                            // current behavior); LEFT float -> text starts at
+                            // wrapText SIDE: text flows in the free segment with
+                            // more room for THIS PARAGRAPH'S OWN COLUMN
+                            // [margin+ind_l, content_right−ind_r] (S772b — Word
+                            // measures indents from the margin, so a paragraph
+                            // whose indents already clear the float keeps its
+                            // indent wrap; hmrc's "If Yes, tick this box" has
+                            // ind right=5831tw=291.55pt placing its column LEFT
+                            // of its checkbox float — the raw wider-free-segment
+                            // rule shifted it right of the box, Word wraps it at
+                            // the box's left edge). Right side wider → shift to
                             // the band's right edge (probeqtbleft Word truth:
                             // lines beside the box span [box_right+distR,
-                            // content_right], x0=221.93 = 70.94+142+9.0).
+                            // content_right], x0=221.93 = 70.94+142+9.0); left
+                            // side wider → width reduction so lines end at the
+                            // band's left edge. Indent-cleared bands compute
+                            // red=0 and are dropped by the find() below.
                             let content_right = start_x + content_width;
-                            let left_gap = (bx0 - start_x).max(0.0);
-                            let right_gap = (content_right - bx1).max(0.0);
-                            if right_gap > left_gap {
-                                let shift = (bx1 - start_x).max(0.0);
+                            let s772b = std::env::var("OXI_S772_DISABLE").is_err();
+                            let (para_ind_l, para_ind_r) = if s772b {
+                                (para.style.indent_left
+                                    .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
+                                    .unwrap_or(0.0).max(0.0),
+                                 para.style.indent_right
+                                    .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
+                                    .unwrap_or(0.0).max(0.0))
+                            } else {
+                                (0.0, 0.0) // legacy raw-gap semantics for A/B
+                            };
+                            let pl = start_x + para_ind_l;
+                            let pr = content_right - para_ind_r;
+                            let left_room = (bx0 - pl).max(0.0);
+                            let right_room = (pr - bx1).max(0.0);
+                            if s772b && left_room.max(right_room) < 30.0 {
+                                // Degenerate: the paragraph's own column fits
+                                // NEITHER free segment (ed025c's 大口株主の名簿
+                                // heading: indent 47.25 > the 33.75pt left strip,
+                                // and the float's right edge overruns the column
+                                // → both rooms 0). Word moves such lines BELOW
+                                // the float; v1 keeps the pre-band behavior
+                                // (full-width flow) rather than a 30pt-floor
+                                // strip explosion. red=0 → dropped by find().
+                                (*bot, 0.0, 0.0)
+                            } else if right_room > left_room {
+                                // shift only the shortfall beyond the indent
+                                let shift = ((bx1 - start_x) - para_ind_l).max(0.0);
                                 (*bot, shift, shift)
                             } else {
-                                (*bot, (content_right - bx0).max(0.0), 0.0)
+                                // reduce only the shortfall beyond the right indent
+                                let red = ((content_right - bx0).max(0.0) - para_ind_r).max(0.0);
+                                (*bot, red, 0.0)
                             }
                         })
                         .find(|(_, red, _)| *red > 6.0);
+                    if std::env::var("OXI_DBG758").is_ok() {
+                        if let Some((bot, red, sh)) = s758_para_band {
+                            let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(20).collect();
+                            eprintln!("[B758] pg={} cur_y={:.1} bot={:.1} red={:.1} sh={:.1} ind_l={:?} ind_r={:?} txt={:?}",
+                                current_page_idx, cursor.cursor_y, bot, red, sh,
+                                para.style.indent_left, para.style.indent_right, txt);
+                        }
+                    }
                     // Round 29: pass the per-page effective content height so the
                     // paragraph's internal line-by-line page-break logic accounts
                     // for the footnote area below. Multi-page paragraphs with
@@ -4722,6 +4766,14 @@ impl LayoutEngine {
                         let needs_wrap_below = v_anchor_text
                             && wide_table
                             && (pos_x_zero || h_anchor_page || h_anchor_margin);
+                        if std::env::var("OXI_DBG_FLOAT").is_ok() {
+                            eprintln!("[FLOAT] blk={} pg={} saved_y={:.1} cand_y=[{:.1}..{:.1}] w={:.1} x={:?} h_align={:?} h_anchor={:?} pages_added={} wide={} wrap_below={}",
+                                block_idx, current_page_idx, saved_cursor_y, candidate_y_top, candidate_y_bottom,
+                                table_w_pt, table.style.position.as_ref().map(|p| p.x),
+                                table.style.position.as_ref().and_then(|p| p.h_align.as_deref()),
+                                table.style.position.as_ref().and_then(|p| p.h_anchor.as_deref()),
+                                pages_added, wide_table, needs_wrap_below);
+                        }
 
                         if needs_wrap_below && pages_added > 0 {
                             current_page_idx += pages_added;
@@ -4770,6 +4822,26 @@ impl LayoutEngine {
                             cursor.set(candidate_y_bottom + 1.5);
                         } else {
                             // Original behavior: floating tables don't advance text flow
+                            // S772 (2026-07-10, opt-out OXI_S772_DISABLE): when a
+                            // NARROW vertAnchor="text" float anchored near the page
+                            // bottom does not fit, layout_table pushes page(s)
+                            // internally (widow/no-fit whole-push) and the float
+                            // lands on the NEW page — but this branch restored the
+                            // cursor to saved_cursor_y on the OLD page without
+                            // advancing current_page_idx, stranding the following
+                            // body (uk_hmrc_checklist: the Types-of-Student-Loan box
+                            // + the "9" number box each spawned a page, question 9's
+                            // text then overflowed onto yet another page → 4 pages
+                            // vs Word's 2). Word moves the float AND its anchor to
+                            // the next page together (hmrc p2: box top-right,
+                            // question 9 flows beside it). Corpus blast radius:
+                            // ZERO docs hit v_anchor_text && !needs_wrap_below &&
+                            // pages_added>0 (OXI_DBG_FLOAT sweep over all 12 tblpPr
+                            // docs — every pages_added>0 case is wrap_below=true;
+                            // 459f05's is vertAnchor=page) → byte-identical by
+                            // construction.
+                            let s772_pushed = std::env::var("OXI_S772_DISABLE").is_err()
+                                && v_anchor_text && pages_added > 0;
                             // S758b: a NARROW vertAnchor="text" float leaves room
                             // beside it — Word wraps the following text NEXT TO the
                             // table (probexfloattbl: body lines narrowed to x1≈347
@@ -4777,16 +4849,13 @@ impl LayoutEngine {
                             // side-wrap band over the table's rect; the S758
                             // paragraph machinery does the narrowing/rebreak. Wide
                             // floats keep the wrap-below paths above.
-                            // v1 scope: ALIGN-positioned floats only (tblpXSpec —
-                            // the probe uses "right"). ed025c's OFFSET-positioned
-                            // floats (tblpX 32-100pt, h_align None) banded at
-                            // −0.0019 vs its word_png — whether Word narrows
-                            // beside offset floats (and at what geometry) is
-                            // unpinned; excluded until measured.
+                            // ALIGN-positioned floats (tblpXSpec — the probe uses
+                            // "right") ship since S758b. OFFSET-positioned (tblpX,
+                            // h_align None) floats join per the probeqtbloffset
+                            // Word truth (an in-column offset float IS wrapped
+                            // beside) — see the offset arm below.
                             if std::env::var("OXI_S758_DISABLE").is_err()
                                 && v_anchor_text && !wide_table && table_w_pt > 6.0
-                                && table.style.position.as_ref()
-                                    .map_or(false, |tp| tp.h_align.is_some())
                             {
                                 let band_x0 = if let Some(ref tpos) = table.style.position {
                                     if let Some(ref ha) = tpos.h_align {
@@ -4814,15 +4883,79 @@ impl LayoutEngine {
                                 // OFF-column floats (large tblpX, overflowing the
                                 // column) get no wrap in Word — banding them
                                 // regressed its word_png −0.0019.
+                                let is_align = table.style.position.as_ref()
+                                    .map_or(false, |tp| tp.h_align.is_some());
+                                // OFFSET-arm gates (S772b, 2026-07-10): the pinned
+                                // probeqtbloffset truth is BOTH-SIDES two-segment
+                                // wrap; the band machinery is single-segment
+                                // (wider side). Band an offset float only when the
+                                // NARROWER free side is negligible (≤24pt — hmrc's
+                                // Types box right gap ≈0 / number-box left gap ≈0),
+                                // so the single-side model is exact. Mid-column
+                                // offset floats (both sides wide) stay unbanded
+                                // until the two-segment flow lands. Dist for the
+                                // offset arm = the tblpPr left/rightFromText
+                                // (ECMA default 0 — hmrc has no attrs and Word
+                                // wraps flush to the box edge; the align arm keeps
+                                // its shipped 9.0 calibration).
+                                let (dl, dr) = if is_align {
+                                    (9.0, 9.0)
+                                } else {
+                                    table.style.position.as_ref()
+                                        .map_or((0.0, 0.0), |tp| (tp.left_from_text, tp.right_from_text))
+                                };
+                                let left_gap = (band_x0 - dl - start_x).max(0.0);
+                                let right_gap = (start_x + content_width
+                                    - (band_x0 + table_w_pt + dr)).max(0.0);
+                                // Offset-arm scope: (a) the NARROW side ≤24pt so the
+                                // single-side model is exact (probeqtbloffset's true
+                                // both-sides two-segment case stays unbanded), AND
+                                // (b) the WIDE side ≥100pt — a real host column.
+                                // ed025c #0 leaves only a 33.75pt left sliver
+                                // (indented paras don't fit it; Word flows them
+                                // BELOW the float, a mechanism the band lacks) —
+                                // banding it exploded its notes into 30pt-floor
+                                // strips. hmrc: Types box 240.65 / number boxes
+                                // ~490 → banded.
+                                let offset_ok = std::env::var("OXI_S772_DISABLE").is_err()
+                                    && left_gap.min(right_gap) <= 24.0
+                                    && left_gap.max(right_gap) >= 100.0;
                                 if band_x0 >= start_x - 1.0
                                     && band_x0 + table_w_pt <= start_x + content_width + 6.0
+                                    && (is_align || offset_ok)
                                 {
-                                    s758_bands.push((current_page_idx, candidate_y_top,
-                                        candidate_y_bottom, band_x0 - 9.0,
-                                        band_x0 + table_w_pt + 9.0));
+                                    // S772: when the float was pushed to a new page,
+                                    // the band lives there, from the page top.
+                                    let (band_pg, band_top) = if s772_pushed {
+                                        (current_page_idx + pages_added, start_y)
+                                    } else {
+                                        (current_page_idx, candidate_y_top)
+                                    };
+                                    s758_bands.push((band_pg, band_top,
+                                        candidate_y_bottom, band_x0 - dl,
+                                        band_x0 + table_w_pt + dr));
                                 }
                             }
-                            cursor.set(saved_cursor_y);
+                            if s772_pushed {
+                                current_page_idx += pages_added;
+                                *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                if let Some(g) = s755_geom.as_ref() {
+                                    start_y = g.top(pages.len() + 1);
+                                    content_height = g.ch(pages.len() + 1);
+                                }
+                                if num_columns > 1 {
+                                    current_column = 0;
+                                    start_x = col_x_positions[0];
+                                    content_width = col_widths[0];
+                                }
+                                lm2_cells = 0;
+                                footnote_reserve_current = 0.0;
+                                footnote_ids_current_page.clear();
+                                cursor.set(start_y);
+                                *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                            } else {
+                                cursor.set(saved_cursor_y);
+                            }
                         }
                     } else {
                         let pages_added = pages.len() - pages_before;
