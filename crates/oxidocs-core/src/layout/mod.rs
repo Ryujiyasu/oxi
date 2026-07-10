@@ -4302,6 +4302,20 @@ impl LayoutEngine {
                             }
                         })
                         .find(|(_, red, _)| *red > 6.0);
+                    if std::env::var("OXI_DBG773").is_ok() {
+                        for s in &para.shapes {
+                            eprintln!("[S773probe] blk={} shape {} w={:.1} h={:.1} pos={:?}",
+                                block_idx, s.shape_type, s.width, s.height,
+                                s.position.as_ref().map(|p| (p.x, p.y)));
+                        }
+                        for tb in &page.text_boxes {
+                            if tb.anchor_block_index == block_idx {
+                                eprintln!("[S773probe] blk={} tb w={:.1} h={:.1} pos={:?} wrap={:?} blocks={}",
+                                    block_idx, tb.width, tb.height,
+                                    tb.position.as_ref().map(|p| (p.x, p.y)), tb.wrap_type, tb.blocks.len());
+                            }
+                        }
+                    }
                     if std::env::var("OXI_DBG758").is_ok() {
                         if let Some((bot, red, sh)) = s758_para_band {
                             let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(20).collect();
@@ -7556,6 +7570,45 @@ impl LayoutEngine {
                 line_heights[0] *= scale;
                 natural_line_heights[0] *= scale;
                 ink_line_heights[0] *= scale;
+            }
+        }
+
+        // S773 (2026-07-10, opt-out OXI_S773_DISABLE): an INLINE visual drawing
+        // (wp:inline wpg/wps vector group without textbox text — hmrc's crown
+        // logo, checkbox rows, black rules) grows its host LINE like an inline
+        // object. COM probe (wpg_probe.docx, hmrc's actual drawings injected
+        // into 12pt hosts): text line = cy + ~0.25×fs (cy16.5→19.5, cy60→63.0);
+        // an object-only paragraph's line = cy EXACTLY (16.5/30.0 exact — the
+        // pinned S537 image-only rule). Without this the crown para was −17.7
+        // and the box rows −5..−8 each → hmrc's body ran ~50pt above Word by
+        // the Employee Statement section. Identified by the S535 synthetic-
+        // inline signature (position (0,0) column/paragraph + WrapType::None +
+        // no text blocks; textbox-text drawings get the S741 placeholder and
+        // must not double-count). Corpus scan: non-pic non-txbx wp:inline
+        // drawings exist ONLY in uk_hmrc_checklist → byte-identical elsewhere.
+        if std::env::var("OXI_S773_DISABLE").is_err() && !lines.is_empty() {
+            let s773_cy: f32 = body_para_index.map_or(0.0, |bi| page.text_boxes.iter()
+                .filter(|tb| tb.anchor_block_index == bi
+                    && tb.blocks.is_empty()
+                    && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+                    && tb.position.as_ref().map_or(false, |p| p.x == 0.0 && p.y == 0.0
+                        && p.h_relative.as_deref() == Some("column")
+                        && p.v_relative.as_deref() == Some("paragraph")))
+                .map(|tb| tb.height)
+                .fold(0.0f32, f32::max));
+            if s773_cy > 0.0 {
+                let has_text = lines[0].fragments.iter().any(|f| !f.text.trim().is_empty());
+                let target = if has_text { s773_cy + 0.25 * para_font_size } else { s773_cy };
+                if std::env::var("OXI_DBG773").is_ok() {
+                    eprintln!("[S773] blk={:?} cy={:.1} lines={} line0={:.1} target={:.1} fired={}",
+                        body_para_index, s773_cy, lines.len(), line_heights[0], target,
+                        target > line_heights[0]);
+                }
+                if target > line_heights[0] {
+                    line_heights[0] = target;
+                    if natural_line_heights[0] < target { natural_line_heights[0] = target; }
+                    if ink_line_heights[0] < target { ink_line_heights[0] = target; }
+                }
             }
         }
 
