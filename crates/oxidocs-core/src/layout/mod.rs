@@ -1540,6 +1540,12 @@ pub enum LayoutContent {
     Image {
         data: Vec<u8>,
         content_type: Option<String>,
+        /// S775: a:srcRect crop percentages (top, right, bottom, left, 0-100).
+        /// The cropped source region stretches to the full element rect —
+        /// ignoring it draws the WHOLE source into the frame (risk_assessment's
+        /// DfE crest: srcRect r=38.06% b=19.93% → the crest rendered at 62%
+        /// width with a matching whitespace band below).
+        crop: Option<(f32, f32, f32, f32)>,
     },
     TableBorder {
         x1: f32,
@@ -5030,6 +5036,7 @@ impl LayoutEngine {
                     elements.push(LayoutElement::new(start_x, cursor.visual_y, img.width, img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                     }));
                     cursor.advance(img_adv);
                     prev_para_style_id = None;
@@ -5389,6 +5396,7 @@ impl LayoutEngine {
                         let el = LayoutElement::new(abs_x, abs_y, img.width, img.height, LayoutContent::Image {
                                 data: img.data.clone(),
                                 content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                         });
                         if let Some(lp) = pages.get_mut(target_page) {
                             lp.elements.push(el);
@@ -5399,6 +5407,7 @@ impl LayoutEngine {
                         lp.elements.push(LayoutElement::new(start_x, 0.0, img.width, img.height, LayoutContent::Image {
                                 data: img.data.clone(),
                                 content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                         }));
                     }
                 }
@@ -5500,6 +5509,7 @@ impl LayoutEngine {
                                 LayoutContent::Image {
                                     data: img.data.clone(),
                                     content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                                 },
                             ));
                         }
@@ -6322,6 +6332,7 @@ impl LayoutEngine {
                     elements.push(LayoutElement::new(inner_x, cursor.visual_y, img.width.min(inner_width), img.height, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                     }));
                     cursor.advance(img.height);
                 }
@@ -18499,6 +18510,7 @@ impl LayoutEngine {
                         LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                         }));
                     // S715: typed-grid cell image line snaps to whole grid cells
                     // (mirrors the pre-pass arm; see comment there).

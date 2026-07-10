@@ -548,10 +548,26 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     oxidocs_core::layout::LayoutContent::ClipEnd => {
                         RestoreDC(mem_dc, -1);
                     }
-                    oxidocs_core::layout::LayoutContent::Image { ref data, .. } => {
+                    oxidocs_core::layout::LayoutContent::Image { ref data, ref crop, .. } => {
                         if !data.is_empty() {
                             // Decode image and draw via GDI StretchDIBits
                             if let Ok(img) = image::load_from_memory(data) {
+                                // S775: a:srcRect — crop the source (percent
+                                // insets); the remainder stretches to the dest.
+                                let img = match *crop {
+                                    Some((t, r, b, l)) if (t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0)
+                            && std::env::var("OXI_S775_DISABLE").is_err() => {
+                                        let (pw, ph) = (img.width(), img.height());
+                                        let x0 = (pw as f32 * l / 100.0).round().max(0.0) as u32;
+                                        let y0 = (ph as f32 * t / 100.0).round().max(0.0) as u32;
+                                        let cw = (pw as f32 * (100.0 - l - r) / 100.0).round().max(1.0) as u32;
+                                        let ch = (ph as f32 * (100.0 - t - b) / 100.0).round().max(1.0) as u32;
+                                        if x0.saturating_add(cw) <= pw && y0.saturating_add(ch) <= ph {
+                                            img.crop_imm(x0, y0, cw, ch)
+                                        } else { img }
+                                    }
+                                    _ => img,
+                                };
                                 let rgba = img.to_rgba8();
                                 let (pw, ph) = rgba.dimensions();
                                 // Create DIB and draw

@@ -432,10 +432,10 @@ unsafe fn render_page_elements(
                 if exclude.iter().any(|e| e == "clip") { continue; }
                 rt.PopAxisAlignedClip();
             }
-            LayoutContent::Image { ref data, .. } => {
+            LayoutContent::Image { ref data, ref crop, .. } => {
                 if exclude.iter().any(|e| e == "image") { continue; }
                 if !data.is_empty() {
-                    render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data)?;
+                    render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data, *crop)?;
                 }
             }
             LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail } => {
@@ -563,6 +563,7 @@ unsafe fn render_image(
     _d2d_factory: &windows::Win32::Graphics::Direct2D::ID2D1Factory,
     x_pt: f32, y_pt: f32, w_pt: f32, h_pt: f32,
     data: &[u8],
+    crop: Option<(f32, f32, f32, f32)>,
 ) -> windows::core::Result<()> {
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
@@ -571,6 +572,22 @@ unsafe fn render_image(
     let img = match image::load_from_memory(data) {
         Ok(i) => i,
         Err(_) => return Ok(()),
+    };
+    // S775: a:srcRect — crop the source (percent insets), the remainder
+    // stretches to the full dest rect (Word's picture-crop semantics).
+    let img = match crop {
+        Some((t, r, b, l)) if (t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0)
+                            && std::env::var("OXI_S775_DISABLE").is_err() => {
+            let (pw, ph) = (img.width(), img.height());
+            let x0 = (pw as f32 * l / 100.0).round().max(0.0) as u32;
+            let y0 = (ph as f32 * t / 100.0).round().max(0.0) as u32;
+            let cw = (pw as f32 * (100.0 - l - r) / 100.0).round().max(1.0) as u32;
+            let ch = (ph as f32 * (100.0 - t - b) / 100.0).round().max(1.0) as u32;
+            if x0.saturating_add(cw) <= pw && y0.saturating_add(ch) <= ph {
+                img.crop_imm(x0, y0, cw, ch)
+            } else { img }
+        }
+        _ => img,
     };
     let rgba = img.to_rgba8();
     let (pw, ph) = rgba.dimensions();

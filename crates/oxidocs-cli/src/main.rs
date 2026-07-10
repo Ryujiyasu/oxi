@@ -1104,7 +1104,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     }
                 }
 
-                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type } => {
+                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type, .. } => {
                     // Decode image (PNG/JPEG/etc.) to raw RGB pixels
                     if !data.is_empty() {
                         if let Ok(img) = image::load_from_memory(data) {
@@ -1147,6 +1147,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                 oxidocs_core::layout::LayoutContent::ClipEnd => {
                     contents.push(ContentElement::RestoreState);
                 }
+                oxidocs_core::layout::LayoutContent::WatermarkText { .. } => {}
                 oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, .. } => {
                     let sx = x;
                     let sy = y;
