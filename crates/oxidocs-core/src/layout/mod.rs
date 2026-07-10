@@ -7129,6 +7129,16 @@ impl LayoutEngine {
         // computes text_y_off). Only set for NON-bullet markers (number markers
         // like ①/(1)); bullets keep their own marker_y_offset tuning untouched.
         let mut s517_marker_el_idx: Option<usize> = None;
+        // S776 (2026-07-10, opt-out OXI_S776_DISABLE): suff="nothing" — Word
+        // renders the number CONTIGUOUS with the first line's text AT the
+        // first-line position (nyserda «3.NON-COLLUSIVE BIDDING…», lvl suff
+        // val="nothing": Word/Libra draw number+text together; Oxi placed the
+        // marker at left−list_indent with a tab-model gap → every numbered
+        // paragraph's left edge differed → the worst nyserda pages 0.53 vs
+        // Libra 0.95). The marker element moves to the first-line x and the
+        // body's first line starts right after it (effective_first_indent +=
+        // marker_width, which also narrows line 0's wrap width like Word).
+        let mut s776_marker_extra: f32 = 0.0;
         if let Some(ref marker) = para.style.list_marker {
             let default_style = RunStyle::default();
             let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
@@ -7160,11 +7170,16 @@ impl LayoutEngine {
                 })
                 .sum();
             let list_indent = para.style.list_indent.unwrap_or(18.0);
-            let marker_x = start_x + indent_left - list_indent;
+            let mut marker_x = start_x + indent_left - list_indent;
             let line_height = self.line_height(marker_font_size, para.style.line_spacing, para.style.line_spacing_rule.as_deref(), marker_metrics, para.style.snap_to_grid, grid_pitch);
 
             // Determine marker text including suffix
             let suff = para.style.list_suff.as_deref().unwrap_or("tab");
+            if suff == "nothing" && std::env::var("OXI_S776_DISABLE").is_err() {
+                // S776: number sits at the first-line position, text right after.
+                marker_x = start_x + indent_left + first_line_indent;
+                s776_marker_extra = marker_width;
+            }
             let marker_text = match suff {
                 "space" => format!("{} ", marker),
                 "nothing" => marker.clone(),
@@ -7432,7 +7447,7 @@ impl LayoutEngine {
         // S241 (2026-05-23): removed OXI_LEGACY_NO_B2_BUNDLE legacy
         // env-var fallback during hardening pass. S168 Phase B-2 bundle
         // is the canonical path.
-        let effective_first_indent = first_line_indent;
+        let effective_first_indent = first_line_indent + s776_marker_extra;
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
         let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
@@ -8741,7 +8756,10 @@ impl LayoutEngine {
                 }
             }
 
-            let extra_indent = if line_idx == 0 { first_line_indent } else { 0.0 };
+            // S776: effective_first_indent includes the suff="nothing" marker
+            // width so line 0's text starts right AFTER the number (the break
+            // above already narrowed line 0 by the same amount).
+            let extra_indent = if line_idx == 0 { effective_first_indent } else { 0.0 };
             // COM-confirmed 2026-04-17 (measure_hanging_indent_v2.py): first-line
             // indent DOES shift line_x. Word places line 1 at margin+indent_left+
             // first_line_indent, continuation lines at margin+indent_left. Applies
