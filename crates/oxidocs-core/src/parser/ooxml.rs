@@ -2028,7 +2028,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 npr.ilvl,
                 &mut ctx.list_counters.borrow_mut(),
             );
-            style.list_marker = Some(resolved.text);
+            // S777: an EMPTY resolved marker (numFmt=none) sets no marker
+            // element; keep suff/indent resolution unchanged.
+            if !resolved.text.is_empty() {
+                style.list_marker = Some(resolved.text);
+            }
             style.list_suff = Some(resolved.suff);
             style.list_tab_stop = resolved.tab_stop;
             if let Some(ind) = resolved.hanging {

@@ -132,7 +132,13 @@ impl NumberingDefinitions {
 
         let formatted_num = format_number(current, &level.num_fmt);
 
-        let marker = if level.lvl_text.is_empty() {
+        let marker = if level.num_fmt == "none" {
+            // S777: numFmt="none" renders NO number — the level's lvlText
+            // verbatim (usually empty; nyserda's definition-list lvl1 is
+            // numFmt=none lvlText="" and Word draws no marker, while the
+            // empty-lvlText fallback below fabricated a phantom "3.").
+            level.lvl_text.clone()
+        } else if level.lvl_text.is_empty() {
             format!("{}.", formatted_num)
         } else {
             // Replace all level placeholders (%1, %2, ..., %9)
