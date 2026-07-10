@@ -7577,6 +7577,34 @@ impl LayoutEngine {
         // box (win*83/64 = 1.297*em for CJK), ~3.2pt larger than the real glyph
         // ink — that over-count rejected page-bottom lines Word fits (their grid
         // leading hangs into the margin). See break_threshold below.
+        // S779 (2026-07-11, opt-out OXI_S779_DISABLE): the DERIVED LM0-Latin
+        // page-bottom rule (controlled sweep _pb_latin_gen.py, TNR 12pt: keep
+        // iff baseline + win descent <= content_bottom, flip within 0.1pt) =
+        // threshold win_ascent+win_descent (13.29 @12pt), NOT the em-ink
+        // leniency (~11.3, ~2pt too lenient: nyserda p10 fit a line at base
+        // 719.3 -> base+desc = 721.9 > 720 where Word widow-pushes the whole
+        // 3-line paragraph -> the page-phase shifts behind its worst pages).
+        // Scope: TRUE no-docGrid docs (page.grid_line_pitch None — gen2's
+        // no-type docGrid keeps its S571-family rules) + pure-Latin
+        // (!doc_body_has_real_cjk — JP no-grid docs keep their calibration).
+        // Scope includes NO-TYPE docGrid docs (nyserda linePitch=299 no-type):
+        // the probe re-run WITH that docGrid flips at the same cbot window —
+        // the rule is grid-independent for non-snapping (no-type/LM0) Latin.
+        let s779_latin = (page.grid_line_pitch.is_none() || page.doc_grid_no_type)
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S779_DISABLE").is_err();
+        let s779_win_heights: Vec<f32> = if s779_latin {
+            lines.iter().map(|line| {
+                let mut mx: f32 = 0.0;
+                for f in &line.fragments {
+                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    let h = (m.win_ascent + m.win_descent) * fs;
+                    if h > mx { mx = h; }
+                }
+                mx
+            }).collect()
+        } else { Vec::new() };
         let mut ink_line_heights: Vec<f32> = lines.iter().map(|line| {
             self.ink_line_height_for_line(line, &para.style, para_font_size)
         }).collect();
@@ -8286,7 +8314,10 @@ impl LayoutEngine {
                     let on_slot = phase < 1.0 || phase > pitch - 1.0;
                     if on_slot { (effective_lh + natural_lh) / 2.0 } else { 0.0 }
                 } else { 0.0 };
-                (ink_lh + tgink_k).max(atleast_floor).max(s739_centered).min(effective_lh)
+                let s779_floor = if s779_latin {
+                    s779_win_heights.get(line_idx).copied().unwrap_or(0.0)
+                } else { 0.0 };
+                (ink_lh + tgink_k).max(atleast_floor).max(s739_centered).max(s779_floor).min(effective_lh)
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
