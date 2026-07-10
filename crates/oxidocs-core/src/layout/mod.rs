@@ -7573,6 +7573,12 @@ impl LayoutEngine {
             }
         }
 
+        // S773: the line-0 target also feeds the single-LM0 cumulative advance
+        // basis (raw_spaced_tw) below — a SINGLE-line paragraph's cursor
+        // advance uses that basis, not line_heights[0] (the documented
+        // S612z three-sites trap; without it the title-para bump was a no-op
+        // once S774 made the title one line).
+        let mut s773_line0_target: f32 = 0.0;
         // S773 (2026-07-10, opt-out OXI_S773_DISABLE): an INLINE visual drawing
         // (wp:inline wpg/wps vector group without textbox text — hmrc's crown
         // logo, checkbox rows, black rules) grows its host LINE like an inline
@@ -7609,6 +7615,7 @@ impl LayoutEngine {
                     if natural_line_heights[0] < target { natural_line_heights[0] = target; }
                     if ink_line_heights[0] < target { ink_line_heights[0] = target; }
                 }
+                if lines.len() == 1 { s773_line0_target = target; }
             }
         }
 
@@ -7778,6 +7785,12 @@ impl LayoutEngine {
                 } else { raw }
             } else { raw }
         } else { 0.0 };
+        // S773: a single-line paragraph hosting an inline visual drawing
+        // advances by the object line (cy[+desc]) — fold the target into the
+        // cumulative basis (single-LM0/multiple both route through it).
+        let raw_spaced_tw: f32 = if s773_line0_target > 0.0 && raw_spaced_tw > 0.0 {
+            raw_spaced_tw.max(s773_line0_target * 20.0)
+        } else { raw_spaced_tw };
         // LM2 (charGrid) and LM0 single spacing: carry cumul_line_idx across paragraphs.
         // COM-confirmed (2026-04-12, 0e7a p2): Word maintains cumulative line index
         // across paragraph boundaries for LM0 single spacing, producing continuous
@@ -10471,6 +10484,17 @@ impl LayoutEngine {
         let kernbreak_cap: f32 = std::env::var("OXI_KERNBREAK_CAP").ok()
             .and_then(|v| v.parse().ok()).unwrap_or(0.25);
         let mut latin_space_credit_tw: i32 = 0;
+        // S774 (2026-07-10, rides the TABTW/Latin scope): a RIGHT-aligned tab
+        // pins the following segment's END at the tab stop — the segment grows
+        // LEFTWARD into the gap the tab jumped, so the wrap check must credit
+        // that slack (hmrc's title «[crown]⇥Starter Checklist», right tab at
+        // 521.55: Word renders ONE line with the 24pt text right-aligned; Oxi
+        // treated the stop as a left anchor → tab + 190pt text overflowed →
+        // 2 lines). The tab-width post-process below already shrinks the tab
+        // fragment by the segment width, so allowing the segment through here
+        // renders exactly right-aligned. Reset with the other per-line
+        // accumulators and on the next tab.
+        let mut right_tab_slack_tw: i32 = 0;
         let mut word_breaks: Vec<(usize, f32)> = Vec::new();
         // Per-SEGMENT (run_idx, char_offset) so a split token keeps the EXACT run
         // metadata of the default per-«/» fragmentation (DWrite re-derives glyph
@@ -10516,10 +10540,10 @@ impl LayoutEngine {
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw
+                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                         }
                         // Place the token as SEGMENTS split at the recorded break
                         // opportunities — IDENTICAL fragmentation to the default path (which
@@ -10541,10 +10565,10 @@ impl LayoutEngine {
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
-                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw
+                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 lines.push(std::mem::take(&mut current_line));
-                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                             }
                             // Exact run metadata for this segment (matches the default
                             // per-«/» fragmentation), so DWrite shapes it identically.
@@ -10566,10 +10590,10 @@ impl LayoutEngine {
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
@@ -10662,7 +10686,7 @@ impl LayoutEngine {
                 if current_width_tw + vw_tw > available_tw
                     && !current_line.fragments.is_empty() && !para_all_whitespace {
                     lines.push(std::mem::take(&mut current_line));
-                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                 }
                 current_line.fragments.push(LineFragment {
                     text: text.to_string(), width: font_size, natural_width: font_size,
@@ -10696,7 +10720,7 @@ impl LayoutEngine {
                 if current_width_tw + cw_tw > available_tw
                     && !current_line.fragments.is_empty() && !para_all_whitespace {
                     lines.push(std::mem::take(&mut current_line));
-                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                 }
                 current_line.fragments.push(LineFragment {
                     text: text.to_string(), width: cw, natural_width: cw,
@@ -11567,7 +11591,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -11627,6 +11651,14 @@ impl LayoutEngine {
                             {
                                 current_width_tw = pt_to_tw(current_width);
                                 current_capw_tw = current_width_tw;
+                                // S774: a RIGHT tab's jump is slack the following
+                                // segment consumes leftward (see the declaration).
+                                // A new tab of any kind resets the prior slack.
+                                right_tab_slack_tw = if tab_align == TabStopAlignment::Right
+                                    && std::env::var("OXI_S774_DISABLE").is_err()
+                                {
+                                    pt_to_tw(w)
+                                } else { 0 };
                             }
                         } else {
                             // Regular space
@@ -12446,7 +12478,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                             continue;
                         }
 
@@ -12471,7 +12503,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
