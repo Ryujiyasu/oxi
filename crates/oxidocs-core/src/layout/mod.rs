@@ -8753,7 +8753,20 @@ impl LayoutEngine {
                             }
                         }
                         let max_y = elements.iter().map(|e| e.y).fold(f32::NEG_INFINITY, f32::max);
-                        cursor.set(max_y + line_height);
+                        // S792 (2026-07-11): at an ORPHAN break (line_idx == 0)
+                        // no text line has been laid yet — `elements` holds only
+                        // same-row OVERLAYS (the list marker). Advancing past
+                        // them consumed a phantom row: the  dash item's
+                        // marker repositioned to page_top but its text line
+                        // landed one line BELOW (72/85.8; Word renders both on
+                        // one row). Keep the cursor at page_top so line 0
+                        // overlays the marker; the widow case (text lines moved)
+                        // keeps the advance-past behavior.
+                        if line_idx == 0 && std::env::var("OXI_S792_DISABLE").is_err() {
+                            cursor.set(page_top);
+                        } else {
+                            cursor.set(max_y + line_height);
+                        }
                     }
                 }
                 // Session 107: half-leading at page top (see mid-para break

@@ -1059,6 +1059,15 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     let mut runs = prev.runs;
                                     runs.extend(joined.runs);
                                     joined.runs = runs;
+                                    // S784b (2026-07-11): the merged paragraph's FIRST
+                                    // line is physically the HIDDEN para's first line —
+                                    // its first-line indent survives (Word renders the
+                                    // nyserda joined 'Section 4.01' line at x=126 =
+                                    // margin + para1's firstLine=720; para2's pPr wins
+                                    // for everything else).
+                                    if joined.style.indent_first_line.is_none() {
+                                        joined.style.indent_first_line = prev.style.indent_first_line;
+                                    }
                                     current_blocks.push(Block::Paragraph(joined));
                                 }
                             } else {
