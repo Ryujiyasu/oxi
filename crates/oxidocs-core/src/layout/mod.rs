@@ -4473,7 +4473,22 @@ impl LayoutEngine {
                     // line actually rendered on. para_fn_refs_per_page[i] holds
                     // the ids on the (start_page + i)-th page. Always runs —
                     // pages_added==0 has 1 bucket == current page's slot.
-                    let start_page_for_para = current_page_idx;
+                    // S793 (2026-07-12): align buckets to the paragraph's FINAL
+                    // page — pre-line-loop pushes inside layout_paragraph (the
+                    // list-marker pre-break, band pushes) add pages WITHOUT
+                    // opening a bucket, so `start + offset` mis-attributed a
+                    // whole-moved paragraph's refs to the PREVIOUS page
+                    // (nyserda: the sole footnote rendered on p17 while its
+                    // reference line sits on p18; Word puts both on p18). The
+                    // last bucket is always the final page; line-loop pushes
+                    // open buckets 1:1, so end-alignment maps every bucket to
+                    // the page its lines actually rendered on.
+                    let start_page_for_para = if std::env::var("OXI_S793_DISABLE").is_ok() {
+                        current_page_idx
+                    } else {
+                        (current_page_idx + pages_added)
+                            .saturating_sub(para_fn_refs_per_page.len().saturating_sub(1))
+                    };
                     for (offset, refs) in para_fn_refs_per_page.iter().enumerate() {
                         let page_i = start_page_for_para + offset;
                         while page_fn_refs.len() <= page_i { page_fn_refs.push(Vec::new()); }
