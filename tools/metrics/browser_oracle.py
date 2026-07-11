@@ -7,7 +7,7 @@ server and writes page_NNNN.png like the word_png convention — a second
 independent oracle next to LibreOffice for Word-fidelity comparison.
 
 Usage:
-  python browser_oracle.py <doc.docx> <outdir> [dpi=110]
+  python browser_oracle.py <doc.docx> <outdir> [dpi=110] [max_pages=0]
 """
 import base64
 import http.server
@@ -21,7 +21,7 @@ HARNESS_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                             "browser-oracle", "dist")
 
 
-def render(docx, outdir, dpi=110):
+def render(docx, outdir, dpi=110, max_pages=0):
     from playwright.sync_api import sync_playwright
     os.makedirs(outdir, exist_ok=True)
     # stage: serve dist + the docx from one root
@@ -42,6 +42,8 @@ def render(docx, outdir, dpi=110):
             pg.wait_for_function("window.oracleReady === true", timeout=30000)
             n = pg.evaluate(f"window.oracleInit('./{doc_name}')")
             print(f"pages: {n}")
+            if max_pages and n > max_pages:
+                n = max_pages
             for i in range(n):
                 url = pg.evaluate(f"window.oraclePage({i}, {dpi})")
                 png = base64.b64decode(url.split(",", 1)[1])
@@ -59,4 +61,5 @@ if __name__ == "__main__":
     doc = os.path.abspath(sys.argv[1])
     out = os.path.abspath(sys.argv[2])
     dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 110
-    render(doc, out, dpi)
+    mp = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+    render(doc, out, dpi, mp)
