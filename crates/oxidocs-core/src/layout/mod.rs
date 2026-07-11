@@ -7203,6 +7203,9 @@ impl LayoutEngine {
         // body's first line starts right after it (effective_first_indent +=
         // marker_width, which also narrows line 0's wrap width like Word).
         let mut s776_marker_extra: f32 = 0.0;
+        // S789: hanging-less level — the suffix tab's num stop (see the
+        // marker block below).
+        let mut s789_stop_extra: f32 = 0.0;
         // S778 (2026-07-10, opt-out OXI_S778_DISABLE): the numbering LEVEL's
         // w:ind left is the marker SUFFIX-TAB stop, and it SURVIVES a direct
         // w:ind override on the paragraph. nyserda's definition list (level
@@ -7271,6 +7274,26 @@ impl LayoutEngine {
                 // S778: the marker sits at the paragraph's first-line indent;
                 // the suffix tab sends the text to the level-left stop.
                 marker_x = start_x + indent_left + first_line_indent;
+            }
+            // S789 (2026-07-11, opt-out OXI_S789_DISABLE): a numbering level
+            // with NO hanging indent (ind left=0 firstLine=0) places its
+            // marker AT the first-line position — NOT at the fabricated
+            // left−18pt default — and the suffix tab sends the text to the
+            // level's own num tab stop. nyserda numId=11 lvl0 ('1.'-'9.'
+            // form items, num tab at 288tw): Word marker x=90 (margin), text
+            // x=104.4; Oxi put the marker at 72 and text at 90 → line 1 was
+            // 18pt wider → '…BECOME EFFECTIVE UNLESS' over-packed (the
+            // LRPB-off catalog #2). Latin scope (JP list model untouched).
+            if std::env::var("OXI_S789_DISABLE").is_err()
+                && !self.doc_body_has_real_cjk
+                && suff == "tab"
+                && para.style.list_indent.is_none()
+                && s778_stop_extra <= 0.0
+            {
+                if let Some(stop) = para.style.list_tab_stop {
+                    marker_x = start_x + indent_left + first_line_indent;
+                    s789_stop_extra = (stop - first_line_indent).max(marker_width);
+                }
             }
             let marker_text = match suff {
                 "space" => format!("{} ", marker),
@@ -7539,7 +7562,7 @@ impl LayoutEngine {
         // S241 (2026-05-23): removed OXI_LEGACY_NO_B2_BUNDLE legacy
         // env-var fallback during hardening pass. S168 Phase B-2 bundle
         // is the canonical path.
-        let effective_first_indent = first_line_indent + s776_marker_extra + s778_stop_extra;
+        let effective_first_indent = first_line_indent + s776_marker_extra + s778_stop_extra + s789_stop_extra;
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
         let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
@@ -8650,7 +8673,39 @@ impl LayoutEngine {
                     widow_orphan_break, txt);
             }
 
-            if widow_orphan_break {
+            // S790 (2026-07-11, default ON, opt-out OXI_S790_DISABLE, Latin
+            // scope): the WIDOW arm (line_idx == len−2) must SPLIT the
+            // paragraph like Word — lines 0..len−3 STAY on the current page
+            // and only the last TWO lines move. The shared whole-move handler
+            // (correct for the ORPHAN arm) sent the ENTIRE paragraph to the
+            // next page (nyserda kick-off para: Word splits 6/2, Oxi moved
+            // all 8 → ~90pt page under-fill = LRPB-off catalog #3; the S770
+            // note documents the same whole-move on '2. WAGE'). JP keeps the
+            // legacy whole-move (widowControl is mostly 0 there; calibrated).
+            // line_idx > 1: the split must KEEP ≥2 lines — at line_idx == 1 it
+            // would strand line 0 alone = an ORPHAN, and Word whole-pushes
+            // instead (nyserda p2 bottom ⎯-item: 3 lines, 2 fit → Word moves
+            // all 3; the first split cut 1/2 = catalog #4).
+            let s790_widow_split = line_idx > 1
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S790_DISABLE").is_err();
+            if widow_orphan_break && s790_widow_split {
+                // Same shape as the natural mid-paragraph break: keep the laid
+                // lines on this page, continue on the fresh one.
+                current_elements.extend(std::mem::take(&mut elements));
+                pages.push(LayoutPage {
+                    width: page.size.width,
+                    height: page.size.height,
+                    elements: std::mem::take(current_elements),
+                });
+                if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                cursor.set(page_top);
+                cur_col = 0;
+                if let Some(v) = line_fn_refs_out.as_deref_mut() {
+                    // earlier lines' refs stay on the old page; open the new bucket
+                    v.push(Vec::new());
+                }
+            } else if widow_orphan_break {
                 // Push current page and move entire paragraph so far to next page
                 pages.push(LayoutPage {
                     width: page.size.width,
