@@ -6708,11 +6708,49 @@ impl LayoutEngine {
                     footer_h += h;
                 }
             }
-            if std::env::var("OXI_DBG_FTR").is_ok() {
-                eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} reserved={:.1} bottom_margin={:.1}",
-                    blocks.len(), footer_dist, footer_h, (footer_dist + footer_h).max(page.margin.bottom), page.margin.bottom);
+            // S780 (2026-07-11): the footer FIRST paragraph's before-spacing and
+            // pBdr top border extend the footer keep-out ABOVE the margin line.
+            // DERIVED (nyserda faithful slice, Word COM->fitz): the footer text
+            // top sits at the margin line (719.72 ~ 720) and its before(12) +
+            // border(1.5+space 1) hang UP into the body; the body's last-keep
+            // rule is BASELINE-only against that keep-out top — the glyph
+            // DESCENT may hang into the footer's before-space (blank region
+            // above the border). With Oxi's S779 base+desc fit metric this is
+            // equivalent to extra = before + border + space − win_descent.
+            // 7-point fit (all pass, margins ≥0.56pt): k-sweep keep 694.06 /
+            // push 707.86; 'Upon' line2 push 706.06 (the 0/10 = this C +
+            // standard widowControl orphan, verified footer-independent via
+            // nofoot_b0_k2); wc0 line1 keep 692.26; Va(no-pBdr) keep 706.06;
+            // real-doc trailing-<w:br/> line keep base 703.06. A pure
+            // before+border extra (no desc relief) fails the real-doc br line
+            // by 0.16pt and Va by 0.94pt. Bisect: removing pBdr OR before each
+            // flips the slice while the footer RENDER stays fixed. Latin scope
+            // (!doc_body_has_real_cjk) — JP corpus byte-identical by construction.
+            let mut s780_extra = 0.0f32;
+            if !self.doc_body_has_real_cjk && std::env::var("OXI_S780_DISABLE").is_err() {
+                if let Some(p) = blocks.iter().find_map(|b| match b {
+                    Block::Paragraph(p) if p.style.frame_pr.is_none() => Some(p),
+                    _ => None,
+                }) {
+                    s780_extra += p.style.space_before.unwrap_or(0.0).max(0.0);
+                    if let Some(t) = p.style.borders.as_ref().and_then(|b| b.top.as_ref()) {
+                        s780_extra += t.width + t.space;
+                    }
+                    if s780_extra > 0.0 {
+                        let fs = p.style.ppr_rpr.as_ref().and_then(|r| r.font_size)
+                            .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
+                        let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let m = self.metrics_for_para_mark(&rpr_ref, &p.style);
+                        s780_extra = (s780_extra - m.win_descent * fs).max(0.0);
+                    }
+                }
             }
-            (footer_dist + footer_h).max(page.margin.bottom)
+            if std::env::var("OXI_DBG_FTR").is_ok() {
+                eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} s780_extra={:.2} reserved={:.1} bottom_margin={:.1}",
+                    blocks.len(), footer_dist, footer_h, s780_extra,
+                    (footer_dist + footer_h).max(page.margin.bottom) + s780_extra, page.margin.bottom);
+            }
+            (footer_dist + footer_h).max(page.margin.bottom) + s780_extra
         } else {
             if std::env::var("OXI_DBG_FTR").is_ok() {
                 eprintln!("[FTR] page.footer EMPTY -> reserved=bottom_margin {:.1}", page.margin.bottom);

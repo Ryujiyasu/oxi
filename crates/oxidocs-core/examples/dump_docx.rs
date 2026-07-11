@@ -174,6 +174,9 @@ fn main() {
                 layout::LayoutContent::BalloonConnector { from_x, from_y, to_x, to_y, .. } => {
                     println!("  [{:2}] CONNECTOR ({:.1},{:.1})->({:.1},{:.1})", ei, from_x, from_y, to_x, to_y);
                 }
+                layout::LayoutContent::WatermarkText { ref text, rotation, .. } => {
+                    println!("  [{:2}] WATERMARK ({:.1},{:.1}) w={:.1} h={:.1} rot={:.1} text={:?}", ei, elem.x, elem.y, elem.width, elem.height, rotation, text);
+                }
             }
         }
     }
