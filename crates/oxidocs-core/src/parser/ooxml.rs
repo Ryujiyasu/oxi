@@ -1093,6 +1093,40 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         }
                         // If this paragraph contained a section break, start a new section
                         if let Some(sp) = pr.sect_pr {
+                            // S794 (2026-07-12, opt-out OXI_S794_DISABLE): an explicit
+                            // trailing page break IMMEDIATELY before a page-starting
+                            // section boundary is redundant — Word emits ONE boundary
+                            // (ukframework front matter: a para ending with
+                            // <w:br type="page"/> is followed directly by the empty
+                            // sectPr(nextPage) para; Word 7 front pages, Oxi rendered a
+                            // phantom blank = the whole 470-para body cascaded +1).
+                            // STRICT adjacency: the sectPr carrier must be EMPTY and the
+                            // \x0C must be the very last content before it — intervening
+                            // empty paragraphs mean Word DOES render the page (the same
+                            // doc's other transition keeps 3 spacer paras on their page).
+                            if std::env::var("OXI_S794_DISABLE").is_err()
+                                && sp.section_type.as_deref() != Some("continuous")
+                            {
+                                let n = current_blocks.len();
+                                let s_empty = matches!(current_blocks.last(), Some(Block::Paragraph(p))
+                                    if p.runs.iter().all(|r| r.text.trim().is_empty()));
+                                if s_empty && n >= 2 {
+                                    if let Some(Block::Paragraph(x)) = current_blocks.get_mut(n - 2) {
+                                        if let Some(run) = x.runs.iter_mut().rev().find(|r| !r.text.trim().is_empty()) {
+                                            let t = run.text.trim_end();
+                                            if t.ends_with('\x0C') {
+                                                run.text = t[..t.len() - 1].to_string();
+                                            }
+                                        }
+                                        // the br-only-para conversion (page_break_after)
+                                        if x.runs.iter().all(|r| r.text.trim().is_empty())
+                                            && x.style.page_break_after
+                                        {
+                                            x.style.page_break_after = false;
+                                        }
+                                    }
+                                }
+                            }
                             sections.push(ParsedSection {
                                 blocks: std::mem::take(&mut current_blocks),
                                 properties: sp,
