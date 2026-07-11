@@ -2346,7 +2346,11 @@ impl LayoutEngine {
     /// Considers bold to look up Bold variant when applicable.
     fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         match self.resolve_font_family(run_style, para_style) {
-            Some(family) => self.registry.get_with_bold(family, self.resolve_bold(run_style, para_style)),
+            Some(family) => self.registry.get_with_style(
+                family,
+                self.resolve_bold(run_style, para_style),
+                self.resolve_italic(run_style, para_style),
+            ),
             None => self.registry.default_metrics(),
         }
     }
@@ -2364,7 +2368,11 @@ impl LayoutEngine {
     fn metrics_for_text(&self, text: &str, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         let quote_latin = std::env::var("OXI_S763M_DISABLE").is_err();
         match self.resolve_font_family_for_text_g(text, run_style, para_style, quote_latin) {
-            Some(family) => self.registry.get_with_bold(family, self.resolve_bold(run_style, para_style)),
+            Some(family) => self.registry.get_with_style(
+                family,
+                self.resolve_bold(run_style, para_style),
+                self.resolve_italic(run_style, para_style),
+            ),
             None => self.registry.default_metrics(),
         }
     }

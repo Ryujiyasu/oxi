@@ -683,6 +683,34 @@ impl FontMetricsRegistry {
             .or_else(|| size_data.get("no_grid").copied())
     }
 
+    /// S791 (2026-07-11): style-aware lookup — italic tries the
+    /// "{family} Italic" variant first (width tables differ: TNR italic
+    /// advances deviate up to ±227/2048 units ≈ 1.3pt @12pt on 44 of 99
+    /// chars; measuring italic runs with Regular widths under-counted
+    /// nyserda's italic guidance line 3.69pt/75ch → a wrong wrap). Falls
+    /// back through the bold logic. Vertical metrics of TNR Italic equal
+    /// Regular (1825/-443/87) so this is width-only where it applies.
+    /// Opt-out for A/B: OXI_ITALIC_METRICS_DISABLE.
+    pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> &FontMetrics {
+        if italic && std::env::var("OXI_ITALIC_METRICS_DISABLE").is_err() {
+            let normalized = normalize_family_name(family);
+            let base = if normalized.ends_with(" Regular") {
+                normalized[..normalized.len() - 8].to_string()
+            } else {
+                normalized
+            };
+            if bold {
+                if let Some(m) = self.fonts.get(&format!("{} Bold Italic", base)) {
+                    return m;
+                }
+            }
+            if let Some(m) = self.fonts.get(&format!("{} Italic", base)) {
+                return m;
+            }
+        }
+        self.get_with_bold(family, bold)
+    }
+
     /// Get metrics for a font family, considering bold to look up Bold variant.
     /// When bold is true and a "{family} Bold" or "{family} Demibold" variant exists,
     /// return that variant's metrics; otherwise fall back to the regular variant.
