@@ -2352,10 +2352,18 @@ impl LayoutEngine {
     }
 
     /// Get font metrics considering East Asian font for CJK text.
-    /// S763: metrics keep the LEGACY quote classification (quote_latin=false)
-    /// — see resolve_font_family_for_text_g.
+    /// S763m (2026-07-11, default ON, opt-out OXI_S763M_DISABLE): metrics now
+    /// follow the SAME S763/S763c quote rule as the render font. The legacy
+    /// quote_latin=false kept a lone curly quote classified CJK for METRICS —
+    /// nyserda: every ’-bearing line got the MS-Mincho-substituted line height
+    /// 15.0 instead of TNR 13.8 (+1.2/line, ~5 lines/page of cumulative
+    /// drift). The old blocker ("flipping blew uk_hmrc_checklist 2→4 pages")
+    /// predated the S772-S774 hmrc fixes — re-verified clean. JP docs are
+    /// unaffected BY CONSTRUCTION: their docDefaults eastAsia lang is CJK →
+    /// S763c keeps the eastAsia chain for quotes (same as legacy).
     fn metrics_for_text(&self, text: &str, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
-        match self.resolve_font_family_for_text_g(text, run_style, para_style, false) {
+        let quote_latin = std::env::var("OXI_S763M_DISABLE").is_err();
+        match self.resolve_font_family_for_text_g(text, run_style, para_style, quote_latin) {
             Some(family) => self.registry.get_with_bold(family, self.resolve_bold(run_style, para_style)),
             None => self.registry.default_metrics(),
         }
@@ -6996,8 +7004,9 @@ impl LayoutEngine {
         // prev_space_after was NOT added to cursor_y by the caller.
         let collapsed_spacing = space_before.max(prev_space_after);
 
-        // Contextual spacing: suppress spacing when EITHER paragraph has
-        // contextualSpacing=true AND they share the same style (COM-confirmed).
+        // Contextual spacing: suppress each paragraph's OWN spacing contribution
+        // when it has contextualSpacing=true AND the neighbors share the same
+        // style (COM-confirmed).
         let mut effective_spacing = collapsed_spacing;
         if para.style.contextual_spacing || prev_contextual_spacing {
             // S657 (2026-06-24): two DEFAULT-style paragraphs (both pStyle absent
@@ -7009,8 +7018,17 @@ impl LayoutEngine {
             // the Normal/default style, so a None-id para never has
             // contextual_spacing=true → the None==None arm never fires on the
             // corpus (byte-identical). Found by the perturbation harness.
+            // S782 (2026-07-11): PER-SIDE, not OR-both — contextualSpacing on a
+            // paragraph suppresses THAT paragraph's before/after only. A same-
+            // style pair where prev is contextual but cur carries a direct
+            // `<w:contextualSpacing w:val="0"/>` + before=240 keeps cur's before
+            // (nyserda '(c) Indirect Costs': Word gap 25.8 = line + 12pt before;
+            // the OR-both gate zeroed it). Mixed pairs require a direct val=0
+            // override under a contextual style → corpus-wide only nyserda.
             if para.style.style_id.as_deref() == prev_style_id {
-                effective_spacing = 0.0;
+                let eff_sb = if para.style.contextual_spacing { 0.0 } else { space_before };
+                let eff_psa = if prev_contextual_spacing { 0.0 } else { prev_space_after };
+                effective_spacing = eff_sb.max(eff_psa);
             }
         }
 
@@ -7667,6 +7685,11 @@ impl LayoutEngine {
         // + Symbol bullet, which the candidate scan confirms is gen2/gen/test ONLY;
         // CJK gen2 excluded by all_latin). lib 142/0/6. Tools: _bugfind_rank.py,
         // Libra-PDF per-line baselines. See [[gen2_vertical_drift]].
+        // S785 note (2026-07-11): the NO-GRID (LM0) Symbol-marker line height
+        // (nyserda bullets: Word 14.64 = Symbol 1.2251×12 device-snapped) is
+        // handled by the REGISTRY 'Symbol' metrics entry (font_metrics_compact
+        // .json, added 2026-07-11) via the normal marker-metrics path — an
+        // explicit S689-style bump here proved redundant (identical output).
         if std::env::var("OXI_S689_DISABLE").is_err()
             && page.doc_grid_no_type
             && !lines.is_empty()
@@ -11822,7 +11845,18 @@ impl LayoutEngine {
                     word.push(ch);
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
-                    if latin_wordwrap {
+                    // S783 (2026-07-11): in a LATIN document a HYPHEN is a real
+                    // word boundary — Word fills a partial line up to the '-'
+                    // of a hyphenated compound (nyserda p13 'Other Co-' at line
+                    // end x=512.66 < margin 522, 'funding' wraps). The
+                    // opportunity-only model (derived on tokyoshugyo URLS after
+                    // CJK text, where Word wraps the WHOLE token first) stays
+                    // for '/'':' etc. and for CJK docs — hyphens there keep the
+                    // URL behavior (JP byte-identical by construction).
+                    let s783_hyphen_flush = ch == '-'
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S783_DISABLE").is_err();
+                    if latin_wordwrap && !s783_hyphen_flush {
                         // Record a break OPPORTUNITY (after this char) instead of forcing
                         // a flush — the maximal Latin token is kept together and only split
                         // by flush_word when it overflows a full line (Western word-wrap).

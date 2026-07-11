@@ -1037,7 +1037,33 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             && pr.math_blocks.is_empty()
                             && std::env::var("OXI_S537_DISABLE").is_err();
                         if !math_only && !image_only {
-                            current_blocks.push(Block::Paragraph(pr.paragraph));
+                            // S784 (2026-07-11, opt-out OXI_S784_DISABLE): a NON-EMPTY
+                            // paragraph whose ¶ MARK is hidden (`<w:pPr><w:rPr>
+                            // <w:vanish/>`) JOINS the following paragraph — Word hides
+                            // the mark so the next paragraph continues on the SAME line
+                            // and the hidden para's spacing vanishes (nyserda Section
+                            // 4.01 '…performed.]In consideration…' renders merged with
+                            // NO space; Oxi rendered 2 paras + after=48pt = a 61.8pt
+                            // phantom gap). The merged paragraph takes the FOLLOWING
+                            // para's properties (the surviving ¶ mark's — the deleted-
+                            // mark revision rule). The EMPTY-vanish case stays S673v
+                            // (layout skip). Corpus scan: exactly 1 such para exists
+                            // (nyserda); the S673v docs' hidden marks are all EMPTY.
+                            let s784_join = std::env::var("OXI_S784_DISABLE").is_err()
+                                && matches!(current_blocks.last(), Some(Block::Paragraph(prev))
+                                    if prev.style.ppr_rpr.as_ref().map_or(false, |r| r.vanish)
+                                        && prev.runs.iter().any(|r| !r.text.is_empty()));
+                            if s784_join {
+                                if let Some(Block::Paragraph(prev)) = current_blocks.pop() {
+                                    let mut joined = pr.paragraph;
+                                    let mut runs = prev.runs;
+                                    runs.extend(joined.runs);
+                                    joined.runs = runs;
+                                    current_blocks.push(Block::Paragraph(joined));
+                                }
+                            } else {
+                                current_blocks.push(Block::Paragraph(pr.paragraph));
+                            }
                         }
                         // OMML math blocks become sibling Block::Math entries.
                         for mb in pr.math_blocks {
@@ -1838,7 +1864,16 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // Inherit keepNext, keepLines, contextualSpacing, widowControl from style
             if ds.keep_next { style.keep_next = true; }
             if ds.keep_lines { style.keep_lines = true; }
-            if ds.contextual_spacing { style.contextual_spacing = true; }
+            // S782 (2026-07-11): a DIRECT `<w:contextualSpacing w:val="0"/>`
+            // (explicit OFF) wins over the style's contextualSpacing — the
+            // merge used to clobber it back to true (CT_OnOff val=0 class,
+            // same shape as has_explicit_widow_control / snapToGrid S606b).
+            // nyserda '(b)/(c)' cost items: ListParagraph style contextual ON,
+            // direct val=0 + before=240 → Word renders the 12pt before (gap
+            // 25.8 vs Oxi 13.8). Only nyserda carries the pattern corpus-wide.
+            if ds.contextual_spacing && !style.has_explicit_contextual_spacing {
+                style.contextual_spacing = true;
+            }
             // S675: before/afterAutospacing is NOT inherited from the paragraph style
             // (Word applies HTML autospacing only on the direct paragraph pPr).
             // Inherit widow_control: style's explicit setting takes precedence
@@ -2102,6 +2137,19 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
                     style.indent_first_line = Some(-hanging);
                     style.indent_first_line_chars = None;
+                } else if let Some(fl) = ctx.numbering.get_level_first_line(&npr.num_id, npr.ilvl) {
+                    // S781 (2026-07-11): the level may carry a POSITIVE w:firstLine
+                    // instead of w:hanging (mutually exclusive; hanging wins).
+                    // nyserda "(b) Direct Charges" numId=18 lvl0 = left=0
+                    // firstLine=720 + suff=nothing: Word renders the marker at
+                    // margin+36 (x=126) with continuation at the margin; dropping
+                    // firstLine placed the whole first line at the margin →
+                    // 36pt-wider wrap → the p12+ phase drift. Corpus scan: level
+                    // firstLine exists ONLY in 5 real_en English docs, 0 JP docs.
+                    if std::env::var("OXI_S781_DISABLE").is_err() {
+                        style.indent_first_line = Some(fl);
+                        style.indent_first_line_chars = None;
+                    }
                 }
             }
         }
@@ -2556,6 +2604,9 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.contextual_spacing = enabled;
+                        // S782: remember the DIRECT setting so the style merge
+                        // can't clobber an explicit val="0" back to true.
+                        style.has_explicit_contextual_spacing = true;
                     }
                     "spacing" => {
                         // S178 (2026-05-22): mirror the Start branch's

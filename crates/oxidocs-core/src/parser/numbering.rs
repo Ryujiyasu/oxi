@@ -25,6 +25,12 @@ pub struct NumberingLevel {
     pub indent_left: Option<f32>,
     /// Hanging indent in points (from w:ind w:hanging, converted from twips)
     pub indent_hanging: Option<f32>,
+    /// Positive first-line indent in points (from w:ind w:firstLine, converted
+    /// from twips). Mutually exclusive with hanging per ECMA-376 (hanging wins).
+    /// S781: nyserda's "(b) Direct Charges" list level = left=0 firstLine=720 —
+    /// dropping firstLine put the marker at the margin (x=90) where Word
+    /// renders it at margin+36 (x=126), widening the wrap by 36pt.
+    pub indent_first_line: Option<f32>,
     /// Suffix after number: "tab" (default), "space", or "nothing"
     pub suff: String,
     /// Tab stop position in points (from w:tabs/w:tab w:pos, converted from twips)
@@ -185,6 +191,15 @@ impl NumberingDefinitions {
         let abstract_num = self.abstract_nums.get(abstract_num_id)?;
         let level = abstract_num.levels.get(&ilvl)?;
         level.indent_hanging
+    }
+
+    /// S781: get the POSITIVE first-line indent (w:ind w:firstLine) for a
+    /// given numId and ilvl. Mutually exclusive with hanging (hanging wins).
+    pub fn get_level_first_line(&self, num_id: &str, ilvl: u8) -> Option<f32> {
+        let abstract_num_id = self.num_map.get(num_id)?;
+        let abstract_num = self.abstract_nums.get(abstract_num_id)?;
+        let level = abstract_num.levels.get(&ilvl)?;
+        level.indent_first_line
     }
 }
 
@@ -440,6 +455,7 @@ fn parse_numbering_level(
     let mut start: u32 = 1;
     let mut indent_left = None;
     let mut indent_hanging = None;
+    let mut indent_first_line = None;
     let mut suff = "tab".to_string();
     let mut tab_stop = None;
     let mut depth = 0;
@@ -512,6 +528,10 @@ fn parse_numbering_level(
                                     indent_hanging =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                 }
+                                "firstLine" => {
+                                    indent_first_line =
+                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                }
                                 _ => {}
                             }
                         }
@@ -540,6 +560,7 @@ fn parse_numbering_level(
         start,
         indent_left,
         indent_hanging,
+        indent_first_line,
         suff,
         tab_stop,
     })

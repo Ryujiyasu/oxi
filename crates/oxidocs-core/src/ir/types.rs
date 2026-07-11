@@ -1210,6 +1210,12 @@ pub struct ParagraphStyle {
     /// Whether widowControl was explicitly set in XML (for docDefaults inheritance)
     #[serde(default, skip_serializing)]
     pub has_explicit_widow_control: bool,
+    /// S782: whether contextualSpacing was explicitly set in the DIRECT pPr —
+    /// a direct `<w:contextualSpacing w:val="0"/>` must not be clobbered by
+    /// the style merge (nyserda ListParagraph items disable the style's
+    /// contextualSpacing to restore their direct before=240).
+    #[serde(default, skip_serializing)]
+    pub has_explicit_contextual_spacing: bool,
     /// Word wrap at CJK character boundaries (w:wordWrap, default true)
     /// When false, lines break only at spaces (no CJK inter-character break)
     #[serde(default = "default_true")]
@@ -1321,6 +1327,7 @@ impl Default for ParagraphStyle {
             keep_lines: false,
             widow_control: true,
             has_explicit_widow_control: false,
+            has_explicit_contextual_spacing: false,
             word_wrap: true,
             adjust_right_ind: true,
             text_alignment: None,

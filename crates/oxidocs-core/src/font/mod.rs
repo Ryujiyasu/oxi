@@ -411,7 +411,18 @@ impl FontMetricsRegistry {
 
         let mut fonts = HashMap::new();
 
+        // S786 (2026-07-11): the 'Symbol' registry entry (real symbol.ttf
+        // metrics, win/hhea 2059/450 upm 2048 = 1.2251em) drives Symbol-marker
+        // list line heights (nyserda bullets: Word 14.64 @12pt vs the old
+        // default-metrics 13.8; Word PDF confirms EVERY Symbol-marker line
+        // grows). Widths are EMPTY (S579 pattern) so advances keep the
+        // existing path. Opt-out for A/B: OXI_SYMBOL_METRICS_DISABLE.
+        let skip_symbol = std::env::var("OXI_SYMBOL_METRICS_DISABLE").is_ok();
+
         for raw in raw_list {
+            if skip_symbol && raw.family == "Symbol" {
+                continue;
+            }
             let upm = raw.units_per_em as f32;
             let ascent = raw.ascender as f32 / upm;
             let descent = (-raw.descender) as f32 / upm; // descender is negative in fonts
