@@ -149,7 +149,37 @@ impl NumberingDefinitions {
             // verbatim (usually empty; nyserda's definition-list lvl1 is
             // numFmt=none lvlText="" and Word draws no marker, while the
             // empty-lvlText fallback below fabricated a phantom "3.").
-            level.lvl_text.clone()
+            // S788 (2026-07-11): a %N PLACEHOLDER in the lvlText must still
+            // substitute — numFmt=none formats THIS level's counter as the
+            // EMPTY string (nyserda numId=11 lvl1: numFmt=none lvlText="%2"
+            // leaked a literal '%2' into the rendered text; Word shows no
+            // marker). Other-level references format per their own numFmt.
+            if level.lvl_text.contains('%') {
+                let mut text = level.lvl_text.clone();
+                for lvl_i in 0u8..9 {
+                    let placeholder = format!("%{}", lvl_i + 1);
+                    if !text.contains(&placeholder) {
+                        continue;
+                    }
+                    if lvl_i == ilvl {
+                        text = text.replace(&placeholder, "");
+                    } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
+                        if let Some(other_level) = abstract_num.levels.get(&lvl_i) {
+                            let other_key = (num_id.to_string(), lvl_i);
+                            let other_count = counters.get(&other_key).copied().unwrap_or(0);
+                            let other_fmt = if other_level.num_fmt == "none" {
+                                String::new()
+                            } else {
+                                format_number(other_count, &other_level.num_fmt)
+                            };
+                            text = text.replace(&placeholder, &other_fmt);
+                        }
+                    }
+                }
+                text
+            } else {
+                level.lvl_text.clone()
+            }
         } else if level.lvl_text.is_empty() {
             format!("{}.", formatted_num)
         } else {

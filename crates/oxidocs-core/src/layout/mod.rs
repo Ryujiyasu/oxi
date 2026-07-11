@@ -4015,9 +4015,17 @@ impl LayoutEngine {
                     // actually leaves line 0 on the current page. Let the
                     // natural per-line break handle the mid-paragraph case
                     // (34140 w_i=535 example).
+                    // OXI_LRPB_DISABLE=1 (2026-07-11, opt-IN measurement knob,
+                    // default off = byte-identical): suppress the block-level
+                    // SOFT LRPB respect — used with OXI_S391_PER_LINE_LRPB=0 to
+                    // measure the engine's NATURAL flow against fresh Word (the
+                    // LRPB-off divergence catalog; nyserda's 28/56 page-start
+                    // alignment collapses to 2/56 without LRPBs = the honest
+                    // baseline of the Latin flow).
+                    let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok();
                     let has_lrpb_at_start = para.runs.first()
                         .map(|r| r.has_last_rendered_page_break).unwrap_or(false);
-                    let lrpb_should_break = if has_lrpb_at_start && !elements.is_empty() {
+                    let lrpb_should_break = if has_lrpb_at_start && !elements.is_empty() && !lrpb_knob_off {
                         let est_h = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                         let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         let consumed = cursor.cursor_y - start_y;
