@@ -64,3 +64,4 @@ tools/oxi-gdi-renderer/--*.png
 
 # Per-worktree TASK.md files — not shared via main
 /TASK.md
+pipeline_data/docx_corpus/
