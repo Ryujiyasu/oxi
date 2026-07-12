@@ -18227,9 +18227,22 @@ impl LayoutEngine {
                                     // row-height balance. A paragraph with ANY CJK char
                                     // keeps the legacy per-char fill; pure-Latin
                                     // paragraphs (English forms) get the word wrap.
+                                    // v2 (2026-07-12): in a LATIN document the gate uses
+                                    // REAL-CJK (ideograph/kana) — kinsoku::is_cjk counts
+                                    // General Punctuation (U+2010-2044: – ' ' " "), so an
+                                    // English cell para with an EN DASH or curly quote
+                                    // fell back to the per-char fill and split mid-word
+                                    // («cha|rge», «ex|cept», «fr|aud» — uklocalspending
+                                    // p9 exclusions table; Word wraps at the word boundary
+                                    // and needs 1 more line per affected row = part of the
+                                    // wp36+ −1 cascade). JP docs keep the v1 gate
+                                    // byte-identical (the second disjunct requires
+                                    // !doc_body_has_real_cjk).
                                     let cellword_ok = std::env::var("OXI_CELLWORD_DISABLE").is_err()
                                         && ch.is_ascii_alphanumeric()
-                                        && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk));
+                                        && (para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
+                                            || (!self.doc_body_has_real_cjk
+                                                && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk_ideograph_or_kana))));
                                     if cellword_ok {
                                         let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
                                         let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
@@ -20874,7 +20887,9 @@ impl LayoutEngine {
                     let mut cellword_done = false;
                     if std::env::var("OXI_CELLWORD_DISABLE").is_err()
                         && ch.is_ascii_alphanumeric()
-                        && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
+                        && (para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
+                            || (!self.doc_body_has_real_cjk
+                                && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk_ideograph_or_kana))))
                     {
                         let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
                         let mut hit_boundary = false;
