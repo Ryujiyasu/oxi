@@ -4203,10 +4203,71 @@ impl LayoutEngine {
                             // val=0) Word splits even a 3-line follower (1+2), so the heading
                             // STAYS — exactly the old gate. Discriminator = next_para widow_control.
                             let s635 = std::env::var("OXI_S635_DISABLE").is_err();
-                            let pair_overflows = this_h + next_h > remaining
-                                && this_h + next_h <= effective_content_h;
                             let follower_moves_wholly =
                                 next_para.style.widow_control && next_lines <= 3;
+                            // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
+                            // when the follower is ITSELF keepNext (H1→H2), the keep unit
+                            // extends transitively to H2's follower (Word keeps the whole
+                            // chain together). Without this, H1's pair check (H1+H2 fits)
+                            // passed, then H2's own check pushed H2+body, STRANDING H1 at
+                            // the page bottom (ukframework «Reviews and winding up
+                            // arrangements» H1 alone at p37 y690.7 while Word starts p38
+                            // with the chain). The chain unit adds the inter-para collapse
+                            // gaps (max(after, before) — estimate_para_height excludes
+                            // space_after) and the FINAL follower's requirement per the
+                            // S635 rule: whole when it moves wholly (widowControl &&
+                            // ≤3 lines), else its 2-line orphan minimum (a 1-line start
+                            // at the page bottom is orphan-pushed, which would strand the
+                            // chain anyway).
+                            // The chain arm fires ONLY when H2 itself WOULD push (the
+                            // strand case) — evaluated one level deep with the same
+                            // S635 semantics; a chain with room stays untouched (the
+                            // unconditional-unit first cut mass-pushed mid-page chains,
+                            // {+1:66}).
+                            // ★HELD OPT-IN (OXI_S802=1, default OFF byte-identical):
+                            // even strand-scoped, the ESTIMATE-based one-level
+                            // simulation over-fires (framework {+1:27} — lead-in
+                            // keepNext paras before short bullets read as pushing
+                            // chains where Word keeps them; estimate heights carry
+                            // the S709 spacing corrections and inflate). The robust
+                            // fix is a POST-HOC BACK-PULL with actual geometry (when
+                            // a keepNext follower pushes, pull the stranded heading's
+                            // already-emitted elements to the new page — the
+                            // S750-rebalance / S728-replay pattern), a dedicated
+                            // session. The wp38 strand case itself IS real: Word
+                            // starts p38 with the whole H1→H2→body chain.
+                            let s802 = std::env::var("OXI_S802").is_ok();
+                            let (unit_next_h, follower_moves_wholly) = if s802
+                                && next_para.style.keep_next
+                            {
+                                if let Some(Block::Paragraph(nn)) = page.blocks.get(block_idx + 2) {
+                                    let nn_h = self.estimate_para_height(nn, content_width, grid_pitch, None, false, None, None);
+                                    let nn_one = self.estimate_para_height(nn, 1.0e6, grid_pitch, None, false, None, None);
+                                    let nn_lines = ((nn_h / nn_one.max(0.01)).round() as usize).max(1);
+                                    let nn_fmw = nn.style.widow_control && nn_lines <= 3;
+                                    let gap1 = para.style.space_after.unwrap_or(0.0)
+                                        .max(next_para.style.space_before.unwrap_or(0.0));
+                                    let gap2 = next_para.style.space_after.unwrap_or(0.0)
+                                        .max(nn.style.space_before.unwrap_or(0.0));
+                                    let tail = if nn_fmw { nn_h } else { 2.0 * nn_one };
+                                    let remaining_after = remaining - this_h - gap1;
+                                    let h2_unit = next_h + gap2 + tail;
+                                    let h2_would_push = h2_unit > remaining_after
+                                        && (next_h > remaining_after || nn_fmw)
+                                        && h2_unit <= effective_content_h;
+                                    if h2_would_push {
+                                        (gap1 + next_h + gap2 + tail, true)
+                                    } else {
+                                        (next_h, follower_moves_wholly)
+                                    }
+                                } else {
+                                    (next_h, follower_moves_wholly)
+                                }
+                            } else {
+                                (next_h, follower_moves_wholly)
+                            };
+                            let pair_overflows = this_h + unit_next_h > remaining
+                                && this_h + unit_next_h <= effective_content_h;
                             let do_push = if s635 {
                                 pair_overflows && (this_h > remaining || follower_moves_wholly)
                             } else {
