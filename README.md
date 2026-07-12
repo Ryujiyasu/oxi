@@ -54,9 +54,9 @@ Two things make this number trustworthy rather than asserted:
 
 The same SSIM pipeline scores third-party engines on identical inputs: each engine renders every corpus page, and every render is compared against **Microsoft Word's own render of that page** (150 DPI, resize-to-match, structural similarity). Word is the ground truth; nobody grades their own homework.
 
-![Word vs Oxi vs @silurus/ooxml — same page, same ground truth](docs/img/vert-3way.png)
+![Word vs Oxi vs LibreOffice vs @silurus/ooxml — same page, same ground truth](docs/img/vert-3way.png)
 
-*The same government research-application form (rotated table-cell labels, 459f05), rendered by Word, Oxi, and @silurus/ooxml. Word and Oxi are near-indistinguishable (SSIM 0.904); silurus wraps cell labels differently, so row heights inflate and the whole form drifts (0.791).*
+*The same government research-application form (rotated table-cell labels, 459f05), rendered by Word, Oxi, LibreOffice, and @silurus/ooxml. Word and Oxi are near-indistinguishable (SSIM 0.904); LibreOffice wraps some cell labels, so rows start to inflate (0.855); silurus wraps the most, and the whole form drifts (0.791).*
 
 | Engine | mean SSIM vs Word (per page) | pages where best |
 |--------|------------------------------|------------------|
