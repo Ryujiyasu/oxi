@@ -6992,6 +6992,22 @@ impl LayoutEngine {
             let header_y = page.header_distance.unwrap_or(36.0);
             let hdr_cw = page.size.width - page.margin.left - page.margin.right;
             let mut hdr_h = 0.0_f32;
+            // S813 (2026-07-13, default ON, opt-out OXI_S813_DISABLE): the header
+            // stack includes the FIRST paragraph's style space_before and
+            // COLLAPSES inter-para gaps — the S806 footer-stack model applied to
+            // the header (the loop added line+after only). uklocalspending's
+            // header ('____' underscores, Normal before/after=240): Word's
+            // landscape-Annex body top = header_dist 35.45 + before 12 + line
+            // 12.65 + after 12 = 72.1 (row-7 box 78 = 72.1 + cell padding);
+            // Oxi started ~61.5 -> every Annex continuation page gained ~12pt ->
+            // Oxi ran 1 page AHEAD by wp46 (the {-1:49} mass). The PORTRAIT
+            // sections hid the bug: their top margin (81) exceeds the header
+            // bottom, so the body top was margin-driven (the discriminator).
+            // Latin scope (JP header calibration untouched).
+            let s813 = !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S813_DISABLE").is_err();
+            let mut s813_first = true;
+            let mut s813_prev_sa: Option<f32> = None;
             for block in blocks {
                 if let Block::Paragraph(para) = block {
                     let fs = para.runs.first()
@@ -7002,7 +7018,21 @@ impl LayoutEngine {
                         .unwrap_or_else(|| self.doc_default_metrics());
                     let lh = metrics.word_line_height(fs, 96.0);
                     hdr_h += lh;
-                    hdr_h += para.style.space_after.unwrap_or(0.0);
+                    if s813 && !para.style.has_direct_spacing {
+                        let sb = para.style.space_before.unwrap_or(0.0);
+                        let sa = para.style.space_after.unwrap_or(0.0);
+                        if s813_first {
+                            hdr_h += sb.max(0.0);
+                        } else if let Some(prev) = s813_prev_sa {
+                            hdr_h += prev.max(sb);
+                        }
+                        s813_prev_sa = Some(sa);
+                        s813_first = false;
+                    } else {
+                        hdr_h += para.style.space_after.unwrap_or(0.0);
+                        s813_prev_sa = None;
+                        s813_first = false;
+                    }
                     // S731 (2026-07-03): a WRAPPING header paragraph pushes the
                     // body top by its FULL wrapped height — the 1-line-per-para
                     // model under-counted a 3-line header para by 2 lines, so
@@ -7022,6 +7052,13 @@ impl LayoutEngine {
                         }
                     }
                 } else if let Block::Table(t) = block {
+                    // S813: a table breaks the paragraph chain (no collapse across).
+                    if s813 {
+                        if let Some(last) = s813_prev_sa.take() {
+                            hdr_h += last;
+                        }
+                        s813_first = true;
+                    }
                     // S731: a TABLE in the header contributed ZERO height (only
                     // Block::Paragraph was handled) — probezhdrtbl {-1:5}. Sum
                     // the rows' natural heights (trHeight floor per row).
@@ -7060,6 +7097,12 @@ impl LayoutEngine {
                         hdr_h += img.height;
                     }
                 }
+            }
+            // S813: the LAST header paragraph's after-spacing sits between the
+            // header text and the body top (Word's Annex body top 72.1 =
+            // dist + before + line + after).
+            if let Some(last) = s813_prev_sa {
+                hdr_h += last;
             }
             header_y + hdr_h
         } else {
