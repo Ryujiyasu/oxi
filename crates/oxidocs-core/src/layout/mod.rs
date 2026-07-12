@@ -18282,6 +18282,11 @@ impl LayoutEngine {
                                 let metrics = self.doc_default_metrics();
                                 self.line_height_inner(self.default_font_size, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true)
                             };
+                            if std::env::var("OXI_DBG_EMPTYLH").is_ok() {
+                                eprintln!("[EMPTYLH] row={} cell={} lh={:.2} pprrpr_fs={:?} default_fs={} ls={:?} rule={:?} snap={}",
+                                    row_idx, cell_idx, empty_lh, pprrpr_fs, self.default_font_size,
+                                    effective_line_spacing, effective_line_rule, para.style.snap_to_grid);
+                            }
                             // S428 (2026-05-29): emit a zero-glyph Text element for the
                             // empty cell paragraph so the row-split / re-anchor logic
                             // (mod.rs ~9215) treats it as a real line box. Without an
