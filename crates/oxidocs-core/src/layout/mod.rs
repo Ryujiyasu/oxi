@@ -3081,6 +3081,16 @@ impl LayoutEngine {
                                 h += prev.max(sb);
                             }
                             s804_prev_sa = Some(sa);
+                            // S810 (2026-07-13): a non-auto (exact/atLeast) fn para
+                            // KEEPS its style sb/sa inside estimate_para_height
+                            // (should_reset is auto-only) — the S806(d) footer
+                            // discovery applied to the fn stack. Strip so the gap
+                            // accounting is single-source (ukframework
+                            // FootnoteText: line=240 exact + after=60; Word fn
+                            // pitch = 15.0 = exact 12 + after 3, NOT 18).
+                            if !matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto")) {
+                                h -= sb + sa;
+                            }
                         } else {
                             s804_prev_sa = Some(0.0);
                         }
@@ -3134,11 +3144,14 @@ impl LayoutEngine {
                                 lines * cells * pitch
                             } else if !self.doc_body_has_real_cjk
                                 && std::env::var("OXI_S808_DISABLE").is_err()
+                                && matches!(p2.style.line_spacing_rule.as_deref(), None | Some("auto"))
                             {
                                 // S808 (2026-07-12): Latin footnote lines are the
                                 // hhea natural (TNR10 11.499 - the S779/S805 line),
                                 // not the estimate's word_line_height_table_cell
                                 // (10.5) - uklocal fn13 est 21.0 vs Word 23.0.
+                                // S810: auto-rule lines only — an exact-rule fn
+                                // (ukframework line=240) uses its declared box.
                                 let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty())
                                     .map(|r| &r.style).cloned().unwrap_or_default();
                                 let fs = self.resolve_font_size(&rs, &p2.style);
@@ -3172,8 +3185,13 @@ impl LayoutEngine {
                             // 9/11/12, Calibri 10-12; the +-0.5 residuals
                             // (TNR12, Arial10, Calibri9) await the font-metric
                             // rule. Latin scope; JP fn stack stays calibrated.
+                            // S810: an EXACT-rule fn para's box clamps the
+                            // superscript raise (Word ukframework pitch 15.0
+                            // exact, no growth) — the raise applies to auto/
+                            // atLeast lines only.
                             if !self.doc_body_has_real_cjk
                                 && std::env::var("OXI_S807_DISABLE").is_err()
+                                && p2.style.line_spacing_rule.as_deref() != Some("exact")
                             {
                                 let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty())
                                     .map(|r| &r.style).cloned().unwrap_or_default();
@@ -3194,8 +3212,10 @@ impl LayoutEngine {
                                 lines * cells * pitch
                             } else if !self.doc_body_has_real_cjk
                                 && std::env::var("OXI_S808_DISABLE").is_err()
+                                && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"))
                             {
                                 // S808: Latin fn lines = hhea natural (see above).
+                                // S810: auto-rule lines only.
                                 let rs = p.runs.iter().find(|r| !r.text.trim().is_empty())
                                     .map(|r| &r.style).cloned().unwrap_or_default();
                                 let fs = self.resolve_font_size(&rs, &p.style);
@@ -4378,6 +4398,54 @@ impl LayoutEngine {
                                     t, this_h, next_h, remaining, one_line_h, next_lines, next_para.style.widow_control, pair_overflows, follower_moves_wholly, do_push);
                             }
                             if do_push {
+                                // S802B (2026-07-13, default ON, opt-out OXI_S802B_DISABLE):
+                                // keepNext CHAIN back-pull with ACTUAL geometry. The pairwise
+                                // lookahead is greedy: H1's check passes (H1+H2 fit the page
+                                // bottom), then H2's own check pushes H2 — STRANDING H1
+                                // (ukframework natural: «Reviews and winding up arrangements»
+                                // H1 25pt alone at the p37 bottom; Word starts p38 with the
+                                // whole H1→H2→body chain; the −1×7 wp38-41 cascade). Word
+                                // treats keepNext transitively. The v1/v2 ESTIMATE-based chain
+                                // simulations over-fired ({+1:66}/{+1:27}, held opt-in
+                                // OXI_S802) — this back-pull uses the ALREADY-LAID geometry
+                                // instead: when the push fires, walk back over immediately
+                                // preceding keepNext paragraphs still on this page, drain
+                                // their emitted elements, and re-emit them at the new page
+                                // top (the S728-replay / S750-rebalance element-move
+                                // pattern); the cursor continues below them so this
+                                // paragraph lays after the moved chain with its normal
+                                // spacing collapse. space_before drops at the page top
+                                // (Word p38: the moved title box sits AT the content top).
+                                // Latin-doc scope v1 (!doc_body_has_real_cjk) — the JP
+                                // corpus keeps its calibrated keepNext behavior
+                                // byte-identically. Caveat (v1): the element split is
+                                // position-based (y >= the chain-start cursor), so a float
+                                // anchored earlier but rendered below the chain start would
+                                // be swept along — none in the EN corpus headings.
+                                let s802b = !self.doc_body_has_real_cjk
+                                    && std::env::var("OXI_S802B_DISABLE").is_err();
+                                let mut pull_from = block_idx;
+                                if s802b && !(num_columns > 1 && current_column + 1 < num_columns) {
+                                    while pull_from > 0 {
+                                        if let Some(Block::Paragraph(pp)) = page.blocks.get(pull_from - 1) {
+                                            if pp.style.keep_next
+                                                && block_page_indices.get(pull_from - 1) == Some(&current_page_idx)
+                                            {
+                                                pull_from -= 1;
+                                                continue;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                                let pulled: Vec<LayoutElement> = if pull_from < block_idx {
+                                    let y0 = block_y_positions[pull_from] - 0.1;
+                                    let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
+                                        elements.drain(..).partition(|e| e.y < y0);
+                                    elements = keep;
+                                    moved
+                                } else { Vec::new() };
+                                let chain_end_old = cursor.cursor_y;
                                 if num_columns > 1 && current_column + 1 < num_columns {
                                     current_column += 1;
                                     start_x = col_x_positions[current_column];
@@ -4398,6 +4466,32 @@ impl LayoutEngine {
                                     footnote_reserve_current = 0.0;
                                     footnote_ids_current_page.clear();
                                     commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
+                                }
+                                if !pulled.is_empty() {
+                                    let min_y = pulled.iter().map(|e| e.y)
+                                        .fold(f32::MAX, f32::min);
+                                    let dy = cursor.cursor_y - min_y;
+                                    if std::env::var("OXI_DBG_KN635").is_ok() {
+                                        eprintln!("[S802B] pull {} blocks ({} els) dy={:.1} chain_end_old={:.1}",
+                                            block_idx - pull_from, pulled.len(), dy, chain_end_old);
+                                    }
+                                    for mut e in pulled {
+                                        e.y += dy;
+                                        // Mirror the S728 clone-shift: border content carries
+                                        // its own y1/y2 coordinates.
+                                        if let LayoutContent::TableBorder { ref mut y1, ref mut y2, .. } = e.content {
+                                            *y1 += dy;
+                                            *y2 += dy;
+                                        }
+                                        elements.push(e);
+                                    }
+                                    // Cursor continues below the moved chain, preserving the
+                                    // chain-internal advance (end − first element top).
+                                    cursor.set(chain_end_old + dy);
+                                    for bi in pull_from..block_idx {
+                                        if let Some(p) = block_page_indices.get_mut(bi) { *p = current_page_idx; }
+                                        if let Some(y) = block_y_positions.get_mut(bi) { *y += dy; }
+                                    }
                                 }
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
@@ -5907,8 +6001,10 @@ impl LayoutEngine {
                             // Only grid-snap if the paragraph opts in (snapToGrid default=true).
                             // b837's FootnoteText style has snapToGrid=0 → Word uses natural.
                             // S808 render mirror: Latin fn lines = hhea natural.
+                            // S810: auto-rule lines only (exact keeps its box).
                             let s808_line = if !self.doc_body_has_real_cjk
                                 && std::env::var("OXI_S808_DISABLE").is_err()
+                                && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"))
                             {
                                 metrics.natural_line_height_hhea(line_fs).max(line_nat)
                             } else { line_nat };
@@ -5936,10 +6032,12 @@ impl LayoutEngine {
                                     let (h, _) = grid_snap_para(p);
                                     nh += h;
                                     // S807 render mirror (estimate==render).
+                                    // S810: exact-rule box clamps the raise.
                                     if s807_first {
                                         s807_first = false;
                                         if !self.doc_body_has_real_cjk
                                             && std::env::var("OXI_S807_DISABLE").is_err()
+                                            && p.style.line_spacing_rule.as_deref() != Some("exact")
                                         {
                                             let rs = p.runs.iter().find(|r| !r.text.trim().is_empty())
                                                 .map(|r| &r.style).cloned().unwrap_or_default();
@@ -5954,6 +6052,10 @@ impl LayoutEngine {
                                             nh += prev.max(sb);
                                         }
                                         prev_sa = Some(sa);
+                                        // S810 strip (see estimate_footnote_h).
+                                        if !matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto")) {
+                                            nh -= sb + sa;
+                                        }
                                     } else {
                                         prev_sa = Some(0.0);
                                     }
