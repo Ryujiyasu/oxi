@@ -16587,9 +16587,16 @@ impl LayoutEngine {
             } else {
                 table_grid_pitch.unwrap_or(14.0)
             };
+            // S814 (2026-07-13, experiment OXI_S814=1): the row-start-LRPB
+            // veto blocks splitting even when the LRPB is STALE (uklocal
+            // Annex row 2: fresh Word SPLITS the row, leaving 2 lines on
+            // p36; the saved break is from different geometry) — the wp36/
+            // 50/51 +1x16. The veto's necessity for the JP corpus is being
+            // measured; if no JP doc relies on it, it is removed.
+            let s814_no_veto = std::env::var("OXI_S814").is_ok();
             let s754_split = std::env::var("OXI_S754_DISABLE").is_err()
                 && row.height.is_none()
-                && !row_has_lrpb_at_cell_start
+                && (!row_has_lrpb_at_cell_start || s814_no_veto)
                 && (page_bottom - cursor.cursor_y) >= s754_min_fit;
             if std::env::var("OXI_DBG754").is_ok() && s754_split && row_overflows
                 && !row.cant_split && has_content
