@@ -6798,6 +6798,21 @@ impl LayoutEngine {
             let cw = page.size.width - page.margin.left - page.margin.right;
             let gp = page.grid_line_pitch;
             let mut footer_h: f32 = 0.0;
+            // S803 (2026-07-12, opt-out OXI_S803_DISABLE): estimate_para_height
+            // DROPS style-level before/after spacing (the S709 should_reset
+            // class) — the footer stack must include it. uklocalspending:
+            // Footer basedOn Normal (before/after=240 = 12pt each) + line=260
+            // exact → Word renders the 2-para footer at 25.1pt pitch and keeps
+            // the body above ~720.3 (deepest Word baseline 717); Oxi estimated
+            // footer_h=49 → eff_bot 747.8 → the body packed ~20pt into Word's
+            // footer zone on EVERY page = the doc-wide page-tail over-pack
+            // (pcd −4) AND 5 footnotes dropped at fit=0 (the body overlapped
+            // the footnote area). Add the collapsed inter-para gaps + the last
+            // para's after; the FIRST para's before is the existing S780
+            // keep-out. Gated to !has_direct_spacing (= exactly when the
+            // estimate dropped it).
+            let s803_on = std::env::var("OXI_S803_DISABLE").is_err();
+            let mut s803_prev_sa: Option<f32> = None;
             for block in blocks {
                 if let Block::Paragraph(p) = block {
                     // Day 33 part 18 (2026-05-10): skip framePr-wrapped paragraphs.
@@ -6833,6 +6848,24 @@ impl LayoutEngine {
                         self.estimate_para_height(p, cw, gp, None, false, None, None)
                     };
                     footer_h += h;
+                    // S803: fold the style-level spacing the estimate dropped.
+                    if s803_on && !p.style.has_direct_spacing {
+                        let sb = p.style.space_before.unwrap_or(0.0);
+                        let sa = p.style.space_after.unwrap_or(0.0);
+                        if let Some(prev) = s803_prev_sa {
+                            footer_h += prev.max(sb);
+                        }
+                        s803_prev_sa = Some(sa);
+                    } else {
+                        s803_prev_sa = Some(0.0);
+                    }
+                }
+            }
+            // S803: the last footer paragraph's after-spacing sits between the
+            // footer text and the page edge in Word's stack.
+            if s803_on {
+                if let Some(last) = s803_prev_sa {
+                    footer_h += last;
                 }
             }
             // S780 (2026-07-11): the footer FIRST paragraph's before-spacing and
