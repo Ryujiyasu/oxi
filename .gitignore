@@ -67,3 +67,8 @@ tools/oxi-gdi-renderer/--*.png
 /TASK.md
 pipeline_data/docx_corpus/
 *.stackdump
+
+# Local-only research memory (disclosure decision 2026-07-13)
+CLAUDE.local.md
+docs/spec/
+AGENTS_STATE.json
