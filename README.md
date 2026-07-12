@@ -76,6 +76,8 @@ Oxi's Ra loop is a mechanical convergence toward SSIM = 1.0 against Microsoft Wo
 
 **Oxi's unique combination:** OSS (MPL-2.0 core + permissive bindings — embeddable in proprietary products, unlike AGPL) + Rust/WASM client-side + dual-format first-class (.docx + .odt, no proprietary "Oxi format") + COM-measured pixel-perfect Word compatibility + zero server cost. No other project occupies this intersection.
 
+The claims above are measured, not asserted — see [Cross-Renderer Comparison](#cross-renderer-comparison--same-documents-same-ground-truth) for SSIM-vs-Word numbers against LibreOffice, ONLYOFFICE, and @silurus/ooxml on the same documents.
+
 LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). Microsoft Word inverts that. Oxi's IR is format-agnostic from the start — neither format owns it, so neither degrades on round-trip.
 
 ---
@@ -217,15 +219,15 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
-  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12", "06-30"]
+  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12", "06-30", "07-12"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189, 0.9253]
+  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189, 0.9253, 0.9370]
 ```
 
 > The small step at **05-30** is not a regression: Phase 3 recomputed a clean
 > SSIM baseline from scratch, so points before and after that date sit on
-> slightly different measurement bases. **06-30** is the current per-page mean
-> over scored pages (per-doc mean **0.9487**).
+> slightly different measurement bases. **07-12** is the current per-page mean
+> over scored pages (per-doc mean **0.9587**).
 
 | Date | avg SSIM | gate / Phase | Key Changes |
 |------|----------|--------------|-------------|
@@ -249,10 +251,29 @@ xychart-beta
 | 2026-06-12 | per-page **0.9189** | **Phase 3** · Phase 1 54/55 | Two weeks of COM-measured spec re-derivations (S495-S548): `lineRule=exact` text bottom-aligns in its box (S495), cell inline images (S533), inline drawing canvases (S535/S537), three justification bugs — style-chain `jc` inheritance, explicit `jc=left` vs style default, jc-left natural breaks (S539/S540) — demand *oikomi* with a line-total fs/2 budget under Word-2010 compat (S543-S546), **character-width trio**: UPM-256 halfwidth = fs/2 exact, autoSpaceDE/DN = fs/4 true-space, yakumono pair-halving gated on `w:kern` with the full 26×26 pair table (S546/S547), compat-15 oidashi-not-burasagari + exact-line page-break threshold (S548). The single Phase-1 FAIL (`3a4f9f`) is down to 3 paragraphs (one page early), all traced to the inline-image text-line model |
 | 2026-06-30 | per-page **0.9253** · per-doc **0.9487** | **Phase 3** · Phase 1 86/87 | Corpus expanded to 87 body-text docs (Phase 1) / 238 SSIM-scored docs. A long pagination + fidelity run (S559-S707): the *char-budget wall* (per-line 約物 demand-compression model, derived from a controlled synthetic dataset + Word-PDF render-truth — gate, mechanism, half-em/0.32em caps, ぶら下げ), the **form-family row-height re-derivation** (drift is a cell-tcBorder border-box overhead, not CJK line-height — S648/S660/S661/S666), the **gen2/Latin vertical & horizontal stack** (no-type-docGrid hhea line height S671, render-x word separation S672, glyph-centering S614/S670, DWrite kerning-off S668), **font substitution** (Latin-only eastAsia → MS Mincho S634, embedded Zen Old Mincho S612z), multi-column + vertical/bidi section flow (S637/S638/S678/S679), and a coverage sweep graduating **vertical writing, tate-chu-yoko (縦中横), ruby, warichu (割注), emphasis marks, run/paragraph shading, and character borders** (S654-S707). Found increasingly via a Word-vs-LibreOffice bug-finder (pages where LibreOffice ≈ Word but Oxi ≠ Word = a fixable Oxi bug) and a feature-injection perturbation harness. The sole remaining Phase-1 FAIL (`tokyoshugyo`) is the legacy compat≤14 約物-oikomi body wrap |
 | 2026-07-03 | — | **Phase 1 87/87 = 100%** | **Pagination COMPLETE**: every paragraph of every corpus document lands on the same page as Microsoft Word (S713-S722 closed the last doc, `tokyoshugyo`). The same day, an **adversarial probe harness** (74 self-authored feature probes gated against real Word) opened the next frontier: 11 fixes shipped in one day (multi-column paragraph split S723, gate hardening S724, paragraph-tail tolerance S725, tall-footer/footnote/header reservations S726/S727/S731, tblHeader repeat S728, continuous-section margins + zero-height break mark S729/S730, evenPage/oddPage parity blank pages S732, column breaks S733) — all with zero corpus regressions |
+| 2026-07-12 | per-page **0.9370** · per-doc **0.9587** | **Phase 3** · Phase 1 87/87 | Row-height border-box cursor model (ROWBOX2 bundle), derived cell char-budget (CELLPAIR), SAMPLE watermark (WordArt em/advance-fit), Latin underline, English real-document corpus opened (6 UK/US government docs added to the pagination gate; 3 already PASS) — stale-LRPB root-caused, justified space-shrink, numbering-indent precedence, en/em-dash font class (S758-S801) |
 
 **Phase-based gate** (since 2026-04-28): the merge gate is currently **Phase 3 — pixel SSIM** (mean ≥ 0.99 + bottom-N floor), active since 2026-05-30. Earlier phases are kept as regression sentinels: **Phase 1** pagination correctness (per-paragraph page match, 54/55) and **Phase 2** element IoU (mean 0.9692). Phases 1 and 2 each plateaued below their entry bars for structural reasons — pagination on one split-table outlier, IoU because its median-dy subtraction hides uniform table offsets — so the gate advanced to the metric that can see the remaining pixel error. The phase-based methodology is documented in [CLAUDE.md](CLAUDE.md) under "Merge gate".
 
 For detailed daily progress, COM-confirmed specifications, and DML structural comparison results, see [docs/layout_accuracy.md](docs/layout_accuracy.md) and [RESEARCH_LOG.md](RESEARCH_LOG.md).
+
+### Cross-Renderer Comparison — same documents, same ground truth
+
+The same SSIM pipeline scores third-party engines on identical inputs: each engine renders every corpus page, and every render is compared against **Microsoft Word's own render of that page** (150 DPI, resize-to-match, structural similarity). Word is the ground truth; nobody grades their own homework.
+
+| Engine | mean SSIM vs Word (per page) | pages where best |
+|--------|------------------------------|------------------|
+| **Oxi** (2026-07-12 build) | **0.9370** | **188** / 406 |
+| ONLYOFFICE (x2t headless → PDF) | 0.8913 | 135 / 406 |
+| LibreOffice (soffice headless → PDF) | 0.8872 | 83 / 406 |
+
+Corpus: the 235-document / 410-page Japanese business-document baseline (regulations, government forms, contracts). LibreOffice and ONLYOFFICE page scores were rendered 2026-05-31 (both engines are deterministic; their output for these files does not change); the Oxi column is the current build. On 109 pages both third-party engines still beat Oxi — exactly those pages feed the bug-finder loop ("everyone matches Word except Oxi" = a guaranteed-fixable bug), so this table is a work queue, not just a scoreboard.
+
+Against **@silurus/ooxml** (the closest architectural neighbor — also Rust/WASM + canvas, driven headlessly via Playwright): on a 5-document Japanese subset (first 2 pages each, same Word ground truth) **Oxi 0.900 / LibreOffice 0.784 / silurus 0.741**, Oxi best on 9/9 scored pages; silurus also mis-paginates the Japanese corpus (e.g. 97 pages vs Word's 94 on a split-table document, 2 vs 1 on a single-page form). Same architecture, different fidelity — the difference is the measurement loop, not the tech stack.
+
+Honest counterpoint: on the newer 6-document **English** corpus (UK/US government forms and contracts, opened 2026-07-08) the engines are currently tied at ~0.8 per-doc, with LibreOffice slightly ahead — Japanese typography is where Oxi's measured differentiation is today. The English documents are in the same pagination gate and closing week by week (3 of 6 already at 100% paragraph-page match).
+
+Reproduce: `tools/metrics/compare_renderers_3way.py` (Libra/OO), `tools/metrics/render_libra.py`, `tools/metrics/render_onlyoffice.py`, `tools/metrics/browser_oracle.py` + `tools/browser-oracle/` (silurus), `tools/metrics/ssim_now.py` (Oxi absolute re-measure).
 
 ---
 
