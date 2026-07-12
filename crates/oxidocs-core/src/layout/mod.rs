@@ -3057,8 +3057,33 @@ impl LayoutEngine {
                 let cw = page.size.width - page.margin.left - page.margin.right;
                 let mut h: f32 = 0.0;
                 let mut first_para = true;
+                // S804 (2026-07-12, opt-out OXI_S804_DISABLE): footnote paragraphs
+                // inherit the style chain's before/after spacing (uklocalspending:
+                // FootnoteText basedOn Normal before/after=240 -> Word inter-note
+                // gap = line 11.5 + collapse 12 = 23.6, and the LAST note's after
+                // sits inside the bottom-anchored stack). estimate_para_height
+                // drops style-level spacing (the S709/S803 class), so the
+                // reservation under-counted ~24pt/note -> fn pages over-packed
+                // ~60-100pt (probe fn_probe.py: 2 notes cost 98.5pt of body in
+                // Word vs ~61 reserved). Add the internal collapse gaps + the
+                // trailing after; the first paragraph's before belongs to the
+                // separator gap (footnote_sep_alloc). Gated per-para to
+                // !has_direct_spacing = exactly when the estimate dropped it; JP
+                // footnote styles carry no spacing -> +0, byte-identical.
+                let s804 = std::env::var("OXI_S804_DISABLE").is_err();
+                let mut s804_prev_sa: Option<f32> = None;
                 for nb in &note.blocks {
                     if let Block::Paragraph(p) = nb {
+                        if s804 && !p.style.has_direct_spacing {
+                            let sb = p.style.space_before.unwrap_or(0.0);
+                            let sa = p.style.space_after.unwrap_or(0.0);
+                            if let Some(prev) = s804_prev_sa {
+                                h += prev.max(sb);
+                            }
+                            s804_prev_sa = Some(sa);
+                        } else {
+                            s804_prev_sa = Some(0.0);
+                        }
                         if first_para {
                             // Footnote rendering prepends a seq number to the first
                             // paragraph, which increases its width and may add a line.
@@ -3134,6 +3159,11 @@ impl LayoutEngine {
                         }
                     }
                 }
+                if s804 {
+                    if let Some(last) = s804_prev_sa {
+                        h += last;
+                    }
+                }
                 h
             } else {
                 0.0
@@ -3173,11 +3203,32 @@ impl LayoutEngine {
                             });
                         // Separator paragraph = one footnote text line. Never
                         // reserve LESS than the legacy base.
-                        return metrics.word_line_height_no_grid(fs).max(base);
+                        // S804: the separator region also carries the collapsed
+                        // style spacing on both sides (body para after -> sep para
+                        // -> first note before; probe: 12 + sep line + 12). Use
+                        // 2 x the first note's style before as the two collapsed
+                        // gaps (uniform-Normal docs; 0 when the style has none).
+                        let s804_sep = if std::env::var("OXI_S804_DISABLE").is_err()
+                            && !p.style.has_direct_spacing {
+                            2.0 * p.style.space_before.unwrap_or(0.0)
+                        } else { 0.0 };
+                        return metrics.word_line_height_no_grid(fs).max(base) + s804_sep;
                     }
                 }
             }
-            base
+            // S804: same spacing addition for the grid-doc path (JP footnote
+            // styles carry no spacing -> +0, byte-identical).
+            let s804_sep = if std::env::var("OXI_S804_DISABLE").is_err() {
+                page.footnotes.iter().find(|n| n.number == first_id)
+                    .and_then(|note| note.blocks.first())
+                    .and_then(|b| match b {
+                        Block::Paragraph(p) if !p.style.has_direct_spacing =>
+                            Some(2.0 * p.style.space_before.unwrap_or(0.0)),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0)
+            } else { 0.0 };
+            base + s804_sep
         };
 
         // Multi-column layout: compute column X positions and widths
@@ -5817,12 +5868,33 @@ impl LayoutEngine {
                             (height, line_count)
                         };
                         let mut note_heights: Vec<f32> = Vec::new();
+                        let s804_r = std::env::var("OXI_S804_DISABLE").is_err();
                         for note in &notes {
                             let mut nh: f32 = 0.0;
+                            // S804 render mirror: the fit/area math must include
+                            // the same style spacing the reservation now counts
+                            // (Fix C estimate==render invariant; without it the
+                            // rendered notes overflowed fn_bot by the spacing).
+                            let mut prev_sa: Option<f32> = None;
                             for nb in &note.blocks {
                                 if let Block::Paragraph(p) = nb {
                                     let (h, _) = grid_snap_para(p);
                                     nh += h;
+                                    if s804_r && !p.style.has_direct_spacing {
+                                        let sb = p.style.space_before.unwrap_or(0.0);
+                                        let sa = p.style.space_after.unwrap_or(0.0);
+                                        if let Some(prev) = prev_sa {
+                                            nh += prev.max(sb);
+                                        }
+                                        prev_sa = Some(sa);
+                                    } else {
+                                        prev_sa = Some(0.0);
+                                    }
+                                }
+                            }
+                            if s804_r {
+                                if let Some(last) = prev_sa {
+                                    nh += last;
                                 }
                             }
                             note_heights.push(nh);
@@ -8107,10 +8179,20 @@ impl LayoutEngine {
                             no_grid_raw_max = no_grid_raw_max.max(font_size * 1448.0 / 1000.0);
                         }
                     }
+                    // S805: exact hhea natural (asc+desc+lineGap, no GDI px
+                    // quantization) — Word's true-LM0 Latin per-line height
+                    // (Arial 11: 12.649 vs the px-rounded run_base 12.75;
+                    // fn_probe PDF para pitch 24.6 = 12.649 device-floored).
+                    // Same value/model as S671's no-type-grid Latin.
+                    let mut s805_hhea_max: f32 = 0.0;
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         let mut h = m.word_line_height_no_grid(fs);
+                        if !m.is_cjk_83_64_font() {
+                            let hh = m.natural_line_height_hhea(fs);
+                            if hh > s805_hhea_max { s805_hhea_max = hh; }
+                        }
                         // Raw (un-floored) height for Multiple spacing cumulative base
                         let mut raw = (m.win_ascent + m.win_descent) * fs;
                         // S612z-circle (2026-06-23): embedded Zen Old Mincho renders CIRCLED
@@ -8143,6 +8225,13 @@ impl LayoutEngine {
                     }
                     if is_multiple_spacing && no_grid_raw_max > 0.0 {
                         run_base.max(no_grid_raw_max)
+                    } else if !is_multiple_spacing && s805_hhea_max > 0.0
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S805_DISABLE").is_err()
+                    {
+                        // S805 basis: exact hhea natural for the Latin-doc LM0
+                        // single-spacing cumulative (see advance-site comment).
+                        s805_hhea_max
                     } else {
                         run_base.max(no_grid_max)
                     }
@@ -8150,6 +8239,18 @@ impl LayoutEngine {
                     run_base
                 }
             };
+            if std::env::var("OXI_DBG805").is_ok() {
+                eprintln!("[DBG805] base={:.4} run_base(ma+md)={:.4}", base, {
+                    let mut ma: f32 = 0.0; let mut md: f32 = 0.0;
+                    for frag in &lines[0].fragments {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                        if m.word_ascent_pt(fs) > ma { ma = m.word_ascent_pt(fs); }
+                        if m.word_descent_pt(fs) > md { md = m.word_descent_pt(fs); }
+                    }
+                    ma + md
+                });
+            }
             let raw = base * para.style.line_spacing.unwrap_or(1.0) * 20.0;
             // S584 (2026-06-16): a TYPED docGrid line (body OR cell) is never
             // shorter than 1 grid cell, even with a COMPRESSING auto multiplier
@@ -10432,8 +10533,20 @@ impl LayoutEngine {
                 let rounded_pt = (raw_pt * 2.0).round() / 2.0;
                 raw_pt > rounded_pt
             } else { false };
+            // S805 (2026-07-12, default ON, opt-out OXI_S805_DISABLE): a LATIN document's LM0
+            // single-spacing line advances by the EXACT raw height (Arial
+            // hhea 1.1499×11 = 12.649), not the cumulative CEIL-10tw
+            // (12.649→13.0 = +0.35pt/para → +9pt/page; fn_probe render-truth:
+            // Word body para pitch 24.6 vs Oxi 25.0). The S510 CEIL was a
+            // COMPENSATION for the CJK 83/64 raw deficit (−0.021pt/line) —
+            // a Latin raw has no deficit, so CEIL purely over-advances. Same
+            // exact-accumulate model as S671 (no-type-grid Latin). JP docs
+            // (doc_body_has_real_cjk) byte-identical by construction.
+            let s805_latin_lm0 = grid_pitch.is_none() && is_single_lm0
+                && raw_spaced_tw > 0.0 && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S805_DISABLE").is_err();
             // LM=0 cumulative ROUND includes LAST line; LM≥1 cumulative CEIL excludes last.
-            let use_cumulative = (is_multiple_spacing || single_lm0_safe) && raw_spaced_tw > 0.0
+            let use_cumulative = (is_multiple_spacing || single_lm0_safe || s805_latin_lm0) && raw_spaced_tw > 0.0
                 && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 1.5)
                 && (grid_pitch.is_none() || !is_last)
                 // S671 (2026-06-25): a NO-TYPE docGrid NON-CJK paragraph advances by
@@ -10534,7 +10647,12 @@ impl LayoutEngine {
                 // Phase-1 safe). δ via OXI_S629_DELTA (default 0.12).
                 let s629 = grid_pitch.is_none() && is_single_lm0
                     && std::env::var("OXI_S629_DISABLE").is_err();
-                if s467_vsnap && is_multiple_spacing {
+                if s805_latin_lm0 {
+                    // S805: exact accumulate — no 10tw quantization (Word
+                    // device-snaps only at render; per-line snap accumulates
+                    // error, the S674 lesson).
+                    cursor.advance(raw_spaced_tw / 20.0);
+                } else if s467_vsnap && is_multiple_spacing {
                     // visual_y advances by the EXACT raw line height; cursor_y by the
                     // current rounded amount (page-break unchanged). Emit snaps visual_y.
                     cursor.advance_split((cn - cc) as f32 / 20.0, raw_spaced_tw / 20.0);
