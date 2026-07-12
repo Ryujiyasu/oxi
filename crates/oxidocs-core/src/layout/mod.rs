@@ -2288,7 +2288,17 @@ impl LayoutEngine {
     /// deferred until that table bug is dissected.
     fn resolve_font_family_for_text_g<'a>(&'a self, text: &str, run_style: &'a RunStyle, para_style: &'a ParagraphStyle, quote_latin: bool) -> Option<&'a str> {
         let s763 = quote_latin && std::env::var("OXI_S763_DISABLE").is_err();
-        let is_q = |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}');
+        // S801 (2026-07-12, opt-out OXI_S801_DISABLE): the EN/EM DASH
+        // (U+2013/U+2014) is the same ambiguous General-Punctuation class as the
+        // curly quotes — is_cjk classifies it CJK, so an en-dash in an English
+        // run routed the line to the eastAsia chain (ukframework: explicit
+        // eastAsia "Times New Roman" [Latin-only] → S634 substituted MS Mincho →
+        // the dash LINE grew 13.43→15.0 [com 11pt], +1.56/line = the p36-37
+        // drift feeding the wp38 keepNext knife-edge). The S763c eastAsia-LANG
+        // gate keeps CJK-lang docs on the eastAsia chain exactly as before.
+        let s801 = std::env::var("OXI_S801_DISABLE").is_err();
+        let is_q = move |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
+            || (s801 && matches!(c, '\u{2013}' | '\u{2014}'));
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
         // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
@@ -2420,7 +2430,12 @@ impl LayoutEngine {
     /// the Latin metrics; with real CJK companions it stays eastAsia.
     fn metrics_for_char_in(&self, ch: char, run_has_real_cjk: bool, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         let s763 = std::env::var("OXI_S763_DISABLE").is_err();
-        let quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}');
+        // S801: en/em dash = the same ambiguous class (see
+        // resolve_font_family_for_text_g) — Latin metrics for a dash in a
+        // Latin run; CJK-companion runs keep eastAsia.
+        let quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
+            || (std::env::var("OXI_S801_DISABLE").is_err()
+                && matches!(ch, '\u{2013}' | '\u{2014}'));
         let cjk_class = kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk);
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
@@ -7839,8 +7854,14 @@ impl LayoutEngine {
             // Microsoft Symbol (symbol.ttf): win 2059/450, upm 2048, lineGap 0.
             const SYM_ASC: f32 = 2059.0 / 2048.0;
             const SYM_DESC: f32 = 450.0 / 2048.0;
-            let target_nat = asc.max(SYM_ASC * para_font_size)
-                + desc.max(SYM_DESC * para_font_size)
+            // S801b: the marker glyph is sized by the LEVEL rPr's w:sz when
+            // declared (ukframework bullet levels = Symbol + sz=20: the 10pt
+            // marker's ascent 10.05 < Calibri@11's 10.47 → NO line growth,
+            // Word pitch 13.44; sizing it at para_font_size wrongly grew the
+            // line to 14.01).
+            let marker_fs = para.style.list_marker_size.unwrap_or(para_font_size);
+            let target_nat = asc.max(SYM_ASC * marker_fs)
+                + desc.max(SYM_DESC * marker_fs)
                 + ext;
             let factor = para.style.line_spacing.unwrap_or(1.0);
             let target = target_nat * if factor > 0.0 { factor } else { 1.0 };
@@ -11608,7 +11629,17 @@ impl LayoutEngine {
                 // TNR's true 909/2048em = 4.66; tables now carry the measured
                 // advances). Word segments script runs by adjacency; a quote
                 // glued to Latin letters joins the Latin run.
-                let latin_ctx_quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
+                // S801: the en/em dash (U+2013/U+2014) joins the ambiguous class —
+                // in a LATIN document a dash is Latin punctuation regardless of
+                // adjacency (dashes sit between SPACES, unlike glued quotes;
+                // ukframework «auditor – shall»: the eastAsia-class dash split
+                // the token and took the eastAsia width/line-height). Doc-level
+                // gate = !doc_body_has_real_cjk → JP byte-identical.
+                let s801_latin_dash = matches!(ch, '\u{2013}' | '\u{2014}')
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S801_DISABLE").is_err();
+                let latin_ctx_quote = s801_latin_dash
+                    || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                     && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
                     && {
                         // neighbors ACROSS fragment boundaries (db9ca's quotes

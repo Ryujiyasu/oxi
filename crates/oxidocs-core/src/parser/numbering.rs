@@ -35,6 +35,11 @@ pub struct NumberingLevel {
     pub suff: String,
     /// Tab stop position in points (from w:tabs/w:tab w:pos, converted from twips)
     pub tab_stop: Option<f32>,
+    /// S801b: the level rPr's w:sz (marker font size in points). Word sizes the
+    /// marker glyph (and its line-height contribution) by the LEVEL rPr sz when
+    /// present (ukframework bullet levels carry Symbol + sz=20 → the 10pt marker
+    /// does NOT grow an 11pt Calibri line; S795 at para size wrongly grew it).
+    pub marker_size: Option<f32>,
 }
 
 /// An abstract numbering definition containing levels
@@ -59,6 +64,8 @@ pub struct NumberingDefinitions {
 /// Result of resolving a list marker
 pub struct ResolvedMarker {
     pub text: String,
+    /// S801b: level rPr w:sz in points (marker glyph size), if declared.
+    pub marker_size: Option<f32>,
     pub hanging: Option<f32>,
     pub suff: String,
     pub tab_stop: Option<f32>,
@@ -92,6 +99,7 @@ impl NumberingDefinitions {
     ) -> ResolvedMarker {
         let fallback = ResolvedMarker {
             text: "\u{2022}".to_string(),
+            marker_size: None,
             hanging: Some(18.0),
             level_left: None,
             suff: "tab".to_string(),
@@ -124,7 +132,7 @@ impl NumberingDefinitions {
                 // Map Symbol font private use area characters to standard Unicode
                 map_symbol_bullets(&level.lvl_text)
             };
-            return ResolvedMarker { text: marker, hanging, suff, tab_stop, level_left: level.indent_left };
+            return ResolvedMarker { text: marker, marker_size: level.marker_size, hanging, suff, tab_stop, level_left: level.indent_left };
         }
 
         // Numbered list: increment counter
@@ -204,7 +212,7 @@ impl NumberingDefinitions {
             text
         };
 
-        ResolvedMarker { text: marker, hanging, suff, tab_stop, level_left: level.indent_left }
+        ResolvedMarker { text: marker, marker_size: level.marker_size, hanging, suff, tab_stop, level_left: level.indent_left }
     }
 
     /// Get the left indent for a given numId and ilvl
@@ -488,6 +496,7 @@ fn parse_numbering_level(
     let mut indent_first_line = None;
     let mut suff = "tab".to_string();
     let mut tab_stop = None;
+    let mut marker_size: Option<f32> = None;
     let mut depth = 0;
 
     loop {
@@ -532,6 +541,15 @@ fn parse_numbering_level(
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 suff = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    }
+                    "sz" => {
+                        // S801b: level rPr marker size (half-points).
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                marker_size = val.parse::<f32>().ok().map(|v| v / 2.0);
                             }
                         }
                     }
@@ -593,6 +611,7 @@ fn parse_numbering_level(
         indent_first_line,
         suff,
         tab_stop,
+        marker_size,
     })
 }
 

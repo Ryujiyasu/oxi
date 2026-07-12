@@ -2113,6 +2113,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             }
             style.list_suff = Some(resolved.suff);
             style.list_tab_stop = resolved.tab_stop;
+            style.list_marker_size = resolved.marker_size;
             // S778 gate = the S771 discriminator: the level ind acts as the
             // suffix-tab stop only for a DIRECT numPr (style-inherited lists
             // keep the style ind — nyserda ListBullet2 level left=274.5pt as
