@@ -7609,6 +7609,13 @@ impl LayoutEngine {
         } else { wrap_width };
         // S476: this is the MAIN BODY flow (s476_body=true) → S475/S476 yakumono
         // capacity may apply (the demand break). Aux/estimate/cell calls pass false.
+        if let Ok(needle) = std::env::var("OXI_DBGFLUSH") {
+            if !needle.is_empty() && para.runs.iter().any(|r| r.text.contains(&needle)) {
+                eprintln!("[DBGWRAP] wrap_width={:.2} first_line_indent={:.2} eff_first={:.2} s776={:.2} s778={:.2} s789={:.2} avail_width_param={:.2}",
+                    wrap_width, first_line_indent, effective_first_indent,
+                    s776_marker_extra, s778_stop_extra, s789_stop_extra, available_width);
+            }
+        }
         let para_has_lrpb = para.runs.iter().any(|r| r.has_last_rendered_page_break);
         let mut lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
         // S721 body arm (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
@@ -10816,6 +10823,23 @@ impl LayoutEngine {
                 .map_or(false, |k| k > 0.0);
         let kernbreak_cap: f32 = std::env::var("OXI_KERNBREAK_CAP").ok()
             .and_then(|v| v.parse().ok()).unwrap_or(0.25);
+        // S799 (2026-07-12, opt-out OXI_S799_DISABLE): a JUSTIFIED Latin line fits
+        // its last word by compressing SPACES below natural — Word's justify
+        // shrinks spaces on demand (the Latin analog of the JP 約物 oikomi).
+        // Derived on ukframework's nominate bullet (jc=both, per-space w:spacing
+        // baked into the docx): natural space = em 2.487 + cs ≈ 3.46pt, Word PDF
+        // renders the line's spaces at 3.12 avg (~10% shrink) and fits
+        // 'shareholder' where Oxi wrapped it (needed 61tw over 9 spaces ≈
+        // 6.8tw/space, well under the 25% cap). This extends the KERNBREAK
+        // space-compression credit (kern-active-only) to the no-kern justified
+        // case. Scope: !doc_body_has_real_cjk → JP byte-identical by construction.
+        let s799_space_shrink = std::env::var("OXI_S799_DISABLE").is_err()
+            && is_justified
+            && !self.doc_body_has_real_cjk;
+        // S799 cap: the no-kern justified shrink is SMALLER than KERNBREAK's 0.25
+        // (a blanket 0.25 over-fits — framework {−1:20}→{−1:31}); sweep knob.
+        let s799_cap: f32 = std::env::var("OXI_S799_CAP").ok()
+            .and_then(|v| v.parse().ok()).unwrap_or(0.10);
         let mut latin_space_credit_tw: i32 = 0;
         // S774 (2026-07-10, rides the TABTW/Latin scope): a RIGHT-aligned tab
         // pins the following segment's END at the tab stop — the segment grows
@@ -10839,9 +10863,16 @@ impl LayoutEngine {
         let mut seg_pending = false;
 
         // Helper: flush the accumulated word into current_line, breaking if needed.
+        let dbg_flush: bool = std::env::var("OXI_DBGFLUSH").ok().map_or(false, |needle|
+            !needle.is_empty() && fragments.iter().any(|&(t, _, _, _, _)| t.contains(&needle)));
         macro_rules! flush_word {
             ($style:expr) => {
                 if !word.is_empty() {
+                    if dbg_flush {
+                        eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} avail={} spcred={} tabslack={} line_n={}",
+                            word, pt_to_tw(word_width), current_width_tw, available_tw,
+                            latin_space_credit_tw, right_tab_slack_tw, lines.len());
+                    }
                     let ws = word_style.take().unwrap_or_else(|| $style.clone());
                     let wft = word_field_type.take();
                     // COM-confirmed (2026-04-14): charGrid extra does NOT affect line
@@ -12014,8 +12045,16 @@ impl LayoutEngine {
                             });
                             current_width += char_width; current_width_tw += pt_to_tw(char_width);
                             current_capw_tw += pt_to_tw(char_width); // S475: space, no punct capacity
+                            if dbg_flush {
+                                eprintln!("[DBGSPACE] w={:.3} fam={} fs={} has32={} em32={:.4}",
+                                    char_width, char_metrics.family, font_size,
+                                    char_metrics.char_widths.contains_key(&' '),
+                                    char_metrics.char_widths.get(&' ').copied().unwrap_or(-1.0));
+                            }
                             if kernbreak_para && ch == ' ' {
                                 latin_space_credit_tw += pt_to_tw(char_width * kernbreak_cap);
+                            } else if s799_space_shrink && ch == ' ' {
+                                latin_space_credit_tw += pt_to_tw(char_width * s799_cap);
                             }
                         }
                     }

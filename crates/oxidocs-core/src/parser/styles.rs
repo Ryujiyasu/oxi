@@ -208,13 +208,28 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if child.after_lines.is_none() {
         child.after_lines = parent.after_lines;
     }
-    if child.indent_left.is_none() {
+    // S800 (2026-07-12, opt-out OXI_S800_DISABLE): a style that DECLARES its own
+    // numPr does NOT inherit ANCESTOR left/firstLine indents — Word inserts the
+    // numbering level's ind at the numPr-declaring layer, overriding ind
+    // inherited from ABOVE it. ukframework FWKBullet/FWKBodyText: numPr in the
+    // style, ind left=720 inherited from the ListParagraph ancestor, yet Word
+    // renders at the LEVEL ind (1436/792 — PDF text x = margin+71.8/39.6). A
+    // style that declares BOTH numPr and its OWN ind keeps that ind (nyserda
+    // ListBullet2 ind left=1152 beats level 5490 = the S771 case, unchanged —
+    // the level ind is weaker than the declaring layer's own props but stronger
+    // than the ancestors'). With the inherit cut, the resolved style's
+    // indent_left is None and the existing S771 gate in ooxml.rs
+    // (style.indent_left.is_none()) applies the level ind. numId="0"
+    // (numbering REMOVAL) keeps normal inheritance — no level ind will apply.
+    let s800_numpr_layer = child.num_id.as_deref().map_or(false, |n| !n.is_empty() && n != "0")
+        && std::env::var("OXI_S800_DISABLE").is_err();
+    if child.indent_left.is_none() && !s800_numpr_layer {
         child.indent_left = parent.indent_left;
     }
     if child.indent_right.is_none() {
         child.indent_right = parent.indent_right;
     }
-    if child.indent_first_line.is_none() {
+    if child.indent_first_line.is_none() && !s800_numpr_layer {
         child.indent_first_line = parent.indent_first_line;
     }
     if child.num_id.is_none() {
