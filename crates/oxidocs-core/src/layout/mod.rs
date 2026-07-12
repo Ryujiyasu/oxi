@@ -16594,9 +16594,20 @@ impl LayoutEngine {
             // 50/51 +1x16. The veto's necessity for the JP corpus is being
             // measured; if no JP doc relies on it, it is removed.
             let s814_no_veto = std::env::var("OXI_S814").is_ok();
+            // S814 v2: the veto holds only when the fresh geometry AGREES with
+            // the whole-push (remaining space too small to place a meaningful
+            // split anyway). When >= s814_k remains, the saved whole-push
+            // evidence contradicts the current flow (uklocal row 2: 33.2pt
+            // free, fresh Word splits 2 lines onto p36) = stale -> split.
+            // Row 21 (remaining ~1.3pt) keeps its veto = whole-push = Word.
+            let s814_k: f32 = std::env::var("OXI_S814_K").ok()
+                .and_then(|v| v.parse().ok()).unwrap_or(28.0);
+            let s814_lrpb_veto = row_has_lrpb_at_cell_start
+                && !s814_no_veto
+                && (page_bottom - cursor.cursor_y) < s814_k;
             let s754_split = std::env::var("OXI_S754_DISABLE").is_err()
                 && row.height.is_none()
-                && (!row_has_lrpb_at_cell_start || s814_no_veto)
+                && !s814_lrpb_veto
                 && (page_bottom - cursor.cursor_y) >= s754_min_fit;
             if std::env::var("OXI_DBG754").is_ok() && s754_split && row_overflows
                 && !row.cant_split && has_content
