@@ -1033,6 +1033,17 @@ fn format_size_key(size: f32) -> String {
 }
 
 /// Normalize common font family name aliases used in OOXML.
+/// S811 (2026-07-13): fonts whose normalize_family_name substitution is
+/// METRICALLY INCOMPATIBLE — the substitute's advances/line heights differ
+/// enough that a document authored with the real font reflows completely.
+/// Such a doc's saved lastRenderedPageBreak marks are systematically stale
+/// (ukframework: Humnst777 Lt BT [Humanist 777, a Frutiger-class humanist
+/// sans] -> Calibri). Metric CLONES (CG Times -> Times New Roman) and
+/// same-metrics JP maps are NOT listed.
+pub(crate) fn is_metric_incompatible_substitution(family: &str) -> bool {
+    family.starts_with("Humnst777")
+}
+
 fn normalize_family_name(name: &str) -> String {
     // Comma-separated font lists (e.g. "MS明朝,Times New Roman"): use the first font.
     // Word picks the first available font; we use the same approach.
@@ -1097,7 +1108,16 @@ fn normalize_family_name(name: &str) -> String {
         // the "Calibri Bold" GDI width table — the bold template-note paragraphs
         // wrapped ~2%/word narrow (Word 7 lines vs Oxi 6, the natural-flow −1
         // over-pack driver). Opt-out OXI_S796_DISABLE.
-        "Humnst777 Lt BT" if std::env::var("OXI_S796_DISABLE").is_err() => "Calibri".to_string(),
+        // S811 (2026-07-13): ALL Humnst777 variants — ukframework's body uses
+        // theme-resolved "Humnst777 BT" (plus "Humnst777 Cn BT" and
+        // "Humnst777-lt-bt-light"); only "Lt BT" was mapped, so the others
+        // fell to the unknown-font fallback whose SPACE width (3.44 @11pt vs
+        // Calibri 2.49) over-advanced every inter-word gap ~+4pt -> a 5-line
+        // bullet wrapped to 6 (the framework wp15/16 +1x2). Word substitutes
+        // them all with Calibri (PDF span font = Calibri, letter advances
+        // match Calibri exactly).
+        "Humnst777 Lt BT" | "Humnst777 BT" | "Humnst777 Cn BT" | "Humnst777-lt-bt-light"
+            if std::env::var("OXI_S796_DISABLE").is_err() => "Calibri".to_string(),
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),

@@ -1795,6 +1795,8 @@ pub struct LayoutEngine {
     /// curly quotes ’ “ ” as CJK, S762) — a UK gov doc with curly quotes but no
     /// kanji must read as a PURE-LATIN document for the cell wrap-margin fix.
     doc_body_has_real_cjk: bool,
+    /// S811: saved-LRPB distrust for metric-incompatible-substitution docs.
+    doc_lrpb_distrust: bool,
 }
 
 /// S463: recursive CJK scan over a block (paragraph runs + nested table cells).
@@ -1815,6 +1817,24 @@ fn block_has_real_cjk(block: &Block) -> bool {
         Block::Paragraph(p) => p.runs.iter().any(|r| r.text.chars().any(kinsoku::is_cjk_ideograph_or_kana)),
         Block::Table(t) => t.rows.iter().any(|row| {
             row.cells.iter().any(|c| c.blocks.iter().any(block_has_real_cjk))
+        }),
+        _ => false,
+    }
+}
+
+/// S811 (2026-07-13): does this block use a font whose substitution is
+/// METRICALLY INCOMPATIBLE (crate::font::is_metric_incompatible_substitution)?
+/// Such a document's saved lastRenderedPageBreak marks were laid out with
+/// different metrics and are systematically stale (ukframework: Humnst777 Lt
+/// BT -> Calibri; its natural flow scores 0.9915 vs 0.8397 with the stale
+/// LRPBs honored). Traversal mirrors block_has_real_cjk.
+fn block_uses_incompatible_font(block: &Block) -> bool {
+    let f = |name: &Option<String>| name.as_deref()
+        .map_or(false, crate::font::is_metric_incompatible_substitution);
+    match block {
+        Block::Paragraph(p) => p.runs.iter().any(|r| f(&r.style.font_family)),
+        Block::Table(t) => t.rows.iter().any(|row| {
+            row.cells.iter().any(|c| c.blocks.iter().any(block_uses_incompatible_font))
         }),
         _ => false,
     }
@@ -1970,6 +1990,7 @@ impl LayoutEngine {
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: false,
             doc_body_has_real_cjk: false,
+            doc_lrpb_distrust: false,
         }
     }
 
@@ -2062,6 +2083,19 @@ impl LayoutEngine {
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_cjk)),
             doc_body_has_real_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_real_cjk)),
+            // S811 (2026-07-13, default ON, opt-out OXI_S811_DISABLE): distrust
+            // saved lastRenderedPageBreak marks when the document's fonts
+            // required a metrically-INCOMPATIBLE substitution — the authoring
+            // Word laid it out with the real font, our render substitutes
+            // (Humnst777 Lt BT -> Calibri), so every saved break sits at a
+            // different flow position = the ukframework systematic-stale-LRPB
+            // class (natural 0.9915 vs 0.8397 honoring them). Metric CLONES
+            // (CG Times -> Times New Roman on usnyserda) are NOT distrusted --
+            // their saved layout matches ours and the LRPBs are load-bearing.
+            // Latin-doc scope (JP keeps its calibrated LRPB machinery).
+            doc_lrpb_distrust: std::env::var("OXI_S811_DISABLE").is_err()
+                && !doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_real_cjk))
+                && doc.pages.iter().any(|pg| pg.blocks.iter().any(block_uses_incompatible_font)),
         }
     }
 
@@ -4176,7 +4210,10 @@ impl LayoutEngine {
                     // LRPB-off divergence catalog; nyserda's 28/56 page-start
                     // alignment collapses to 2/56 without LRPBs = the honest
                     // baseline of the Latin flow).
-                    let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok();
+                    // S811: metric-incompatible-substitution docs distrust
+                    // their saved LRPBs entirely (see doc_lrpb_distrust).
+                    let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok()
+                        || self.doc_lrpb_distrust;
                     let has_lrpb_at_start = para.runs.first()
                         .map(|r| r.has_last_rendered_page_break).unwrap_or(false);
                     let lrpb_should_break = if has_lrpb_at_start && !elements.is_empty() && !lrpb_knob_off {
@@ -9066,7 +9103,10 @@ impl LayoutEngine {
             //   OXI_S394_LRPB_MAX=<N>     -> override threshold (default 30)
             let s391_on = std::env::var("OXI_S391_PER_LINE_LRPB")
                 .map(|v| v != "0" && v != "false")
-                .unwrap_or(true);
+                .unwrap_or(true)
+                // S811: distrusted saved LRPBs (metric-incompatible font
+                // substitution) skip the per-line respect too.
+                && !self.doc_lrpb_distrust;
             let s391_lrpb_break = if line_idx > 0 && !in_textbox && s391_on {
                 let has_lrpb_here = line.fragments.iter().any(|f| {
                     f.char_offset == 0
@@ -12206,6 +12246,20 @@ impl LayoutEngine {
                         char_width *= scale / 100.0;
                     }
                 }
+                // S812 (2026-07-13) ATTEMPTED + FALSIFIED + REVERTED: "a justified
+                // paragraph's SPACE-run w:spacing is excluded from the break" —
+                // ukframework wp15 render-truth seemed to show it (Word fits 'Board'
+                // where the cs-inclusive width overflows by ~5.3pt, rendered spaces
+                // shrunk toward natural). But the CONTROLLED sweep (_pb_cs_gen.py:
+                // per-space w:spacing V in {0,20,40} x jc x margin sweep, + a
+                // substituted-font variant) proves Word COUNTS space-cs FULLY in the
+                // break (flip boundary = cs-less width + n*V EXACT, both installed
+                // Arial and substituted Humnst777 BT; ZERO shrink granted in the
+                // synthetic), and dropping it over-fit 16 framework lines (-1x16
+                // cascade from wp18). The framework wp15 line is a JUSTIFY-SHRINK
+                // case (~0.66pt/space granted) whose enabling condition the synthetic
+                // lacks — the underived S799-shrink model (dedicated session; vary
+                // para line count / following content / numPr / cs magnitude).
                 char_width += cs;
                 // §17.15.1.7 balanceSingleByteDoubleByteWidth (Session 56 Finding 3,
                 // COM-confirmed via V19/V25/V26/V27 minimal repros 2026-05-06):
