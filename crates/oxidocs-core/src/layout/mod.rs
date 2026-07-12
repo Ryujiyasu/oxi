@@ -15578,7 +15578,15 @@ impl LayoutEngine {
                 // (no tblLayout/cellMar discriminator; risk_assessment is the CELLWORD
                 // showcase doc calibrated at the FULL cell_w wrap). Ships default-ON
                 // once a per-table discriminator (or CELLWORD co-calibration) is found.
-                let s768_latin_wrap = std::env::var("OXI_S768").ok().as_deref() == Some("1")
+                // S768 default-ON (2026-07-12, opt-out OXI_S768_DISABLE): with the
+                // S803 footer-reserve fix in place the doc-level Latin cell-wrap
+                // moves uklocalspending's Annex tables another page toward Word
+                // (pcd -2 -> -1, neg-delta mass 551 -> 453). The held reason
+                // (risk_assessment SSIM -0.0027, a 1-page PASS doc calibrated on
+                // the full-cell_w compensation) is a render-only trade accepted
+                // under the Phase-1-first directive; JP is byte-identical by
+                // construction (doc-level real-CJK gate, 238-doc A/B +0.0000).
+                let s768_latin_wrap = std::env::var("OXI_S768_DISABLE").is_err()
                     && !self.doc_body_has_real_cjk;
                 let inner_w = if self.cellpair_active() || s713_cellmar || s768_latin_wrap {
                     (cell_w - _pad_l - _pad_r).max(0.0)
@@ -17210,7 +17218,7 @@ impl LayoutEngine {
                         } else if cell_hang_inner || s301_layout_fixed || s412_cellmar_subtract || s531_singlecell_cellmar || s559_cellmar || s585n_nested
                             || self.cellpair_active()
                             || s713_cellmar_render
-                            || (std::env::var("OXI_S768").ok().as_deref() == Some("1") && !self.doc_body_has_real_cjk) {
+                            || (std::env::var("OXI_S768_DISABLE").is_err() && !self.doc_body_has_real_cjk) {
                             // S768 (opt-in): pure-Latin document → wrap at cell_w − cellMar
                             // (Word's content area). See the estimate-side s768_latin_wrap comment.
                             (wrap_cell_w - pad_l - pad_r).max(0.0)
