@@ -2475,8 +2475,20 @@ impl LayoutEngine {
                 return true;
             }
         }
-        if let Some(level) = para_style.heading_level {
-            return level <= 2;
+        // S797 (2026-07-12): the legacy "heading level <= 2 is bold" heuristic is
+        // REMOVED by default (restore with OXI_S797_LEGACY_HEADING_BOLD=1). Word
+        // bolds a heading only when the style/run carries w:b — ukframework's
+        // Heading1 has ONLY <w:bCs/> (complex-script bold; Latin renders REGULAR,
+        // PDF span font = plain Calibri), but the heuristic forced Calibri Bold
+        // metrics → the 25pt heading broke at the Bold em+kern width (402 >
+        // 396.9 content) into TWO lines where Word fits ONE (392.7 em+kern) →
+        // the «Role of the department as shareholder» wrap pushed «8. The
+        // Responsible Minister» +1 page (the natural-flow +1 class). bCs stays
+        // a separate field (not Latin bold), per ECMA-376 §17.3.2.2.
+        if std::env::var("OXI_S797_LEGACY_HEADING_BOLD").is_ok() {
+            if let Some(level) = para_style.heading_level {
+                return level <= 2;
+            }
         }
         false
     }
@@ -7770,6 +7782,69 @@ impl LayoutEngine {
             }
         }
 
+        // S795 (2026-07-12, opt-out OXI_S795_DISABLE): NO-GRID (LM0) Symbol-bullet
+        // marker line height — Word's line model is a per-COMPONENT GDI max:
+        // line = max(tmAscent) + max(tmDescent) + max(tmExternalLeading) over the
+        // text fonts AND the marker font (tm* = OS/2 win metrics; ext = hhea
+        // natural − win sum). A Symbol marker (winAsc 2059/2048 = 1.0054em) grows
+        // the line's ASCENT while the text font keeps its larger DESCENT (Calibri
+        // 550 > Symbol 450) — the sum-max model (S689's flat 1.2251 ratio) cannot
+        // express this: Calibri+Symbol = (2059+550)/2048 = 1.2739em, NOT 1.2251.
+        // DERIVED from a controlled probe (fw_probe2, Word PDF baselines):
+        // plain Calibri 13.44 / Calibri+Symbol 14.02 (= 1.2739×11.04 device-
+        // rounded) / Humnst-sub+Symbol 13.51 (= 1.2251 — the sub font's desc <
+        // 450); ukframework's real list pitch 13.92-14.04 matches, and its
+        // line=259 bullets measure 15.12 = component-max × 1.0792 → the growth
+        // applies to LINE 0 ONLY and composes MULTIPLICATIVELY with the auto
+        // line-spacing factor. Scope: grid_pitch None (covers BOTH pure no-grid
+        // AND no-type docGrid — ukframework carries the default
+        // <w:docGrid linePitch=360>, so the no-type case must be included;
+        // S689's sum-ratio bump runs first and this rule supersedes it only
+        // when the component-max exceeds it, i.e. text desc > Symbol desc —
+        // for Cambria/TNR the two are degenerate within 0.03pt, probe-
+        // confirmed), Latin doc (!doc_body_has_real_cjk → JP corpus
+        // byte-identical by construction), auto line rule only.
+        let mut s795_line0_target: f32 = 0.0;
+        if std::env::var("OXI_DBG795").is_ok() && para.style.list_marker.is_some() {
+            eprintln!("[DBG795] marker={:?} gp_none={} no_type={} cjk={} rule={:?} ls={:?} nlines={}",
+                para.style.list_marker.as_deref().map(|m| m.chars().take(3).collect::<String>()),
+                grid_pitch.is_none(), page.doc_grid_no_type, self.doc_body_has_real_cjk,
+                para.style.line_spacing_rule, para.style.line_spacing, lines.len());
+        }
+        if std::env::var("OXI_S795_DISABLE").is_err()
+            && grid_pitch.is_none()
+            && !self.doc_body_has_real_cjk
+            && !lines.is_empty()
+            && !lines[0].fragments.is_empty()
+            && !matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"))
+            && para.style.list_marker.as_deref().map_or(false, |m| m.contains('\u{F0B7}'))
+        {
+            let mut asc: f32 = 0.0;
+            let mut desc: f32 = 0.0;
+            let mut ext: f32 = 0.0;
+            for f in &lines[0].fragments {
+                let fs = f.style.font_size.unwrap_or(para_font_size);
+                let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                asc = asc.max(m.win_ascent * fs);
+                desc = desc.max(m.win_descent * fs);
+                ext = ext.max((m.natural_line_height_hhea(fs) - (m.win_ascent + m.win_descent) * fs).max(0.0));
+            }
+            // Microsoft Symbol (symbol.ttf): win 2059/450, upm 2048, lineGap 0.
+            const SYM_ASC: f32 = 2059.0 / 2048.0;
+            const SYM_DESC: f32 = 450.0 / 2048.0;
+            let target_nat = asc.max(SYM_ASC * para_font_size)
+                + desc.max(SYM_DESC * para_font_size)
+                + ext;
+            let factor = para.style.line_spacing.unwrap_or(1.0);
+            let target = target_nat * if factor > 0.0 { factor } else { 1.0 };
+            if target > line_heights[0] {
+                line_heights[0] = target;
+                if natural_line_heights[0] < target { natural_line_heights[0] = target; }
+                if ink_line_heights[0] < target { ink_line_heights[0] = target; }
+                s795_line0_target = target;
+            }
+        }
+
         // S773: the line-0 target also feeds the single-LM0 cumulative advance
         // basis (raw_spaced_tw) below — a SINGLE-line paragraph's cursor
         // advance uses that basis, not line_heights[0] (the documented
@@ -7987,6 +8062,16 @@ impl LayoutEngine {
         // cumulative basis (single-LM0/multiple both route through it).
         let raw_spaced_tw: f32 = if s773_line0_target > 0.0 && raw_spaced_tw > 0.0 {
             raw_spaced_tw.max(s773_line0_target * 20.0)
+        } else { raw_spaced_tw };
+        // S795: a SINGLE-line Symbol-bullet paragraph advances by the marker-
+        // grown line0 (the S612z three-sites trap — the cumulative basis, not
+        // line_heights[0], drives the cursor for single-LM0 paragraphs). The
+        // target already includes the line-spacing factor; the basis is the
+        // pre-factor raw, so fold the factored value only for lines.len()==1
+        // where the whole-paragraph advance IS line0.
+        let raw_spaced_tw: f32 = if s795_line0_target > 0.0 && raw_spaced_tw > 0.0
+            && lines.len() == 1 {
+            raw_spaced_tw.max(s795_line0_target * 20.0)
         } else { raw_spaced_tw };
         // LM2 (charGrid) and LM0 single spacing: carry cumul_line_idx across paragraphs.
         // COM-confirmed (2026-04-12, 0e7a p2): Word maintains cumulative line index
@@ -11539,6 +11624,12 @@ impl LayoutEngine {
                     && style.kern
                         .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
                         .map_or(false, |k| k > 0.0 && font_size >= k);
+                if std::env::var("OXI_DBG_KERN").is_ok() && font_size >= 20.0 && char_index == 0 {
+                    eprintln!("[DBG_KERN] fs={} ch={:?} style.kern={:?} drs.kern={:?} active={} widths_has={} fam={}",
+                        font_size, ch, style.kern,
+                        para_style.default_run_style.as_ref().and_then(|rs| rs.kern),
+                        kern_active, char_metrics.char_widths.contains_key(&ch), char_metrics.family);
+                }
                 if kern_active
                     && (!kinsoku::is_cjk(ch) || latin_ctx_quote)
                     && char_metrics.char_widths.contains_key(&ch)
@@ -12187,6 +12278,12 @@ impl LayoutEngine {
                         eprintln!("[DBG721] ch={:?} idx={} cw_tw={} capw_tw={} avail={} ovf={} s475={} s590={} lrpb={}",
                             ch, char_index, current_width_tw, current_capw_tw, available_tw, overflow_tw,
                             s475_break, s590_legacy_just_cap, para_has_lrpb);
+                    }
+                    if let Ok(needle) = std::env::var("OXI_DBG721_TEXT") {
+                        if !needle.is_empty() && text.contains(&needle) {
+                            eprintln!("[DBG721T] ch={:?} idx={} cw_tw={} capw_tw={} avail={} ovf={}",
+                                ch, char_index, current_width_tw, current_capw_tw, available_tw, overflow_tw);
+                        }
                     }
                     // PER-LINE TOTAL compression budget FALSIFIED (2026-06-23): tested
                     // OXI_LINE_BUDGET (wrap iff nat_overflow > budget). It correctly wrapped

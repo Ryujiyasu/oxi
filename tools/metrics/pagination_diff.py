@@ -60,6 +60,13 @@ def normalize_text(s: str) -> str:
     # match (they silently fell out of the gate before).
     s = s.replace("", "").replace("­", "")
     s = s.replace("", "‑")
+    # S798: ToC leader dots (Oxi renders the w:leader fill as literal '....'
+    # runs; Word Range.Text has a tab) — collapse 4+ dots to a space so a ToC
+    # entry matches its Oxi line at radius 0 instead of crossing onto the
+    # same-prefix BODY heading pages away (ukframework's phantom +/-2/3).
+    # 4+ keeps a literal English ellipsis '...' intact; both sides normalize
+    # through the same function so match behavior elsewhere is unchanged.
+    s = re.sub(r"\.{4,}", " ", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 

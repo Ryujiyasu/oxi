@@ -1089,6 +1089,15 @@ fn normalize_family_name(name: &str) -> String {
         // run. Fallback path mismatch caused |dy|=26.24pt drift; aliasing
         // to MS Mincho aligns Oxi metrics with Word.
         "Arial Unicode MS" => "MS Mincho".to_string(),
+        // S796 (2026-07-12): Humnst777 Lt BT (Humanist 777 Light, a commercial
+        // Bitstream font, not installed) — Word's PANOSE substitution renders it
+        // as CALIBRI (uk_framework PDF span fonts: body Calibri 11.04, bold notes
+        // Calibri-Bold). The unknown-font fallback already lands on Calibri
+        // REGULAR metrics, but only an explicit map lets get_with_bold resolve
+        // the "Calibri Bold" GDI width table — the bold template-note paragraphs
+        // wrapped ~2%/word narrow (Word 7 lines vs Oxi 6, the natural-flow −1
+        // over-pack driver). Opt-out OXI_S796_DISABLE.
+        "Humnst777 Lt BT" if std::env::var("OXI_S796_DISABLE").is_err() => "Calibri".to_string(),
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),
