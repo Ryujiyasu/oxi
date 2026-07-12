@@ -11156,6 +11156,24 @@ impl LayoutEngine {
         let mut word = String::new();
         let mut word_width: f32 = 0.0;
         let mut word_natural_width: f32 = 0.0; // 2-pass wrap: natural (pre-compression) width
+        // S809 (2026-07-13, default ON, opt-out OXI_S809_DISABLE): Latin
+        // trailing-punctuation hang (overflowPunct). LEGACY (compat<=14)
+        // Word lets a line-end '.' or ',' hang COMPLETELY past the content
+        // right — DERIVED via _pb_punct_gen.py (right-margin sweep, ctrl
+        // 'x' vs '.' vs ',': the legacy dot/comma flip boundary == the word
+        // width WITHOUT the punct, exact to 0.1pt; the compat15 variant
+        // flips at word+punct = NO hang) + render-truth both ways:
+        // uklocalspending (compat 14) fits 'mandated' AT the margin with
+        // the '.' hanging to 773.0; uk_health_form (compat 15) WRAPS
+        // 'claims.' even though it fits to 524.01 <= edge 524.06 (Word
+        // measures the full stop). The compat<15 gate is the Latin analog
+        // of the S568/S572 legacy CJK oikomi discriminator. Tracks the
+        // width of the word's trailing hangable punct; the flush fit tests
+        // credit it. Latin-doc scope (JP keeps its own CJK burasage).
+        let s809_hang = !self.doc_body_has_real_cjk
+            && self.compat_mode < 15
+            && std::env::var("OXI_S809_DISABLE").is_err();
+        let mut word_trail_hang_w: f32 = 0.0;
         // S245 (2026-05-24): removed dead variable `word_grid_extra`
         // (assigned/incremented at 3 sites but never read after S243
         // removed `current_grid_extra`).
@@ -11279,7 +11297,7 @@ impl LayoutEngine {
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw
+                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + pt_to_tw(word_trail_hang_w)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
@@ -11329,7 +11347,7 @@ impl LayoutEngine {
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
@@ -12040,7 +12058,7 @@ impl LayoutEngine {
                     && style.kern
                         .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
                         .map_or(false, |k| k > 0.0 && font_size >= k);
-                if std::env::var("OXI_DBG_KERN").is_ok() && font_size >= 20.0 && char_index == 0 {
+                if std::env::var("OXI_DBG_KERN").is_ok() && char_index == 0 {
                     eprintln!("[DBG_KERN] fs={} ch={:?} style.kern={:?} drs.kern={:?} active={} widths_has={} fam={}",
                         font_size, ch, style.kern,
                         para_style.default_run_style.as_ref().and_then(|rs| rs.kern),
@@ -12459,6 +12477,9 @@ impl LayoutEngine {
                     word.push(ch);
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
+                    if s809_hang {
+                        word_trail_hang_w = if matches!(ch, '.' | ',') { char_width } else { 0.0 };
+                    }
                     // S783 (2026-07-11): in a LATIN document a HYPHEN is a real
                     // word boundary — Word fills a partial line up to the '-'
                     // of a hyphenated compound (nyserda p13 'Other Co-' at line
@@ -13354,6 +13375,9 @@ impl LayoutEngine {
                     word.push(ch);
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
+                    if s809_hang {
+                        word_trail_hang_w = if matches!(ch, '.' | ',') { char_width } else { 0.0 };
+                    }
                     // S745 (2026-07-04, default ON, opt-out OXI_S745_DISABLE):
                     // `<w:wordWrap w:val="0"/>` = Latin text may break at ANY
                     // character (ECMA-376 §17.3.1.40 — "allow line breaking at
