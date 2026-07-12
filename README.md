@@ -40,15 +40,15 @@ xychart-beta
   line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189, 0.9253, 0.9370]
 ```
 
-> The small step at **05-30** is not a regression: Phase 3 recomputed a clean
-> SSIM baseline from scratch, so points before and after that date sit on
+> The small step at **05-30** is not a regression: the SSIM baseline was
+> recomputed from scratch that day, so points before and after sit on
 > slightly different measurement bases. **07-12** is the current per-page mean
 > over scored pages (per-doc mean **0.9587**).
 
 Two things make this number trustworthy rather than asserted:
 
 - **Pagination is exact.** Every paragraph of every corpus document lands on the same page as Microsoft Word (per-paragraph page match: **87/87 documents = 100%**, reached 2026-07-03, measured via Word COM). SSIM measures how a page looks; pagination measures whether it *is the same page*. A renderer can look plausible while shifting content across pages — the two metrics together close that gap.
-- **The gate evolved whenever a metric went blind.** The merge gate moved bottom-5 SSIM → pagination correctness → element IoU → pixel SSIM, each time the previous metric plateaued for a structural reason (SSIM single-gating could not move past pagination cascades; IoU's median-dy subtraction hid uniform table offsets). The methodology is documented in [CLAUDE.md](CLAUDE.md); the date-by-date progress table and COM-confirmed derivations are in [docs/layout_accuracy.md](docs/layout_accuracy.md) and [RESEARCH_LOG.md](RESEARCH_LOG.md).
+- **The gate is external, and it changed whenever it went blind.** Every score is against Microsoft Word's own render — never against Oxi's previous output. And when a measure plateaued because it structurally could not see the remaining error, the merge gate moved to one that could. The date-by-date progress table is in [docs/layout_accuracy.md](docs/layout_accuracy.md); the derivation log is [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
 ### Cross-Renderer Comparison
 
@@ -264,9 +264,9 @@ Oxi treats every document as untrusted input. A hostile file can render wrong �
 
 - **v1 — Foundation (current):** Word-compatible .docx rendering — pagination 87/87 = 100%, SSIM convergence via the Ra loop; .xlsx/.pptx/PDF parsing and basic rendering; round-trip editing; WASM + Canvas editor
 - **v1.x — Word parity:** close the remaining per-page SSIM gap (0.937 → 0.99+); English corpus to parity; IME (Japanese/CJK input) and editor polish; .xlsx/.pptx layout engines
-- **v2 — Format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same phase-based gate; bidirectional .docx ↔ .odt at the IR level; round-trip preservation tests
+- **v2 — Format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level; round-trip preservation tests
 
-The measurement methodology (deterministic reference output, falsifiable hypotheses, phase-based merge gate) is documented in [CLAUDE.md](CLAUDE.md) and [docs/layout_accuracy.md](docs/layout_accuracy.md) — the same loop transfers to ODF once the v2 baseline lands; only the reference renderer changes.
+The measurement loop (deterministic reference output, falsifiable hypotheses, external merge gate) transfers to ODF once the v2 baseline lands — only the reference renderer changes.
 
 ---
 
