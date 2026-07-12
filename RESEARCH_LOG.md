@@ -4624,3 +4624,56 @@ V1–V4. `tools/metrics/grep_first_footer_no_titlepg.py` identifies
 baseline-affected docs.
 
 ---
+
+
+---
+
+## 2026-07-13 — Cross-renderer re-measurement: @silurus/ooxml built from source at HEAD (vertical-writing subset)
+
+**Context**: silurus merged a vertical-writing overhaul in the ~6h before measurement
+(PR #1027 feat/docx-vert-full-repertoire: real vert glyphs for the full Tu/Tr repertoire
+with measure==paint, ruby w:rubyPr/w:hpsRaise reservation, docGrid cells from design
+height per §17.6.5, btLr/tbRl 1px advance-model test tolerance). Question: does the
+README cross-renderer claim survive their newest build?
+
+**Method**: silurus built from source (github.com/yukiyokotani/office-open-xml-viewer,
+HEAD 797a3efab0da2554a590970d7a574a0d9a3af12a, committed 2026-07-13T02:25 JST; wasm-pack
+x3 + vite dist), wired into tools/browser-oracle harness (Playwright Chromium, 150dpi).
+8-document vertical-writing subset with existing Word GT (word_png; probevert freshly
+COM-rendered): albalunaSS_a6, albaluna2col_3227, albalunaTaidan_6pt, 2ea81a, 459f05,
+7ead52b, ed025c, probevert_vertical3pg. Same SSIM loader/resize as the Phase-3 gate.
+LibreOffice column from existing libra_png + fresh soffice render for probevert.
+Oxi = 0b3fb41b (DWrite rebuilt). Artifacts: pipeline_data/silurus_vert_20260713/
+(3-panel sheets, sil_png renders, results_3way.json, build_meta.txt).
+
+**Result (30 paired pages)**: Oxi **0.8614** / LibreOffice **0.7846** / silurus **0.7545**.
+Oxi ahead of silurus on 29/30 pages (only albaluna2col p1 flips, +0.003 on a near-blank
+page). Best-of-three: Oxi 24/30. Pagination: silurus 7/8 docs page-count-correct but
+ed025c 18 vs Word 16 (+2); README-claim re-checks: 3a4f **101** vs Word 94 (old README
+said 97 — WORSE, updated), 1ec1 2 vs 1 (unchanged). probevert 5=5 (their vertical
+multi-page now paginates correctly).
+
+**Findings**:
+1. **Glyph orientation is real, distance is not closed.** Long marks (chōon), dashes,
+   ellipsis all render rotated correctly in silurus now (zoomed crops confirm) — the
+   commit claims are true — but the Word gap persists (~0.11 mean). measure==paint is
+   self-consistency, not Word-consistency; the numbers now demonstrate that directly.
+2. **Silurus wrap drift**: vertical columns hold ~1 fewer char than Word in places
+   (albalunaSS), cell text tracking is wider so form labels over-wrap (459f05 「年分
+   （事業年度）」 2 lines vs Word 1) → row heights inflate → whole-form drift. This,
+   not glyph shape, is where their SSIM is lost.
+3. **★Oxi lever found — vertical punctuation placement**: in vertical text Word puts
+   。、 at the TOP-RIGHT of the character cell; **silurus matches Word here, Oxi draws
+   them low-center** (the S679 known residual "vertical-specific punctuation
+   rotation/position" made visible by direct comparison). Also Word joins ―― into one
+   continuous vertical line; Oxi and silurus both leave a gap. On this vertical-heavy
+   subset LibreOffice beats Oxi on 4 docs (albalunaSS 0.779 vs 0.765, Taidan, 7ead52b,
+   2col) — consistent with these vertical-rendering residuals. Next vertical session:
+   punctuation cell-position first.
+4. **Coverage gaps (honest)**: vertical ruby (hpsRaise) and btLr have ZERO corpus docs
+   with Word GT — silurus claims there are neither confirmed nor refuted. Do not cite
+   vertical ruby as an Oxi advantage anywhere until measured.
+
+**README updated** (same session): restructure (SSIM/cross-renderer front, Vision/Fork
+removed) + silurus paragraph replaced with this measurement (hash+date pinned) +
+docs/img/vert-3way.png (459f05 p1 3-panel, Word 0.904-Oxi vs 0.791-silurus).
