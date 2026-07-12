@@ -14087,13 +14087,35 @@ impl LayoutEngine {
                 } else {
                     (raw * 8.0).floor() / 8.0
                 }
+            } else if in_table_cell && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S815").is_ok()
+            {
+                // S815 (2026-07-13, OPT-IN OXI_S815=1, default OFF): a LATIN
+                // document's table-cell LINE is the hhea natural EXACT — the
+                // uklocalspending Annex render-truth (Word cell pitch 11.5 =
+                // Arial 10 hhea 11.499; the GDI tmHeight table gives 16px =
+                // 12.0). CORRECT per-line but HELD: the +0.5/line surplus was
+                // COMPENSATING a ~0.6/row OVERHEAD deficit (Word row = lines x
+                // 11.5 + ~1.3 overhead vs Oxi ~0.7 — the insideH border-box /
+                // rowbox family for Latin docs). S815 alone over-corrects
+                // (uklocal 0.9856 -> 0.9423 {-1:52}, the S559 pattern). Ships
+                // together with the Latin row-overhead derivation.
+                metrics.natural_line_height_hhea(font_size)
             } else {
                 gdi_height_pt
             }
         } else if in_table_cell && self.adjust_line_height_in_table {
             metrics.word_line_height_standard(font_size)
         } else if in_table_cell {
-            metrics.word_line_height_table_cell(font_size)
+            // S815 (opt-in, see above): same rule on the no-GDI-table path.
+            if !self.doc_body_has_real_cjk
+                && !metrics.is_cjk_83_64_font()
+                && std::env::var("OXI_S815").is_ok()
+            {
+                metrics.natural_line_height_hhea(font_size)
+            } else {
+                metrics.word_line_height_table_cell(font_size)
+            }
         } else {
             metrics.word_line_height(font_size, 96.0)
         };
