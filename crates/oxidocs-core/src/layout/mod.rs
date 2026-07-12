@@ -3132,6 +3132,20 @@ impl LayoutEngine {
                                 let lines = (ph_nat / per_line).round().max(1.0);
                                 let cells = (m.word_line_height_no_grid(fs) / pitch).ceil().max(1.0);
                                 lines * cells * pitch
+                            } else if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_S808_DISABLE").is_err()
+                            {
+                                // S808 (2026-07-12): Latin footnote lines are the
+                                // hhea natural (TNR10 11.499 - the S779/S805 line),
+                                // not the estimate's word_line_height_table_cell
+                                // (10.5) - uklocal fn13 est 21.0 vs Word 23.0.
+                                let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty())
+                                    .map(|r| &r.style).cloned().unwrap_or_default();
+                                let fs = self.resolve_font_size(&rs, &p2.style);
+                                let m = self.metrics_for(&rs, &p2.style);
+                                let per_line = m.word_line_height_table_cell(fs).max(1.0);
+                                let lines = (ph_nat / per_line).round().max(1.0);
+                                lines * m.natural_line_height_hhea(fs)
                             } else { ph_nat };
                             if std::env::var("OXI_FN_PROBE").is_ok() {
                                 eprintln!("[FN_EST] id={} snap={} ph_nat={:.2} ph={:.2}", id, p2.style.snap_to_grid, ph_nat, ph);
@@ -3143,6 +3157,29 @@ impl LayoutEngine {
                             // line-height. Over-reservation by 10pt per page (5
                             // fns × 2pt) prevented para 70 from fitting on p5.
                             h += ph;
+                            // S807 (2026-07-12, opt-out OXI_S807_DISABLE): the
+                            // note's FIRST line (the superscript ref-mark line)
+                            // renders TALLER — the vertAlign run keeps its
+                            // declared-fs line box RAISED by the superscript
+                            // offset, so ref_line_h = plain + raise. DERIVED
+                            // (_fn_refline_gen.py, 3 fonts x 4 sizes, Word PDF
+                            // mark-span raise vs baseline pitch): growth ==
+                            // the measured raise exactly (TNR10 +3.5 = the
+                            // uklocalspending footnote; values are half-point
+                            // pre-quantized: TNR {3,3.5,4,4.5} Arial {3,3,4,4}
+                            // Calibri {2.5,3.5,4,4} @9-12pt). v1 raise =
+                            // halfround(0.35*fs) — exact for TNR 9-11, Arial
+                            // 9/11/12, Calibri 10-12; the +-0.5 residuals
+                            // (TNR12, Arial10, Calibri9) await the font-metric
+                            // rule. Latin scope; JP fn stack stays calibrated.
+                            if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_S807_DISABLE").is_err()
+                            {
+                                let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty())
+                                    .map(|r| &r.style).cloned().unwrap_or_default();
+                                let fs = self.resolve_font_size(&rs, &p2.style);
+                                h += (0.35 * fs * 2.0).round() / 2.0;
+                            }
                             first_para = false;
                         } else {
                             let ph_nat = self.estimate_para_height(p, cw, None, None, false, None, None);
@@ -3155,6 +3192,17 @@ impl LayoutEngine {
                                 let lines = (ph_nat / per_line).round().max(1.0);
                                 let cells = (m.word_line_height_no_grid(fs) / pitch).ceil().max(1.0);
                                 lines * cells * pitch
+                            } else if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_S808_DISABLE").is_err()
+                            {
+                                // S808: Latin fn lines = hhea natural (see above).
+                                let rs = p.runs.iter().find(|r| !r.text.trim().is_empty())
+                                    .map(|r| &r.style).cloned().unwrap_or_default();
+                                let fs = self.resolve_font_size(&rs, &p.style);
+                                let m = self.metrics_for(&rs, &p.style);
+                                let per_line = m.word_line_height_table_cell(fs).max(1.0);
+                                let lines = (ph_nat / per_line).round().max(1.0);
+                                lines * m.natural_line_height_hhea(fs)
                             } else { ph_nat };
                         }
                     }
@@ -5858,13 +5906,19 @@ impl LayoutEngine {
                             let line_count = ((nat / line_nat).round() as usize).max(1);
                             // Only grid-snap if the paragraph opts in (snapToGrid default=true).
                             // b837's FootnoteText style has snapToGrid=0 → Word uses natural.
+                            // S808 render mirror: Latin fn lines = hhea natural.
+                            let s808_line = if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_S808_DISABLE").is_err()
+                            {
+                                metrics.natural_line_height_hhea(line_fs).max(line_nat)
+                            } else { line_nat };
                             let height = if let Some(pitch) = grid_pitch {
                                 if pitch > 0.0 && p.style.snap_to_grid {
                                     line_count as f32 * pitch
                                 } else {
-                                    line_count as f32 * line_nat
+                                    line_count as f32 * s808_line
                                 }
-                            } else { line_count as f32 * line_nat };
+                            } else { line_count as f32 * s808_line };
                             (height, line_count)
                         };
                         let mut note_heights: Vec<f32> = Vec::new();
@@ -5876,10 +5930,23 @@ impl LayoutEngine {
                             // (Fix C estimate==render invariant; without it the
                             // rendered notes overflowed fn_bot by the spacing).
                             let mut prev_sa: Option<f32> = None;
+                            let mut s807_first = true;
                             for nb in &note.blocks {
                                 if let Block::Paragraph(p) = nb {
                                     let (h, _) = grid_snap_para(p);
                                     nh += h;
+                                    // S807 render mirror (estimate==render).
+                                    if s807_first {
+                                        s807_first = false;
+                                        if !self.doc_body_has_real_cjk
+                                            && std::env::var("OXI_S807_DISABLE").is_err()
+                                        {
+                                            let rs = p.runs.iter().find(|r| !r.text.trim().is_empty())
+                                                .map(|r| &r.style).cloned().unwrap_or_default();
+                                            let fs = self.resolve_font_size(&rs, &p.style);
+                                            nh += (0.35 * fs * 2.0).round() / 2.0;
+                                        }
+                                    }
                                     if s804_r && !p.style.has_direct_spacing {
                                         let sb = p.style.space_before.unwrap_or(0.0);
                                         let sa = p.style.space_after.unwrap_or(0.0);
@@ -6884,6 +6951,27 @@ impl LayoutEngine {
             // keep-out. Gated to !has_direct_spacing (= exactly when the
             // estimate dropped it).
             let s803_on = std::env::var("OXI_S803_DISABLE").is_err();
+            // S806 (2026-07-12, default ON, opt-out OXI_S806_DISABLE): the
+            // DERIVED Latin footer stack (controlled sweep _pb_footer_gen.py,
+            // 4 footer configs × bottom sweep, + the uklocalspending real-doc
+            // pin cbot=719.81):
+            //   stack = first_before + Σ line_i + Σ collapse(prev_sa, sb)
+            //           + last_after
+            // with (a) an EMPTY para honoring its style's line=exact value
+            // (uklocal Footer style line=260 exact → 13.0; the empty branch
+            // used word_line_height_no_grid = 12.0), (b) an empty para
+            // WITHOUT exact using the hhea natural (Arial 11 → 12.649, the
+            // S805/S671 Latin line height; the 10tw floor gave 12.0), and
+            // (c) the FIRST para's before INSIDE the stack with NO descent
+            // relief (the S780 before−win_desc relief over-credits ~2.3pt —
+            // uklocal Word pushes base 718.25 at cbot 719.81; with relief
+            // Oxi's cbot 722.1 keeps it). fU window (76.71, 89.36] ∋ 86.65
+            // model; fE window (51.45, 64.1] ∋ 61.3; real-doc 86.64 exact.
+            // Latin scope (!doc_body_has_real_cjk) — JP footers keep the
+            // calibrated legacy path (bd90b00/04b88e/ed025) byte-identical.
+            let s806_latin = !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S806_DISABLE").is_err();
+            let mut s806_first_before = true;
             let mut s803_prev_sa: Option<f32> = None;
             for block in blocks {
                 if let Block::Paragraph(p) = block {
@@ -6908,18 +6996,58 @@ impl LayoutEngine {
                             .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
                         let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                         let metrics = self.metrics_for_para_mark(&rpr_ref, &p.style);
-                        // Day 33 part 11 (2026-05-10): always use natural line height
-                        // for empty footer paragraphs. Previous grid-snap (added
-                        // 2026-04-17 for 04b88e) over-reserves footer area when
-                        // grid pitch > natural line height (bd90b00: 16.5pt pitch,
-                        // ~13pt natural → 2.3pt over-reservation pushes 備考 to
-                        // page 2). The max-with-bottom-margin guard below ensures
-                        // we still reserve at least bottom_margin space.
-                        metrics.word_line_height_no_grid(empty_fs)
+                        // S806 (a): an empty footer paragraph honors its style's
+                        // line=exact value (Footer style line=260 → 13.0).
+                        if s806_latin
+                            && p.style.line_spacing_rule.as_deref() == Some("exact")
+                            && p.style.line_spacing.unwrap_or(0.0) > 0.0
+                        {
+                            p.style.line_spacing.unwrap_or(0.0)
+                        } else if s806_latin && !metrics.is_cjk_83_64_font() {
+                            // S806 (b): Latin empty footer line = hhea natural
+                            // (12.649 @Arial 11), not the 10tw-floored win sum.
+                            metrics.natural_line_height_hhea(empty_fs)
+                        } else {
+                            // Day 33 part 11 (2026-05-10): always use natural line height
+                            // for empty footer paragraphs. Previous grid-snap (added
+                            // 2026-04-17 for 04b88e) over-reserves footer area when
+                            // grid pitch > natural line height (bd90b00: 16.5pt pitch,
+                            // ~13pt natural → 2.3pt over-reservation pushes 備考 to
+                            // page 2). The max-with-bottom-margin guard below ensures
+                            // we still reserve at least bottom_margin space.
+                            metrics.word_line_height_no_grid(empty_fs)
+                        }
                     } else {
-                        self.estimate_para_height(p, cw, gp, None, false, None, None)
+                        let mut est = self.estimate_para_height(p, cw, gp, None, false, None, None);
+                        // S806: estimate_para_height's should_reset drops style
+                        // spacing ONLY for rule∈{auto,none} — an exact/atLeast
+                        // para keeps its style sb+sa inside the estimate
+                        // (uklocal Footer PAGE para: est 37.0 = 12+13+12), which
+                        // the S803/S806 gap accounting then double-counts.
+                        // Strip it; the stack adds spacing explicitly.
+                        if s806_latin && !p.style.has_direct_spacing
+                            && !matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                        {
+                            est -= p.style.space_before.unwrap_or(0.0)
+                                + p.style.space_after.unwrap_or(0.0);
+                        }
+                        est
                     };
                     footer_h += h;
+                    if std::env::var("OXI_DBG_FTR").is_ok() {
+                        eprintln!("[FTR-P] h={:.3} sb={:?} sa={:?} direct={} lsr={:?} ls={:?} n_runs={}",
+                            h, p.style.space_before, p.style.space_after,
+                            p.style.has_direct_spacing, p.style.line_spacing_rule,
+                            p.style.line_spacing, p.runs.len());
+                    }
+                    // S806 (c): the FIRST paragraph's before-spacing sits inside
+                    // the reserved stack (replaces the S780 before−desc relief).
+                    if s806_latin && s806_first_before {
+                        s806_first_before = false;
+                        if !p.style.has_direct_spacing {
+                            footer_h += p.style.space_before.unwrap_or(0.0).max(0.0);
+                        }
+                    }
                     // S803: fold the style-level spacing the estimate dropped.
                     if s803_on && !p.style.has_direct_spacing {
                         let sb = p.style.space_before.unwrap_or(0.0);
@@ -6964,16 +7092,30 @@ impl LayoutEngine {
                     Block::Paragraph(p) if p.style.frame_pr.is_none() => Some(p),
                     _ => None,
                 }) {
-                    s780_extra += p.style.space_before.unwrap_or(0.0).max(0.0);
-                    if let Some(t) = p.style.borders.as_ref().and_then(|b| b.top.as_ref()) {
-                        s780_extra += t.width + t.space;
-                    }
-                    if s780_extra > 0.0 {
-                        let fs = p.style.ppr_rpr.as_ref().and_then(|r| r.font_size)
-                            .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
-                        let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let m = self.metrics_for_para_mark(&rpr_ref, &p.style);
-                        s780_extra = (s780_extra - m.win_descent * fs).max(0.0);
+                    if s806_latin {
+                        // S806 (c): before is already inside footer_h; the pBdr
+                        // top border+space joins the stack INSIDE the
+                        // max(margin) (fN3 sweep: a border-only footer stays
+                        // margin-driven until the full stack incl. border
+                        // exceeds it), WITHOUT the descent relief (falsified
+                        // by uklocal: with the before−desc relief Oxi's cbot
+                        // 722.1 keeps the base 718.25 line Word pushes at
+                        // cbot 719.81).
+                        if let Some(t) = p.style.borders.as_ref().and_then(|b| b.top.as_ref()) {
+                            footer_h += t.width + t.space;
+                        }
+                    } else {
+                        s780_extra += p.style.space_before.unwrap_or(0.0).max(0.0);
+                        if let Some(t) = p.style.borders.as_ref().and_then(|b| b.top.as_ref()) {
+                            s780_extra += t.width + t.space;
+                        }
+                        if s780_extra > 0.0 {
+                            let fs = p.style.ppr_rpr.as_ref().and_then(|r| r.font_size)
+                                .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
+                            let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            let m = self.metrics_for_para_mark(&rpr_ref, &p.style);
+                            s780_extra = (s780_extra - m.win_descent * fs).max(0.0);
+                        }
                     }
                 }
             }

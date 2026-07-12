@@ -1249,63 +1249,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     // Self-closing <w:p .../> — empty paragraph with no children.
                     // Apply default Normal style + docDefaults, matching parse_paragraph().
                     "p" if in_body && depth == 0 => {
-                        let mut style = ParagraphStyle::default();
-
-                        // Apply Normal style (common IDs: "a" for Japanese, "Normal" for English)
-                        if let Some(defined) = styles.styles.get("a")
-                            .or_else(|| styles.styles.get("Normal"))
-                        {
-                            let ds = &defined.paragraph;
-                            if style.space_before.is_none() { style.space_before = ds.space_before; }
-                            if style.space_after.is_none() { style.space_after = ds.space_after; }
-                            if style.line_spacing.is_none() {
-                                style.line_spacing = ds.line_spacing;
-                                style.line_spacing_rule = ds.line_spacing_rule.clone();
-                            }
-                            if let Some(ref drs) = ds.default_run_style {
-                                style.default_run_style = Some(drs.clone());
-                            }
-                            if ds.keep_next { style.keep_next = true; }
-                            if ds.keep_lines { style.keep_lines = true; }
-                        }
-                        // Apply docDefaults fallback
-                        if style.default_run_style.is_none() {
-                            style.default_run_style = styles.doc_default_run_style.clone();
-                        }
-                        if let Some(ref doc_para) = styles.doc_default_para_style {
-                            if style.space_before.is_none() { style.space_before = doc_para.space_before; }
-                            if style.space_after.is_none() { style.space_after = doc_para.space_after; }
-                            if style.line_spacing.is_none() {
-                                style.line_spacing = doc_para.line_spacing;
-                                style.line_spacing_rule = doc_para.line_spacing_rule.clone();
-                                style.line_spacing_from_doc_defaults = true;
-                            }
-                            if style.indent_left.is_none() && style.indent_left_chars.is_none() {
-                                style.indent_left = doc_para.indent_left;
-                                style.indent_left_chars = doc_para.indent_left_chars;
-                            }
-                            if style.indent_right.is_none() && style.indent_right_chars.is_none() {
-                                style.indent_right = doc_para.indent_right;
-                                style.indent_right_chars = doc_para.indent_right_chars;
-                            }
-                            if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
-                                style.indent_first_line = doc_para.indent_first_line;
-                                style.indent_first_line_chars = doc_para.indent_first_line_chars;
-                            }
-                            // Empty paragraphs: only override if docDefaults explicitly sets widowControl
-                            if doc_para.has_explicit_widow_control {
-                                style.widow_control = doc_para.widow_control;
-                            }
-                        }
-
-                        current_blocks.push(Block::Paragraph(Paragraph {
-                            runs: vec![],
-                            style,
-                            alignment: Alignment::default(),
-                            shapes: vec![],
-                            ppr_change: None,
-                            paragraph_mark_revision: None,
-                        }));
+                        current_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
                     }
                     _ => {}
                 }
@@ -7238,6 +7182,68 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
 }
 
 // Parse a header or footer XML part (w:hdr or w:ftr element)
+/// Self-closing `<w:p/>` — empty paragraph with no children. Applies the
+/// default Normal style + docDefaults, matching parse_paragraph(). Shared by
+/// the body parser and parse_header_footer_xml (S806p: the header/footer
+/// parser previously DROPPED Event::Empty paragraphs).
+fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
+    let mut style = ParagraphStyle::default();
+    // Apply Normal style (common IDs: "a" for Japanese, "Normal" for English)
+    if let Some(defined) = styles.styles.get("a")
+        .or_else(|| styles.styles.get("Normal"))
+    {
+        let ds = &defined.paragraph;
+        if style.space_before.is_none() { style.space_before = ds.space_before; }
+        if style.space_after.is_none() { style.space_after = ds.space_after; }
+        if style.line_spacing.is_none() {
+            style.line_spacing = ds.line_spacing;
+            style.line_spacing_rule = ds.line_spacing_rule.clone();
+        }
+        if let Some(ref drs) = ds.default_run_style {
+            style.default_run_style = Some(drs.clone());
+        }
+        if ds.keep_next { style.keep_next = true; }
+        if ds.keep_lines { style.keep_lines = true; }
+    }
+    // Apply docDefaults fallback
+    if style.default_run_style.is_none() {
+        style.default_run_style = styles.doc_default_run_style.clone();
+    }
+    if let Some(ref doc_para) = styles.doc_default_para_style {
+        if style.space_before.is_none() { style.space_before = doc_para.space_before; }
+        if style.space_after.is_none() { style.space_after = doc_para.space_after; }
+        if style.line_spacing.is_none() {
+            style.line_spacing = doc_para.line_spacing;
+            style.line_spacing_rule = doc_para.line_spacing_rule.clone();
+            style.line_spacing_from_doc_defaults = true;
+        }
+        if style.indent_left.is_none() && style.indent_left_chars.is_none() {
+            style.indent_left = doc_para.indent_left;
+            style.indent_left_chars = doc_para.indent_left_chars;
+        }
+        if style.indent_right.is_none() && style.indent_right_chars.is_none() {
+            style.indent_right = doc_para.indent_right;
+            style.indent_right_chars = doc_para.indent_right_chars;
+        }
+        if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
+            style.indent_first_line = doc_para.indent_first_line;
+            style.indent_first_line_chars = doc_para.indent_first_line_chars;
+        }
+        // Empty paragraphs: only override if docDefaults explicitly sets widowControl
+        if doc_para.has_explicit_widow_control {
+            style.widow_control = doc_para.widow_control;
+        }
+    }
+    Paragraph {
+        runs: vec![],
+        style,
+        alignment: Alignment::default(),
+        shapes: vec![],
+        ppr_change: None,
+        paragraph_mark_revision: None,
+    }
+}
+
 fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<Block>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut blocks = Vec::new();
@@ -7329,6 +7335,21 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         depth += 1;
                     }
                     _ => {}
+                }
+            }
+            Event::Empty(e) => {
+                // S806p (2026-07-12): a SELF-CLOSING <w:p/> (Event::Empty, not
+                // Start) was silently DROPPED — uklocalspending footer1.xml ends
+                // with <w:p/> (a Normal-style empty line Word reserves ~24.6pt
+                // for in the footer stack); its loss under-reserved the footer
+                // and let the body pack into Word's footer zone. Corpus scan:
+                // only ukhealthform/header1 + uklocalspending/footer1 carry the
+                // pattern (JP untouched by construction). Push an empty
+                // default-style paragraph (same as parse_paragraph on an empty
+                // <w:p> with no pPr).
+                let local = local_name(e.name().as_ref());
+                if local == "p" && in_root && depth == 0 {
+                    blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
                 }
             }
             Event::End(e) => {
