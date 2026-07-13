@@ -8285,13 +8285,31 @@ impl LayoutEngine {
         let s779_latin = (page.grid_line_pitch.is_none() || page.doc_grid_no_type)
             && !self.doc_body_has_real_cjk
             && std::env::var("OXI_S779_DISABLE").is_err();
+        // S827 (2026-07-13, opt-out OXI_S827_DISABLE): the S779 floor was a
+        // MIS-TRANSLATION of the derived rule. The derivation said "keep iff
+        // baseline + win_descent <= content_bottom"; from the line TOP the
+        // baseline sits at hhea_ascent + lineGap, so the top-relative
+        // threshold = hhea asc+desc+lineGap = the FULL hhea line (TNR 12pt
+        // 13.799), NOT win_asc+win_desc (13.289). Re-derived directly
+        // (_pb_latinbot_gen: no-grid Letter, TNR 12pt singles, 2tw bottom
+        // sweep): Word's capacity flips EXACTLY at line_top + 13.799
+        // (cbot 720.5 pushes / 720.6 keeps line47@706.746; the win model
+        // predicts keeps at 720.1-720.5 — violated). Settings-absent and
+        // compat-14 variants flip at the SAME point (compat is NOT a
+        // discriminator here). The [13.29, 13.80) window let Oxi keep lines
+        // Word pushes = the nyserda natural-flow over-pack class.
         let s779_win_heights: Vec<f32> = if s779_latin {
+            let s827_hhea = std::env::var("OXI_S827_DISABLE").is_err();
             lines.iter().map(|line| {
                 let mut mx: f32 = 0.0;
                 for f in &line.fragments {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
                     let m = self.metrics_for_text(&f.text, &f.style, &para.style);
-                    let h = (m.win_ascent + m.win_descent) * fs;
+                    let h = if s827_hhea {
+                        m.natural_line_height_hhea(fs)
+                    } else {
+                        (m.win_ascent + m.win_descent) * fs
+                    };
                     if h > mx { mx = h; }
                 }
                 mx
@@ -9739,6 +9757,31 @@ impl LayoutEngine {
                                 i += 1;
                             } else {
                                 break;
+                            }
+                        }
+                    }
+                }
+                // S826 (2026-07-13, opt-out OXI_S826_DISABLE): a footnote-ref
+                // run whose marker merged into a WORD fragment that BEGAN at an
+                // earlier run (rsid-split words: "P"+"ractice"+[fnref]+".")
+                // never appears as a fragment run_index, and the S276 forward
+                // sweep above breaks at the first intermediate TEXT run — the
+                // reservation AND the footnote body were silently dropped
+                // (uk_framework fn 7 "Practice7."). General attribution:
+                // fragments are emitted in run order, so every run index in
+                // [this line's first fragment run, next line's first fragment
+                // run) lies ON this line — sweep the whole range for
+                // footnote_ref runs.
+                if std::env::var("OXI_S826_DISABLE").is_err() {
+                    let lo = line.fragments.iter().map(|f| f.run_index).min();
+                    let hi = lines
+                        .get(line_idx + 1)
+                        .and_then(|nl| nl.fragments.iter().map(|f| f.run_index).min())
+                        .unwrap_or(para.runs.len());
+                    if let Some(lo) = lo {
+                        for r in lo..hi.max(lo) {
+                            if let Some(id) = para.runs.get(r).and_then(|x| x.footnote_ref) {
+                                if !bucket.contains(&id) { bucket.push(id); }
                             }
                         }
                     }
@@ -12791,7 +12834,31 @@ impl LayoutEngine {
                             if kernbreak_para && ch == ' ' {
                                 latin_space_credit_tw += pt_to_tw(char_width * kernbreak_cap);
                             } else if s799_space_shrink && ch == ' ' {
-                                latin_space_credit_tw += pt_to_tw(char_width * s799_cap);
+                                // S825 (2026-07-13, opt-out OXI_S825_DISABLE): the
+                                // COMPAT-15 justified space-shrink capacity, DERIVED
+                                // (_pb_cs3_gen m15 sweeps, 4 cs profiles, fits ±0.03
+                                // ..0.3pt over 10 spaces):
+                                //   capacity/space = 0.365×em + 0.24×cs
+                                // — the em space compresses to ~63.5% and baked
+                                // w:spacing (cs) to ~76% of itself. WITHOUT a
+                                // compat-15 settings part the allowance collapses to
+                                // a small per-LINE constant (fs/4, cs-independent —
+                                // the same sweeps without settings.xml) — the legacy
+                                // 0.10 approximation stays for that regime. The
+                                // enabler was pinned by adding ONLY the compat-15
+                                // settings to the synthetic (allow 2.74 → ≥7.7);
+                                // falsified en route: substitution, pStyle, theme,
+                                // numbering, docDefaults line=23, line index.
+                                if self.compat_mode >= 15
+                                    && self.compat_mode_explicit
+                                    && std::env::var("OXI_S825_DISABLE").is_err()
+                                {
+                                    let em_part = char_width - cs;
+                                    latin_space_credit_tw +=
+                                        pt_to_tw(em_part * 0.365 + cs.max(0.0) * 0.24);
+                                } else {
+                                    latin_space_credit_tw += pt_to_tw(char_width * s799_cap);
+                                }
                             }
                         }
                     }
