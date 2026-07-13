@@ -7604,11 +7604,10 @@ impl LayoutEngine {
         // section-start page read as page 1 and kept its space-before where
         // Word suppresses (uklocalspending Annex headings, Heading1 inherited
         // before=240, render at y=72=margin). Body flow only.
-        // HELD OPT-IN (OXI_S816=1, default OFF byte-identical): correct per
-        // render-truth but the default carries the compensating GDI cell-line
-        // surplus (S815) — ships with the Latin exact-cell bundle.
+        // Default ON (opt-out OXI_S816_DISABLE) since the Latin exact-cell
+        // bundle (S815-S819) shipped together 2026-07-13.
         let s816_section_2_plus = body_para_index.is_some()
-            && std::env::var("OXI_S816").is_ok()
+            && std::env::var("OXI_S816_DISABLE").is_err()
             && S816_PAST_FIRST_SECTION.with(|c| c.get());
         let is_page_2_plus =
             !pages.is_empty() || !current_elements.is_empty() || s816_section_2_plus;
@@ -7620,7 +7619,7 @@ impl LayoutEngine {
             // corpus is calibrated with unconditional suppression.
             if !(para.style.page_break_before
                 && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S816").is_ok())
+                && std::env::var("OXI_S816_DISABLE").is_err())
             {
                 effective_spacing = 0.0;
             }
@@ -14126,9 +14125,9 @@ impl LayoutEngine {
                     (raw * 8.0).floor() / 8.0
                 }
             } else if in_table_cell && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S815").is_ok()
+                && std::env::var("OXI_S815_DISABLE").is_err()
             {
-                // S815 (2026-07-13, OPT-IN OXI_S815=1, default OFF): a LATIN
+                // S815 (2026-07-13, default ON, opt-out OXI_S815_DISABLE): a LATIN
                 // document's table-cell LINE is the hhea natural EXACT — the
                 // uklocalspending Annex render-truth (Word cell pitch 11.5 =
                 // Arial 10 hhea 11.499; the GDI tmHeight table gives 16px =
@@ -14148,7 +14147,7 @@ impl LayoutEngine {
             // S815 (opt-in, see above): same rule on the no-GDI-table path.
             if !self.doc_body_has_real_cjk
                 && !metrics.is_cjk_83_64_font()
-                && std::env::var("OXI_S815").is_ok()
+                && std::env::var("OXI_S815_DISABLE").is_err()
             {
                 metrics.natural_line_height_hhea(font_size)
             } else {
@@ -18685,7 +18684,7 @@ impl LayoutEngine {
                                     // non-whitespace overflow char (an URL overflowing at '/',
                                     // a parenthesized token at '('), not just alphanumerics.
                                     let s818_cell = !self.doc_body_has_real_cjk
-                                        && std::env::var("OXI_S818").is_ok();
+                                        && std::env::var("OXI_S818_DISABLE").is_err();
                                     let cellword_ok = std::env::var("OXI_CELLWORD_DISABLE").is_err()
                                         && (if s818_cell { !ch.is_whitespace() } else { ch.is_ascii_alphanumeric() })
                                         && (para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
@@ -20102,6 +20101,38 @@ impl LayoutEngine {
                 } else {
                     page_bottom
                 };
+                // S819 (2026-07-13, default ON, opt-out OXI_S819_DISABLE, Latin
+                // exact-cell bundle): Word's split-row fill keeps a text line only when
+                // line_box_bottom + tcMar_b + border_width fits the content
+                // bottom — the split reserves the cell's BOTTOM frame at the
+                // page bottom (_pb_rowsplit_gen: base Q=5.97=5.25+0.72 in
+                // [5.93,6.13); tcMar_b=15tw variant Q=1.47 in [1.48,1.68);
+                // sa=0 variant unchanged → sa excluded). The p1-side mirror
+                // of the S817 continuation tail. TEXT elements only; the
+                // border/shading clip geometry keeps split_y. S402 history:
+                // a GLOBAL tighten here is catastrophic (ed025 0.9986→0.80)
+                // — Latin-scoped, opt-in.
+                let s819_q = if !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S819_DISABLE").is_err()
+                {
+                    let pad_b = row.cells.first()
+                        .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
+                        .unwrap_or(default_pad_b);
+                    let bw = row.cells.first()
+                        .and_then(|c| c.borders.as_ref())
+                        .and_then(|b| b.bottom.as_ref())
+                        .map(|bd| bd.width)
+                        .unwrap_or_else(|| {
+                            if table.style.border {
+                                table.style.border_width.unwrap_or(0.4)
+                            } else {
+                                0.0
+                            }
+                        });
+                    pad_b + bw
+                } else {
+                    0.0
+                };
                 // Partition elements: those fitting on current page vs overflow
                 let mut current_page_elems: Vec<LayoutElement> = Vec::new();
                 let mut next_page_elems: Vec<LayoutElement> = Vec::new();
@@ -20199,7 +20230,9 @@ impl LayoutEngine {
                             // The bug needs per-cell positioning correction
                             // upstream (Oxi cell cursor 4pt above Word at p13
                             // continuation start), not split-threshold tweaking.
-                            if elem_bottom <= split_y + 0.1 {
+                            // S819: the text fill threshold reserves the cell
+                            // bottom frame (tcMar_b + bw); 0.0 when off.
+                            if elem_bottom <= split_y + 0.1 - s819_q {
                                 current_page_elems.push(elem);
                             } else {
                                 let shift = split_y - page_top;
@@ -20259,7 +20292,7 @@ impl LayoutEngine {
                 // S719b tokyoshugyo) anchors at page_top. Opt-out
                 // OXI_S817_DISABLE.
                 let s817_cont_pad = if !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S817").is_ok()
+                    && std::env::var("OXI_S817_DISABLE").is_err()
                 {
                     row.cells.first()
                         .and_then(|c| c.margins.as_ref().and_then(|m| m.top))
@@ -20274,7 +20307,7 @@ impl LayoutEngine {
                 // re-close AND the post-split cursor branches below. 0.0 for
                 // CJK docs = byte-identical.
                 let s817_tail = if !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S817").is_ok()
+                    && std::env::var("OXI_S817_DISABLE").is_err()
                 {
                     let pad_b = row.cells.first()
                         .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
@@ -21425,7 +21458,7 @@ impl LayoutEngine {
                     // S818 estimate mirror: same two-stage token wrap as the
                     // render site (estimate==render line counts).
                     let s818_cell = !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_S818").is_ok();
+                        && std::env::var("OXI_S818_DISABLE").is_err();
                     if std::env::var("OXI_CELLWORD_DISABLE").is_err()
                         && (if s818_cell { !ch.is_whitespace() } else { ch.is_ascii_alphanumeric() })
                         && (para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
