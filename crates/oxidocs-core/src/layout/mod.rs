@@ -8403,14 +8403,22 @@ impl LayoutEngine {
             // Word pitch 13.44; sizing it at para_font_size wrongly grew the
             // line to 14.01).
             let marker_fs = para.style.list_marker_size.unwrap_or(para_font_size);
-            // S820: the Symbol marker (lineGap 0) competes for the tallest
-            // component — when it wins, the ext term drops.
-            if (SYM_ASC + SYM_DESC) * marker_fs > best_sum {
+            // S820b (2026-07-13): the Symbol marker contributes its ASCENT
+            // only — the line's descent stays the TEXT fonts' max, and the
+            // external leading drops when the marker drives the height.
+            // Differential probe (pbb_ 4/8/16/24 bullets, TARGET ink deltas —
+            // ink offsets cancel): Arial 11 + full-size Symbol advance =
+            // 13.380/13.399/13.380 ≈ 13.386 = (2059 + 434)/2048×11 = Symbol
+            // asc + ARIAL desc (Symbol's own winDesc 450 NOT used; win-sum
+            // max gave 13.476, max(ext) 13.84 = the old wp6/7/15 drift).
+            // fw_probe2 Calibri+Symbol 14.02 = 11.10 + Calibri desc 2.90 ✓.
+            let marker_asc = SYM_ASC * marker_fs;
+            let _ = SYM_DESC;
+            let _ = best_sum;
+            if marker_asc > asc {
                 ext = 0.0;
             }
-            let target_nat = asc.max(SYM_ASC * marker_fs)
-                + desc.max(SYM_DESC * marker_fs)
-                + ext;
+            let target_nat = asc.max(marker_asc) + desc + ext;
             let factor = para.style.line_spacing.unwrap_or(1.0);
             let target = target_nat * if factor > 0.0 { factor } else { 1.0 };
             if target > line_heights[0] {
