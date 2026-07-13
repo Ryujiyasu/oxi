@@ -1053,6 +1053,17 @@ fn normalize_family_name(name: &str) -> String {
         }
     }
     match name {
+        // S831 (2026-07-13): CG Times is the PCL metric CLONE of Times New
+        // Roman; Windows FontSubstitutes resolves it to TNR and Word renders
+        // TNR metrics. The comment on is_metric_incompatible_substitution
+        // above CLAIMED this mapping but no map entry existed — the name fell
+        // through to registry fallback = Calibri-class default_metrics (hhea
+        // 1.2207: usnyserda's Normal-style runs rendered 14.65pt lines vs
+        // Word's TNR 13.8 → +0.85/line wherever an rsid-split run lacked the
+        // explicit TNR override → the p27 (a)/(b) warranty paras drifted +3.7
+        // = the wp27-35 natural-flow cascade). Corpus scan: CG Times appears
+        // in usnyserda ONLY → single-doc-scoped by construction.
+        "CG Times" => "Times New Roman".to_string(),
         "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
         "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
         // "MS Pゴシック" (half-width variant) → GDI resolves via system font.

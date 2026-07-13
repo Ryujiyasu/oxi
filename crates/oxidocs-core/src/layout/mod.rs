@@ -9320,7 +9320,20 @@ impl LayoutEngine {
                     .and_then(|v| v.parse::<f32>().ok()).unwrap_or(-1.0);
                 if nat_over > ov_thr { effective_lh } else { break_threshold }
             } else { break_threshold };
-            let natural_needs_page_break = if in_textbox { false } else {
+            // S832 (2026-07-13, opt-out OXI_S832_DISABLE): a TRAILING-BR EMPTY
+            // line (the S684 line — a paragraph-final <w:br/> renders an empty
+            // line) at the PAGE BOTTOM stays on the current page. Word starts
+            // the next page with the FOLLOWING paragraph (nyserda p54:
+            // «…for Reports.¶<br>» then the Option-2 heading at p55 y=72.5 =
+            // the page top; Oxi pushed the empty br line → +26pt at the p55
+            // top → the wp55 ×2 tail in BOTH LRPB modes). Latin scope; JP
+            // byte-identical by construction.
+            let s832_trailing_empty = line_idx > 0
+                && line_idx + 1 == lines.len()
+                && line.fragments.iter().all(|f| f.text.trim().is_empty())
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S832_DISABLE").is_err();
+            let natural_needs_page_break = if in_textbox || s832_trailing_empty { false } else {
                 cursor.cursor_y + break_threshold > effective_break_bottom
             };
             // S391 (2026-05-27): per-LINE LRPB respect. When THIS line is the
