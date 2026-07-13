@@ -3272,8 +3272,14 @@ impl LayoutEngine {
                             // superscript raise (Word ukframework pitch 15.0
                             // exact, no growth) — the raise applies to auto/
                             // atLeast lines only.
+                            // S807 RETIRED to opt-in 2026-07-14 (OXI_S807=1):
+                            // under the S833 declared-separator model the
+                            // ref-line raise is a DOUBLE-COUNT (the fnr probe
+                            // boxes show no raise term); uklocal natural
+                            // 1.0000 requires it off. Kept as a knob for the
+                            // legacy (S833-off) comparison state.
                             if !self.doc_body_has_real_cjk
-                                && std::env::var("OXI_S807_DISABLE").is_err()
+                                && std::env::var("OXI_S807").is_ok()
                                 && p2.style.line_spacing_rule.as_deref() != Some("exact")
                             {
                                 let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty())
@@ -3354,17 +3360,15 @@ impl LayoutEngine {
             // (b837/kojin/bunkacontract) keep their calibrated base (their
             // special paras inherit spacing-less JP Normals, where the models
             // nearly coincide; reconciliation is a separate gated session).
-            // ★HELD OPT-IN (OXI_S833=1, default OFF byte-identical): the
-            // model is derived-true (probe + real-doc closure) but flipping it
-            // default-ON exposes S559 compensating errors in the LRPB-mode
-            // gates — ukframework 1.0->0.9979 {+1:1} (sep 36.65 vs the
-            // calibrated 36: one knife-edge para) and uklocalspending
-            // 1.0->0.9928 {+1:7} (the +13.3 packing room was compensating the
-            // wp12+ natural-flow cascade). Ships default-ON together with the
-            // uklocal natural-flow fixes (the S815-S819 bundle pattern).
+            // ★SHIPPED default-ON 2026-07-14 (opt-out OXI_S833_DISABLE) as
+            // part of the EN natural-flow endgame: the S559 exposures that
+            // held it opt-in (ukframework {+1:1} / uklocalspending {+1:7} in
+            // LRPB mode) are resolved by S835 (fn-boundary fs/16 relief) +
+            // S836 (Latin saved-LRPB retirement) — the bundle state measures
+            // 6/6 = 1.0000 on the EN gate.
             if self.fn_special_declared
                 && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S833").is_ok()
+                && std::env::var("OXI_S833_DISABLE").is_err()
             {
                 let cw = page.size.width - page.margin.left - page.margin.right;
                 let special_h = |num: u32| -> f32 {
@@ -4181,6 +4185,7 @@ impl LayoutEngine {
                             false,
                             None, // S755
                             None, // S758
+                            false, // S835
                         );
                         elements.extend(frame_els);
                         // Band height: framePr h (hRule atLeast semantics — the
@@ -4314,8 +4319,18 @@ impl LayoutEngine {
                     // baseline of the Latin flow).
                     // S811: metric-incompatible-substitution docs distrust
                     // their saved LRPBs entirely (see doc_lrpb_distrust).
+                    // S836 (2026-07-14, default ON, opt-out OXI_S836_DISABLE):
+                    // Latin docs RETIRE the block-level SOFT LRPB respect —
+                    // the EN natural flow (with S833/S834/S835 + S807 off)
+                    // measures 6/6 = 1.0000 without it, and the saved breaks
+                    // FIGHT the corrected fn/footer reservations (stale-LRPB
+                    // class: nyserda p18 kept a saved break with 6.6 lines of
+                    // fresh room). S391 per-line respect is untouched (it did
+                    // not fire against the EN gate; JP keeps everything).
                     let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok()
-                        || self.doc_lrpb_distrust;
+                        || self.doc_lrpb_distrust
+                        || (!self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S836_DISABLE").is_err());
                     let has_lrpb_at_start = para.runs.first()
                         .map(|r| r.has_last_rendered_page_break).unwrap_or(false);
                     let lrpb_should_break = if has_lrpb_at_start && !elements.is_empty() && !lrpb_knob_off {
@@ -4863,6 +4878,7 @@ impl LayoutEngine {
                         footer_tight, // S726
                         s755_geom.as_ref(), // S755
                         s758_para_band, // S758
+                        (footnote_reserve_current + delta_if_current) > 0.0, // S835
                     );
                     prev_space_after = sa;
                     if std::env::var("OXI_DBG_PARA").is_ok() {
@@ -5732,6 +5748,7 @@ impl LayoutEngine {
                             false,
                             None, // S755
                             None, // S758
+                            false, // S835
                         );
                         elements.extend(en_elements);
                     }
@@ -5984,6 +6001,7 @@ impl LayoutEngine {
                             false, // S726: header bottom differs
                             None, // S755
                             None, // S758
+                            false, // S835
                         );
                         lp.elements.extend(hdr_elements);
                     } else if let Block::Image(img) = block {
@@ -6038,6 +6056,7 @@ impl LayoutEngine {
                             false, // S726: footer bottom differs
                             None, // S755
                             None, // S758
+                            false, // S835
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -6236,8 +6255,9 @@ impl LayoutEngine {
                                     // S810: exact-rule box clamps the raise.
                                     if s807_first {
                                         s807_first = false;
+                                        // S807 retired to opt-in (see estimate site).
                                         if !self.doc_body_has_real_cjk
-                                            && std::env::var("OXI_S807_DISABLE").is_err()
+                                            && std::env::var("OXI_S807").is_ok()
                                             && p.style.line_spacing_rule.as_deref() != Some("exact")
                                         {
                                             let rs = p.runs.iter().find(|r| !r.text.trim().is_empty())
@@ -6447,6 +6467,7 @@ impl LayoutEngine {
                                         false, // S726
                                         None, // S755
                                         None, // S758
+                                        false, // S835
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -6767,6 +6788,7 @@ impl LayoutEngine {
                         false, // S726
                         None, // S755
                         None, // S758
+                        false, // S835
                     );
                     // CLNSP: count this paragraph's rendered LINES (text
                     // elements grouped by y) and push one spec per line —
@@ -7608,6 +7630,13 @@ impl LayoutEngine {
         // v1 = floating IMAGES only (all corpus wrapSquare anchors are
         // textboxes → corpus-inert by construction).
         s758_band: Option<(f32, f32, f32)>,
+        // S835 (2026-07-14): the page's CURRENT footnote reserve is non-zero —
+        // the content bottom this paragraph tests against is the FOOTNOTE-AREA
+        // top (a SOFT boundary: Word grants fs/16 of line-box relief there;
+        // see the s835_fn_relief derivation at the natural break test). Only
+        // the body call site threads a real value; header/footer/footnote/
+        // textbox/frame callers pass false (their bottoms are not fn areas).
+        fn_boundary_active: bool,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -8362,7 +8391,7 @@ impl LayoutEngine {
             // S834 alone flips uklocalspending's LRPB-mode gate {-1:1} (an S559
             // compensation); the pair ships default-ON together with the Latin
             // LRPB-drop once the uklocal natural residual {+1:7} closes.
-            let s834 = std::env::var("OXI_S833").is_ok();
+            let s834 = std::env::var("OXI_S833_DISABLE").is_err() && !self.doc_body_has_real_cjk;
             let sep_part: f32 = if s834 {
                 (first_line_extra_content_h - para_fn_heights.values().sum::<f32>()).max(0.0)
             } else { 0.0 };
@@ -9450,8 +9479,30 @@ impl LayoutEngine {
                 && line.fragments.iter().all(|f| f.text.trim().is_empty())
                 && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S832_DISABLE").is_err();
+            // S835 (2026-07-14, default ON, opt-out OXI_S835_DISABLE): the
+            // FOOTNOTE-AREA top is a SOFT boundary — Word lets the body line's
+            // box enter the separator paragraph's leading by 1/16 em (fs/16)
+            // before pushing. DERIVED on uk_framework wp26 (Calibri 11): the
+            // area chain is locked by the sep-rule baseline (rule center 722.98
+            // = area_top 714.82 + asc 8.25; keep-all-afters + Normal-hhea sep),
+            // and the body flip L = 0.71 ± 0.05 (W8 spacer ladder ×2 + W9
+            // bottom-margin ladder keep→push 1144→1146) = fs/16 = 0.6875@11pt.
+            // The ceil-0.75 device-slot alternative was REJECTED by W9 (predicts
+            // push at 1136; Word keeps through 1144). The PLAIN page bottom
+            // keeps the FULL hhea box (S827; Calibri probe lbc_1240→1242 =
+            // box-exact — the relief is fn-boundary-ONLY). Scope: Latin +
+            // fn-ref-carrying para (the derived case; a no-own-ref para above
+            // a committed area is not yet covered).
+            let s835_boundary_is_fn = fn_boundary_active
+                || committed_fn_delta_at_line.get(line_idx).copied().unwrap_or(0.0) > 0.0;
+            let s835_fn_relief = if s835_boundary_is_fn
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S835_DISABLE").is_err()
+            {
+                para_font_size / 16.0
+            } else { 0.0 };
             let natural_needs_page_break = if in_textbox || s832_trailing_empty { false } else {
-                cursor.cursor_y + break_threshold > effective_break_bottom
+                cursor.cursor_y + break_threshold - s835_fn_relief > effective_break_bottom
             };
             // S391 (2026-05-27): per-LINE LRPB respect. When THIS line is the
             // first to contain a run R that has has_last_rendered_page_break
@@ -9662,14 +9713,18 @@ impl LayoutEngine {
                     } else {
                         line_heights.get(1).copied().unwrap_or(0.0)
                     };
-                    cursor.cursor_y + line_height + next_h > page_top + content_height
+                    // S835: the fn-area boundary softness (fs/16) applies to the
+                    // widow/orphan fit test too — framework wp26 «shall obtain»
+                    // (2-line, ref 14) was whole-moved HERE at a 0.17pt overflow
+                    // that Word's soft boundary absorbs.
+                    cursor.cursor_y + line_height + next_h - s835_fn_relief > page_top + content_height
                         && !current_elements.is_empty()
                 } else if line_idx == lines.len() - 2 && !needs_page_break {
                     // Widow: if the last line would overflow to the next page alone,
                     // break BEFORE this line so at least 2 lines go to the next page.
                     // next line (line_idx+1) is the paragraph's LAST line → S608.
                     let next_h = last_line_fit_h(line_idx + 1);
-                    cursor.cursor_y + line_height + next_h > page_top + content_height
+                    cursor.cursor_y + line_height + next_h - s835_fn_relief > page_top + content_height
                 } else {
                     false
                 }
