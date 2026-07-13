@@ -8370,13 +8370,29 @@ impl LayoutEngine {
         {
             let mut asc: f32 = 0.0;
             let mut desc: f32 = 0.0;
+            // S820 (2026-07-13): the external-leading term comes from the
+            // TALLEST (max win-sum) component, NOT the max ext across
+            // components — uklocalspending bullets (Arial 11 text ext 67/2048
+            // + full-size Symbol marker ext 0): Word pitch 13.44 =
+            // (2059+450)/2048×11 with NO ext (the Symbol marker is tallest);
+            // max(ext) gave 13.84 = +0.4/bullet → ~+6pt over a 16-bullet page
+            // → the wp6/7/15 page-bottom pushes. Degenerate for ukframework
+            // (Calibri tallest AND ext-max → identical); fw_probe2's
+            // Calibri+full-Symbol 14.02 also matches (argmax=Symbol → ext 0 →
+            // 13.95 ≈ 14.02 device) where max(ext) gave 14.26.
+            let mut best_sum: f32 = 0.0;
             let mut ext: f32 = 0.0;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
                 let m = self.metrics_for_text(&f.text, &f.style, &para.style);
                 asc = asc.max(m.win_ascent * fs);
                 desc = desc.max(m.win_descent * fs);
-                ext = ext.max((m.natural_line_height_hhea(fs) - (m.win_ascent + m.win_descent) * fs).max(0.0));
+                let win_sum = (m.win_ascent + m.win_descent) * fs;
+                let fext = (m.natural_line_height_hhea(fs) - win_sum).max(0.0);
+                if win_sum > best_sum {
+                    best_sum = win_sum;
+                    ext = fext;
+                }
             }
             // Microsoft Symbol (symbol.ttf): win 2059/450, upm 2048, lineGap 0.
             const SYM_ASC: f32 = 2059.0 / 2048.0;
@@ -8387,6 +8403,11 @@ impl LayoutEngine {
             // Word pitch 13.44; sizing it at para_font_size wrongly grew the
             // line to 14.01).
             let marker_fs = para.style.list_marker_size.unwrap_or(para_font_size);
+            // S820: the Symbol marker (lineGap 0) competes for the tallest
+            // component — when it wins, the ext term drops.
+            if (SYM_ASC + SYM_DESC) * marker_fs > best_sum {
+                ext = 0.0;
+            }
             let target_nat = asc.max(SYM_ASC * marker_fs)
                 + desc.max(SYM_DESC * marker_fs)
                 + ext;
