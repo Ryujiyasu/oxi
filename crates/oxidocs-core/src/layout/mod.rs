@@ -8344,15 +8344,74 @@ impl LayoutEngine {
         };
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
+        // S834 (2026-07-14, opt-out OXI_S834_DISABLE): the SEPARATOR allocation
+        // is part of first_line_extra_content_h (delta_if_current includes
+        // footnote_sep_alloc for the page's first fn) but was NEVER entered in
+        // this per-line committed map — so the REF LINE's lenient extra stayed
+        // at +sep_region (~36-49pt) and every anchor line could eat into the
+        // separator/notice region → the fn area under-fit → footnote bodies
+        // silently DROPPED (uklocal fn4: anchor last line at 664.8 vs the
+        // reserved eff 632.6; FN_PLACE fit=0 gap 33.0 < 38.5). Word render
+        // truth (fnr_Z sweep): the anchor line must co-locate with the FULL fn
+        // machinery — anchor at 645.3 fits, at ~648 the ANCHOR moves to the
+        // next page with its fn; no leniency at/after the ref line. FIX: fold
+        // the sep part (first_line_extra − Σ para fn heights, clamped ≥0) into
+        // the cumulative when the para's FIRST ref commits.
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
+            // ★BUNDLED with S833 (opt-in OXI_S833=1, default OFF byte-identical):
+            // S834 alone flips uklocalspending's LRPB-mode gate {-1:1} (an S559
+            // compensation); the pair ships default-ON together with the Latin
+            // LRPB-drop once the uklocal natural residual {+1:7} closes.
+            let s834 = std::env::var("OXI_S833").is_ok();
+            let sep_part: f32 = if s834 {
+                (first_line_extra_content_h - para_fn_heights.values().sum::<f32>()).max(0.0)
+            } else { 0.0 };
             let mut out = Vec::with_capacity(lines.len());
             let mut cumulative = 0.0_f32;
             let mut seen: Vec<u32> = Vec::new();
-            for line in &lines {
-                for f in &line.fragments {
-                    if let Some(run) = para.runs.get(f.run_index) {
-                        if let Some(id) = run.footnote_ref {
+            for (li, line) in lines.iter().enumerate() {
+                // S834(b): the same word-merge blind spot S826 fixed in the
+                // per-line attribution — a ref run merged into a word fragment
+                // («organisations.» + "3" → one fragment keeping the first
+                // run_index) is invisible to the raw fragment scan. Sweep the
+                // full run RANGE this line covers (fragments are emitted in
+                // run order: [this line's first fragment run, next line's
+                // first fragment run)). Bundled behind OXI_S833; the legacy
+                // path keeps the raw per-fragment scan byte-identically.
+                let lo = line.fragments.iter().map(|f| f.run_index).min();
+                let hi = if s834 {
+                    lines
+                        .get(li + 1)
+                        .and_then(|nl| nl.fragments.iter().map(|f| f.run_index).min())
+                        .unwrap_or(para.runs.len())
+                } else {
+                    // legacy: only runs that appear as fragment run_index
+                    // (reproduced by sweeping each fragment's own run only)
+                    0
+                };
+                if !s834 {
+                    for f in &line.fragments {
+                        if let Some(run) = para.runs.get(f.run_index) {
+                            if let Some(id) = run.footnote_ref {
+                                if !seen.contains(&id) {
+                                    seen.push(id);
+                                    if let Some(&h) = para_fn_heights.get(&id) {
+                                        cumulative += h;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    out.push(cumulative);
+                    continue;
+                }
+                if let Some(lo) = lo {
+                    for r in lo..hi.max(lo) {
+                        if let Some(id) = para.runs.get(r).and_then(|x| x.footnote_ref) {
                             if !seen.contains(&id) {
+                                if seen.is_empty() {
+                                    cumulative += sep_part;
+                                }
                                 seen.push(id);
                                 if let Some(&h) = para_fn_heights.get(&id) {
                                     cumulative += h;
