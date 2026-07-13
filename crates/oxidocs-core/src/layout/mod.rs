@@ -1718,7 +1718,16 @@ impl LayoutCursor {
     }
 
     /// Set both tracks to the same value (used at page boundary reset).
+    #[track_caller]
     pub fn set(&mut self, y: f32) {
+        // OXI_DBG_CURSET: page-transition localizer — prints a backtrace-lite
+        // (caller line via the panic-free Location) whenever the cursor jumps
+        // UP by more than half a page (a page push), so block-level pushes
+        // with no dedicated instrument can be attributed.
+        if self.cursor_y - y > 300.0 && std::env::var("OXI_DBG_CURSET").is_ok() {
+            eprintln!("[CURSET] {:.2} -> {:.2} at {}", self.cursor_y, y,
+                std::panic::Location::caller());
+        }
         self.cursor_y = y;
         self.visual_y = y;
     }
@@ -4237,6 +4246,18 @@ impl LayoutEngine {
                         let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         let consumed = cursor.cursor_y - start_y;
                         let half_page = effective_content_h * 0.5;
+                        // S822 ATTEMPTED + REVERTED (2026-07-13): gating the
+                        // SOFT LRPB on `remaining − est < K` (the "a real
+                        // page-bottom break leaves little room" physical test,
+                        // S814-v2's row analog) is Oxi-geometry-relative and
+                        // FAILS the S581 wall: uklocalspending's PASS is still
+                        // LRPB-supported at many boundaries where Oxi's natural
+                        // flow under-fills (K=28 → uklocal 1.0→0.31 {−1:634},
+                        // nyserda −1×22 new). usnyserda's +1×20 stale-LRPB
+                        // subset (p18: a saved break with 6.6 lines of fresh
+                        // room, fresh Word keeps) has NO local discriminator —
+                        // the fix is the nyserda natural-flow catalog (make the
+                        // LRPBs redundant, the b837-pi=89 resolution pattern).
                         est_h <= remaining && consumed > half_page
                     } else {
                         false
