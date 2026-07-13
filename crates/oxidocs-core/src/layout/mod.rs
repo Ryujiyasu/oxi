@@ -3211,7 +3211,15 @@ impl LayoutEngine {
                                 // (10.5) - uklocal fn13 est 21.0 vs Word 23.0.
                                 // S810: auto-rule lines only — an exact-rule fn
                                 // (ukframework line=240) uses its declared box.
-                                let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty())
+                                // S828(b): skip the SUPERSCRIPT ref-mark run (the
+                                // prefix "1" lands in it, making it the first
+                                // non-empty run; its auto-shrunk 2/3 fs gave
+                                // nyserda ph=7.93 for an 11.5 line).
+                                let s828b = std::env::var("OXI_S828_DISABLE").is_err();
+                                let rs = p2.runs.iter().find(|r| !r.text.trim().is_empty()
+                                        && !(s828b && matches!(r.style.vertical_align,
+                                            Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript))))
+                                    .or_else(|| p2.runs.iter().find(|r| !r.text.trim().is_empty()))
                                     .map(|r| &r.style).cloned().unwrap_or_default();
                                 let fs = self.resolve_font_size(&rs, &p2.style);
                                 let m = self.metrics_for(&rs, &p2.style);
@@ -4883,17 +4891,38 @@ impl LayoutEngine {
                         // fn area, silently dropping the fns (b837 p5 cascade).
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
-                        if let Some(new_page_refs) = para_fn_refs_per_page.get(pages_added) {
-                            for id in new_page_refs {
-                                if !footnote_ids_current_page.contains(id) {
-                                    if footnote_ids_current_page.is_empty() {
-                                        // S160: see estimate-path comment near line 1934.
-                                        // S596b: no-docGrid separator = one footnote line.
-                                        footnote_reserve_current += footnote_sep_alloc(*id);
-                                    }
-                                    footnote_ids_current_page.push(*id);
-                                    footnote_reserve_current += estimate_footnote_h(*id);
+                        // S829 (2026-07-13, opt-out OXI_S829_DISABLE): re-commit
+                        // the refs the AREA mapping above assigns to the FINAL
+                        // page, using the SAME saturating arithmetic. The literal
+                        // get(pages_added) assumed one bucket per spanned page;
+                        // a break path that doesn't push a per-line bucket
+                        // (nyserda block 82: 1 bucket, pages_added=1) returned
+                        // None → the new page carried ZERO reserve while the fn
+                        // area still rendered there → the body packed into the
+                        // fn area (Word widow-pushes the following paragraph).
+                        // For the normal shape (buckets == pages_added+1) the
+                        // last bucket maps to the final page — byte-identical.
+                        let s829 = std::env::var("OXI_S829_DISABLE").is_err();
+                        let s829_start = current_page_idx
+                            .saturating_sub(para_fn_refs_per_page.len().saturating_sub(1));
+                        let final_refs: Vec<u32> = if s829 {
+                            para_fn_refs_per_page.iter().enumerate()
+                                .filter(|(o, _)| s829_start + o == current_page_idx)
+                                .flat_map(|(_, refs)| refs.iter().copied())
+                                .collect()
+                        } else {
+                            para_fn_refs_per_page.get(pages_added)
+                                .map(|v| v.clone()).unwrap_or_default()
+                        };
+                        for id in &final_refs {
+                            if !footnote_ids_current_page.contains(id) {
+                                if footnote_ids_current_page.is_empty() {
+                                    // S160: see estimate-path comment near line 1934.
+                                    // S596b: no-docGrid separator = one footnote line.
+                                    footnote_reserve_current += footnote_sep_alloc(*id);
                                 }
+                                footnote_ids_current_page.push(*id);
+                                footnote_reserve_current += estimate_footnote_h(*id);
                             }
                         }
                     } else {
@@ -6056,15 +6085,44 @@ impl LayoutEngine {
                         // returns natural height which diverges from the render.
                         // COM-derived 2026-04-20 from 6 minimal repros: render uses
                         // grid_pitch × line_count per paragraph.
+                        // S828 (2026-07-13, opt-out OXI_S828_DISABLE): a NO-TYPE
+                        // docGrid does not snap footnote lines — the ESTIMATE
+                        // already excluded it (fn_est_gp, S727 "No-type grids
+                        // don't snap") but the PLACEMENT (this fn) and the note
+                        // RENDER below kept the raw pitch → est 11.5/line vs
+                        // place/render 14.95/line (nyserda pitch=299): the body
+                        // under-reserved, the area over-computed, [FN_PLACE]
+                        // fit=0 → footnote bodies silently DROPPED. Word
+                        // render-truth (nyserda p18 fn 1): line box 11.4 = hhea
+                        // natural, NOT the pitch. est == place == render.
+                        // Corpus scan: no-type grid + footnoteReference = the 4
+                        // EN docs only → JP byte-identical by construction.
+                        let s828 = std::env::var("OXI_S828_DISABLE").is_err();
+                        let fn_gp = if s828 && page.doc_grid_no_type { None } else { grid_pitch };
                         let grid_snap_para = |p: &Paragraph| -> (f32, usize) {
                             // Natural estimated height (may include space_before/after)
-                            let nat = self.estimate_para_height(p, hdr_width, grid_pitch, None, false, None, None);
-                            // Per-line natural height (used to derive line_count)
+                            let nat = self.estimate_para_height(p, hdr_width, fn_gp, None, false, None, None);
+                            // Per-line natural height (used to derive line_count).
+                            // S828(b): the first run is the SUPERSCRIPT ref mark
+                            // (auto-shrunk 2/3 by resolve_font_size) — keying the
+                            // per-line height off it under-sizes line_nat →
+                            // line_count inflates (nyserda fn 1: round(nat/8.6)=2
+                            // for a 1-line URL). Use the first non-superscript
+                            // text run for fs/metrics (Latin scope; JP typed-grid
+                            // footnote estimates keep their calibration).
+                            let fs_run = if s828 && !self.doc_body_has_real_cjk {
+                                p.runs.iter().find(|r| !r.text.trim().is_empty()
+                                    && !matches!(r.style.vertical_align,
+                                        Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript)))
+                                    .or_else(|| p.runs.first())
+                            } else {
+                                p.runs.first()
+                            };
                             let line_fs = self.resolve_font_size(
-                                p.runs.first().map(|r| &r.style).unwrap_or(&RunStyle::default()),
+                                fs_run.map(|r| &r.style).unwrap_or(&RunStyle::default()),
                                 &p.style,
                             );
-                            let metrics = p.runs.first()
+                            let metrics = fs_run
                                 .map(|r| self.metrics_for_text(&r.text, &r.style, &p.style))
                                 .unwrap_or_else(|| {
                                     let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
@@ -6082,7 +6140,7 @@ impl LayoutEngine {
                             {
                                 metrics.natural_line_height_hhea(line_fs).max(line_nat)
                             } else { line_nat };
-                            let height = if let Some(pitch) = grid_pitch {
+                            let height = if let Some(pitch) = fn_gp {
                                 if pitch > 0.0 && p.style.snap_to_grid {
                                     line_count as f32 * pitch
                                 } else {
@@ -6308,7 +6366,9 @@ impl LayoutEngine {
                                         &para_to_render, page.margin.left, &mut cy, footnote_width, footnote_page_height_huge,
                                         footnote_page_top, page,
                                         &mut Vec::new(), &mut Vec::new(),
-                                        grid_pitch, None, false,
+                                        // S828: no-type grids render footnote lines at
+                                        // natural hhea, not the pitch (est==place==render).
+                                        fn_gp, None, false,
                                         None, false, false, 0.0, None, None, None,
                                         false, false, None,
                                         0.0,
