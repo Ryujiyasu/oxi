@@ -44,6 +44,15 @@ pub struct Document {
     /// legacy-vs-2013 split must check `compat_mode <= 14 || !compat_mode_explicit`.
     #[serde(default)]
     pub compat_mode_explicit: bool,
+    /// S833 (2026-07-13): settings.xml `<w:footnotePr>` declares CUSTOM special
+    /// footnotes (`<w:footnote w:id="-1"/>` etc.). Word then reserves/renders
+    /// the custom separator paragraph at its FULL styled height (style-chain
+    /// space before/after included) and pre-reserves the continuationNotice
+    /// paragraph even on non-continuing pages; without the declaration the
+    /// built-in compact separator (~one bare line) applies. Derived via the
+    /// _pb_fnres probe family on uklocalspending (P1-P4 decomposition).
+    #[serde(default)]
+    pub fn_special_declared: bool,
     /// w:characterSpacingControl from settings.xml.
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana"
     /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.

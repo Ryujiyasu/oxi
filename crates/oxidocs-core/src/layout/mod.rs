@@ -1751,6 +1751,9 @@ pub struct LayoutEngine {
     /// Absent = legacy (Word ≤2010) document — Word applies ≤14 layout
     /// behaviors (jc=left demand oikomi) even though compat_mode reports 15.
     compat_mode_explicit: bool,
+    /// S833: settings.xml footnotePr declares custom special footnotes ->
+    /// the declared-separator reservation model (see footnote_sep_alloc).
+    fn_special_declared: bool,
     /// w:characterSpacingControl: enable yakumono (CJK punctuation) compression
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
@@ -1999,6 +2002,7 @@ impl LayoutEngine {
             default_tab_stop: 36.0,
             compat_mode: 15,
             compat_mode_explicit: true,
+            fn_special_declared: false,
             compress_punctuation: false,
             cellpair_neg_charspace: false,
             do_not_expand_shift_return: false,
@@ -2085,6 +2089,7 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compat_mode_explicit: doc.compat_mode_explicit,
+            fn_special_declared: doc.fn_special_declared,
             compress_punctuation: doc.compress_punctuation,
             cellpair_neg_charspace: doc.pages.iter().any(|pg| {
                 pg.doc_grid_lines_and_chars
@@ -3334,6 +3339,59 @@ impl LayoutEngine {
             let sep_extra: f32 = std::env::var("OXI_FN_SEP_GAP_EXTRA")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
             let base = 6.0 + sep_extra;
+            // S833 (2026-07-13, opt-out OXI_S833_DISABLE): DECLARED custom
+            // separator model. When settings.xml footnotePr declares the
+            // special footnotes, Word reserves the separator region as the
+            // CUSTOM separator paragraph at its FULL styled height (line +
+            // style-chain sb/sa — uklocal: Normal-inherited 12 + 12.649 + 12
+            // = 36.65 vs the built-in compact ~13) PLUS the continuationNotice
+            // paragraph's styled height even on non-continuing pages (real
+            // uklocal notice: direct spacing 0/0 -> line only, 12.65).
+            // DERIVED via the _pb_fnres probes (P1-P4 decomposition; the
+            // arithmetic closes on the real doc: 59.6 + 22.9 + 12.4 = 94.9 vs
+            // the measured ~94.6; continuationSeparator declaration = 0 on
+            // non-continuing pages). Latin scope: the JP footnotePr docs
+            // (b837/kojin/bunkacontract) keep their calibrated base (their
+            // special paras inherit spacing-less JP Normals, where the models
+            // nearly coincide; reconciliation is a separate gated session).
+            // ★HELD OPT-IN (OXI_S833=1, default OFF byte-identical): the
+            // model is derived-true (probe + real-doc closure) but flipping it
+            // default-ON exposes S559 compensating errors in the LRPB-mode
+            // gates — ukframework 1.0->0.9979 {+1:1} (sep 36.65 vs the
+            // calibrated 36: one knife-edge para) and uklocalspending
+            // 1.0->0.9928 {+1:7} (the +13.3 packing room was compensating the
+            // wp12+ natural-flow cascade). Ships default-ON together with the
+            // uklocal natural-flow fixes (the S815-S819 bundle pattern).
+            if self.fn_special_declared
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S833").is_ok()
+            {
+                let cw = page.size.width - page.margin.left - page.margin.right;
+                let special_h = |num: u32| -> f32 {
+                    page.footnotes.iter().find(|n| n.number == num)
+                        .and_then(|note| note.blocks.iter().find_map(|b| match b {
+                            Block::Paragraph(p) => Some(p),
+                            _ => None,
+                        }))
+                        .map(|p| {
+                            let _fng = FnLayoutGuard::new();
+                            let mut h = self.estimate_para_height(p, cw, None, None, false, None, None);
+                            // S804 convention: the estimate drops STYLE-level
+                            // spacing; add it back unless the para carries
+                            // direct spacing (the real notice's explicit 0/0).
+                            if !p.style.has_direct_spacing {
+                                h += p.style.space_before.unwrap_or(0.0)
+                                    + p.style.space_after.unwrap_or(0.0);
+                            }
+                            h
+                        })
+                        .unwrap_or(0.0)
+                };
+                let sep_h = special_h(u32::MAX);
+                if sep_h > 0.0 {
+                    return sep_h + special_h(u32::MAX - 1);
+                }
+            }
             if page.grid_line_pitch.is_none() && std::env::var("OXI_S596B_DISABLE").is_err() {
                 if let Some(note) = page.footnotes.iter().find(|n| n.number == first_id) {
                     if let Some(Block::Paragraph(p)) = note.blocks.first() {

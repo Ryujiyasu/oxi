@@ -66,6 +66,7 @@ impl OoxmlParser {
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
         let default_tab_stop = self.parse_default_tab_stop();
         let (compat_mode, compat_mode_explicit) = self.parse_compat_mode();
+        let fn_special_declared = self.parse_fn_special_declared();
         let compress_punctuation = self.parse_compress_punctuation();
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
         let balance_single_byte_double_byte_width =
@@ -191,6 +192,20 @@ impl OoxmlParser {
                 en_id_to_seq.insert(f.number, (i as u32) + 1);
             }
             renumber_note_refs(&mut section.blocks, &fn_id_to_seq, &en_id_to_seq);
+
+            // S833: append the SPECIAL footnote paragraphs (separator /
+            // continuationNotice, kept under sentinel keys by parse_notes_xml)
+            // with sentinel numbers AFTER the real notes — positions/seq of
+            // real notes are unchanged; the layout's declared-separator
+            // reservation looks them up by the sentinel numbers.
+            if !footnotes_list.is_empty() {
+                if let Some(blocks) = ctx.footnotes.get("__sep__") {
+                    footnotes_list.push(Footnote { number: u32::MAX, blocks: blocks.clone() });
+                }
+                if let Some(blocks) = ctx.footnotes.get("__notice__") {
+                    footnotes_list.push(Footnote { number: u32::MAX - 1, blocks: blocks.clone() });
+                }
+            }
 
             // Continuous section: merge into previous page instead of creating a new one
             if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty() {
@@ -437,10 +452,27 @@ impl OoxmlParser {
             default_tab_stop,
             compat_mode,
             compat_mode_explicit,
+            fn_special_declared,
             compress_punctuation,
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
         })
+    }
+
+    /// S833: settings.xml `<w:footnotePr>` with at least one `<w:footnote>`
+    /// declaration — Word switches to the CUSTOM special-footnote model
+    /// (separator/continuation paragraphs at their full styled heights).
+    fn parse_fn_special_declared(&mut self) -> bool {
+        let xml = match self.read_part("word/settings.xml") {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        if let Some(i) = xml.find("<w:footnotePr>") {
+            if let Some(j) = xml[i..].find("</w:footnotePr>") {
+                return xml[i..i + j].contains("<w:footnote ");
+            }
+        }
+        false
     }
 
     /// Parse `word/people.xml` (MS-DOCX w15). Missing part → empty list.
@@ -3395,6 +3427,7 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
     let mut reader = Reader::from_str(xml);
     let mut notes: HashMap<String, Vec<Block>> = HashMap::new();
     let mut current_id: Option<String> = None;
+    let mut current_type: Option<String> = None;
     let mut current_blocks: Vec<Block> = Vec::new();
     let mut depth = 0;
     let mut in_note = false;
@@ -3423,11 +3456,18 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                         depth = 0;
                         current_blocks.clear();
                         current_id = None;
+                        current_type = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "id" {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 current_id = Some(val);
+                            }
+                            // S833: capture the special-footnote type so the
+                            // separator / continuationNotice paragraphs are
+                            // available for the styled-height reservation.
+                            if key == "type" {
+                                current_type = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -3446,10 +3486,25 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "footnote" | "endnote" if in_note && depth == 0 => {
+                        let typ = current_type.take();
                         if let Some(id) = current_id.take() {
-                            // Skip separator notes (id 0 and -1)
-                            if id != "0" && id != "-1" {
-                                notes.insert(id, std::mem::take(&mut current_blocks));
+                            // S833: keep the SPECIAL paragraphs under sentinel
+                            // keys — their styled heights drive the declared-
+                            // separator reservation model.
+                            match typ.as_deref() {
+                                Some("separator") => {
+                                    notes.insert("__sep__".to_string(), std::mem::take(&mut current_blocks));
+                                }
+                                Some("continuationNotice") => {
+                                    notes.insert("__notice__".to_string(), std::mem::take(&mut current_blocks));
+                                }
+                                Some("continuationSeparator") => { current_blocks.clear(); }
+                                _ => {
+                                    // Skip separator notes (id 0 and -1)
+                                    if id != "0" && id != "-1" {
+                                        notes.insert(id, std::mem::take(&mut current_blocks));
+                                    }
+                                }
                             }
                         }
                         in_note = false;
