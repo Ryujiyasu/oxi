@@ -8305,6 +8305,11 @@ impl LayoutEngine {
         // handled by the REGISTRY 'Symbol' metrics entry (font_metrics_compact
         // .json, added 2026-07-11) via the normal marker-metrics path — an
         // explicit S689-style bump here proved redundant (identical output).
+        // S821 shared: the marker line-0 growth target (S689 ratio model /
+        // S795 component model, max) — attributed to the paragraph ENTRY
+        // (cursor) instead of the line's own advance when S821 is on.
+        let mut s821_growth_target: f32 = 0.0;
+        let s821_entry_attribution = std::env::var("OXI_S821_DISABLE").is_err();
         if std::env::var("OXI_S689_DISABLE").is_err()
             && page.doc_grid_no_type
             && !lines.is_empty()
@@ -8313,6 +8318,7 @@ impl LayoutEngine {
         {
             // body natural-hhea of line 0 (max over fragments), and confirm all-Latin
             let mut body_nat: f32 = 0.0;
+            let mut body_desc: f32 = 0.0;
             let mut all_latin = true;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
@@ -8320,14 +8326,29 @@ impl LayoutEngine {
                 if m.is_cjk_83_64_font() { all_latin = false; }
                 let n = m.natural_line_height_hhea(fs);
                 if n > body_nat { body_nat = n; }
+                let d = m.win_descent * fs;
+                if d > body_desc { body_desc = d; }
             }
-            const SYMBOL_RATIO: f32 = 1.2251; // win(2059+450)/upm 2048 of Microsoft Symbol
-            let marker_nat = SYMBOL_RATIO * para_font_size;
+            // S821b (2026-07-13): the marker line target is the COMPONENT
+            // model (Symbol asc + TEXT desc, S820b — differential probe
+            // 13.386 = (2059+434)/2048×11), not the win-SUM ratio (1.2251
+            // → 13.476, +0.086/bullet = the uklocal p6/p7 residual slope).
+            const SYM_ASC_R: f32 = 2059.0 / 2048.0;
+            const SYMBOL_RATIO: f32 = 1.2251; // legacy win-sum model (A/B)
+            let marker_nat = if s821_entry_attribution {
+                SYM_ASC_R * para_font_size + body_desc
+            } else {
+                SYMBOL_RATIO * para_font_size
+            };
             if all_latin && body_nat > 0.0 && marker_nat > body_nat {
                 let scale = marker_nat / body_nat;
-                line_heights[0] *= scale;
-                natural_line_heights[0] *= scale;
-                ink_line_heights[0] *= scale;
+                if s821_entry_attribution {
+                    s821_growth_target = s821_growth_target.max(line_heights[0] * scale);
+                } else {
+                    line_heights[0] *= scale;
+                    natural_line_heights[0] *= scale;
+                    ink_line_heights[0] *= scale;
+                }
             }
         }
 
@@ -8354,6 +8375,9 @@ impl LayoutEngine {
         // confirmed), Latin doc (!doc_body_has_real_cjk → JP corpus
         // byte-identical by construction), auto line rule only.
         let mut s795_line0_target: f32 = 0.0;
+        // S821: the marker growth advanced at the paragraph ENTRY (cursor),
+        // keeping the line's own advance plain.
+        let mut s795_entry_extra: f32 = 0.0;
         if std::env::var("OXI_DBG795").is_ok() && para.style.list_marker.is_some() {
             eprintln!("[DBG795] marker={:?} gp_none={} no_type={} cjk={} rule={:?} ls={:?} nlines={}",
                 para.style.list_marker.as_deref().map(|m| m.chars().take(3).collect::<String>()),
@@ -8422,12 +8446,36 @@ impl LayoutEngine {
             let factor = para.style.line_spacing.unwrap_or(1.0);
             let target = target_nat * if factor > 0.0 { factor } else { 1.0 };
             if target > line_heights[0] {
-                line_heights[0] = target;
-                if natural_line_heights[0] < target { natural_line_heights[0] = target; }
-                if ink_line_heights[0] < target { ink_line_heights[0] = target; }
-                s795_line0_target = target;
+                // S821 (2026-07-13, opt-out OXI_S821_DISABLE): the marker
+                // growth belongs to the pitch INTO the bullet line, not out
+                // of it — junction probe matrix (pk_, real F0B7 markers):
+                // entry plain→bullet 13.44 / interior 13.44 / EXIT
+                // bullet→plain 12.60 = PLAIN (marker irrelevant); spacing
+                // adds on top (kB12 24.6 = 12.6+12, kEB12 25.44 = 13.44+12).
+                // Word model: pitch = prev_TEXT_desc + next_max_asc(incl.
+                // marker) + next_ext(tallest). Attribution: advance the
+                // CURSOR by the growth at the paragraph ENTRY and keep the
+                // line's own advance PLAIN (the old line_heights[0] bump put
+                // the growth on the EXIT → +0.74 after every list followed
+                // by spacing — uklocal p6/p7 page-bottom pushes). The pbb_
+                // "exit=13.704" that suggested otherwise was the '•' GLYPH
+                // ink (1.1 above the text ink) — measure bullet junctions
+                // text-ink to text-ink.
+                if s821_entry_attribution {
+                    s821_growth_target = s821_growth_target.max(target);
+                } else {
+                    line_heights[0] = target;
+                    if natural_line_heights[0] < target { natural_line_heights[0] = target; }
+                    if ink_line_heights[0] < target { ink_line_heights[0] = target; }
+                    s795_line0_target = target;
+                }
             }
         }
+        if s821_growth_target > line_heights.first().copied().unwrap_or(0.0) {
+            s795_entry_extra = s821_growth_target - line_heights[0];
+            cursor.advance(s795_entry_extra);
+        }
+        let _ = s795_entry_extra;
 
         // S773: the line-0 target also feeds the single-LM0 cumulative advance
         // basis (raw_spaced_tw) below — a SINGLE-line paragraph's cursor
@@ -20141,7 +20189,16 @@ impl LayoutEngine {
                 // border/shading clip geometry keeps split_y. S402 history:
                 // a GLOBAL tighten here is catastrophic (ed025 0.9986→0.80)
                 // — Latin-scoped, opt-in.
+                // S819 applies to the NATURAL page-bottom split only: an
+                // LRPB-pulled split_y is Word's own recorded break position,
+                // which already encodes the bottom-frame decision —
+                // subtracting q again double-counts and drops one more line
+                // (uklocal p21 row 1: saved split 708.8, line-1 bottom 707 —
+                // Word keeps 1 line, the doubled q pushed the row whole).
+                let s819_natural_split =
+                    !(lrpb_split_y.is_finite() && lrpb_split_y < page_bottom);
                 let s819_q = if !self.doc_body_has_real_cjk
+                    && s819_natural_split
                     && std::env::var("OXI_S819_DISABLE").is_err()
                 {
                     let pad_b = row.cells.first()
