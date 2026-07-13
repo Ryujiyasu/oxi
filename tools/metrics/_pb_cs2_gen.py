@@ -30,7 +30,22 @@ CT = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
       '<Default Extension="xml" ContentType="application/xml"/>'
       '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
       '</Types>')
+
+DOCRELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+           '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
+           '</Relationships>')
+
+# ukframework-shaped bullet level (Symbol sz=20 marker, hanging indent)
+NUM = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+       f'<w:numbering {W_NS}>'
+       '<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/>'
+       '<w:numFmt w:val="bullet"/><w:lvlText w:val=""/><w:lvlJc w:val="left"/>'
+       '<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>'
+       '<w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/><w:sz w:val="20"/></w:rPr></w:lvl></w:abstractNum>'
+       '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>')
 
 RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -95,6 +110,8 @@ def gen(cases=None):
         with zipfile.ZipFile(os.path.join(OUTDIR, name(c, r)), 'w', zipfile.ZIP_DEFLATED) as z:
             z.writestr('[Content_Types].xml', CT)
             z.writestr('_rels/.rels', RELS)
+            z.writestr('word/_rels/document.xml.rels', DOCRELS)
+            z.writestr('word/numbering.xml', NUM)
             z.writestr('word/document.xml', build(r, cs, jc, variant))
     print('generated', len(cases or CASES), 'docs in', OUTDIR)
 

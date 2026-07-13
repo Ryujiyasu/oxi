@@ -67,6 +67,17 @@ def normalize_text(s: str) -> str:
     # 4+ keeps a literal English ellipsis '...' intact; both sides normalize
     # through the same function so match behavior elsewhere is unchanged.
     s = re.sub(r"\.{4,}", " ", s)
+    # S823: strip ToC TAIL decorations entirely so a ToC entry and its BODY
+    # heading normalize to the SAME text and the page-radius tie-break pairs
+    # each with its own page (ukframework 'Introduction and background':
+    # Word ToC = heading + '\t6', Oxi ToC = heading + '...' [a SHORT leader
+    # under the 4-dot collapse] — the min-length prefix compare failed on
+    # the differing tails at radius 0 and CROSSED onto the p10 heading, the
+    # recorded ±2 artifact pair). Word side: tab + page number tail; Oxi
+    # side: 2+ leader dots + optional page number tail. Trailing-only, both
+    # sides through the same function.
+    s = re.sub(r"\t+\s*\d+\s*$", "", s)
+    s = re.sub(r"\.{2,}\s*\d*\s*$", "", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
