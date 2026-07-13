@@ -1940,6 +1940,15 @@ thread_local! {
     /// there regressed b837's word_png −0.0228 (25 sg0 footnotes). Set
     /// around footnote layout/estimate calls to suppress the SG0RAW branch.
     static IN_FOOTNOTE_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// S816 (2026-07-13): true once the document's FIRST IR section has been
+    /// laid out. The page-top space-before suppression keys on
+    /// `!pages.is_empty() || !current_elements.is_empty()`, but those vecs are
+    /// per-SECTION — the first page of section 2+ read as "page 1" and kept
+    /// its space-before. Word suppresses there too (uklocalspending Annex
+    /// I/II headings, Heading1 inherited before=240, render at y=72=margin).
+    /// Body flow only (`body_para_index.is_some()`), so a textbox/header
+    /// first paragraph keeps its space-before as before.
+    static S816_PAST_FIRST_SECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// RAII guard for IN_FOOTNOTE_LAYOUT (SG0RAW footnote scope-out).
@@ -2152,7 +2161,14 @@ impl LayoutEngine {
         // (pagination), all sharing the same IR index.
         let mut layout_to_ir_page: Vec<usize> = Vec::new();
 
+        // S816: reset the past-first-section flag for this layout run.
+        S816_PAST_FIRST_SECTION.with(|c| c.set(false));
         for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
+            // S816: sections after the first count as "page 2+" for the
+            // page-top space-before suppression.
+            if ir_idx > 0 {
+                S816_PAST_FIRST_SECTION.with(|c| c.set(true));
+            }
             // S732 (2026-07-03): an evenPage/oddPage section starts on the
             // next physical page of that parity — Word inserts a BLANK page
             // when the parity mismatches (probexeo2: content sections at
@@ -7583,9 +7599,31 @@ impl LayoutEngine {
         // Suppress space_before at the top of a page (page 2+).
         // COM-confirmed: page 1 preserves space_before (H1 sb=24 → y=96=72+24).
         // Page 2+ suppresses it.
-        let is_page_2_plus = !pages.is_empty() || !current_elements.is_empty();
+        // S816 (2026-07-13): the first page of a NON-FIRST section is also
+        // "page 2+" — pages/current_elements are per-section vecs, so a
+        // section-start page read as page 1 and kept its space-before where
+        // Word suppresses (uklocalspending Annex headings, Heading1 inherited
+        // before=240, render at y=72=margin). Body flow only.
+        // HELD OPT-IN (OXI_S816=1, default OFF byte-identical): correct per
+        // render-truth but the default carries the compensating GDI cell-line
+        // surplus (S815) — ships with the Latin exact-cell bundle.
+        let s816_section_2_plus = body_para_index.is_some()
+            && std::env::var("OXI_S816").is_ok()
+            && S816_PAST_FIRST_SECTION.with(|c| c.get());
+        let is_page_2_plus =
+            !pages.is_empty() || !current_elements.is_empty() || s816_section_2_plus;
         if (cursor.cursor_y - page_top).abs() < 0.01 && is_page_2_plus {
-            effective_spacing = 0.0;
+            // _pb_sbtop_gen (2026-07-13): a pageBreakBefore paragraph KEEPS its
+            // space-before at the page top (probe pbb y=84.35 = margin+12);
+            // natural and hard-break (<w:br type=page>) tops suppress
+            // (y=72.33 = margin). Latin scope for the pbb exception — the JP
+            // corpus is calibrated with unconditional suppression.
+            if !(para.style.page_break_before
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S816").is_ok())
+            {
+                effective_spacing = 0.0;
+            }
         }
 
         cursor.advance(effective_spacing);
@@ -18643,75 +18681,107 @@ impl LayoutEngine {
                                     // wp36+ −1 cascade). JP docs keep the v1 gate
                                     // byte-identical (the second disjunct requires
                                     // !doc_body_has_real_cjk).
+                                    // S818: in a Latin document the token wrap engages for ANY
+                                    // non-whitespace overflow char (an URL overflowing at '/',
+                                    // a parenthesized token at '('), not just alphanumerics.
+                                    let s818_cell = !self.doc_body_has_real_cjk
+                                        && std::env::var("OXI_S818").is_ok();
                                     let cellword_ok = std::env::var("OXI_CELLWORD_DISABLE").is_err()
-                                        && ch.is_ascii_alphanumeric()
+                                        && (if s818_cell { !ch.is_whitespace() } else { ch.is_ascii_alphanumeric() })
                                         && (para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
                                             || (!self.doc_body_has_real_cjk
                                                 && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk_ideograph_or_kana))));
                                     if cellword_ok {
-                                        let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
-                                        let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
-                                        let mut hit_boundary = false;
-                                        loop {
-                                            let tail = buf.chars().last()
-                                                .or_else(|| current_line.last().and_then(|f| f.0.chars().last()));
-                                            let remaining_on_line = buf.chars().count()
-                                                + current_line.iter().map(|f| f.0.chars().count()).sum::<usize>();
-                                            if !tail.map_or(false, |c| c.is_ascii_alphanumeric()) {
-                                                hit_boundary = remaining_on_line >= 1;
-                                                break;
-                                            }
-                                            if remaining_on_line <= 1 { break; }
-                                            if buf.pop().is_some() {
-                                                if let Some(pc) = buf_chars.pop() {
-                                                    buf_w -= pc.natural_advance;
-                                                    carry.insert(0, pc);
+                                        // S818 (2026-07-13, Latin docs, opt-out OXI_S818_DISABLE):
+                                        // two-stage Word token wrap. Stage 1 = the token is
+                                        // WHITESPACE-delimited — Word wraps a long token (URL)
+                                        // WHOLE to the next line; the v1 alnum boundary split it
+                                        // at '/' to fill the partial line (uklocal p37
+                                        // «…org/ | data/local-authorities» vs Word
+                                        // «http://…local- | authorities»). Stage 2 (the token
+                                        // alone fills the line) = split at the LAST internal
+                                        // break-after opportunity ('-' '/' …), not the raw
+                                        // overflow char. JP docs keep the v1 alnum walk
+                                        // (calibrated form-family balance).
+                                        let p_alnum = |c: char| c.is_ascii_alphanumeric();
+                                        let p_token = |c: char| !c.is_whitespace();
+                                        let p_opp = |c: char| !c.is_whitespace() && !is_break_after(c);
+                                        let preds: &[&dyn Fn(char) -> bool] = if s818_cell {
+                                            &[&p_token, &p_opp]
+                                        } else {
+                                            &[&p_alnum]
+                                        };
+                                        let mut consumed = false;
+                                        for pred in preds {
+                                            let ch_ctx = crate::layout::jc_both_compress::CharContext { ch, natural_advance: cw, font_size };
+                                            let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = vec![ch_ctx];
+                                            let mut hit_boundary = false;
+                                            loop {
+                                                let tail = buf.chars().last()
+                                                    .or_else(|| current_line.last().and_then(|f| f.0.chars().last()));
+                                                let remaining_on_line = buf.chars().count()
+                                                    + current_line.iter().map(|f| f.0.chars().count()).sum::<usize>();
+                                                if !tail.map_or(false, |c| pred(c)) {
+                                                    hit_boundary = remaining_on_line >= 1;
+                                                    break;
                                                 }
-                                            } else if let Some(pc) = current_line_chars.pop() {
-                                                if let Some(frag) = current_line.last_mut() {
-                                                    if frag.0.pop().is_some() {
-                                                        frag.2 -= pc.natural_advance;
-                                                        if frag.0.is_empty() {
-                                                            current_line.pop();
+                                                if remaining_on_line <= 1 { break; }
+                                                if buf.pop().is_some() {
+                                                    if let Some(pc) = buf_chars.pop() {
+                                                        buf_w -= pc.natural_advance;
+                                                        carry.insert(0, pc);
+                                                    }
+                                                } else if let Some(pc) = current_line_chars.pop() {
+                                                    if let Some(frag) = current_line.last_mut() {
+                                                        if frag.0.pop().is_some() {
+                                                            frag.2 -= pc.natural_advance;
+                                                            if frag.0.is_empty() {
+                                                                current_line.pop();
+                                                            }
                                                         }
                                                     }
+                                                    carry.insert(0, pc);
+                                                } else {
+                                                    break;
                                                 }
-                                                carry.insert(0, pc);
-                                            } else {
+                                            }
+                                            if hit_boundary && carry.len() >= 2 {
+                                                if !buf.is_empty() {
+                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                                    buf.clear();
+                                                    buf_w = 0.0;
+                                                    current_line_chars.extend(buf_chars.drain(..));
+                                                }
+                                                lines.push(std::mem::take(&mut current_line));
+                                                line_x = 0.0;
+                                                current_line_chars.clear();
+                                                is_first_line = false;
+                                                for c in &carry {
+                                                    buf.push(c.ch);
+                                                    buf_w += c.natural_advance;
+                                                }
+                                                buf_chars.extend(carry);
+                                                consumed = true;
                                                 break;
                                             }
+                                            // un-carry: restore anything popped (carry[..len-1],
+                                            // in reading order — popping drained buf's TAIL then
+                                            // current_line's tail, so appending keeps order) back
+                                            // onto buf so the next stage / plain wrap sees the
+                                            // original text (reachable when the word fills the
+                                            // whole line).
+                                            if carry.len() >= 2 {
+                                                let n = carry.len() - 1;
+                                                for c in carry.drain(..n) {
+                                                    buf.push(c.ch);
+                                                    buf_w += c.natural_advance;
+                                                    buf_chars.push(c);
+                                                }
+                                            }
                                         }
-                                        if hit_boundary && carry.len() >= 2 {
-                                            if !buf.is_empty() {
-                                                current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
-                                                buf.clear();
-                                                buf_w = 0.0;
-                                                current_line_chars.extend(buf_chars.drain(..));
-                                            }
-                                            lines.push(std::mem::take(&mut current_line));
-                                            line_x = 0.0;
-                                            current_line_chars.clear();
-                                            is_first_line = false;
-                                            for c in &carry {
-                                                buf.push(c.ch);
-                                                buf_w += c.natural_advance;
-                                            }
-                                            buf_chars.extend(carry);
+                                        if consumed {
                                             prev_char_emitted = Some(ch);
                                             continue;
-                                        }
-                                        // un-carry: restore anything popped (carry[..len-1],
-                                        // in reading order — popping drained buf's TAIL then
-                                        // current_line's tail, so appending keeps order) back
-                                        // onto buf so the plain wrap sees the original text
-                                        // (only reachable when the word fills the whole line).
-                                        if carry.len() >= 2 {
-                                            let n = carry.len() - 1;
-                                            for c in carry.drain(..n) {
-                                                buf.push(c.ch);
-                                                buf_w += c.natural_advance;
-                                                buf_chars.push(c);
-                                            }
                                         }
                                     }
                                     // Flush buffer to current line, then wrap
@@ -20179,9 +20249,50 @@ impl LayoutEngine {
                         LayoutContent::Text { text, .. }
                             if s719_collapsible(text) && e.y < min_overflow_text_y - 0.1));
                 }
+                // S817 (2026-07-13): Word re-applies the cell TOP margin at the
+                // row-split continuation top — uklocal rt.pdf p38: continuation
+                // first line ink 77.66 = page-top border 72.14 + tcMar_t 5.25
+                // (the continuation region then obeys the full rowbox formula:
+                // tcMar_t + n×line + after + tcMar_b + bw = 51.75 = measured
+                // 51.72). Oxi anchored the first line at the raw page_top.
+                // Latin scope: the JP split calibration (S570 harassbun,
+                // S719b tokyoshugyo) anchors at page_top. Opt-out
+                // OXI_S817_DISABLE.
+                let s817_cont_pad = if !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S817").is_ok()
+                {
+                    row.cells.first()
+                        .and_then(|c| c.margins.as_ref().and_then(|m| m.top))
+                        .unwrap_or(default_pad_t)
+                } else {
+                    0.0
+                };
+                // S817 tail (companion): Word closes the continuation box like
+                // a normal row bottom — last line + space_after + tcMar_b
+                // (uklocal rt.pdf p37: row-2 close 252.74 = last line box
+                // bottom 241.8 + 6 + 5.25). Applied to the Step-3 border
+                // re-close AND the post-split cursor branches below. 0.0 for
+                // CJK docs = byte-identical.
+                let s817_tail = if !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S817").is_ok()
+                {
+                    let pad_b = row.cells.first()
+                        .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
+                        .unwrap_or(default_pad_b);
+                    let after_last = row.cells.iter()
+                        .filter_map(|c| c.blocks.iter().rev().find_map(|b| match b {
+                            Block::Paragraph(p) => Some(p.style.space_after.unwrap_or(0.0)),
+                            _ => None,
+                        }))
+                        .fold(0.0_f32, f32::max);
+                    pad_b + after_last
+                } else {
+                    0.0
+                };
                 if min_overflow_text_y.is_finite() {
                     let original_shift = split_y - page_top;
-                    let correct_shift = (min_overflow_text_y + original_shift) - page_top;
+                    let correct_shift =
+                        (min_overflow_text_y + original_shift) - (page_top + s817_cont_pad);
                     let adjust = correct_shift - original_shift;
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         let first_after = min_overflow_text_y - adjust;
@@ -20209,6 +20320,13 @@ impl LayoutEngine {
                             _ => None,
                         })
                         .fold(f32::NEG_INFINITY, f32::max);
+                    // S817 tail (hoisted above Step 1): border re-close lands at
+                    // content bottom + tail.
+                    let s817_close = if max_cont_text_bottom.is_finite() {
+                        max_cont_text_bottom + s817_tail
+                    } else {
+                        max_cont_text_bottom
+                    };
 
                     // Find a horizontal bottom border in next_page_elems (the
                     // shifted row_bottom from the split row).
@@ -20236,14 +20354,16 @@ impl LayoutEngine {
                                 LayoutContent::TableBorder { y1, .. } => *y1,
                                 _ => f32::INFINITY,
                             };
-                            if cur_border_y < max_cont_text_bottom - 0.5 {
-                                // Move bottom horizontal border down to content bottom.
+                            if cur_border_y < s817_close - 0.5 {
+                                // Move bottom horizontal border down to content
+                                // bottom (+ the S817 tail; tail=0 keeps the old
+                                // content-bottom condition byte-identical).
                                 if let LayoutContent::TableBorder { y1, y2, .. } =
                                     &mut next_page_elems[bi].content {
-                                    *y1 = max_cont_text_bottom;
-                                    *y2 = max_cont_text_bottom;
+                                    *y1 = s817_close;
+                                    *y2 = s817_close;
                                 }
-                                next_page_elems[bi].y = max_cont_text_bottom;
+                                next_page_elems[bi].y = s817_close;
 
                                 // Collect vertical border x1/x2 range, extend y2.
                                 let mut min_vx = f32::INFINITY;
@@ -20252,8 +20372,8 @@ impl LayoutEngine {
                                     if let LayoutContent::TableBorder { y1, y2, x1, x2, .. } =
                                         &mut e.content {
                                         if (*y1 - *y2).abs() >= 0.1 {
-                                            if *y2 < max_cont_text_bottom {
-                                                *y2 = max_cont_text_bottom;
+                                            if *y2 < s817_close {
+                                                *y2 = s817_close;
                                                 e.height = *y2 - *y1;
                                             }
                                             if *x1 < min_vx { min_vx = *x1; }
@@ -20674,7 +20794,11 @@ impl LayoutEngine {
                         .unwrap_or(0);
                     if last_cont_top.is_finite() {
                         if let Some(lh) = table_grid_pitch {
-                            cursor.set(last_cont_top + lh * (1.0 + trailing_empty_count as f32));
+                            cursor.set(
+                                last_cont_top
+                                    + lh * (1.0 + trailing_empty_count as f32)
+                                    + s817_tail,
+                            );
                         } else {
                             // S304 (2026-05-26): no-docGrid extension of Pattern A.
                             // When docGrid is absent, derive `lh` from the last text
@@ -20705,7 +20829,8 @@ impl LayoutEngine {
                                 cursor.set(
                                     last_cont_top
                                         + last_cont_h
-                                            * (1.0 + trailing_empty_count as f32),
+                                            * (1.0 + trailing_empty_count as f32)
+                                        + s817_tail,
                                 );
                             } else {
                                 let overflow_on_next = row_bottom - split_y;
@@ -20736,6 +20861,9 @@ impl LayoutEngine {
                         LayoutContent::PresetShape { .. } => e.y,
                         _ => e.y + e.height,
                     }).fold(f32::NEG_INFINITY, f32::max);
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        eprintln!("[SPLIT-CURSOR] branch=s754 cont_max_y={:.2}", cont_max_y);
+                    }
                     if cont_max_y.is_finite() {
                         cursor.set(cont_max_y);
                     } else {
@@ -20747,6 +20875,10 @@ impl LayoutEngine {
                     let overflow_on_next = row_bottom - split_y;
                     let pages_used = ((overflow_on_next) / content_height).floor() as usize;
                     cursor.set(page_top + overflow_on_next - (pages_used as f32 * content_height));
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        eprintln!("[SPLIT-CURSOR] branch=geom cursor={:.2} (row_bottom={:.2} split_y={:.2})",
+                            cursor.cursor_y, row_bottom, split_y);
+                    }
                 }
             } else {
                 // S200 (2026-05-22): visual/cursor decoupling for Word's per-row
@@ -21290,19 +21422,33 @@ impl LayoutEngine {
                     // matches the render's word wrap (Fix C invariant). Same
                     // pure-Latin-paragraph scope as the render site.
                     let mut cellword_done = false;
+                    // S818 estimate mirror: same two-stage token wrap as the
+                    // render site (estimate==render line counts).
+                    let s818_cell = !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S818").is_ok();
                     if std::env::var("OXI_CELLWORD_DISABLE").is_err()
-                        && ch.is_ascii_alphanumeric()
+                        && (if s818_cell { !ch.is_whitespace() } else { ch.is_ascii_alphanumeric() })
                         && (para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))
                             || (!self.doc_body_has_real_cjk
                                 && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk_ideograph_or_kana))))
                     {
+                        let p_alnum = |c: char| c.is_ascii_alphanumeric();
+                        let p_token = |c: char| !c.is_whitespace();
+                        let p_opp = |c: char| !c.is_whitespace() && !is_break_after(c);
+                        let preds: &[&dyn Fn(char) -> bool] = if s818_cell {
+                            &[&p_token, &p_opp]
+                        } else {
+                            &[&p_alnum]
+                        };
+                        let mut stage_carry: Option<Vec<crate::layout::jc_both_compress::CharContext>> = None;
+                        for pred in preds {
                         let mut carry: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
                         let mut hit_boundary = false;
                         loop {
                             let tail = buf_chars.last().map(|c| c.ch)
                                 .or_else(|| current_line_chars.last().map(|c| c.ch));
                             let remaining = buf_chars.len() + current_line_chars.len();
-                            if !tail.map_or(false, |c| c.is_ascii_alphanumeric()) {
+                            if !tail.map_or(false, |c| pred(c)) {
                                 hit_boundary = remaining >= 1;
                                 break;
                             }
@@ -21318,6 +21464,17 @@ impl LayoutEngine {
                             }
                         }
                         if hit_boundary && !carry.is_empty() {
+                            stage_carry = Some(carry);
+                            break;
+                        } else {
+                            // un-carry for the next stage / fall-through.
+                            for pc in carry {
+                                buf_w += pc.natural_advance;
+                                buf_chars.push(pc);
+                            }
+                        }
+                        }
+                        if let Some(carry) = stage_carry {
                             lines += 1;
                             line_x = 0.0;
                             line_nonempty = false;
@@ -21340,12 +21497,8 @@ impl LayoutEngine {
                             }
                             buf_nonempty = true;
                             cellword_done = true;
-                        } else {
-                            for pc in carry {
-                                buf_w += pc.natural_advance;
-                                buf_chars.push(pc);
-                            }
-                            if !buf_chars.is_empty() { buf_nonempty = true; }
+                        } else if !buf_chars.is_empty() {
+                            buf_nonempty = true;
                         }
                     }
                     if !cellword_done {
