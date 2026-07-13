@@ -2356,8 +2356,19 @@ impl LayoutEngine {
         // drift feeding the wp38 keepNext knife-edge). The S763c eastAsia-LANG
         // gate keeps CJK-lang docs on the eastAsia chain exactly as before.
         let s801 = std::env::var("OXI_S801_DISABLE").is_err();
+        // S830 (2026-07-13, opt-out OXI_S830_DISABLE): HORIZONTAL ELLIPSIS
+        // (U+2026) is the same East-Asian-Width=Ambiguous class as the curly
+        // quotes/dashes — is_cjk classified it CJK unconditionally, so «…» in
+        // an English run routed the LINE to the eastAsia chain → the com-table
+        // line height (13.5×1.15 = 15.52 vs hhea-exact 13.224) → +2.3pt at
+        // every occurrence (nyserda p54 «(“Visit….”).» = the wp54-55 drift
+        // jump; ASCII-substitution A/B isolated the ellipsis, quotes clean).
+        // The S763c eastAsia-LANG gate keeps CJK-lang docs on the eastAsia
+        // chain exactly as before (JP byte-identical by construction).
+        let s830 = std::env::var("OXI_S830_DISABLE").is_err();
         let is_q = move |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
-            || (s801 && matches!(c, '\u{2013}' | '\u{2014}'));
+            || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
+            || (s830 && matches!(c, '\u{2026}'));
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
         // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
@@ -11685,9 +11696,10 @@ impl LayoutEngine {
             ($style:expr) => {
                 if !word.is_empty() {
                     if dbg_flush {
-                        eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} avail={} spcred={} tabslack={} line_n={}",
+                        eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} avail={} spcred={} tabslack={} line_n={} just={} s799={}",
                             word, pt_to_tw(word_width), current_width_tw, available_tw,
-                            latin_space_credit_tw, right_tab_slack_tw, lines.len());
+                            latin_space_credit_tw, right_tab_slack_tw, lines.len(),
+                            is_justified, s799_space_shrink);
                     }
                     let ws = word_style.take().unwrap_or_else(|| $style.clone());
                     let wft = word_field_type.take();
@@ -12909,13 +12921,29 @@ impl LayoutEngine {
                                 // settings to the synthetic (allow 2.74 → ≥7.7);
                                 // falsified en route: substitution, pStyle, theme,
                                 // numbering, docDefaults line=23, line index.
+                                // S825b (2026-07-13): the em coefficient RE-DERIVED at
+                                // 0.25 (quarter-space) — the original 0.365 was fit
+                                // against METRICS-computed naturals that over-state
+                                // Word's rendered width (Calibri-11 11-word line:
+                                // Oxi metrics 455.99 vs Word rendered 453.19, +2.8pt
+                                // → the derived allow inflated by the same). Fresh
+                                // render-measured naturals (left-aligned line1
+                                // extents) across TNR-12/TNR-11/Calibri-12/Calibri-11
+                                // give allow/space = 0.243/0.266/0.240/0.253 ≈ 0.25 ×
+                                // the em space — unifying with KERNBREAK's 0.25 cap
+                                // (Word's justify shrink limit = space/4). The 0.24×cs
+                                // term survives (cs deltas were RELATIVE in the pc3
+                                // sweep, natural-inflation cancels). nyserda p24
+                                // «…agrees to submit | to» (13 spaces, needed 12.9):
+                                // 0.365-model granted 14.2 → over-fit (Word wraps);
+                                // 0.25-model grants 9.75 → wraps = Word.
                                 if self.compat_mode >= 15
                                     && self.compat_mode_explicit
                                     && std::env::var("OXI_S825_DISABLE").is_err()
                                 {
                                     let em_part = char_width - cs;
                                     latin_space_credit_tw +=
-                                        pt_to_tw(em_part * 0.365 + cs.max(0.0) * 0.24);
+                                        pt_to_tw(em_part * 0.25 + cs.max(0.0) * 0.24);
                                 } else {
                                     latin_space_credit_tw += pt_to_tw(char_width * s799_cap);
                                 }
