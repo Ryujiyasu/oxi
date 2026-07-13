@@ -33,6 +33,10 @@ pub struct NumberingLevel {
     pub indent_first_line: Option<f32>,
     /// Suffix after number: "tab" (default), "space", or "nothing"
     pub suff: String,
+    /// w:lvlRestart val (S824): Some(0) = this level NEVER restarts;
+    /// Some(v) = restarts when a level with ilvl < v is used; None
+    /// (absent) = ECMA default, restart when ANY higher level is used.
+    pub lvl_restart: Option<u32>,
     /// Tab stop position in points (from w:tabs/w:tab w:pos, converted from twips)
     pub tab_stop: Option<f32>,
     /// S801b: the level rPr's w:sz (marker font size in points). Word sizes the
@@ -149,6 +153,34 @@ impl NumberingDefinitions {
         });
         *count += 1;
         let current = *count;
+        // S824 (2026-07-13): ECMA-376 default level restart — using level L
+        // restarts all DEEPER levels' counters (lvlRestart absent = restart
+        // whenever a higher level is used). ukframework numId=20 lvlText
+        // '%1.%2.': Word renders 8.1, 8.2 after the Heading2 (ilvl=0)
+        // advances to 8; the unreset counter produced 8.18 (continued across
+        // the whole document). 10 corpus docx carry <w:lvlRestart> (scan):
+        // JP 3a4f/model/ohnoshugyo/tokyoshugyo all val=0 (never restart —
+        // honored below, keeping their markers byte-identical) and
+        // ukframework val=1 ×76 (= the explicit default for ilvl=1).
+        if std::env::var("OXI_S824_DISABLE").is_err() {
+            for deeper in (ilvl + 1)..=8u8 {
+                // lvlRestart: Some(0) = never restart; Some(v) = restart only
+                // when a level with ilvl < v is used; None = default (any
+                // higher level restarts).
+                let restart_ok = match abstract_num
+                    .levels
+                    .get(&deeper)
+                    .and_then(|l| l.lvl_restart)
+                {
+                    Some(0) => false,
+                    Some(v) => u32::from(ilvl) < v,
+                    None => true,
+                };
+                if restart_ok {
+                    counters.remove(&(num_id.to_string(), deeper));
+                }
+            }
+        }
 
         let formatted_num = format_number(current, &level.num_fmt);
 
@@ -497,6 +529,7 @@ fn parse_numbering_level(
     let mut suff = "tab".to_string();
     let mut tab_stop = None;
     let mut marker_size: Option<f32> = None;
+    let mut lvl_restart: Option<u32> = None;
     let mut depth = 0;
 
     loop {
@@ -541,6 +574,14 @@ fn parse_numbering_level(
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 suff = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    }
+                    "lvlRestart" => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                lvl_restart = String::from_utf8_lossy(&attr.value)
+                                    .parse().ok();
                             }
                         }
                     }
@@ -612,6 +653,7 @@ fn parse_numbering_level(
         suff,
         tab_stop,
         marker_size,
+        lvl_restart,
     })
 }
 
