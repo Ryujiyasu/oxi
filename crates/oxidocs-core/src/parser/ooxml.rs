@@ -3225,6 +3225,25 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                 let local = local_name(e.name().as_ref());
                 if local == "t" || local == "delText" {
                     in_text = false;
+                    // S848 (2026-07-14, opt-out OXI_S848_DISABLE): a LITERAL
+                    // trailing newline inside `<w:t>` content
+                    // (`<w:t xml:space="preserve">text\n</w:t>`, common in
+                    // HTML-export docx) is collapsed by Word — the paragraph
+                    // mark is the real break. Oxi's soft-break handling
+                    // rendered it as a phantom EMPTY 2nd line (+~one line
+                    // height per paragraph): a bulleted list where every item
+                    // carries a trailing \n doubled each item's advance (30pt
+                    // vs Word 15pt), over-flowing the page (docx-corpus reports
+                    // doc 2pg->1pg=Word). Strip it HERE (at </w:t>) so only the
+                    // `<w:t>` text content is trimmed — a `<w:br/>` pushes its
+                    // \n AFTER </w:t>, so genuine wrap breaks are preserved
+                    // (the first cut, which stripped the merged run text, ate
+                    // trailing `<w:br/>` breaks — creative doc regressed).
+                    if local == "t" && std::env::var("OXI_S848_DISABLE").is_err() {
+                        while text.ends_with('\n') || text.ends_with('\r') {
+                            text.pop();
+                        }
+                    }
                 } else if local == "instrText" {
                     in_instr_text = false;
                 } else if local == "r" && depth == 0 {
