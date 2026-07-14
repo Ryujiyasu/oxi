@@ -3757,6 +3757,13 @@ impl LayoutEngine {
         } else { Default::default() };
         // resolved bands: (page_idx, top, bottom, x0, x1)
         let mut s758_bands: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
+        // S847 (2026-07-14): CONSECUTIVE paragraphs sharing an IDENTICAL
+        // page-anchored framePr form ONE text frame — Word stacks them
+        // vertically from (x, y) and the continuation paragraphs INHERIT the
+        // first paragraph's anchor (they typically omit hAnchor). Keyed on the
+        // DECLARED (x, y): (decl_x, decl_y, first_fx, running_bottom_y). Reset
+        // when a non-frame block intervenes or the declared key changes.
+        let mut s847_frame: Option<(f32, f32, f32, f32)> = None;
         // ANCHORPUSH experiment (opt-in OXI_ANCHORPUSH=1, ROWBOX2-family):
         // Word keeps an anchored drawing on the SAME PAGE as its anchor
         // paragraph — when the float's extent (anchor_y + posOffsetV + cy)
@@ -4186,12 +4193,38 @@ impl LayoutEngine {
                             && fp.wrap.as_deref() != Some("none"))
                     {
                         let fp = para.style.frame_pr.as_ref().unwrap();
-                        let fx = if fp.h_anchor.as_deref() == Some("page") {
-                            fp.x
-                        } else {
-                            page.margin.left + fp.x
+                        // S847: match the group on the DECLARED (x, y). A
+                        // continuation paragraph inherits the FIRST para's fx
+                        // (its own hAnchor is often omitted → mis-computed) and
+                        // starts at the previous frame para's bottom.
+                        let fy_decl = fp.y;
+                        // S847 (opt-in OXI_S847=1, default OFF = byte-identical):
+                        // consecutive same-(x,y) page frames stack vertically
+                        // (Word groups them into one frame; continuations
+                        // inherit the first para's fx). Structurally correct
+                        // (title block matches Word) but HELD opt-in — on the
+                        // sole affected corpus doc (correspondence Massachusetts
+                        // letterhead) it nets −0.043 SSIM: the stacked title's
+                        // lower lines drift sub-pixel vs Word's line heights AND
+                        // the officials block (a separate vAnchor="text"
+                        // negative-y frame + flow paras) is still unpositioned.
+                        // Ships default-ON once frame line-height precision + the
+                        // vAnchor=text officials frame are also handled.
+                        let s847_on = std::env::var("OXI_S847").is_ok();
+                        let (fx, fy) = match s847_frame {
+                            Some((px, py, first_fx, run_bottom))
+                                if s847_on
+                                    && (px - fp.x).abs() < 0.1 && (py - fy_decl).abs() < 0.1 =>
+                                (first_fx, run_bottom),
+                            _ => {
+                                let fx0 = if fp.h_anchor.as_deref() == Some("page") {
+                                    fp.x
+                                } else {
+                                    page.margin.left + fp.x
+                                };
+                                (fx0, fy_decl)
+                            }
                         };
-                        let fy = fp.y;
                         let fw = fp.width.unwrap_or(content_width * 0.3).max(20.0);
                         let mut fcy = LayoutCursor::new(fy + 3.0);
                         let empty_fn_frame = std::collections::HashMap::new();
@@ -4217,10 +4250,21 @@ impl LayoutEngine {
                         let content_h_frame = (fcy.cursor_y - fy).max(14.0);
                         let fh = fp.height.unwrap_or(0.0).max(content_h_frame);
                         s758_bands.push((current_page_idx, fy, fy + fh, fx - 9.0, fx + fw + 9.0));
+                        if std::env::var("OXI_DBG847").is_ok() {
+                            let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(16).collect();
+                            eprintln!("[S847] blk={} fx={:.1} fy_decl={:.1} fy_used={:.1} bottom={:.1} txt={:?}",
+                                block_idx, fx, fy_decl, fy, fcy.cursor_y, txt);
+                        }
+                        // S847: remember this frame's declared key + first fx +
+                        // bottom so the NEXT consecutive same-key paragraph
+                        // inherits fx and stacks below it.
+                        s847_frame = Some((fp.x, fy_decl, fx, fcy.cursor_y));
                         // Float: no flow consumption.
                         prev_space_after = 0.0;
                         continue;
                     }
+                    // S847: a non-frame block breaks the consecutive-frame run.
+                    s847_frame = None;
                     // Round 29: compute footnote contribution if this paragraph is
                     // laid out on the CURRENT page (delta added) vs a NEW page
                     // (full from-scratch). Used by overflow checks below.
