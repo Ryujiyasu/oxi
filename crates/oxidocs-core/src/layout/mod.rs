@@ -7246,6 +7246,25 @@ impl LayoutEngine {
     /// arms included) so first/even/odd variants share one code path.
     fn s755_header_bottom(&self, blocks: &[Block], page: &Page) -> f32 {
         if !blocks.is_empty() {
+            // S843 (2026-07-14, opt-out OXI_S843_DISABLE): an INK-FREE header
+            // (only empty/whitespace paragraphs — no text, no table, no image)
+            // does NOT constrain the body top; Word starts the body at the
+            // top margin. risk_assessment: empty Header para (Arial 12 +
+            // Normal after 12 → dist 35.4 + ~26 = 61.8 > margin 49.65) yet
+            // Word body top = 49.65 (the crest anchor pins the first body
+            // para box at 63.4 = 49.65 + the 13.8 empty body para line).
+            // The S726 footer ink-collision discriminator applied to the
+            // header. Corpus scan: ink-free headers = framework h2-4 /
+            // risk h1 / nyserda h1-3 ONLY (0 JP docs; no drawing-only
+            // headers exist) → JP byte-identical by construction.
+            let s843_has_ink = blocks.iter().any(|b| match b {
+                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty()),
+                Block::Table(_) | Block::Image(_) => true,
+                _ => false,
+            });
+            if !s843_has_ink && std::env::var("OXI_S843_DISABLE").is_err() {
+                return 0.0;
+            }
             let header_y = page.header_distance.unwrap_or(36.0);
             let hdr_cw = page.size.width - page.margin.left - page.margin.right;
             let mut hdr_h = 0.0_f32;
