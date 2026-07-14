@@ -1061,6 +1061,15 @@ pub fn render_family_name(name: &str) -> &str {
         "Calibri"
     } else if name == "CG Times" || name.starts_with("CG Times ") {
         "Times New Roman"
+    } else if name == "Helvetica" || name.starts_with("Helvetica Neue")
+        || name == "Helvetica LT Std" {
+        // S846 (2026-07-14): Helvetica / Helvetica Neue are uninstalled on
+        // Windows; Word substitutes them with Arial (the canonical
+        // metric-compatible clone). The renderer was drawing them via a
+        // DirectWrite fallback over Calibri-metric positions (Calibri space
+        // 2.49pt vs Arial 3.05pt at 11pt → every word jammed together,
+        // «Inthe secondpart of ourmini-series…»).
+        "Arial"
     } else {
         name
     }
@@ -1086,6 +1095,13 @@ fn normalize_family_name(name: &str) -> String {
         // = the wp27-35 natural-flow cascade). Corpus scan: CG Times appears
         // in usnyserda ONLY → single-doc-scoped by construction.
         "CG Times" => "Times New Roman".to_string(),
+        // S846 (2026-07-14): Helvetica family → Arial (metric-compatible clone,
+        // uninstalled on Windows; Word substitutes Arial). Feeds the METRICS
+        // side so layout uses Arial's wider space (3.05pt vs the Calibri
+        // fallback 2.49pt at 11pt) — without it English body text set in
+        // Helvetica rendered word-jammed. render_family_name maps the same
+        // names for the DirectWrite draw.
+        "Helvetica" | "Helvetica Neue" | "Helvetica LT Std" => "Arial".to_string(),
         "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
         "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
         // "MS Pゴシック" (half-width variant) → GDI resolves via system font.
