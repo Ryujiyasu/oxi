@@ -8739,6 +8739,9 @@ impl LayoutEngine {
         // S612z three-sites trap; without it the title-para bump was a no-op
         // once S774 made the title one line).
         let mut s773_line0_target: f32 = 0.0;
+        // S837 (2026-07-14): the S773 bump fired on line 0 — its cy, for the
+        // baseline-alignment override at emit (0 = not fired).
+        let mut s837_fired_cy: f32 = 0.0;
         // S773 (2026-07-10, opt-out OXI_S773_DISABLE): an INLINE visual drawing
         // (wp:inline wpg/wps vector group without textbox text — hmrc's crown
         // logo, checkbox rows, black rules) grows its host LINE like an inline
@@ -8774,6 +8777,7 @@ impl LayoutEngine {
                     line_heights[0] = target;
                     if natural_line_heights[0] < target { natural_line_heights[0] = target; }
                     if ink_line_heights[0] < target { ink_line_heights[0] = target; }
+                    s837_fired_cy = s773_cy;
                 }
                 if lines.len() == 1 { s773_line0_target = target; }
             }
@@ -10498,6 +10502,29 @@ impl LayoutEngine {
             // real win but the vertical stack is NOT exhausted — the drift is a real fixable
             // error whose source must be isolated per-element (each block's height vs Word).
             let text_y_off = self.text_y_offset_for_line(line, &para.style, para_font_size, line_height, grid_pitch, in_textbox, page.doc_grid_no_type);
+            // S837 (2026-07-14, default ON, opt-out OXI_S837_DISABLE): a line
+            // hosting an INLINE visual drawing (the S773 bump) shares its
+            // BASELINE with the object's BOTTOM — Word render truth (hmrc
+            // title: Calibri-Bold 18 baseline 75.24 = crown bottom 75.1;
+            // Word line box = cy + text hhea DESCENT — the S773 probe's
+            // "+0.25×fs" was Calibri's 512/2048 descent ratio, resolving that
+            // coincidence). The old centering ((line_h − text_hhea)/2) drew
+            // the title ~23pt too high (the doubled «Starter Checklist» in
+            // the 3-panel). Place the glyph baseline at box_top + cy using
+            // the S614 DWrite convention (baseline = el.y + text_y_off − 1.0
+            // + win_ascent×fs). Fires only when S773 fired (hmrc-only by the
+            // S773 corpus scan) → corpus byte-identical by construction.
+            let text_y_off = if line_idx == 0 && s837_fired_cy > 0.0
+                && std::env::var("OXI_S837_DISABLE").is_err()
+            {
+                let mut off = text_y_off;
+                if let Some(f) = line.fragments.iter().find(|f| !f.text.trim().is_empty()) {
+                    let fs = f.style.font_size.unwrap_or(para_font_size);
+                    let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                    off = s837_fired_cy - m.win_ascent * fs + 1.0;
+                }
+                off
+            } else { text_y_off };
 
             // S517 (2026-06-09): the body list-marker element was emitted before
             // this loop with the default text_y_off=0.0 (never set), so for wide
