@@ -4854,6 +4854,21 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut group_height: f32 = 0.0;
     let mut is_canvas_group = false;
     let mut depth = 0;
+    // S850 (2026-07-14, default ON, opt-out OXI_S850_DISABLE): inside a
+    // <v:group> the inner shapes' style dims/position are GROUP-INTERNAL
+    // (canvas coordinate space, e.g. width:4940;height:4853 within
+    // coordsize=4960,5123) and must NOT overwrite the outer function's
+    // width/height/is_absolute/margins. An absolutely-positioned image-bearing
+    // v:group (reference poster icons: <v:group style="width:247pt;
+    // height:255.65pt;mso-position-*-relative:page" ...><v:shape
+    // style="position:absolute;width:4252;height:1602"><v:imagedata/>) was
+    // being emitted as an INLINE image with the inner shape's VML-unit dims
+    // (4252x1602pt) reserving ~1602pt of flow -> each icon forced its own page
+    // (Word floats them -> 2 pages, Oxi -> 10). Track group nesting; when
+    // inside a group, skip the inner-shape dim/position writes and take the
+    // outermost group's declared pt dims + margin position instead.
+    let s850 = std::env::var("OXI_S850_DISABLE").is_err();
+    let mut group_depth: i32 = 0;
 
     loop {
         match reader.read_event()? {
@@ -4888,26 +4903,48 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                     // Inline canvas only (mso-position-*-relative:line/char); a
                     // position:absolute group floats (handled by is_absolute, S566).
                     "group" => {
-                        let mut g_abs = false;
-                        for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "style" {
-                                let val = String::from_utf8_lossy(&attr.value);
-                                for part in val.split(';') {
-                                    let part = part.trim();
-                                    if let Some(w) = part.strip_prefix("width:") {
-                                        group_width = parse_css_length(w.trim());
-                                    } else if let Some(h) = part.strip_prefix("height:") {
-                                        group_height = parse_css_length(h.trim());
-                                    } else if part.starts_with("position:absolute") {
-                                        g_abs = true;
+                        let outer = group_depth == 0;
+                        group_depth += 1;
+                        // Only the OUTERMOST group's style carries the real pt
+                        // display dims + page position; nested groups are
+                        // canvas-internal (S850).
+                        if outer || !s850 {
+                            let mut g_abs = false;
+                            let mut g_ml = 0.0;
+                            let mut g_mt = 0.0;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "style" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    for part in val.split(';') {
+                                        let part = part.trim();
+                                        if let Some(w) = part.strip_prefix("width:") {
+                                            group_width = parse_css_length(w.trim());
+                                        } else if let Some(h) = part.strip_prefix("height:") {
+                                            group_height = parse_css_length(h.trim());
+                                        } else if let Some(ml) = part.strip_prefix("margin-left:") {
+                                            g_ml = parse_css_length(ml.trim());
+                                        } else if let Some(mt) = part.strip_prefix("margin-top:") {
+                                            g_mt = parse_css_length(mt.trim());
+                                        } else if part.starts_with("position:absolute") {
+                                            g_abs = true;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if g_abs {
-                            is_absolute = true;
-                        } else if group_height > 0.0 {
-                            is_canvas_group = true;
+                            if g_abs {
+                                is_absolute = true;
+                            } else if group_height > 0.0 {
+                                is_canvas_group = true;
+                            }
+                            if s850 {
+                                // Take the group's declared pt dims + margin
+                                // position so the inner canvas-unit shapes can be
+                                // ignored below.
+                                if group_width > 0.0 { width = group_width; }
+                                if group_height > 0.0 { height = group_height; }
+                                if g_ml != 0.0 { margin_left = g_ml; }
+                                if g_mt != 0.0 { margin_top = g_mt; }
+                            }
                         }
                     }
                     // VML shape types
@@ -4933,20 +4970,21 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "style" => {
+                                    let in_grp = s850 && group_depth > 0;
                                     for part in val.split(';') {
                                         let part = part.trim();
                                         if let Some(w) = part.strip_prefix("width:") {
-                                            width = parse_css_length(w.trim());
+                                            if !in_grp { width = parse_css_length(w.trim()); }
                                         } else if let Some(h) = part.strip_prefix("height:") {
-                                            height = parse_css_length(h.trim());
+                                            if !in_grp { height = parse_css_length(h.trim()); }
                                         } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
                                             v_text_anchor = Some(anchor.trim().to_string());
                                         } else if let Some(ml) = part.strip_prefix("margin-left:") {
-                                            margin_left = parse_css_length(ml.trim());
+                                            if !in_grp { margin_left = parse_css_length(ml.trim()); }
                                         } else if let Some(mt) = part.strip_prefix("margin-top:") {
-                                            margin_top = parse_css_length(mt.trim());
+                                            if !in_grp { margin_top = parse_css_length(mt.trim()); }
                                         } else if part.starts_with("position:absolute") {
-                                            is_absolute = true;
+                                            if !in_grp { is_absolute = true; }
                                         }
                                     }
                                 }
@@ -5020,20 +5058,23 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "style" => {
+                                    // S850: inside a v:group the inner shape style
+                                    // dims/margins/position are canvas-internal.
+                                    let in_grp = s850 && group_depth > 0;
                                     for part in val.split(';') {
                                         let part = part.trim();
                                         if let Some(w) = part.strip_prefix("width:") {
-                                            width = parse_css_length(w.trim());
+                                            if !in_grp { width = parse_css_length(w.trim()); }
                                         } else if let Some(h) = part.strip_prefix("height:") {
-                                            height = parse_css_length(h.trim());
+                                            if !in_grp { height = parse_css_length(h.trim()); }
                                         } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
                                             v_text_anchor = Some(anchor.trim().to_string());
                                         } else if let Some(ml) = part.strip_prefix("margin-left:") {
-                                            margin_left = parse_css_length(ml.trim());
+                                            if !in_grp { margin_left = parse_css_length(ml.trim()); }
                                         } else if let Some(mt) = part.strip_prefix("margin-top:") {
-                                            margin_top = parse_css_length(mt.trim());
+                                            if !in_grp { margin_top = parse_css_length(mt.trim()); }
                                         } else if part.starts_with("position:absolute") {
-                                            is_absolute = true;
+                                            if !in_grp { is_absolute = true; }
                                         }
                                     }
                                 }
@@ -5054,6 +5095,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                 let local = local_name(e.name().as_ref());
                 if local == "pict" && depth == 0 {
                     break;
+                }
+                if local == "group" && group_depth > 0 {
+                    group_depth -= 1;
                 }
                 if depth > 0 {
                     depth -= 1;
