@@ -42,11 +42,14 @@ xychart-beta
 
 > The small step at **05-30** is not a regression: the SSIM baseline was
 > recomputed from scratch that day, so points before and after sit on
-> slightly different measurement bases. **07-12** is the current per-page mean
-> over scored pages (per-doc mean **0.9587**).
+> slightly different measurement bases. The **07-12** point is a per-page mean;
+> the current (2026-07-14) figures are per-page mean **0.9373** (std 0.0632)
+> and per-doc mean **0.9590** (std 0.0437) over the 235-document Japanese
+> corpus.
 
 Two things make this number trustworthy rather than asserted:
 
+- **Every document clears a floor, not just the average.** As of 2026-07-14 the worst-scoring document in the whole corpus sits at **SSIM 0.80** — across all 235 Japanese documents *and* 6 English documents, none renders below 0.80 structural similarity to Word. A per-document floor is a stronger guarantee than a mean: it says *whichever* file you open, this is the least fidelity you get. The spread is tight around a high mean — Japanese per-document **mean 0.959, standard deviation 0.044** (211 of 235 documents score ≥ 0.90); English per-document **mean 0.847, standard deviation 0.023**. The floor (Japanese 0.802, English 0.820) is a genuine tail, not a broad shortfall.
 - **Pagination is exact.** Every paragraph of every corpus document lands on the same page as Microsoft Word (per-paragraph page match: **87/87 documents = 100%**, reached 2026-07-03, measured via Word COM). SSIM measures how a page looks; pagination measures whether it *is the same page*. A renderer can look plausible while shifting content across pages — the two metrics together close that gap.
 - **The gate is external, and it changed whenever it went blind.** Every score is against Microsoft Word's own render — never against Oxi's previous output. And when a measure plateaued because it structurally could not see the remaining error, the merge gate moved to one that could. The date-by-date progress table is in [docs/layout_accuracy.md](docs/layout_accuracy.md); the derivation log is [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
