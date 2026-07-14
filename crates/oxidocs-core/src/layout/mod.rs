@@ -8129,9 +8129,36 @@ impl LayoutEngine {
         // lists (3a4f/model/harassmanual/tokyoshugyo 第X条) do NOT tab to the
         // level left in Word — unscoped, all four flipped PASS→FAIL. The JP
         // suffix-tab model needs its own derivation (recorded).
+        // S853 (2026-07-15, opt-out OXI_S853_DISABLE): the level_left tab stop
+        // is only correct for a NON-hanging list (nyserda: positive firstLine,
+        // marker on the first line, tab to level_left). A HANGING list
+        // (list_consumes_hanging: marker hangs left of the text, wrapped lines
+        // align at the paragraph's left indent) tabs to the paragraph's OWN
+        // indent_left, NOT the level_left — Word respects the direct w:ind.
+        // reports__0007f6be: bullet numId=8 level ind left=1440tw=72pt, direct
+        // w:ind left=634tw=31.7pt hanging=274; Word tabs the text to 31.7pt
+        // (x=103.7), Oxi's S778 tabbed to level 72pt (x=144) → line 1 ~40pt
+        // narrower → the long "Reminder MDPH…Register here." wrapped to 2 lines
+        // where Word fits 1 → the extra line pushed the bullet off the page 3
+        // bottom (+1 page). For the standard adopted-level hanging case
+        // (indent_left == level_left) both branches give 0 → byte-identical.
+        // ★DISCRIMINATOR (marker position sign): the direct w:ind overrides the
+        // level tab stop ONLY when the marker sits at/right of the text margin
+        // (indent_left + first_line_indent_raw >= 0, i.e. left >= hanging). When
+        // the marker HANGS INTO the left margin (left < hanging, marker_pos < 0)
+        // the direct left is a degenerate value and Word keeps tabbing to the
+        // level_left. uk_framework numId=20 ilvl=1 direct ind left=153tw=7.65pt
+        // hanging=431tw=21.55pt (marker_pos = 7.65-21.55 = -13.9 < 0): Word tabs
+        // to level 586tw=29.3pt, NOT to 7.65pt — an unscoped S853 re-wrapped
+        // those clauses (SSIM p23 0.88→0.71). The 584tw "normal" ilvl=1 items
+        // (marker_pos +7.65 >= 0) shift only 0.1pt (direct 584 ≈ level 586).
+        let s853_zero_stop = std::env::var("OXI_S853_DISABLE").is_err()
+            && list_consumes_hanging
+            && (indent_left + first_line_indent_raw >= 0.0);
         let s778_stop_extra: f32 = if std::env::var("OXI_S778_DISABLE").is_err()
             && !self.doc_body_has_real_cjk
             && para.style.list_suff.as_deref() == Some("tab")
+            && !s853_zero_stop
         {
             para.style.list_level_left
                 .map(|ll| (ll - indent_left - first_line_indent).max(0.0))
