@@ -470,6 +470,14 @@ pub struct RunStyle {
     /// except the marked runs (wpg = hmrc/framework only by corpus scan).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_object_extent: Option<(f32, f32)>,
+    /// S851: an inline OLEObject-less `<w:object>` (a bare form-field picture
+    /// shape — no `<o:OLEObject>` child) that flows in its host line. The
+    /// FFFC object fragment (created from `inline_object_extent`) draws THIS
+    /// image at the fragment position instead of a vector group. None
+    /// everywhere except inline form-field w:objects; real OLE (Equation /
+    /// Visio) keeps the block-extraction path, so the canaries are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_object_image: Option<Box<Image>>,
 }
 
 impl Default for RunStyle {
@@ -513,6 +521,7 @@ impl Default for RunStyle {
             emphasis_mark: None,
             run_border: None,
             inline_object_extent: None,
+            inline_object_image: None,
         }
     }
 }

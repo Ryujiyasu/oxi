@@ -8647,7 +8647,7 @@ impl LayoutEngine {
         // compat-14 variants flip at the SAME point (compat is NOT a
         // discriminator here). The [13.29, 13.80) window let Oxi keep lines
         // Word pushes = the nyserda natural-flow over-pack class.
-        let s779_win_heights: Vec<f32> = if s779_latin {
+        let mut s779_win_heights: Vec<f32> = if s779_latin {
             let s827_hhea = std::env::var("OXI_S827_DISABLE").is_err();
             lines.iter().map(|line| {
                 let mut mx: f32 = 0.0;
@@ -8667,6 +8667,45 @@ impl LayoutEngine {
         let mut ink_line_heights: Vec<f32> = lines.iter().map(|line| {
             self.ink_line_height_for_line(line, &para.style, para_font_size)
         }).collect();
+
+        // S851 (2026-07-14, opt-out OXI_S851_DISABLE): an inline w:object
+        // form-field image (routed as a run-level inline object,
+        // RunStyle.inline_object_image) contributes its box HEIGHT to its host
+        // line — the FFFC width fragment (break_into_lines) reserves x but not
+        // y. Grow every height array on the affected line so the object's box
+        // (~18pt) reserves vertical space (render advance + page-break). Fires
+        // ONLY when a fragment carries inline_object_image (EN form docs;
+        // corpus JP has 0 inline OLE-less w:objects → byte-identical).
+        if std::env::var("OXI_S851_DISABLE").is_err() {
+            for (li, line) in lines.iter().enumerate() {
+                let obj_h = line.fragments.iter()
+                    .filter_map(|f| if f.style.inline_object_image.is_some() {
+                        f.style.inline_object_extent.map(|(_, oh)| oh)
+                    } else { None })
+                    .fold(0.0f32, f32::max);
+                if obj_h > 0.0 {
+                    // The object BOTTOM sits on the text baseline (emit), so the
+                    // line height = object (all above baseline) + the line's text
+                    // DESCENT (below baseline). Word's PA-form member-info gap
+                    // 23.2 = line 20.2 (=18 + Arial-10 descent 2.2) + after 3.0;
+                    // reserving only obj_h (18) under-counts ~2.2pt/line → d-1.
+                    let descent = line.fragments.iter()
+                        .filter(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        .map(|f| {
+                            let fs = f.style.font_size.unwrap_or(para_font_size);
+                            self.metrics_for_text(&f.text, &f.style, &para.style).win_descent * fs
+                        })
+                        .fold(0.0f32, f32::max);
+                    let target = obj_h + descent;
+                    if target > line_heights[li] { line_heights[li] = target; }
+                    if target > natural_line_heights[li] { natural_line_heights[li] = target; }
+                    if target > ink_line_heights[li] { ink_line_heights[li] = target; }
+                    if li < s779_win_heights.len() && target > s779_win_heights[li] {
+                        s779_win_heights[li] = target;
+                    }
+                }
+            }
+        }
 
         // S689 (2026-06-29, SHIPPED default ON, opt-out OXI_S689_DISABLE): a list
         // paragraph whose numbering marker is a SYMBOL-FONT bullet (\u{F0B7}) renders
@@ -11025,6 +11064,31 @@ impl LayoutEngine {
                 // S773 fired, baseline = line_top + cy_max — else the normal
                 // S614 convention baseline from the line's first text frag).
                 if frag.text == "\u{FFFC}" && frag.style.inline_object_extent.is_some() {
+                    // S851: an inline w:object form-field image draws its bitmap
+                    // at the fragment position (box BOTTOM on the text baseline,
+                    // like the S839 vector groups) instead of a vector group.
+                    if let Some(img) = frag.style.inline_object_image.as_ref() {
+                        let (ow, oh) = frag.style.inline_object_extent.unwrap_or((img.width, img.height));
+                        let baseline = if let Some(tf) = line.fragments.iter()
+                            .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        {
+                            let fs = tf.style.font_size.unwrap_or(para_font_size);
+                            let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        } else {
+                            emit_y + line_height
+                        };
+                        let oy = baseline - oh;
+                        let mut e = LayoutElement::new(el_x, oy, ow, oh, LayoutContent::Image {
+                            data: img.data.clone(),
+                            content_type: img.content_type.clone(),
+                            crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
+                        });
+                        if let Some(pi) = body_para_index { e.paragraph_index = Some(pi); }
+                        elements.push(e);
+                        x += adjusted_width + frag_spacing_after[frag_idx];
+                        continue;
+                    }
                     if let Some(&tbi) = s839_tbs.get(s839_next) {
                         s839_next += 1;
                         let tb = &page.text_boxes[tbi];

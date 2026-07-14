@@ -3187,9 +3187,33 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                     }
                     // OLE object — extract preview image from embedded VML shape
                     "object" if depth == 0 => {
-                        let ole = parse_ole_object(reader, ctx)?;
+                        let (ole, saw_ole) = parse_ole_object(reader, ctx)?;
                         if drawing_result.is_none() {
-                            drawing_result = Some(ole);
+                            // S851 (2026-07-14, default ON, opt-out OXI_S851_DISABLE):
+                            // an inline OLEObject-LESS <w:object> (a bare form-field
+                            // picture shape, e.g. the MassHealth PA-form field
+                            // underlines "Last name [___] First name [___]") flows
+                            // INLINE in its host line in Word. Route it as a run-level
+                            // inline object (inline_object_extent + inline_object_image)
+                            // so break_into_lines makes a width-bearing U+FFFC fragment
+                            // and the emit draws the image there — NOT extracted to a
+                            // separate Block::Image, which stacked each field on its own
+                            // ~18pt line (forms__00042714 over-reserved ~54pt/row, 8pg
+                            // vs Word 6pg). Real OLE (Equation.3 / Visio, saw_ole) keeps
+                            // the block path → the JP canaries 3a4f/model/tokyoshugyo
+                            // (Equation) + uklocalspending (Visio) are byte-identical.
+                            let s851_ole_less = std::env::var("OXI_S851_DISABLE").is_err()
+                                && !saw_ole
+                                && ole.shape.is_none() && ole.text_box.is_none()
+                                && ole.image.as_ref().map_or(false, |i|
+                                    i.position.is_none() && i.width > 0.0 && i.height > 0.0);
+                            if s851_ole_less {
+                                let img = ole.image.unwrap();
+                                style.inline_object_extent = Some((img.width, img.height));
+                                style.inline_object_image = Some(Box::new(img));
+                            } else {
+                                drawing_result = Some(ole);
+                            }
                         }
                     }
                     "ruby" if depth == 0 => {
@@ -5297,17 +5321,23 @@ fn parse_css_length_opt(s: &str) -> Option<f32> {
 }
 
 /// Parse w:object (OLE embedded object) — extract preview image from VML shape inside
-fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<DrawingResult, ParseError> {
+fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(DrawingResult, bool), ParseError> {
     let mut rel_id: Option<String> = None;
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     let mut depth = 0;
+    // S851: whether an <o:OLEObject> child was seen. A real OLE embed
+    // (Equation.3, Visio, …) has one; a bare form-field picture (the
+    // MassHealth PA-form field underlines) does NOT — the discriminator for
+    // routing the inline picture as a run-level inline object vs a block.
+    let mut saw_ole_object = false;
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 depth += 1;
+                if local == "OLEObject" { saw_ole_object = true; }
                 match local.as_str() {
                     // VML shape inside OLE object — parse style for dimensions
                     "shape" | "rect" => {
@@ -5341,8 +5371,8 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Dr
                             }
                         }
                     }
-                    // OLEObject element — skip gracefully
-                    "OLEObject" => {}
+                    // OLEObject element — skip gracefully (S851: note presence)
+                    "OLEObject" => { saw_ole_object = true; }
                     _ => {}
                 }
             }
@@ -5381,7 +5411,7 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<Dr
         None
     };
 
-    Ok(DrawingResult { image, shape: None, text_box: None })
+    Ok((DrawingResult { image, shape: None, text_box: None }, saw_ole_object))
 }
 
 /// Parse mc:AlternateContent — prefer mc:Choice (DrawingML), fall back to mc:Fallback (VML)
