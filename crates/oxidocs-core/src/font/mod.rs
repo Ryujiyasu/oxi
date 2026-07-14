@@ -1044,6 +1044,28 @@ pub(crate) fn is_metric_incompatible_substitution(family: &str) -> bool {
     family.starts_with("Humnst777")
 }
 
+/// S844 (2026-07-14, opt-out OXI_S844_DISABLE): the family name to hand the
+/// RENDERER for an uninstalled substituted Latin font. normalize_family_name
+/// feeds only the METRICS side — the renderer received the raw docx name
+/// ("Humnst777 BT") and DirectWrite's fallback drew a heavy condensed face
+/// over Calibri-metric positions (uk_framework body: words visually fused,
+/// «enteringinto anyundertakingto…», every text page ~0.68-0.73 SSIM).
+/// Word substitutes these with Calibri / Times New Roman (PDF span fonts,
+/// S796/S831 derivations). JP maps are NOT routed here (their render
+/// calibration predates this and the JP names resolve natively).
+pub fn render_family_name(name: &str) -> &str {
+    if std::env::var("OXI_S844_DISABLE").is_ok() {
+        return name;
+    }
+    if name.starts_with("Humnst777") {
+        "Calibri"
+    } else if name == "CG Times" || name.starts_with("CG Times ") {
+        "Times New Roman"
+    } else {
+        name
+    }
+}
+
 fn normalize_family_name(name: &str) -> String {
     // Comma-separated font lists (e.g. "MS明朝,Times New Roman"): use the first font.
     // Word picks the first available font; we use the same approach.

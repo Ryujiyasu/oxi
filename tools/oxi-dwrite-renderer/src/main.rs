@@ -371,7 +371,12 @@ unsafe fn render_page_elements(
                 let is_double_underline = underline_style.as_deref() == Some("double");
                 // S518: align a Symbol-font marker to its line's body baseline.
                 let mut glyph_top_y = el.y + el.text_y_off;
-                let fam = font_family.as_deref().unwrap_or("Calibri");
+                // S844: hand DirectWrite the SUBSTITUTED family for uninstalled
+                // Latin fonts (Humnst777* -> Calibri, CG Times -> TNR) — the raw
+                // name fell to a mismatched DWrite fallback over substituted
+                // metrics (uk_framework: visually fused words).
+                let fam = oxidocs_core::font::render_family_name(
+                    font_family.as_deref().unwrap_or("Calibri"));
                 if el.paragraph_index.is_none() && fam == "Symbol"
                     && std::env::var("OXI_S518_BULLET_DISABLE").is_err()
                 {

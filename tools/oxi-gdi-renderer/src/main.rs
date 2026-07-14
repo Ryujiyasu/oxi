@@ -179,7 +179,8 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let lf_width = if (*text_scale - 100.0).abs() > 0.01 {
                             (*font_size as f64 * (*text_scale as f64 / 100.0) * scale * 0.5).round() as i32
                         } else { 0 };
-                        let family = font_family.as_deref().unwrap_or("Calibri");
+                        let family = oxidocs_core::font::render_family_name(
+                            font_family.as_deref().unwrap_or("Calibri"));
 
                         // Parse color
                         let rgb = color.as_deref()
