@@ -3819,6 +3819,30 @@ impl LayoutEngine {
                 s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
                 cursor.advance(band_h);
             }
+            // S842 (2026-07-14, opt-out OXI_S842_DISABLE): a PAGE-anchored
+            // wrapTopAndBottom float pushes its anchor block below the band.
+            // hmrc's top rule (Group 3426: positionV page 19.75, 2pt line,
+            // anchored to p2's first empty para): Word starts that para at
+            // band bottom 21.75, not the 15.75 top margin — without this the
+            // whole p2 ran ~6pt high.
+            if std::env::var("OXI_S842_DISABLE").is_err() {
+                for tb in &page.text_boxes {
+                    if tb.anchor_block_index == block_idx
+                        && matches!(tb.wrap_type, Some(crate::ir::WrapType::TopAndBottom))
+                    {
+                        if let Some(tp) = tb.position.as_ref() {
+                            if tp.v_relative.as_deref() == Some("page") {
+                                let band_bottom = tp.y + tb.height;
+                                if cursor.cursor_y < band_bottom
+                                    && cursor.cursor_y + 10.0 > tp.y
+                                {
+                                    cursor.set(band_bottom);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // ANCHORPUSH: push the anchor block to the next page when its
             // paragraph-anchored float would cross the PHYSICAL page bottom.
             if let Some(&need) = anchorpush.get(&block_idx) {
@@ -6673,6 +6697,51 @@ impl LayoutEngine {
             None => self.resolve_textbox_position(text_box, page, block_y_positions),
         };
 
+        // S839c (2026-07-14): an ANCHORED visual-only vector group (hmrc's
+        // If No/If Yes checkbox stack, Group 3424 — wrapSquare float at
+        // posH column+219.65) draws its primitives at the resolved float
+        // position. INLINE S535-signature groups are drawn at the line
+        // level (U+FFFC fragment) — skip to avoid double-draw. Groups
+        // anchored to a TABLE block (the First-Names writing line whose
+        // anchor paragraph lives inside a cell — the page-level anchor
+        // index maps to the table, resolving ~97pt off) are deferred.
+        if !text_box.vector_shapes.is_empty() && text_box.blocks.is_empty()
+            && std::env::var("OXI_S839_DISABLE").is_err()
+        {
+            let is_inline_sig = matches!(text_box.wrap_type, Some(crate::ir::WrapType::None))
+                && text_box.position.as_ref().map_or(false, |p| p.x == 0.0 && p.y == 0.0
+                    && p.h_relative.as_deref() == Some("column")
+                    && p.v_relative.as_deref() == Some("paragraph"));
+            let anchor_is_table = matches!(
+                page.blocks.get(text_box.anchor_block_index),
+                Some(crate::ir::Block::Table(_)));
+            if !is_inline_sig && !anchor_is_table {
+                for vs in &text_box.vector_shapes {
+                    let (vx, vy) = (abs_x + vs.x, abs_y + vs.y);
+                    if vs.is_line {
+                        elements.push(LayoutElement::new(
+                            vx, vy, vs.w.max(0.1), vs.h.max(vs.stroke_width),
+                            LayoutContent::TableBorder {
+                                x1: vx, y1: vy, x2: vx + vs.w, y2: vy + vs.h,
+                                color: vs.stroke.clone(),
+                                width: vs.stroke_width,
+                                style: None,
+                            }));
+                    } else {
+                        elements.push(LayoutElement::new(
+                            vx, vy, vs.w, vs.h,
+                            LayoutContent::BoxRect {
+                                fill: vs.fill.clone(),
+                                stroke_color: vs.stroke.clone(),
+                                stroke_width: vs.stroke_width,
+                                corner_radius: 0.0,
+                            }));
+                    }
+                }
+            }
+            return elements;
+        }
+
         // 2. Background fill + border as a single BoxRect (supports corner radius)
         let has_fill = text_box.fill.is_some();
         let has_border = text_box.border;
@@ -9060,6 +9129,43 @@ impl LayoutEngine {
                 !self.metrics_for_text(&f.text, &f.style, &para.style).is_cjk_83_64_font()
             });
 
+        // S842 (2026-07-14, opt-out OXI_S842_DISABLE): a PAGE-anchored
+        // wrapTopAndBottom float band pushes this paragraph's lines below it.
+        // hmrc's p2 top rule (Group 3426: positionV page 19.75, 2pt): Word
+        // starts the anchor (p2-first) para at band bottom 21.75, not the
+        // 15.75 margin — the block-loop arm alone missed it because the
+        // p1→p2 transition happens INSIDE this paragraph's line flow.
+        // The band is SPATIAL, not anchor-scoped: Word pushes ANY line
+        // intersecting it on the float's page — hmrc's p2-FIRST empty para
+        // (one block BEFORE the anchor) is pushed to 21.75 too, which is
+        // what places the heading at 43.15 = Word 43.5. Forward-pass
+        // approximation: blocks within 2 of the anchor share the band.
+        let s842_band: Option<(f32, f32)> = if std::env::var("OXI_S842_DISABLE").is_err() {
+            body_para_index.and_then(|bi| page.text_boxes.iter()
+                .find(|tb| bi <= tb.anchor_block_index + 2
+                    && tb.anchor_block_index <= bi + 2
+                    && matches!(tb.wrap_type, Some(crate::ir::WrapType::TopAndBottom))
+                    && tb.position.as_ref()
+                        .map_or(false, |tp| tp.v_relative.as_deref() == Some("page")))
+                .map(|tb| {
+                    let tp = tb.position.as_ref().unwrap();
+                    (tp.y, tp.y + tb.height)
+                }))
+        } else { None };
+        if std::env::var("OXI_DBG842").is_ok() {
+            if s842_band.is_some() {
+                eprintln!("[S842] blk={:?} band={:?} cursor={:.2} lines={}",
+                    body_para_index, s842_band, cursor.cursor_y, lines.len());
+            }
+        }
+        // S842 applier: run after every internal page push — the p1->p2
+        // transition happens inside this paragraph's line flow, so the
+        // loop-head check alone sees the pre-push cursor.
+        let s842_apply = |c: &mut LayoutCursor| {
+            if let Some((bt, bb)) = s842_band {
+                if c.cursor_y >= bt - 12.0 && c.cursor_y < bb { c.set(bb); }
+            }
+        };
         // S758 refactor: index-based iteration so the side-wrap rebreak can
         // splice the remaining lines at a float-band exit (byte-identical
         // when no rebreak fires — same order, same borrows).
@@ -9067,6 +9173,13 @@ impl LayoutEngine {
         let mut s758_rebroken = s758_band.is_none();
         let s758_entry_pages = pages.len();
         while line_idx < lines.len() {
+            // S842: a line starting inside (or whose box would overlap) the
+            // page-anchored band moves below it.
+            if let Some((bt, bb)) = s842_band {
+                if cursor.cursor_y >= bt - 12.0 && cursor.cursor_y < bb {
+                    cursor.set(bb);
+                }
+            }
             // S758: the cursor exited the band (or a page push left it behind)
             // → rebreak the remaining lines' fragments at the full width.
             if !s758_rebroken {
@@ -9811,6 +9924,7 @@ impl LayoutEngine {
                 });
                 if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
+                s842_apply(cursor);
                 cur_col = 0;
                 if let Some(v) = line_fn_refs_out.as_deref_mut() {
                     // earlier lines' refs stay on the old page; open the new bucket
@@ -9827,6 +9941,7 @@ impl LayoutEngine {
                 elements = std::mem::take(current_elements);
                 if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
+                s842_apply(cursor);
                 // S770 (2026-07-09): the widow/orphan break MOVES this paragraph's
                 // already-laid lines to the next page but they KEPT their OLD y
                 // (bottom of the previous page) while the cursor reset to page_top.
@@ -9867,6 +9982,7 @@ impl LayoutEngine {
                         // keeps the advance-past behavior.
                         if line_idx == 0 && std::env::var("OXI_S792_DISABLE").is_err() {
                             cursor.set(page_top);
+                            s842_apply(cursor);
                         } else {
                             cursor.set(max_y + line_height);
                         }
@@ -9918,6 +10034,7 @@ impl LayoutEngine {
                     cur_col += 1;
                     start_x = col_x_positions[cur_col];
                     cursor.set(if pages.len() > s749_pages_at_entry { page_top } else { col_band_top });
+                    s842_apply(cursor);
                 } else {
                 // Phantom-blank-page fix (2026-04-23): when an empty paragraph
                 // with page_break_after overflows and would produce an empty
@@ -9936,6 +10053,7 @@ impl LayoutEngine {
                     });
                     if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
+                s842_apply(cursor);
                     return (Vec::new(), 0.0, 0);
                 }
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
@@ -9948,6 +10066,7 @@ impl LayoutEngine {
                 });
                 if let Some(g) = s755_geom { page_top = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
                 cursor.set(page_top);
+                s842_apply(cursor);
                 // S637: a real page push lands on column 0 of the new page.
                 cur_col = 0;
                 // Session 107 (2026-05-18): apply half-leading at page top for
