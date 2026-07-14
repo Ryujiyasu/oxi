@@ -8766,8 +8766,32 @@ impl LayoutEngine {
                 .map(|tb| tb.height)
                 .fold(0.0f32, f32::max));
             if s773_cy > 0.0 {
-                let has_text = lines[0].fragments.iter().any(|f| !f.text.trim().is_empty());
-                let target = if has_text { s773_cy + 0.25 * para_font_size } else { s773_cy };
+                // S839: the U+FFFC object fragment is NOT text — an
+                // object-only paragraph keeps the "line = cy EXACTLY" rule.
+                let has_text = lines[0].fragments.iter()
+                    .any(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty());
+                // S839b (2026-07-14): the mixed line = cy + the TEXT line's
+                // own BELOW-BASELINE extent (line0 − win_asc×text_fs) — the
+                // baseline sits at box+cy (S837) and the text's descent
+                // portion (incl any lineRule-auto multiplier extra) hangs
+                // below it. hmrc title (Calibri 18, line=259 auto): Word
+                // line 65.78 = cy 59.46 + (23.5 − 0.952×18) ✓; the old flat
+                // "+0.25×para_font_size" used the FIRST run's size (11 →
+                // +2.75) and left the title 3.7pt short — the doc-wide
+                // upward drift's origin. The S773 probe's "+0.25×fs" is the
+                // m=1.0 case of the same formula (12pt host: 14.4 − 11.42 ≈
+                // 3.0 = 0.25×12).
+                let target = if has_text {
+                    let max_asc = lines[0].fragments.iter()
+                        .filter(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        .map(|f| {
+                            let fs = f.style.font_size.unwrap_or(para_font_size);
+                            let m = self.metrics_for_text(&f.text, &f.style, &para.style);
+                            m.win_ascent * fs
+                        })
+                        .fold(0.0f32, f32::max);
+                    s773_cy + (line_heights[0] - max_asc).max(0.0)
+                } else { s773_cy };
                 if std::env::var("OXI_DBG773").is_ok() {
                     eprintln!("[S773] blk={:?} cy={:.1} lines={} line0={:.1} target={:.1} fired={}",
                         body_para_index, s773_cy, lines.len(), line_heights[0], target,
@@ -8782,6 +8806,22 @@ impl LayoutEngine {
                 if lines.len() == 1 { s773_line0_target = target; }
             }
         }
+        // S839: ordered page.text_boxes indices of this paragraph's INLINE
+        // visual vector groups (the S535 signature + vector_shapes). Consumed
+        // one per U+FFFC fragment in the emit loop (run order == page order).
+        let s839_tbs: Vec<usize> = if std::env::var("OXI_S839_DISABLE").is_err() {
+            body_para_index.map(|bi| page.text_boxes.iter().enumerate()
+                .filter(|(_, tb)| tb.anchor_block_index == bi
+                    && tb.blocks.is_empty()
+                    && !tb.vector_shapes.is_empty()
+                    && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+                    && tb.position.as_ref().map_or(false, |p| p.x == 0.0 && p.y == 0.0
+                        && p.h_relative.as_deref() == Some("column")
+                        && p.v_relative.as_deref() == Some("paragraph")))
+                .map(|(i, _)| i)
+                .collect()).unwrap_or_default()
+        } else { Vec::new() };
+        let mut s839_next: usize = 0;
 
         // COM-confirmed (2026-04-05, test_widow): Multiple spacing uses cumulative ceil
         // for intra-paragraph Y positions. Last line uses per-line ceil for paragraph gap.
@@ -10518,7 +10558,9 @@ impl LayoutEngine {
                 && std::env::var("OXI_S837_DISABLE").is_err()
             {
                 let mut off = text_y_off;
-                if let Some(f) = line.fragments.iter().find(|f| !f.text.trim().is_empty()) {
+                if let Some(f) = line.fragments.iter()
+                    .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
                     let m = self.metrics_for_text(&f.text, &f.style, &para.style);
                     off = s837_fired_cy - m.win_ascent * fs + 1.0;
@@ -10791,6 +10833,58 @@ impl LayoutEngine {
                     wpush(&mut elements, bot, cx, text_y_off + small, small);
                     cx += half as f32 * small;
                     if !rb.is_empty() { wpush(&mut elements, rb.to_string(), cx, text_y_off, bsz); }
+                    x += adjusted_width + frag_spacing_after[frag_idx];
+                    continue;
+                }
+                // S839: a U+FFFC object fragment draws its vector group's
+                // primitives at the fragment position instead of text. The
+                // object BOTTOM sits on the line's text baseline (the S837
+                // rule: hmrc NI strip bottom 442.87 = label baseline; when
+                // S773 fired, baseline = line_top + cy_max — else the normal
+                // S614 convention baseline from the line's first text frag).
+                if frag.text == "\u{FFFC}" && frag.style.inline_object_extent.is_some() {
+                    if let Some(&tbi) = s839_tbs.get(s839_next) {
+                        s839_next += 1;
+                        let tb = &page.text_boxes[tbi];
+                        let baseline = if line_idx == 0 && s837_fired_cy > 0.0 {
+                            emit_y + s837_fired_cy
+                        } else if let Some(tf) = line.fragments.iter()
+                            .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        {
+                            let fs = tf.style.font_size.unwrap_or(para_font_size);
+                            let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        } else {
+                            emit_y + line_height
+                        };
+                        let oy = baseline - tb.height;
+                        for vs in &tb.vector_shapes {
+                            let (vx, vy) = (el_x + vs.x, oy + vs.y);
+                            if vs.is_line {
+                                let mut e = LayoutElement::new(
+                                    vx, vy, vs.w.max(0.1), vs.h.max(vs.stroke_width),
+                                    LayoutContent::TableBorder {
+                                        x1: vx, y1: vy, x2: vx + vs.w, y2: vy + vs.h,
+                                        color: vs.stroke.clone(),
+                                        width: vs.stroke_width,
+                                        style: None,
+                                    });
+                                if let Some(pi) = body_para_index { e.paragraph_index = Some(pi); }
+                                elements.push(e);
+                            } else {
+                                let mut e = LayoutElement::new(
+                                    vx, vy, vs.w, vs.h,
+                                    LayoutContent::BoxRect {
+                                        fill: vs.fill.clone(),
+                                        stroke_color: vs.stroke.clone(),
+                                        stroke_width: vs.stroke_width,
+                                        corner_radius: 0.0,
+                                    });
+                                if let Some(pi) = body_para_index { e.paragraph_index = Some(pi); }
+                                elements.push(e);
+                            }
+                        }
+                    }
                     x += adjusted_width + frag_spacing_after[frag_idx];
                     continue;
                 }
@@ -12134,6 +12228,38 @@ impl LayoutEngine {
                 });
                 current_width += cw; current_width_tw += cw_tw; current_capw_tw += cw_tw;
                 continue;
+            }
+            // S839 (2026-07-14, opt-out OXI_S839_DISABLE): an INLINE visual
+            // vector-group drawing (wpg without txbxContent — hmrc's checkbox
+            // strips / heavy rules) is a WIDTH-BEARING atomic object in its
+            // host line: Word reserves cx and positions it via the normal tab
+            // machinery (the NI 9-box strip is CENTERED at its tab stop —
+            // measured x330.5 = 413.85 − 166.7/2). Push ONE U+FFFC fragment of
+            // the drawing width; the emit loop draws tb.vector_shapes at the
+            // fragment x and never emits the FFFC as text. The marker style
+            // field is set ONLY for S535-signature inline visual drawings
+            // (wpg = hmrc/framework only by corpus scan; framework's groups
+            // are text-bearing → never marked → byte-identical elsewhere).
+            if let Some((ow, _oh)) = style.inline_object_extent {
+                if std::env::var("OXI_S839_DISABLE").is_err() {
+                    flush_word!(style);
+                    let ow_tw = pt_to_tw(ow);
+                    // NO overflow wrap for the object fragment (v1): hmrc's
+                    // strips follow CENTER tabs — the raw width test would
+                    // compare stop + full width against the column (543 > 521)
+                    // and wrap, but the center post-process (below, ~14360)
+                    // shifts the segment to stop − w/2 and Word fits it
+                    // ([330.5..497.2] < 538). The corpus-scope objects always
+                    // fit their host line in Word.
+                    current_line.fragments.push(LineFragment {
+                        text: "\u{FFFC}".to_string(), width: ow, natural_width: ow,
+                        style: style.clone(), tab_alignment: None, tab_position: None,
+                        field_type: frag_field_type, run_index: frag_run_index,
+                        char_offset: frag_char_start,
+                    });
+                    current_width += ow; current_width_tw += ow_tw; current_capw_tw += ow_tw;
+                    continue;
+                }
             }
             let mut char_pos_in_run = frag_char_start;
             // Char counts in PRECEDING / SUBSEQUENT fragments (paragraph-level total/
@@ -14238,8 +14364,17 @@ impl LayoutEngine {
         // Post-process: adjust tab fragment widths for Center/Right/Decimal alignment.
         // ECMA-376 §17.3.1.38: Center tabs center the following segment on the tab position,
         // Right tabs right-align, Decimal tabs align at the decimal point.
+        // S841 (2026-07-14, opt-out OXI_S841_DISABLE): each tab targets its
+        // ABSOLUTE stop. The raw tab widths were computed during break with
+        // UNADJUSTED prior widths, so shrinking tab1 by segment/2 shifted
+        // every later tab's landing point left by the same amount (hmrc para
+        // B: tab2's strip centered at 361.7 instead of the 413.85 stop =
+        // Word x330.5 vs Oxi 278.3). Track the cumulative shrink and restore
+        // it on each subsequent tab before applying its own alignment.
+        let s841_on = std::env::var("OXI_S841_DISABLE").is_err();
         for line in &mut lines {
             let frag_count = line.fragments.len();
+            let mut s841_cum_delta: f32 = 0.0;
             let mut i = 0;
             while i < frag_count {
                 if let Some(align) = line.fragments[i].tab_alignment {
@@ -14276,7 +14411,10 @@ impl LayoutEngine {
                     // Calculate the desired tab width so the segment aligns correctly
                     // Current tab width advances cursor to tab_pos. We need to adjust it
                     // so the segment is positioned according to the alignment type.
-                    let current_tab_width = line.fragments[i].width;
+                    // S841: re-anchor to the absolute stop first (undo the
+                    // cumulative left-shift produced by earlier tabs' shrink).
+                    let current_tab_width = line.fragments[i].width
+                        + if s841_on { s841_cum_delta } else { 0.0 };
                     let adjustment = match align {
                         TabStopAlignment::Center => segment_width / 2.0,
                         TabStopAlignment::Right => segment_width,
@@ -14285,6 +14423,7 @@ impl LayoutEngine {
                     };
                     // New tab width = original width - adjustment (shift left by adjustment)
                     let new_width = (current_tab_width - adjustment).max(0.0);
+                    s841_cum_delta += line.fragments[i].width - new_width;
                     line.fragments[i].width = new_width;
                 }
                 i += 1;

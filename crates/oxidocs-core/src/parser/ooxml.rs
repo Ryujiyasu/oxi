@@ -1447,6 +1447,21 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         {
                             run.text.clear();
                         }
+                        // S839: an INLINE visual vector group (wpg without
+                        // txbxContent — hmrc's checkbox strips) marks its host
+                        // run as a width-bearing atomic object; break_into_lines
+                        // makes it a U+FFFC fragment of the drawing's extent and
+                        // the emit loop draws tb.vector_shapes at the fragment x.
+                        if let Some(tb) = dr.as_ref().and_then(|d| d.text_box.as_ref()) {
+                            if !tb.vector_shapes.is_empty() && tb.blocks.is_empty()
+                                && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+                                && tb.position.as_ref().map_or(false, |tp| tp.x == 0.0 && tp.y == 0.0
+                                    && tp.h_relative.as_deref() == Some("column")
+                                    && tp.v_relative.as_deref() == Some("paragraph"))
+                            {
+                                run.style.inline_object_extent = Some((tb.width, tb.height));
+                            }
+                        }
                         runs.push(run);
                         if let Some(drawing) = dr {
                             if let Some(image) = drawing.image {
@@ -3710,6 +3725,36 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     let mut text_compat_ln_spc = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
+    // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
+    // loop keeps ALL its existing (last-win, global) prop semantics; the
+    // S839 state only PIGGYBACKS per-shape records so a visual-only group
+    // (hmrc's checkbox strips / writing boxes / heavy rules) yields
+    // drawable primitives. Text-bearing groups (framework cover pages)
+    // parse exactly as before and get NO vector_shapes attached.
+    struct S839Wsp {
+        off: (f32, f32),
+        ext: (f32, f32),
+        prst: Option<String>,
+        pts: Vec<(f32, f32)>,
+        path_wh: Option<(f32, f32)>,
+        n_paths: u32,
+        has_curve: bool,
+        ln_w: Option<f32>,
+        ln_color: Option<String>,
+        ln_nofill: bool,
+        fill: Option<String>,
+        no_fill: bool,
+        lnref: (i32, Option<String>),
+        fillref: (i32, Option<String>),
+    }
+    let mut s839_vector_shapes: Vec<crate::ir::VectorShape> = Vec::new();
+    let mut s839_in_wgp = false;
+    let mut s839_in_grpsppr = false;
+    // group xfrm: off, ext, chOff, chExt (EMU)
+    let mut s839_grp: ((f32, f32), (f32, f32), (f32, f32), (f32, f32)) =
+        ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0));
+    let mut s839_grp_seen = false;
+    let mut s839_wsp: Option<S839Wsp> = None;
 
     loop {
         match reader.read_event()? {
@@ -3719,6 +3764,36 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                 match local.as_str() {
                     "wpc" => {
                         is_canvas = true;
+                    }
+                    // S839: wpg vector-group boundaries + per-shape state.
+                    // These arms only toggle piggyback state (the events fell
+                    // to the default `_ => {}` before) — every existing global
+                    // extraction arm still runs unchanged.
+                    "wgp" => { s839_in_wgp = true; }
+                    "grpSpPr" if s839_in_wgp => { s839_in_grpsppr = true; }
+                    "wsp" if s839_in_wgp => {
+                        s839_wsp = Some(S839Wsp {
+                            off: (0.0, 0.0), ext: (0.0, 0.0), prst: None,
+                            pts: Vec::new(), path_wh: None, n_paths: 0,
+                            has_curve: false, ln_w: None, ln_color: None,
+                            ln_nofill: false, fill: None, no_fill: false,
+                            lnref: (-1, None), fillref: (-1, None),
+                        });
+                    }
+                    "path" if s839_wsp.is_some() => {
+                        let w = s839_wsp.as_mut().unwrap();
+                        w.n_paths += 1;
+                        let (mut pw, mut ph) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "w" { pw = val.parse().unwrap_or(0.0); }
+                            else if key == "h" { ph = val.parse().unwrap_or(0.0); }
+                        }
+                        if w.path_wh.is_none() { w.path_wh = Some((pw, ph)); }
+                    }
+                    "cubicBezTo" | "quadBezTo" | "arcTo" if s839_wsp.is_some() => {
+                        s839_wsp.as_mut().unwrap().has_curve = true;
                     }
                     "anchor" => {
                         is_anchor = true;
@@ -3744,11 +3819,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     }
                     // Shape line as Start element — may contain srgbClr child
                     "ln" => {
+                        // S839: per-shape capture of THIS a:ln's values (the
+                        // globals stay last-win as before).
+                        let mut s839_ln_color: Option<String> = None;
+                        let mut s839_ln_nofill = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                if let Some(wsp) = s839_wsp.as_mut() { wsp.ln_w = stroke_width; }
                             }
                         }
                         // Parse children for stroke color
@@ -3779,7 +3859,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                                 }
                                             }
                                             if !hex.is_empty() {
-                                                stroke_color = Some(parse_color_modifiers(reader, &hex, "srgbClr"));
+                                                let c = parse_color_modifiers(reader, &hex, "srgbClr");
+                                                s839_ln_color = Some(c.clone());
+                                                stroke_color = Some(c);
                                             }
                                         }
                                         "sysClr" => {
@@ -3790,7 +3872,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                                 }
                                             }
                                             if !hex.is_empty() {
-                                                stroke_color = Some(parse_color_modifiers(reader, &hex, "sysClr"));
+                                                let c = parse_color_modifiers(reader, &hex, "sysClr");
+                                                s839_ln_color = Some(c.clone());
+                                                stroke_color = Some(c);
                                             }
                                         }
                                         _ => ln_depth += 1,
@@ -3801,13 +3885,17 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                     if sl == "srgbClr" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "val" {
-                                                stroke_color = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                                let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                s839_ln_color = Some(c.clone());
+                                                stroke_color = Some(c);
                                             }
                                         }
                                     } else if sl == "sysClr" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "lastClr" {
-                                                stroke_color = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                                let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                s839_ln_color = Some(c.clone());
+                                                stroke_color = Some(c);
                                             }
                                         }
                                     } else if sl == "schemeClr" {
@@ -3815,11 +3903,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             if local_name(attr.key.as_ref()) == "val" {
                                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                                 if let Some(resolved) = ctx.theme.resolve(&val) {
+                                                    s839_ln_color = Some(resolved.clone());
                                                     stroke_color = Some(resolved.clone());
                                                 }
                                             }
                                         }
                                     } else if sl == "noFill" {
+                                        s839_ln_nofill = true;
                                         has_no_stroke = true;
                                     } else if sl == "headEnd" || sl == "tailEnd" {
                                         // S493i: connector arrowhead (type≠none). head=start, tail=end.
@@ -3842,6 +3932,10 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 Ok(Event::Eof) => break,
                                 _ => {}
                             }
+                        }
+                        if let Some(wsp) = s839_wsp.as_mut() {
+                            if s839_ln_color.is_some() { wsp.ln_color = s839_ln_color; }
+                            wsp.ln_nofill |= s839_ln_nofill;
                         }
                         // We consumed ln's End, decrement outer depth
                         depth -= 1;
@@ -3936,6 +4030,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         }
                         if !hex.is_empty() {
                             let final_color = parse_color_modifiers(reader, &hex, "srgbClr");
+                            if let Some(wsp) = s839_wsp.as_mut() {
+                                if wsp.fill.is_none() && !wsp.no_fill { wsp.fill = Some(final_color.clone()); }
+                            }
                             if shape_fill.is_none() && !has_no_fill {
                                 shape_fill = Some(final_color);
                             }
@@ -4052,7 +4149,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "prst" {
-                                shape_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                if let Some(wsp) = s839_wsp.as_mut() { wsp.prst = Some(v.clone()); }
+                                shape_type = Some(v);
                             }
                         }
                     }
@@ -4077,6 +4176,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "idx" {
                                                     fill_ref_idx = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
+                                                    if let Some(wsp) = s839_wsp.as_mut() { wsp.fillref.0 = fill_ref_idx; }
                                                 }
                                             }
                                         }
@@ -4085,6 +4185,20 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "idx" {
                                                     ln_ref_idx = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
+                                                    if let Some(wsp) = s839_wsp.as_mut() { wsp.lnref.0 = ln_ref_idx; }
+                                                }
+                                            }
+                                        }
+                                        // S839: srgbClr style refs feed ONLY the per-shape
+                                        // record (the legacy globals never read srgbClr here).
+                                        "srgbClr" => {
+                                            for attr in se.attributes().flatten() {
+                                                if local_name(attr.key.as_ref()) == "val" {
+                                                    let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                                        if in_fill_ref { wsp.fillref.1 = Some(c.clone()); }
+                                                        if in_ln_ref { wsp.lnref.1 = Some(c.clone()); }
+                                                    }
                                                 }
                                             }
                                         }
@@ -4094,6 +4208,10 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                                     let val = String::from_utf8_lossy(&attr.value).to_string();
                                                     if let Some(resolved) = ctx.theme.resolve(&val) {
                                                         let color = parse_color_modifiers(reader, resolved, "schemeClr");
+                                                        if let Some(wsp) = s839_wsp.as_mut() {
+                                                            if in_fill_ref { wsp.fillref.1 = Some(color.clone()); }
+                                                            if in_ln_ref { wsp.lnref.1 = Some(color.clone()); }
+                                                        }
                                                         if in_fill_ref && fill_ref_idx > 0 && shape_fill.is_none() {
                                                             shape_fill = Some(color.clone());
                                                         }
@@ -4115,12 +4233,27 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             if local_name(attr.key.as_ref()) == "val" {
                                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                                 if let Some(resolved) = ctx.theme.resolve(&val) {
+                                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                                        if in_fill_ref { wsp.fillref.1 = Some(resolved.clone()); }
+                                                        if in_ln_ref { wsp.lnref.1 = Some(resolved.clone()); }
+                                                    }
                                                     if in_fill_ref && fill_ref_idx > 0 && shape_fill.is_none() {
                                                         shape_fill = Some(resolved.clone());
                                                     }
                                                     if in_ln_ref && ln_ref_idx > 0 && stroke_color.is_none() {
                                                         stroke_color = Some(resolved.clone());
                                                     }
+                                                }
+                                            }
+                                        }
+                                    } else if sl == "srgbClr" {
+                                        // S839: per-shape only (legacy globals unchanged).
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "val" {
+                                                let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                if let Some(wsp) = s839_wsp.as_mut() {
+                                                    if in_fill_ref { wsp.fillref.1 = Some(c.clone()); }
+                                                    if in_ln_ref { wsp.lnref.1 = Some(c.clone()); }
                                                 }
                                             }
                                         }
@@ -4230,22 +4363,30 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     }
                     "ext" => {
                         // a:ext cx/cy fallback for size
+                        let (mut s839_cx, mut s839_cy) = (0.0f32, 0.0f32);
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             let val = String::from_utf8_lossy(&attr.value);
                             match key {
-                                "cx" if width == 0.0 => {
+                                "cx" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        width = v / 12700.0;
+                                        s839_cx = v;
+                                        if width == 0.0 { width = v / 12700.0; }
                                     }
                                 }
-                                "cy" if height == 0.0 => {
+                                "cy" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        height = v / 12700.0;
+                                        s839_cy = v;
+                                        if height == 0.0 { height = v / 12700.0; }
                                     }
                                 }
                                 _ => {}
                             }
+                        }
+                        // S839: per-shape / group extent capture (EMU).
+                        if s839_in_wgp {
+                            if s839_in_grpsppr { s839_grp.1 = (s839_cx, s839_cy); }
+                            else if let Some(wsp) = s839_wsp.as_mut() { wsp.ext = (s839_cx, s839_cy); }
                         }
                     }
                     "docPr" => {
@@ -4261,7 +4402,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "prst" {
-                                shape_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                if let Some(wsp) = s839_wsp.as_mut() { wsp.prst = Some(v.clone()); }
+                                shape_type = Some(v);
                             }
                         }
                     }
@@ -4293,6 +4436,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             if key == "val" {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    if wsp.fill.is_none() && !wsp.no_fill { wsp.fill = Some(val.clone()); }
+                                }
                                 if shape_fill.is_none() && !has_no_fill {
                                     shape_fill = Some(val);
                                 }
@@ -4342,8 +4488,48 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             }
                         }
                     }
-                    "noFill" => { has_no_fill = true; }
+                    "noFill" => {
+                        if let Some(wsp) = s839_wsp.as_mut() { wsp.no_fill = true; }
+                        has_no_fill = true;
+                    }
                     "noLn" => { has_no_stroke = true; }
+                    // S839: wpg group / member-shape geometry (Empty events;
+                    // gated on the group state so non-group drawings are
+                    // untouched — a:off/a:ext were unhandled here before).
+                    "off" | "chOff" if s839_in_wgp => {
+                        let (mut x, mut y) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "x" { x = val.parse().unwrap_or(0.0); }
+                            else if key == "y" { y = val.parse().unwrap_or(0.0); }
+                        }
+                        if s839_in_grpsppr {
+                            if local == "off" { s839_grp.0 = (x, y); } else { s839_grp.2 = (x, y); }
+                        } else if local == "off" {
+                            if let Some(wsp) = s839_wsp.as_mut() { wsp.off = (x, y); }
+                        }
+                    }
+                    "chExt" if s839_in_wgp => {
+                        let (mut cx, mut cy) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "cx" { cx = val.parse().unwrap_or(0.0); }
+                            else if key == "cy" { cy = val.parse().unwrap_or(0.0); }
+                        }
+                        if s839_in_grpsppr { s839_grp.3 = (cx, cy); s839_grp_seen = true; }
+                    }
+                    "pt" if s839_wsp.is_some() => {
+                        let (mut x, mut y) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "x" { x = val.parse().unwrap_or(0.0); }
+                            else if key == "y" { y = val.parse().unwrap_or(0.0); }
+                        }
+                        s839_wsp.as_mut().unwrap().pts.push((x, y));
+                    }
                     // Shape line/outline properties (as empty element)
                     "ln" => {
                         for attr in e.attributes().flatten() {
@@ -4364,6 +4550,57 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     "positionV" => { in_pos_v = false; }
                     "posOffset" => { in_pos_offset = false; }
                     "align" => { in_align = false; }
+                    // S839: classify + record the finished group member shape.
+                    "wsp" if s839_in_wgp => {
+                        if let Some(w) = s839_wsp.take() {
+                            let stroke = if w.ln_nofill { None } else {
+                                w.ln_color.clone().or_else(|| if w.lnref.0 > 0 { w.lnref.1.clone() } else { None })
+                            };
+                            let fill = if w.no_fill { None } else {
+                                w.fill.clone().or_else(|| if w.fillref.0 > 0 { w.fillref.1.clone() } else { None })
+                            };
+                            // line: degenerate extent or prst="line".
+                            let is_line = w.prst.as_deref() == Some("line")
+                                || w.ext.0 == 0.0 || w.ext.1 == 0.0;
+                            // rect: preset rect, or a curve-free single closed
+                            // path whose points all sit on the extent corners.
+                            let is_rect = !is_line && (w.prst.as_deref() == Some("rect")
+                                || (w.prst.is_none() && !w.has_curve && w.n_paths <= 1 && {
+                                    let (pw, ph) = w.path_wh.unwrap_or(w.ext);
+                                    let tx = (pw * 0.02).max(1.0);
+                                    let ty = (ph * 0.02).max(1.0);
+                                    !w.pts.is_empty() && w.pts.len() <= 6
+                                        && w.pts.iter().all(|&(px, py)|
+                                            (px.abs() < tx || (px - pw).abs() < tx)
+                                            && (py.abs() < ty || (py - ph).abs() < ty))
+                                }));
+                            if std::env::var("OXI_DBG839").is_ok() {
+                                eprintln!("[S839wsp] off={:?} ext={:?} prst={:?} pts={} curve={} paths={} ln_w={:?} ln_c={:?} lnref={:?} fillref={:?} nofill={} -> stroke={:?} fill={:?} line={} rect={}",
+                                    w.off, w.ext, w.prst, w.pts.len(), w.has_curve, w.n_paths,
+                                    w.ln_w, w.ln_color, w.lnref, w.fillref, w.no_fill,
+                                    stroke, fill, is_line, is_rect);
+                            }
+                            if (stroke.is_some() || fill.is_some()) && (is_line || is_rect) {
+                                let ((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)) = s839_grp;
+                                let (sx, sy) = if s839_grp_seen && cex > 0.0 && cey > 0.0 {
+                                    (gex / cex, gey / cey)
+                                } else { (1.0, 1.0) };
+                                let e2p = 1.0 / 12700.0;
+                                s839_vector_shapes.push(crate::ir::VectorShape {
+                                    x: (gx + (w.off.0 - cx0) * sx) * e2p,
+                                    y: (gy + (w.off.1 - cy0) * sy) * e2p,
+                                    w: w.ext.0 * sx * e2p,
+                                    h: w.ext.1 * sy * e2p,
+                                    fill,
+                                    stroke,
+                                    stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
+                                    is_line,
+                                });
+                            }
+                        }
+                    }
+                    "wgp" => { s839_in_wgp = false; s839_wsp = None; }
+                    "grpSpPr" => { s839_in_grpsppr = false; }
                     _ => {}
                 }
                 if local == "drawing" && depth == 0 {
@@ -4483,16 +4720,23 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             v_align: None,
             dist_l: None, dist_r: None })
     } else { None });
+    // S839: a VISUAL-ONLY wpg group (no txbxContent — hmrc's checkbox strips /
+    // writing boxes / heavy rules) carries its drawable primitives on the
+    // textbox and suppresses the legacy whole-extent outline (border came from
+    // the group members' a:ln via the generic last-win extraction). Text-
+    // bearing groups (framework cover pages) attach nothing → byte-identical.
+    let s839_attach = !s839_vector_shapes.is_empty() && shape_text_blocks.is_empty()
+        && std::env::var("OXI_S839_DISABLE").is_err();
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
             blocks: shape_text_blocks,
             width,
             height,
             position: tb_position,
-            border: !has_no_stroke,
-            stroke_color: if has_no_stroke { None } else { stroke_color_saved.clone() },
-            stroke_width: if has_no_stroke { None } else { stroke_width_saved },
-            fill: if has_no_fill { None } else { shape_fill.clone().or_else(|| shape_type.as_ref().map(|_| "FFFFFF".to_string())) },
+            border: !has_no_stroke && !s839_attach,
+            stroke_color: if has_no_stroke || s839_attach { None } else { stroke_color_saved.clone() },
+            stroke_width: if has_no_stroke || s839_attach { None } else { stroke_width_saved },
+            fill: if has_no_fill || s839_attach { None } else { shape_fill.clone().or_else(|| shape_type.as_ref().map(|_| "FFFFFF".to_string())) },
             anchor_block_index: 0, // set by caller in parse_body
             corner_radius,
             inset_left: text_inset_left,
@@ -4514,6 +4758,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             behind_doc,
             vert_overflow: text_vert_overflow,
             compat_line_spacing: text_compat_ln_spc,
+            vector_shapes: if s839_attach { std::mem::take(&mut s839_vector_shapes) } else { Vec::new() },
         })
     } else {
         None
@@ -4923,6 +5168,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             behind_doc: false,
             vert_overflow: None,
             compat_line_spacing: false,
+            vector_shapes: Vec::new(),
         });
         let placeholder = Some(Image {
             data: Vec::new(),

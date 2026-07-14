@@ -461,6 +461,15 @@ pub struct RunStyle {
     /// line fragment as a BoxRect stroke.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_border: Option<BorderDef>,
+    /// S839 (2026-07-14): (width, height) pt of an INLINE visual drawing
+    /// (wpg vector group without textbox text — hmrc's checkbox strips)
+    /// hosted by this run. The run becomes a width-bearing atomic line
+    /// fragment (Word reserves cx and positions it via the tab machinery:
+    /// the NI strip is CENTERED at its tab stop) and the emit loop draws
+    /// the group's vector shapes at the fragment position. None everywhere
+    /// except the marked runs (wpg = hmrc/framework only by corpus scan).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_object_extent: Option<(f32, f32)>,
 }
 
 impl Default for RunStyle {
@@ -503,6 +512,7 @@ impl Default for RunStyle {
             position: None,
             emphasis_mark: None,
             run_border: None,
+            inline_object_extent: None,
         }
     }
 }
@@ -765,6 +775,34 @@ pub struct TextBox {
     /// to compatLnSpc=1 textboxes. Default false (most textboxes lack the attr).
     #[serde(default)]
     pub compat_line_spacing: bool,
+    /// S839 (2026-07-14): drawable vector primitives extracted from a wpg
+    /// group's rect/line-class member shapes (hmrc-class form furniture:
+    /// checkbox strips, writing boxes, heavy rules). Attached only for
+    /// VISUAL-ONLY groups (no txbxContent) so text-bearing groups (framework
+    /// cover pages) keep their legacy merged-textbox behavior byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vector_shapes: Vec<VectorShape>,
+}
+
+/// S839: one drawable vector primitive from a wpg/wps drawing group.
+/// Coordinates in pt relative to the drawing extent's top-left (group
+/// child-space transform already applied). `is_line` draws a straight
+/// segment of `stroke_width` thickness; otherwise a rectangle outline
+/// (`stroke`) and/or fill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorShape {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(default)]
+    pub stroke_width: f32,
+    #[serde(default)]
+    pub is_line: bool,
 }
 
 /// A geometric shape (DrawingML or VML)
