@@ -478,6 +478,13 @@ pub struct RunStyle {
     /// Visio) keeps the block-extraction path, so the canaries are unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_object_image: Option<Box<Image>>,
+    /// S852: an inline VML horizontal rule (`<v:rect o:hr="t" .../>`). Carried
+    /// on the same run whose `inline_object_extent` reserves the rule's own
+    /// line; the emit draws a full-width gray line instead of an image. Tuple =
+    /// (thickness_pt, hex_color). None everywhere except o:hr runs (forms only
+    /// by corpus scan; JP has 0 → byte-identical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hr_rule: Option<(f32, String)>,
 }
 
 impl Default for RunStyle {
@@ -522,6 +529,7 @@ impl Default for RunStyle {
             run_border: None,
             inline_object_extent: None,
             inline_object_image: None,
+            hr_rule: None,
         }
     }
 }

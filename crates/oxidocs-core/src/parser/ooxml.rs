@@ -3175,7 +3175,30 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                     "pict" if depth == 0 => {
                         let vml = parse_vml_pict(reader, ctx, styles)?;
                         if drawing_result.is_none() {
-                            drawing_result = Some(vml);
+                            // S852: an inline horizontal rule (<v:rect o:hr="t"/>)
+                            // is routed to the run style — its own line is reserved
+                            // via inline_object_extent (the S851/S839 object
+                            // mechanism) and the emit draws a full-width gray rule.
+                            // A generic inline Shape (position None) is otherwise
+                            // dropped by the layout (mod.rs shape loop only draws
+                            // positioned shapes). forms only; JP byte-identical.
+                            let is_hr_shape = vml.shape.as_ref()
+                                .map_or(false, |s| s.shape_type == "hr");
+                            if is_hr_shape && std::env::var("OXI_S852_DISABLE").is_err() {
+                                let sh = vml.shape.as_ref().unwrap();
+                                let hr_w = if sh.width > 1.0 { sh.width } else { 468.0 };
+                                let thickness = sh.height.max(0.75);
+                                let color = sh.fill.clone()
+                                    .filter(|c| c.chars().all(|ch| ch.is_ascii_hexdigit()) && c.len() == 6)
+                                    .unwrap_or_else(|| "A6A6A6".to_string());
+                                // The rule occupies its own line ~= a default text
+                                // line (rule + vertical margins). 13.8pt matches
+                                // Word's o:hr line box (measured on forms' title HR).
+                                style.inline_object_extent = Some((hr_w, 13.8));
+                                style.hr_rule = Some((thickness, color));
+                            } else {
+                                drawing_result = Some(vml);
+                            }
                         }
                     }
                     // mc:AlternateContent — prefer Choice (DrawingML)
@@ -4893,6 +4916,11 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     // outermost group's declared pt dims + margin position instead.
     let s850 = std::env::var("OXI_S850_DISABLE").is_err();
     let mut group_depth: i32 = 0;
+    // S852: an inline VML horizontal rule (<v:rect o:hr="t" .../>). Word draws
+    // it on its OWN line (a full-width gray divider). Marked here so parse_run
+    // routes it to the run style (reserve a line + draw the rule) instead of a
+    // generic inline Shape (which the layout skips because position is None).
+    let mut is_hr = false;
 
     loop {
         match reader.read_event()? {
@@ -5018,8 +5046,13 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
                                 "allowincell" => { if val == "f" || val == "false" { escapes_cell = true; } }
+                                // S852: o:hr="t" marks this rect as a horizontal rule.
+                                "hr" => { if val == "t" || val == "true" { is_hr = true; } }
                                 _ => {}
                             }
+                        }
+                        if is_hr && std::env::var("OXI_S852_DISABLE").is_err() {
+                            shape_type = Some("hr".to_string());
                         }
                     }
                     _ => {}
@@ -5108,8 +5141,13 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
                                 "allowincell" => { if val == "f" || val == "false" { escapes_cell = true; } }
+                                // S852: o:hr="t" marks this rect as a horizontal rule.
+                                "hr" => { if val == "t" || val == "true" { is_hr = true; } }
                                 _ => {}
                             }
+                        }
+                        if is_hr && std::env::var("OXI_S852_DISABLE").is_err() {
+                            shape_type = Some("hr".to_string());
                         }
                     }
                     _ => {}

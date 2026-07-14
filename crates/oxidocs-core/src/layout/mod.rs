@@ -8679,7 +8679,7 @@ impl LayoutEngine {
         if std::env::var("OXI_S851_DISABLE").is_err() {
             for (li, line) in lines.iter().enumerate() {
                 let obj_h = line.fragments.iter()
-                    .filter_map(|f| if f.style.inline_object_image.is_some() {
+                    .filter_map(|f| if f.style.inline_object_image.is_some() || f.style.hr_rule.is_some() {
                         f.style.inline_object_extent.map(|(_, oh)| oh)
                     } else { None })
                     .fold(0.0f32, f32::max);
@@ -11064,6 +11064,24 @@ impl LayoutEngine {
                 // S773 fired, baseline = line_top + cy_max — else the normal
                 // S614 convention baseline from the line's first text frag).
                 if frag.text == "\u{FFFC}" && frag.style.inline_object_extent.is_some() {
+                    // S852: an inline horizontal rule (o:hr) draws a full-width
+                    // gray line centered in its own reserved line.
+                    if let Some((thickness, color)) = frag.style.hr_rule.as_ref() {
+                        let (ow, oh) = frag.style.inline_object_extent.unwrap_or((468.0, 13.8));
+                        let ry = emit_y + oh * 0.5;
+                        let mut e = LayoutElement::new(
+                            el_x, ry - thickness * 0.5, ow.max(0.1), thickness.max(0.5),
+                            LayoutContent::TableBorder {
+                                x1: el_x, y1: ry, x2: el_x + ow, y2: ry,
+                                color: Some(color.clone()),
+                                width: *thickness,
+                                style: None,
+                            });
+                        if let Some(pi) = body_para_index { e.paragraph_index = Some(pi); }
+                        elements.push(e);
+                        x += adjusted_width + frag_spacing_after[frag_idx];
+                        continue;
+                    }
                     // S851: an inline w:object form-field image draws its bitmap
                     // at the fragment position (box BOTTOM on the text baseline,
                     // like the S839 vector groups) instead of a vector group.
@@ -12489,6 +12507,14 @@ impl LayoutEngine {
             if let Some((ow, _oh)) = style.inline_object_extent {
                 if std::env::var("OXI_S839_DISABLE").is_err() {
                     flush_word!(style);
+                    // S852: a horizontal rule (o:hr) occupies its OWN line —
+                    // flush the current line (e.g. the title text) so the rule
+                    // starts fresh, and end its line afterward.
+                    let is_hr = style.hr_rule.is_some();
+                    if is_hr && !current_line.fragments.is_empty() {
+                        lines.push(std::mem::take(&mut current_line));
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                    }
                     let ow_tw = pt_to_tw(ow);
                     // NO overflow wrap for the object fragment (v1): hmrc's
                     // strips follow CENTER tabs — the raw width test would
@@ -12504,6 +12530,10 @@ impl LayoutEngine {
                         char_offset: frag_char_start,
                     });
                     current_width += ow; current_width_tw += ow_tw; current_capw_tw += ow_tw;
+                    if is_hr {
+                        lines.push(std::mem::take(&mut current_line));
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                    }
                     continue;
                 }
             }
