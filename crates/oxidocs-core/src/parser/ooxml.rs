@@ -6359,7 +6359,28 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                         // all three). pr.text_boxes carry a body-relative index
                         // from parse_paragraph; overwrite with the cell-relative one.
                         let cell_para_block_idx = blocks.len();
+                        // S838 (2026-07-14): a CELL paragraph hosting an INLINE
+                        // visual drawing (the S535 synthetic-inline signature —
+                        // hmrc's NI/DOB checkbox strips inside the personal-
+                        // details table) must reserve the drawing's extent like
+                        // the body S773 rule. Collect the max cy while moving
+                        // the tbs; an EMPTY host para is then replaced by a
+                        // height-only Block::Image (the S536/S537b image-only
+                        // path: cell line = extent EXACTLY = the pinned Word
+                        // rule), instead of contributing one empty text line.
+                        let mut s838_cy: f32 = 0.0;
+                        let mut s838_cx: f32 = 0.0;
                         for mut tb in pr.text_boxes {
+                            if tb.blocks.is_empty()
+                                && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+                                && tb.position.as_ref().map_or(false, |p| p.x == 0.0 && p.y == 0.0
+                                    && p.h_relative.as_deref() == Some("column")
+                                    && p.v_relative.as_deref() == Some("paragraph"))
+                                && tb.height > s838_cy
+                            {
+                                s838_cy = tb.height;
+                                s838_cx = tb.width;
+                            }
                             tb.anchor_block_index = cell_para_block_idx;
                             cell_text_boxes.push(tb);
                         }
@@ -6378,7 +6399,28 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                             && !pr.inline_images.is_empty()
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && pr.math_blocks.is_empty();
-                        if !image_only {
+                        // S838: visual-only cell para (inline vector group, no
+                        // text/images/math) -> height-only placeholder Image.
+                        let s838_visual_only = std::env::var("OXI_S838_DISABLE").is_err()
+                            && s838_cy > 0.0
+                            && pr.inline_images.is_empty()
+                            && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                            && pr.math_blocks.is_empty();
+                        if s838_visual_only {
+                            blocks.push(Block::Image(crate::ir::Image {
+                                data: Vec::new(),
+                                width: s838_cx,
+                                height: s838_cy,
+                                alt_text: None,
+                                content_type: None,
+                                position: None,
+                                wrap_type: None,
+                                crop: None,
+                                anchor_block_index: 0,
+                                relative_height: 0,
+                                behind_doc: false,
+                            }));
+                        } else if !image_only {
                             blocks.push(Block::Paragraph(pr.paragraph));
                         }
                         // S331 (2026-05-26): forward inline images from cell
