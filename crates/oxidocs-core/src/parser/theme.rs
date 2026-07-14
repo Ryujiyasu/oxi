@@ -253,7 +253,18 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                             // Word DID use Mincho — so the suppression is MINOR-scoped, not
                             // major (re-derive from richer input, don't stack exceptions).
                             // Env OXI_E_MAJOR_JPAN, default OFF (byte-identical) for the canary.
-                            let s492e_major_jpan = std::env::var("OXI_E_MAJOR_JPAN").is_ok();
+                            // S845 (2026-07-14): flipped DEFAULT ON (opt-out
+                            // OXI_E_MAJOR_JPAN_DISABLE). 1ec1's 「□(2)…」bold
+                            // paragraphs are majorEastAsia-theme runs — Word
+                            // renders them in the theme Jpan ＭＳ ゴシック
+                            // (heavy); Oxi fell to the rPrDefault Mincho
+                            // (thin) = the corpus-floor doc's weight gap
+                            // (1ec1 0.7966→0.8091; the same mechanism the
+                            // 2ea81a S487z callout font finding identified).
+                            // Pagination-inert (fullwidth advances identical;
+                            // corpus 0 real flips with the flag ON).
+                            let s492e_major_jpan = std::env::var("OXI_E_MAJOR_JPAN").is_ok()
+                                || std::env::var("OXI_E_MAJOR_JPAN_DISABLE").is_err();
                             let suppress_major = suppress_jpan_when_empty_ea && ea_empty_major
                                 && !s492e_major_jpan;
                             let suppress_minor = suppress_jpan_when_empty_ea && ea_empty_minor;
