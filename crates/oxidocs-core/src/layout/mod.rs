@@ -4043,11 +4043,31 @@ impl LayoutEngine {
                                     let dx = col2_x0 - col1_x0;
                                     let col2_next = col_band_top + n2 as f32 * pitch;
                                     let dy = col2_next - rows1[n1 - k];
+                                    // S750b (2026-07-15): Word ROW-ALIGNS the balanced
+                                    // columns — col2 row i sits at the same Y as col1
+                                    // row (n2+i), not a UNIFORM-pitch offset (which
+                                    // misaligns when the source rows vary in height:
+                                    // forms' drug/indication lists mix 14.5pt items
+                                    // and 17pt headings, so the median-pitch dy drifted
+                                    // ~3pt/row). Map each moved row to its target col1
+                                    // row Y (preserving any intra-row element offset);
+                                    // fall back to the uniform dy when the row index is
+                                    // ambiguous or the target is missing.
+                                    let moved_start = n1 - k;
                                     for e in elements.iter_mut() {
                                         if e.y >= cut_y && e.x < split_x
                                             && e.y >= col_band_top - 0.1 {
                                             e.x += dx;
-                                            e.y += dy;
+                                            let yk = (e.y * 10.0).round() / 10.0;
+                                            let ri = rows1.iter()
+                                                .position(|&r| (r - yk).abs() < 0.5);
+                                            match ri.and_then(|ri| {
+                                                let j = ri.checked_sub(moved_start)?;
+                                                rows1.get(n2 + j).map(|ty| (ri, *ty))
+                                            }) {
+                                                Some((ri, ty)) => { e.y = ty + (e.y - rows1[ri]); }
+                                                None => { e.y += dy; }
+                                            }
                                         }
                                     }
                                     let new_len = ((n1 - k).max(n2 + k)) as f32 * pitch;
