@@ -1044,7 +1044,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                        let pr = parse_paragraph(&mut reader, ctx, styles, true)?;
                         // S525 (coverage): a paragraph whose ONLY content is display
                         // math (oMathPara, no runs/images/shapes) must NOT emit an
                         // empty paragraph line before the math — the Math block IS
@@ -1185,7 +1185,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     } else if in_sdt_content {
                                         match sl.as_str() {
                                             "p" => {
-                                                let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                                                let pr = parse_paragraph(&mut reader, ctx, styles, true)?;
                                                 current_blocks.push(Block::Paragraph(pr.paragraph));
                                                 for mb in pr.math_blocks {
                                                     current_blocks.push(Block::Math(mb));
@@ -1358,9 +1358,14 @@ struct ParagraphResult {
     math_blocks: Vec<crate::ir::MathBlock>,
 }
 
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<ParagraphResult, ParseError> {
+fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
+    // S854: (run_index, image) for INLINE (non-positioned) images. A paragraph
+    // with MULTIPLE inline images flows them HORIZONTALLY (chord charts, icon
+    // rows) via the run's inline_object mechanism instead of extracting each to
+    // its own Block::Image line; a single inline image keeps the block path.
+    let mut inline_img_runs: Vec<(usize, Image)> = Vec::new();
     let mut found_shapes: Vec<Shape> = Vec::new();
     let mut found_text_boxes: Vec<TextBox> = Vec::new();
     let mut math_blocks: Vec<crate::ir::MathBlock> = Vec::new();
@@ -1465,7 +1470,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         runs.push(run);
                         if let Some(drawing) = dr {
                             if let Some(image) = drawing.image {
-                                images.push(image);
+                                // S854: record an INLINE (non-positioned) image with
+                                // its run index so ≥2-inline-image paragraphs can flow
+                                // horizontally (decided after the run loop). Positioned
+                                // images stay on the floating path.
+                                if std::env::var("OXI_S854_DISABLE").is_err()
+                                    && image.position.is_none()
+                                {
+                                    inline_img_runs.push((runs.len() - 1, image));
+                                } else {
+                                    images.push(image);
+                                }
                             }
                             if let Some(shape) = drawing.shape {
                                 found_shapes.push(shape);
@@ -2211,6 +2226,30 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
 
     // Store style ID for contextual spacing comparison
     style.style_id = style_id;
+
+    // S854: resolve the recorded inline images. ≥2 in one paragraph → flow
+    // HORIZONTALLY by carrying each on its run as an inline object (the S839/
+    // S851 U+FFFC mechanism), matching Word's inline row (chord charts:
+    // educational__0003daa8 stacked 8× 47.7pt images vertically = +330pt over
+    // Word's single 48pt row → +1 page; hmrc "Male [☐] Female [☐]" checkboxes).
+    // 0 or 1 → restore the block path (byte-identical for single-figure paras).
+    // Scoped to BODY paragraphs (allow_inline_flow): a textbox/table-cell/
+    // header/footnote paragraph keeps the block path — its inline_object_image
+    // is NOT drawn by those emit paths (kyotei36spec's 18 form-marker images
+    // live in a textbox at the page-right edge; flowing them there dropped all
+    // 18 from the render). Body emit (mod.rs:11135) draws inline_object_image.
+    if allow_inline_flow && inline_img_runs.len() >= 2 {
+        for (ridx, image) in inline_img_runs {
+            if let Some(run) = runs.get_mut(ridx) {
+                run.style.inline_object_extent = Some((image.width, image.height));
+                run.style.inline_object_image = Some(Box::new(image));
+            }
+        }
+    } else {
+        for (_ridx, image) in inline_img_runs {
+            images.push(image);
+        }
+    }
 
     // Separate inline images (no position) from floating images
     let mut inline_images: Vec<Block> = Vec::new();
@@ -3553,7 +3592,7 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                         }
                     }
                     "p" if in_note && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, &note_ctx, styles)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, styles, false)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
@@ -4184,7 +4223,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 Ok(Event::Start(se)) => {
                                     let sl = local_name(se.name().as_ref());
                                     if sl == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles) {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false) {
                                             shape_text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -4934,7 +4973,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
                                     if local_name(se.name().as_ref()) == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles) {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false) {
                                             text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -6723,7 +6762,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let pr = parse_paragraph(reader, ctx, styles)?;
+                        let pr = parse_paragraph(reader, ctx, styles, false)?;
                         // S486: preserve in-cell floating text boxes/shapes
                         // (previously discarded). S488: stamp each preserved
                         // text box with its anchor paragraph's index within THIS
@@ -7734,7 +7773,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                        let pr = parse_paragraph(&mut reader, ctx, styles, false)?;
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and
@@ -7781,7 +7820,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "p" {
-                                        let pr = parse_paragraph(&mut reader, ctx, styles)?;
+                                        let pr = parse_paragraph(&mut reader, ctx, styles, false)?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if in_sdt_content && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
@@ -8173,7 +8212,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                                 }
                             }
                         }
-                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles, false)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
