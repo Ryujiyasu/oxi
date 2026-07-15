@@ -7789,8 +7789,25 @@ impl LayoutEngine {
                     // packed 2 extra lines onto the page and held para 9 on p2
                     // where Word pushes it to p3 ({-1:1}). Sum the rows' natural
                     // heights with the trHeight floor, identical to the S731
-                    // header arm. Opt-out OXI_S868_DISABLE.
-                    if std::env::var("OXI_S868_DISABLE").is_err() {
+                    // header arm.
+                    //
+                    // ★HELD OPT-IN (OXI_S868=1, default OFF = byte-identical):
+                    // default-ON flips administrative__0006985e FAIL→PASS but
+                    // knocks forms__000ee7c0ec3f9325 PASS→FAIL (+1) = a merge-gate
+                    // violation (n_pass 37 either way, but 1 PASS→FAIL). The two
+                    // real docs CONTRADICT each other and the controlled probe:
+                    //   _pb_ftrtbl_gen.py (administrative's geometry, 230 renders)
+                    //   cT1(table+para) ≡ cP2(2 paras) and cT2 ≡ cP3 EXACTLY
+                    //   ⇒ a footer table costs exactly its rows, no extra term.
+                    // administrative agrees (its footer table must push); forms
+                    // does NOT — Word there keeps cbot at the ~margin (770.4),
+                    // IGNORING a 24pt footer intrusion, though the marker-injection
+                    // pin proves both its table row (ink 747.7) and trailing para
+                    // (759.3) render. The missing discriminator is when a footer
+                    // pushes the body at all (the probe's cP1 shows the same
+                    // anomaly: Word ignored a 5.3pt intrusion but respected 18pt
+                    // at cP2). Ship default-ON only once that is derived.
+                    if std::env::var("OXI_S868").is_ok() {
                         let col_widths = self.resolve_table_col_widths(t, cw);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
