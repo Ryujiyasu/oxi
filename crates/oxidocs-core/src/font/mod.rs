@@ -1061,6 +1061,11 @@ pub fn render_family_name(name: &str) -> &str {
         "Calibri"
     } else if name == "CG Times" || name.starts_with("CG Times ") {
         "Times New Roman"
+    } else if name == "宋体" || name == "新宋体" || name == "NSimSun" {
+        // S858: draw real SimSun glyphs (installed) — the metrics alias to MS
+        // Mincho, but the Chinese Han glyphs should render in SimSun. Latin
+        // glyphs are identical width, so pagination is unaffected.
+        "SimSun"
     } else if name == "Helvetica" || name.starts_with("Helvetica Neue")
         || name == "Helvetica LT Std" {
         // S846 (2026-07-14): Helvetica / Helvetica Neue are uninstalled on
@@ -1149,6 +1154,18 @@ fn normalize_family_name(name: &str) -> String {
         // run. Fallback path mismatch caused |dy|=26.24pt drift; aliasing
         // to MS Mincho aligns Oxi metrics with Word.
         "Arial Unicode MS" => "MS Mincho".to_string(),
+        // S858 (2026-07-15): 宋体 / SimSun (Simplified-Chinese) is a upm-256 CJK
+        // font, STRUCTURALLY IDENTICAL to MS Mincho for metrics — win 220/36
+        // (line 83/64×fs), all Latin glyphs monospace half-em (128/256 = 5.5pt
+        // @11pt). technical__002351b5's Normal style sets rFonts ascii="宋体"
+        // (whole body); Word renders the English description in SimSun (COM:
+        // Font.Name=SimSun, wi4 = 26 lines × 16.5pt pitch = 11×83/64×1.15), but
+        // Oxi fell to the Calibri default (proportional ~4.5pt avg + smaller line
+        // → 22 lines × 15.2pt = -102pt/para under-reserve). Alias to MS Mincho
+        // (the Arial-Unicode-MS pattern): upm-256 half-Latin + is_cjk_83_64 line.
+        // Corpus scan: SimSun = 3 EN docs, ZERO frozen/JP docs → byte-identical
+        // by construction. render_family_name draws real SimSun glyphs.
+        "宋体" | "新宋体" | "SimSun" | "NSimSun" => "MS Mincho".to_string(),
         // S796 (2026-07-12): Humnst777 Lt BT (Humanist 777 Light, a commercial
         // Bitstream font, not installed) — Word's PANOSE substitution renders it
         // as CALIBRI (uk_framework PDF span fonts: body Calibri 11.04, bold notes
