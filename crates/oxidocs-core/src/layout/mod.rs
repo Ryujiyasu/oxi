@@ -5400,10 +5400,26 @@ impl LayoutEngine {
                                     && (content_width - table_w_pt) / 2.0
                                         - p.left_from_text.max(p.right_from_text) < 50.0
                             });
+                        // S857 (2026-07-15, default ON, opt-out OXI_S857_DISABLE): a
+                        // WIDE (overflow) vertAnchor="page" body-floating table also
+                        // forces the following body BELOW it — Word flows the body
+                        // around a full-width page-anchored float (policies__0009e9db
+                        // Cognition SEN table: 471pt overflow at tblpY=111.65 on page
+                        // 2; Word's empties wi94-98 SKIP the float region y112-373 and
+                        // resume at y370.5, but Oxi packed them through it → wi108 held
+                        // on page 2 instead of page 3). Frozen-corpus scan: the ONLY
+                        // wide body-page-float doc is 459f05 (PASS canary, 2 overflow
+                        // page-floats) — VERIFIED pagination byte-identical (PASS
+                        // 1.0000 {0:88}) AND SSIM byte-identical (+0.0000, only empty
+                        // paragraphs shift, no pixels) → Word flows 459f05's body below
+                        // its floats too. policies__0009e9db: 0.987 FAIL → 1.000 PASS.
+                        let page_float_wide = std::env::var("OXI_S857_DISABLE").is_err()
+                            && is_body_floating && wide_table;
                         let needs_wrap_below = (v_anchor_text
                             && wide_table
                             && (pos_x_zero || h_anchor_page || h_anchor_margin))
-                            || centered_narrow;
+                            || centered_narrow
+                            || page_float_wide;
                         if std::env::var("OXI_DBG_FLOAT").is_ok() {
                             eprintln!("[FLOAT] blk={} pg={} saved_y={:.1} cand_y=[{:.1}..{:.1}] w={:.1} x={:?} h_align={:?} h_anchor={:?} pages_added={} wide={} wrap_below={}",
                                 block_idx, current_page_idx, saved_cursor_y, candidate_y_top, candidate_y_bottom,
