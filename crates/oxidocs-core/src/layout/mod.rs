@@ -5546,11 +5546,22 @@ impl LayoutEngine {
                         // its floats too. policies__0009e9db: 0.987 FAIL → 1.000 PASS.
                         let page_float_wide = std::env::var("OXI_S857_DISABLE").is_err()
                             && is_body_floating && wide_table;
+                        // S864: an edge-aligned float leaving <100pt beside it has
+                        // no usable text band; Word flows following body below it.
+                        let edge_narrow = std::env::var("OXI_S864_DISABLE").is_err()
+                            && v_anchor_text
+                            && pos_x_zero
+                            && table_w_pt <= content_width + 0.5
+                            && table.style.position.as_ref().map_or(false, |p| {
+                                content_width - table_w_pt
+                                    - p.left_from_text.max(p.right_from_text) < 100.0
+                            });
                         let needs_wrap_below = (v_anchor_text
                             && wide_table
                             && (pos_x_zero || h_anchor_page || h_anchor_margin))
                             || centered_narrow
-                            || page_float_wide;
+                            || page_float_wide
+                            || edge_narrow;
                         if std::env::var("OXI_DBG_FLOAT").is_ok() {
                             eprintln!("[FLOAT] blk={} pg={} saved_y={:.1} cand_y=[{:.1}..{:.1}] w={:.1} x={:?} h_align={:?} h_anchor={:?} pages_added={} wide={} wrap_below={}",
                                 block_idx, current_page_idx, saved_cursor_y, candidate_y_top, candidate_y_bottom,
@@ -17794,10 +17805,24 @@ impl LayoutEngine {
             let s814_lrpb_veto = row_has_lrpb_at_cell_start
                 && !s814_no_veto
                 && (page_bottom - cursor.cursor_y) < s814_k;
-            let s754_split = std::env::var("OXI_S754_DISABLE").is_err()
+            // S864: an explicit atLeast row whose height is driven
+            // by a run of trailing empty cell paragraphs is still splittable.
+            // Word keeps the visible cell content above the boundary and lets
+            // the empty tail continue on the next page; treating every trHeight
+            // row as atomic pushes the whole visible row forward.
+            let s864_empty_tail_split = std::env::var("OXI_S864_DISABLE").is_err()
+                && row.cells.len() > 1
+                && row.height_rule.as_deref() != Some("exact")
+                && row.cells.iter().any(|cell| cell.blocks.iter().rev()
+                    .take_while(|b| matches!(b, Block::Paragraph(p)
+                        if p.runs.iter().all(|r| r.text.is_empty())))
+                    .count() >= 2)
+                && (page_bottom - cursor.cursor_y) >= table_grid_pitch.unwrap_or(14.0);
+            let s754_split = (std::env::var("OXI_S754_DISABLE").is_err()
                 && row.height.is_none()
                 && !s814_lrpb_veto
-                && (page_bottom - cursor.cursor_y) >= s754_min_fit;
+                && (page_bottom - cursor.cursor_y) >= s754_min_fit)
+                || s864_empty_tail_split;
             if std::env::var("OXI_DBG754").is_ok() && s754_split && row_overflows
                 && !row.cant_split && has_content
                 && !(is_single_cell_row || has_lrpb_mid_row)
@@ -22044,7 +22069,17 @@ impl LayoutEngine {
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         eprintln!("[SPLIT-CURSOR] branch=s754 cont_max_y={:.2}", cont_max_y);
                     }
-                    if cont_max_y.is_finite() {
+                    if s864_empty_tail_split {
+                        // Only the non-painting empty tail crossed the page.
+                        // Word collapses that continuation to the page top, so
+                        // the following block may begin at the same Y. A split
+                        // from a titlePg first page must use the DEFAULT header's
+                        // body top, not the first-page body top passed to the
+                        // table at entry.
+                        let next_page_top = page.margin.top
+                            .max(self.s755_header_bottom(&page.header, page));
+                        cursor.set(next_page_top);
+                    } else if cont_max_y.is_finite() {
                         cursor.set(cont_max_y);
                     } else {
                         let overflow_on_next = row_bottom - split_y;
@@ -23461,7 +23496,14 @@ impl LayoutEngine {
         est_sb: f32,
         est_sa: f32,
     ) -> (f32, f32) {
-        if std::env::var("OXI_CELLAS").map(|v| v == "0" || v.is_empty()).unwrap_or(true) {
+        let cellas_enabled = std::env::var("OXI_CELLAS")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false)
+            // S864 enables only the style-derived cell case. Direct-pPr
+            // autospacing remains under the existing OXI_CELLAS experiment.
+            || (std::env::var("OXI_S864_DISABLE").is_err()
+                && !para.style.has_direct_before_after);
+        if !cellas_enabled {
             return (est_sb, est_sa);
         }
         const AUTO: f32 = 13.75;

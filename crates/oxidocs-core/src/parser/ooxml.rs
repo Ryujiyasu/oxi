@@ -6908,8 +6908,54 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                     depth -= 1;
                 }
             }
+            // S864: preserve a self-closing empty paragraph inside
+            // a table cell. The Start/End path above handles `<w:p>...</w:p>`,
+            // but quick-xml reports `<w:p/>` as Event::Empty. Dropping it makes
+            // row height depend on the producer's equivalent XML spelling.
+            Event::Empty(e) if depth == 0
+                && local_name(e.name().as_ref()) == "p"
+                && std::env::var("OXI_S864_DISABLE").is_err() =>
+            {
+                blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
+            }
             Event::Eof => break,
             _ => {}
+        }
+    }
+
+    // S864: Word applies NormalWeb's style-level autospacing to a table cell
+    // containing a long manual-break list, while S675 keeps style-level HTML
+    // spacing inert in ordinary body/cell content. At the boundary immediately
+    // after the long list, Word suppresses it again (explicit spacing remains).
+    // The >=10 w:br signature keeps this correction isolated from generic Web
+    // style tables, which have deliberately different S675 behaviour.
+    if std::env::var("OXI_S864_DISABLE").is_err() {
+        let has_long_manual_breaks = blocks.iter().any(|b| matches!(b, Block::Paragraph(p)
+            if p.runs.iter().map(|r| r.text.matches('\n').count()).sum::<usize>() >= 10));
+        if has_long_manual_breaks {
+            for block in &mut blocks {
+                if let Block::Paragraph(p) = block {
+                    if let Some(style_id) = p.style.style_id.as_deref() {
+                        if let Some(defined) = styles.styles.get(style_id) {
+                            p.style.before_autospacing = defined.paragraph.before_autospacing;
+                            p.style.after_autospacing = defined.paragraph.after_autospacing;
+                        }
+                    }
+                }
+            }
+        }
+        for i in 1..blocks.len() {
+            let long_manual_breaks = matches!(&blocks[i - 1], Block::Paragraph(p)
+                if p.runs.iter().map(|r| r.text.matches('\n').count()).sum::<usize>() >= 10);
+            if long_manual_breaks {
+                let (before, after) = blocks.split_at_mut(i);
+                if let Block::Paragraph(prev) = &mut before[i - 1] {
+                    prev.style.after_autospacing = false;
+                }
+                if let Block::Paragraph(next) = &mut after[0] {
+                    next.style.before_autospacing = false;
+                }
+            }
         }
     }
 

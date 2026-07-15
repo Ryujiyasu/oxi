@@ -737,6 +737,14 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                     // attribute is set DIRECTLY on the paragraph's pPr, not when inherited
                     // from a paragraph style (S675, COM-confirmed: harassbosi/b837 64 Web
                     // paras render with 0 extra; a direct-pPr para renders 13.75).
+                    // S864: retain style-level HTML autospacing for the table-cell
+                    // parser. Body paragraphs still intentionally ignore it (S675).
+                    "beforeAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                        style.before_autospacing = val == "1" || val == "true" || val == "on";
+                    }
+                    "afterAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                        style.after_autospacing = val == "1" || val == "true" || val == "on";
+                    }
                     "line" => {
                         line_val = val.parse::<f32>().ok();
                     }
@@ -1281,7 +1289,16 @@ fn parse_style_definition(
                                     "afterLines" => {
                                         style.after_lines = val.parse::<f32>().ok();
                                     }
-                                    // autospacing NOT parsed at style level (S675, see above)
+                                    // S864 retains style-level autospacing for the
+                                    // table-cell parser; body inheritance stays off.
+                                    "beforeAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                                        style.before_autospacing =
+                                            val == "1" || val == "true" || val == "on";
+                                    }
+                                    "afterAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                                        style.after_autospacing =
+                                            val == "1" || val == "true" || val == "on";
+                                    }
                                     "line" => {
                                         line_val = val.parse::<f32>().ok();
                                     }
