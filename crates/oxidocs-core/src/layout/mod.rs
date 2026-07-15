@@ -7388,12 +7388,27 @@ impl LayoutEngine {
             let mut s813_prev_sa: Option<f32> = None;
             for block in blocks {
                 if let Block::Paragraph(para) = block {
-                    let fs = para.runs.first()
-                        .and_then(|r| r.style.font_size)
-                        .unwrap_or(self.default_font_size);
-                    let metrics = para.runs.first()
-                        .map(|r| self.metrics_for(&r.style, &para.style))
-                        .unwrap_or_else(|| self.doc_default_metrics());
+                    // S862 (2026-07-15, opt-out OXI_S862_DISABLE): empty header
+                    // paragraphs derive their line from the paragraph mark's
+                    // pPr/rPr. Falling straight back to the document default turns
+                    // explicit tiny marks (for example sz=2 = 1pt) into full 11pt
+                    // lines and can push the body down by tens of points.
+                    let fallback_style = RunStyle::default();
+                    let s862 = std::env::var("OXI_S862_DISABLE").is_err();
+                    let mark_style = para
+                        .runs
+                        .first()
+                        .map(|r| &r.style)
+                        .or_else(|| if s862 { para.style.ppr_rpr.as_ref() } else { None })
+                        .unwrap_or(&fallback_style);
+                    let fs = self.resolve_font_size(mark_style, &para.style);
+                    let metrics = if let Some(run) = para.runs.first() {
+                        self.metrics_for(&run.style, &para.style)
+                    } else if let Some(mark) = para.style.ppr_rpr.as_ref().filter(|_| s862) {
+                        self.metrics_for_para_mark(mark, &para.style)
+                    } else {
+                        self.doc_default_metrics()
+                    };
                     let lh = metrics.word_line_height(fs, 96.0);
                     hdr_h += lh;
                     if s813 && !para.style.has_direct_spacing {
