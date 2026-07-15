@@ -7776,6 +7776,46 @@ impl LayoutEngine {
                     } else {
                         s803_prev_sa = Some(0.0);
                     }
+                } else if let Block::Table(t) = block {
+                    // S868 (2026-07-15): a TABLE in the FOOTER contributed ZERO
+                    // height — this loop was Paragraph-only. That is exactly the
+                    // symmetric gap S731 fixed for HEADERS and explicitly flagged
+                    // as unprobed ("table-in-FOOTER = the symmetric unprobed case
+                    // — measure before implementing"). MEASURED on the first real
+                    // doc that has one: administrative__0006985e's footer is a
+                    // 1-row 3-cell table + 1 trailing empty para, so Oxi reserved
+                    // only the para ([FTR] footer_h=12.6, reserved 77.3 → eff_bot
+                    // ~764.6) where Word keeps the body above ~730 — the body then
+                    // packed 2 extra lines onto the page and held para 9 on p2
+                    // where Word pushes it to p3 ({-1:1}). Sum the rows' natural
+                    // heights with the trHeight floor, identical to the S731
+                    // header arm. Opt-out OXI_S868_DISABLE.
+                    if std::env::var("OXI_S868_DISABLE").is_err() {
+                        let col_widths = self.resolve_table_col_widths(t, cw);
+                        let dp = t.style.default_cell_margins.as_ref();
+                        let (pl, pr, pt, pb) = (
+                            dp.and_then(|m| m.left).unwrap_or(5.4),
+                            dp.and_then(|m| m.right).unwrap_or(5.4),
+                            dp.and_then(|m| m.top).unwrap_or(0.0),
+                            dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                        );
+                        for row in &t.rows {
+                            let nat = self.estimate_table_row_natural_h(
+                                row, &col_widths, pl, pr, pt, pb, t,
+                                page.grid_line_pitch, page.grid_char_pitch, None);
+                            let h = row.height.map(|th| match row.height_rule.as_deref() {
+                                Some("exact") => th,
+                                // ROWBOX2: binding atLeast = trH + bw (border-box)
+                                _ => (th + self.rowbox2_trh_bw(t, row)).max(nat),
+                            }).unwrap_or(nat);
+                            footer_h += h;
+                        }
+                        // A table breaks the paragraph spacing chain (the S813
+                        // rule the header arm applies): flush the pending after.
+                        if let Some(last) = s803_prev_sa.take() {
+                            footer_h += last;
+                        }
+                    }
                 }
             }
             // S803: the last footer paragraph's after-spacing sits between the
