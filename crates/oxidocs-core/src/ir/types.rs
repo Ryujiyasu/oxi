@@ -177,6 +177,12 @@ pub struct Page {
     /// Empty = uniform margins (single-section / non-parser constructions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub margin_runs: Vec<(usize, f32, f32)>,
+    /// S863: per-section vertical page geometry for merged continuous
+    /// sections: (block_start, top, bottom, header_distance, footer_distance).
+    /// A continuous section adopts this geometry on the next physical page;
+    /// its blocks continue at the current cursor on the boundary page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vertical_runs: Vec<(usize, f32, f32, Option<f32>, Option<f32>)>,
     /// S735 (2026-07-03): per-section docGrid line pitch for merged continuous
     /// sections — (block_start_index, grid_line_pitch). The merged Page kept
     /// only the first section's pitch (probezcontgrid: pitch 360→480 change at
@@ -1560,6 +1566,9 @@ pub struct FrameProperties {
     /// Frame height in points (w:h)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f32>,
+    /// Frame height rule: "auto", "atLeast", or "exact" (w:hRule)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_rule: Option<String>,
     /// Horizontal anchor: "text", "margin", "page" (w:hAnchor)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h_anchor: Option<String>,

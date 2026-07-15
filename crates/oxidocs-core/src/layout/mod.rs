@@ -3100,6 +3100,45 @@ impl LayoutEngine {
         } else {
             None
         };
+        // S863: a continuous section's top/bottom and header/footer
+        // distances govern physical pages that begin after its boundary. Build
+        // the same first/odd/even geometry tuple as S755, but for every section
+        // run; the block loop switches the active tuple without moving the
+        // boundary page's current cursor.
+        let s863_vertical_geoms: Vec<S755Geom> = if std::env::var("OXI_S863_DISABLE").is_err()
+            && page.vertical_runs.len() > 1
+        {
+            page.vertical_runs.iter().map(|(_, top, bottom, hd, fd)| {
+                let mut rp = page.clone();
+                rp.margin.top = *top;
+                rp.margin.bottom = *bottom;
+                rp.header_distance = *hd;
+                rp.footer_distance = *fd;
+                let geom = |hdr: &[Block], ftr: &[Block]| {
+                    let sy = rp.margin.top.max(self.s755_header_bottom(hdr, &rp));
+                    let (mut fr, _) = self.s755_footer_geom(ftr, &rp);
+                    // A zero footer distance pins the footer to the physical
+                    // page edge. Word then lets body flow use the bottom margin
+                    // boundary (the footer stack does not enlarge that margin)
+                    // and permits the usual ~device-pixel ink overhang there.
+                    let edge_slack = if rp.footer_distance == Some(0.0) {
+                        fr = rp.margin.bottom;
+                        1.25
+                    } else { 0.0 };
+                    (sy, rp.size.height - sy - fr + edge_slack)
+                };
+                let first = if s755_on && rp.title_pg {
+                    geom(&rp.header_first, &rp.footer_first)
+                } else { geom(&rp.header, &rp.footer) };
+                let odd = geom(&rp.header, &rp.footer);
+                let even = if s755_on && rp.even_odd_hf {
+                    geom(&rp.header_even, &rp.footer_even)
+                } else { odd };
+                S755Geom { first, odd, even }
+            }).collect()
+        } else { Vec::new() };
+        let mut s755_geom = s755_geom;
+        let mut s863_vertical_run_idx: usize = 0;
         // Round 29 (2026-04-08): per-page dynamic footnote reservation.
         // Footnotes are reserved at the bottom of the page where their reference
         // appears. The amount reserved varies per page based on which footnotes
@@ -3764,6 +3803,11 @@ impl LayoutEngine {
         // DECLARED (x, y): (decl_x, decl_y, first_fx, running_bottom_y). Reset
         // when a non-frame block intervenes or the declared key changes.
         let mut s847_frame: Option<(f32, f32, f32, f32)> = None;
+        // S863: consecutive identical vAnchor="text" framePr
+        // paragraphs with a negative Y and an exact height form ONE frame.
+        // State: (decl_x, decl_y, first_x, running_content_bottom,
+        //         exact_frame_bottom, original_anchor_y).
+        let mut s863_frame: Option<(f32, f32, f32, f32, f32, f32)> = None;
         // ANCHORPUSH experiment (opt-in OXI_ANCHORPUSH=1, ROWBOX2-family):
         // Word keeps an anchored drawing on the SAME PAGE as its anchor
         // paragraph — when the float's extent (anchor_y + posOffsetV + cy)
@@ -3789,6 +3833,14 @@ impl LayoutEngine {
                 m
             } else { Default::default() };
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            if !s863_vertical_geoms.is_empty() {
+                while s863_vertical_run_idx + 1 < page.vertical_runs.len()
+                    && block_idx >= page.vertical_runs[s863_vertical_run_idx + 1].0
+                {
+                    s863_vertical_run_idx += 1;
+                    s755_geom = Some(s863_vertical_geoms[s863_vertical_run_idx]);
+                }
+            }
             // S755: refresh the current page's header/footer geometry (a
             // previous block may have pushed pages internally).
             if let Some(g) = s755_geom.as_ref() {
@@ -4199,6 +4251,85 @@ impl LayoutEngine {
                         // Float: do NOT advance the cursor; skip normal block processing.
                         continue;
                     }
+                    // S863: Word groups consecutive paragraphs that repeat the
+                    // same exact-height text-anchored framePr into one frame.
+                    // The frame top is relative to the first paragraph's flow
+                    // anchor; its declared height is consumed only once.
+                    let s863_fp = para.style.frame_pr.as_ref().filter(|fp|
+                        fp.drop_cap.is_none()
+                            && fp.v_anchor.as_deref() == Some("text")
+                            && fp.h_anchor.as_deref() == Some("page")
+                            && fp.height_rule.as_deref() == Some("exact")
+                            && fp.height.unwrap_or(0.0) > 0.0
+                            && fp.y < 0.0
+                            && fp.wrap.as_deref() == Some("around")
+                    );
+                    let s863_matches = |other: &Block, fp: &crate::ir::FrameProperties| {
+                        matches!(other, Block::Paragraph(p) if p.style.frame_pr.as_ref().map_or(false, |n|
+                            n.drop_cap.is_none()
+                                && n.v_anchor.as_deref() == Some("text")
+                                && n.h_anchor.as_deref() == Some("page")
+                                && n.height_rule.as_deref() == Some("exact")
+                                && n.wrap.as_deref() == Some("around")
+                                && (n.x - fp.x).abs() < 0.1
+                                && (n.y - fp.y).abs() < 0.1
+                                && (n.height.unwrap_or(0.0) - fp.height.unwrap_or(0.0)).abs() < 0.1
+                        ))
+                    };
+                    let s863_in_run = s863_fp.map_or(false, |fp| {
+                        s863_frame.map_or(false, |(x, y, _, _, _, _)|
+                            (x - fp.x).abs() < 0.1 && (y - fp.y).abs() < 0.1)
+                            || page.blocks.get(block_idx + 1).map_or(false, |b| s863_matches(b, fp))
+                    });
+                    if std::env::var("OXI_S863_DISABLE").is_err() && s863_in_run {
+                        let fp = s863_fp.unwrap();
+                        let (fx, fy, frame_bottom, anchor_y) = match s863_frame {
+                            Some((_, _, first_x, running_bottom, exact_bottom, anchor)) =>
+                                (first_x, running_bottom, exact_bottom, anchor),
+                            None => {
+                                let anchor = cursor.cursor_y;
+                                let top = anchor + fp.y;
+                                (fp.x, top, top + fp.height.unwrap_or(0.0), anchor)
+                            }
+                        };
+                        let fw = fp.width.unwrap_or(page.size.width - fx - page.margin.right)
+                            .max(20.0);
+                        let mut fcy = LayoutCursor::new(fy);
+                        let empty_fn_frame = std::collections::HashMap::new();
+                        let (frame_els, _, _) = self.layout_paragraph(
+                            para, fx, &mut fcy, fw,
+                            page.size.height, fy, page,
+                            &mut Vec::new(), &mut Vec::new(),
+                            grid_pitch, None, false,
+                            None, false, false, 0.0, Some(block_idx), None, None,
+                            false, false, None,
+                            0.0,
+                            &empty_fn_frame,
+                            1, 0, &[], 0.0,
+                            false,
+                            false,
+                            None,
+                            None,
+                            false,
+                        );
+                        elements.extend(frame_els);
+                        let has_next = page.blocks.get(block_idx + 1)
+                            .map_or(false, |b| s863_matches(b, fp));
+                        if std::env::var("OXI_DBG863").is_ok() {
+                            eprintln!("[S863] blk={} anchor={:.2} y={:.2} bottom={:.2} next={}",
+                                block_idx, anchor_y, fy, fcy.cursor_y, has_next);
+                        }
+                        if has_next {
+                            s863_frame = Some((fp.x, fp.y, fx, fcy.cursor_y,
+                                frame_bottom, anchor_y));
+                        } else {
+                            cursor.set(anchor_y.max(frame_bottom));
+                            s863_frame = None;
+                        }
+                        prev_space_after = 0.0;
+                        continue;
+                    }
+                    s863_frame = None;
                     // S758c (2026-07-06): a PAGE-anchored framePr paragraph is a
                     // fixed-position frame — the body flows AROUND it (side-wrap
                     // band) and the frame consumes NO flow height (probeqframepg:

@@ -245,6 +245,9 @@ impl OoxmlParser {
                 // S729: parallel per-section margin run (left, right).
                 last.margin_runs.push((last.blocks.len(),
                     section.properties.margin.left, section.properties.margin.right));
+                last.vertical_runs.push((last.blocks.len(),
+                    section.properties.margin.top, section.properties.margin.bottom,
+                    section.properties.header_distance, section.properties.footer_distance));
                 // S735: parallel per-section grid pitch run.
                 last.grid_runs.push((last.blocks.len(), section.properties.grid_line_pitch));
                 // S730: the paragraph that ENDED the previous section (it
@@ -293,6 +296,9 @@ impl OoxmlParser {
                 // S729: seed the margin-run list with the first section's margins.
                 let margin_runs = vec![(0usize,
                     section.properties.margin.left, section.properties.margin.right)];
+                let vertical_runs = vec![(0usize,
+                    section.properties.margin.top, section.properties.margin.bottom,
+                    section.properties.header_distance, section.properties.footer_distance)];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];
                 pages.push(Page {
@@ -322,6 +328,7 @@ impl OoxmlParser {
                     columns: section.properties.columns,
                     column_runs,
                     margin_runs,
+                    vertical_runs,
                     grid_runs,
                     section_start_type: section.properties.section_type.clone(),
                     header_distance: section.properties.header_distance,
@@ -2643,6 +2650,7 @@ fn parse_paragraph_properties(
                                 "lines" => fp.lines = val.parse().unwrap_or(1),
                                 "w" => fp.width = val.parse::<f32>().ok().map(|v| v / 20.0),
                                 "h" => fp.height = val.parse::<f32>().ok().map(|v| v / 20.0),
+                                "hRule" => fp.height_rule = Some(val.to_string()),
                                 "hAnchor" => fp.h_anchor = Some(val.to_string()),
                                 "vAnchor" => fp.v_anchor = Some(val.to_string()),
                                 "x" => fp.x = val.parse::<f32>().unwrap_or(0.0) / 20.0,
