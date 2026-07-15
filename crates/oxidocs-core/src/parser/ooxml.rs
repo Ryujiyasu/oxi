@@ -6926,7 +6926,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
             // row height depend on the producer's equivalent XML spelling.
             Event::Empty(e) if depth == 0
                 && local_name(e.name().as_ref()) == "p"
-                && std::env::var("OXI_S864_DISABLE").is_err() =>
+                && crate::layout::s864_part("D") =>
             {
                 blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
             }
@@ -6941,7 +6941,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
     // after the long list, Word suppresses it again (explicit spacing remains).
     // The >=10 w:br signature keeps this correction isolated from generic Web
     // style tables, which have deliberately different S675 behaviour.
-    if std::env::var("OXI_S864_DISABLE").is_err() {
+    if crate::layout::s864_part("E") {
         let has_long_manual_breaks = blocks.iter().any(|b| matches!(b, Block::Paragraph(p)
             if p.runs.iter().map(|r| r.text.matches('\n').count()).sum::<usize>() >= 10));
         if has_long_manual_breaks {

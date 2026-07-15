@@ -739,10 +739,10 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                     // paras render with 0 extra; a direct-pPr para renders 13.75).
                     // S864: retain style-level HTML autospacing for the table-cell
                     // parser. Body paragraphs still intentionally ignore it (S675).
-                    "beforeAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                    "beforeAutospacing" if crate::layout::s864_part("F") => {
                         style.before_autospacing = val == "1" || val == "true" || val == "on";
                     }
-                    "afterAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                    "afterAutospacing" if crate::layout::s864_part("F") => {
                         style.after_autospacing = val == "1" || val == "true" || val == "on";
                     }
                     "line" => {
@@ -1291,11 +1291,11 @@ fn parse_style_definition(
                                     }
                                     // S864 retains style-level autospacing for the
                                     // table-cell parser; body inheritance stays off.
-                                    "beforeAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                                    "beforeAutospacing" if crate::layout::s864_part("F") => {
                                         style.before_autospacing =
                                             val == "1" || val == "true" || val == "on";
                                     }
-                                    "afterAutospacing" if std::env::var("OXI_S864_DISABLE").is_err() => {
+                                    "afterAutospacing" if crate::layout::s864_part("F") => {
                                         style.after_autospacing =
                                             val == "1" || val == "true" || val == "on";
                                     }

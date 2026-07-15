@@ -31,6 +31,17 @@ fn char_to_string(ch: char) -> String {
 
 /// Characters that allow a line break AFTER them (English punctuation).
 /// Word treats these as breakable opportunities similar to spaces.
+/// S864 bundles SIX independent rules (float side-wrap / empty-tail row split /
+/// cell autospacing / self-closing cell `<w:p/>` / NormalWeb cell autospacing /
+/// style-level autospacing retention) behind ONE env flag, so a regression in
+/// any one of them could neither be bisected nor scoped. `OXI_S864_DISABLE`
+/// still kills the whole set; `OXI_S864<PART>_DISABLE` (A..F) kills one part.
+/// A..C live here, D..F in the parser (`parser::ooxml::s864_part`).
+pub(crate) fn s864_part(part: &str) -> bool {
+    std::env::var("OXI_S864_DISABLE").is_err()
+        && std::env::var(format!("OXI_S864{part}_DISABLE")).is_err()
+}
+
 fn is_break_after(ch: char) -> bool {
     matches!(ch, '-' | '/' | '\\' | ')' | ']' | '}' | '>' | '!' | '?' | ';' | ':' | ',')
 }
@@ -5548,7 +5559,7 @@ impl LayoutEngine {
                             && is_body_floating && wide_table;
                         // S864: an edge-aligned float leaving <100pt beside it has
                         // no usable text band; Word flows following body below it.
-                        let edge_narrow = std::env::var("OXI_S864_DISABLE").is_err()
+                        let edge_narrow = s864_part("A")
                             && v_anchor_text
                             && pos_x_zero
                             && table_w_pt <= content_width + 0.5
@@ -17876,7 +17887,29 @@ impl LayoutEngine {
             // Word keeps the visible cell content above the boundary and lets
             // the empty tail continue on the next page; treating every trHeight
             // row as atomic pushes the whole visible row forward.
-            let s864_empty_tail_split = std::env::var("OXI_S864_DISABLE").is_err()
+            // ★HELD OPT-IN (OXI_S864B=1, default OFF): shipping this default-ON
+            // broke the JP corpus — 29dc6e8943fe (order_01) went PASS 1.0000 →
+            // FAIL 0.9910, i.e. Phase-1 stopped being 87/87. Bisected to THIS
+            // part alone (A/C..F leave 29dc6e at 1.0). It IS needed by its
+            // target (administrative__0001ce58: with it PASS 1.0, without it
+            // FAIL), so it is a JP-PASS-for-EN-PASS trade, which the merge gate
+            // forbids (0 PASS→FAIL).
+            // ★NO STRUCTURAL DISCRIMINATOR EXISTS (measured): 29dc6e's 14
+            // matching rows and administrative's 1 are IDENTICAL in shape —
+            // hRule absent (=atLeast), 2 trailing empty paras, 2-3 cells, and
+            // the trHeight ranges overlap (administrative 944tw sits inside
+            // 29dc6e's 255..2400). So the row shape cannot separate "Word
+            // splits" from "Word keeps whole".
+            // ★The rule also does not match its own stated intent: "an explicit
+            // atLeast row whose height is DRIVEN BY a run of trailing empty
+            // paragraphs" — but the condition never checks that the empties
+            // drive the height (only that they exist), and `!= Some("exact")`
+            // also admits rows with no trHeight at all. Per the no-exception
+            // rule the spec is wrong and must be re-derived (candidate: compare
+            // the row's natural content height against trHeight so only rows
+            // actually GROWN by the empty tail split) before it can ship.
+            let s864_empty_tail_split = std::env::var("OXI_S864B").is_ok()
+                && s864_part("B")
                 && row.cells.len() > 1
                 && row.height_rule.as_deref() != Some("exact")
                 && row.cells.iter().any(|cell| cell.blocks.iter().rev()
@@ -23588,7 +23621,7 @@ impl LayoutEngine {
             .unwrap_or(false)
             // S864 enables only the style-derived cell case. Direct-pPr
             // autospacing remains under the existing OXI_CELLAS experiment.
-            || (std::env::var("OXI_S864_DISABLE").is_err()
+            || (s864_part("C")
                 && !para.style.has_direct_before_after);
         if !cellas_enabled {
             return (est_sb, est_sa);
