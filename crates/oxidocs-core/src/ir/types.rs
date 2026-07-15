@@ -1182,6 +1182,14 @@ pub struct ParagraphStyle {
     /// Word resets inherited spacing to Single/0 inside table cells.
     #[serde(default)]
     pub has_direct_spacing: bool,
+    /// S855 (2026-07-15): True when the DIRECT pPr `<w:spacing>` set before/after
+    /// (or beforeLines/afterLines/*Autospacing) — as opposed to setting ONLY the
+    /// line multiplier. A direct line-only `<w:spacing w:line=…>` sets
+    /// `has_direct_spacing` but must NOT prevent the table-cell before/after
+    /// reset: Word still resets the docDefaults-inherited before/after to the
+    /// cell default (0) when the paragraph does not itself set them.
+    #[serde(default)]
+    pub has_direct_before_after: bool,
     /// True when line_spacing was inherited from docDefaults pPrDefault (not from Normal style or direct).
     /// Word resets docDefaults lineSpacing to Single inside table cells but keeps Normal style's lineSpacing.
     #[serde(default)]
@@ -1362,6 +1370,7 @@ impl Default for ParagraphStyle {
             space_before: None,
             space_after: None,
             has_direct_spacing: false,
+            has_direct_before_after: false,
             line_spacing_from_doc_defaults: false,
             before_lines: None,
             after_lines: None,

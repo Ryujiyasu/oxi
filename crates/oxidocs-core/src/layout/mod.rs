@@ -18187,7 +18187,15 @@ impl LayoutEngine {
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.line_spacing_rule.as_deref()))
                     };
                     let style_has_explicit_rule = effective_line_rule == Some("exact") || effective_line_rule == Some("atLeast");
-                    let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
+                    // S855 (2026-07-15): render cell before/after reset keys on
+                    // whether the DIRECT pPr set before/after (has_direct_before_after),
+                    // not has_direct_spacing — a direct line-only spacing must not
+                    // preserve the docDefaults-inherited before/after in a cell.
+                    // Kept in sync with estimate_para_height_inner / cell_para_spacing.
+                    let s855_reset_flag = if std::env::var("OXI_S855_DISABLE").is_err() {
+                        para.style.has_direct_before_after
+                    } else { para.style.has_direct_spacing };
+                    let should_reset = !s855_reset_flag && !style_has_explicit_rule;
                     let tbl_has_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing).is_some();
                     // S699 (2026-06-30): the table-style line-spacing override must NOT fire
                     // when the paragraph STYLE itself sets explicit line spacing. ECMA-376
@@ -22939,7 +22947,17 @@ impl LayoutEngine {
         let raw_lr = para.style.line_spacing_rule.as_deref()
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
         let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
-        let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
+        // S855 (2026-07-15): the before/after RESET keys on whether the DIRECT
+        // pPr set before/after, NOT on has_direct_spacing. A direct line-only
+        // `<w:spacing w:line=…>` (has_direct_spacing=true, has_direct_before_after
+        // =false) must still let Word's cell reset zero the docDefaults-inherited
+        // before/after (technical__0009d767 Arial-Narrow parts table: cell paras
+        // set only line=276, inherited docDefaults after=8pt was over-reserved
+        // +8pt/row → the whole 1-page table spilled to 2). See [[en_..._benchmark]].
+        let s855_reset_flag = if std::env::var("OXI_S855_DISABLE").is_err() {
+            para.style.has_direct_before_after
+        } else { para.style.has_direct_spacing };
+        let should_reset = !s855_reset_flag && !style_has_explicit_rule;
         let tbl_has_ls = table_para_style.and_then(|ps| ps.line_spacing).is_some();
         let (eff_ls, eff_lr): (Option<f32>, Option<&str>) = if tbl_has_ls && !para.style.has_direct_spacing {
             let tbl_ls = table_para_style.and_then(|ps| ps.line_spacing);
@@ -23188,7 +23206,11 @@ impl LayoutEngine {
         let raw_lr = para.style.line_spacing_rule.as_deref()
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
         let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
-        let should_reset = !para.style.has_direct_spacing && !style_has_explicit_rule;
+        // S855: keep in sync with estimate_para_height_inner's should_reset.
+        let s855_reset_flag = if std::env::var("OXI_S855_DISABLE").is_err() {
+            para.style.has_direct_before_after
+        } else { para.style.has_direct_spacing };
+        let should_reset = !s855_reset_flag && !style_has_explicit_rule;
         if should_reset {
             return (0.0, 0.0);
         }
