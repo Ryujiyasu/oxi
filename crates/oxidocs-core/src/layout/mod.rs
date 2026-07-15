@@ -5379,9 +5379,31 @@ impl LayoutEngine {
                             && table.style.position.as_ref()
                                 .map_or(false, |p| p.h_anchor.as_deref() == Some("margin"));
                         let wide_table = table_w_pt > content_width - 30.0;
-                        let needs_wrap_below = v_anchor_text
+                        // S856 (2026-07-15, default ON, opt-out OXI_S856_DISABLE): a
+                        // CENTERED vertAnchor="text" float that FITS within the content
+                        // width but leaves too little room for body text on either side
+                        // (usable side < 50pt) forces the body BELOW it, like a
+                        // full-width float. `wide_table` misses it (float 410.85 <
+                        // content-30) and the S758 side-wrap gate needs a wide side
+                        // (≥100pt), so neither fired → Oxi overlapped the following
+                        // body (policies__0009e9db Pathways float: 410.85pt on 451.3pt
+                        // content, 11.2pt usable side → body wi92 placed INSIDE the
+                        // float region → -338pt under-reserve). Frozen-corpus scan: NO
+                        // doc has a centered float that fits-but-narrow (the centered
+                        // canaries are overflow [1ec1/kyotei/459f05] or tiny [ukhmrc])
+                        // → byte-identical by construction.
+                        let centered_narrow = std::env::var("OXI_S856_DISABLE").is_err()
+                            && v_anchor_text
+                            && table.style.position.as_ref().map_or(false, |p| {
+                                p.h_align.as_deref() == Some("center")
+                                    && table_w_pt <= content_width + 0.5
+                                    && (content_width - table_w_pt) / 2.0
+                                        - p.left_from_text.max(p.right_from_text) < 50.0
+                            });
+                        let needs_wrap_below = (v_anchor_text
                             && wide_table
-                            && (pos_x_zero || h_anchor_page || h_anchor_margin);
+                            && (pos_x_zero || h_anchor_page || h_anchor_margin))
+                            || centered_narrow;
                         if std::env::var("OXI_DBG_FLOAT").is_ok() {
                             eprintln!("[FLOAT] blk={} pg={} saved_y={:.1} cand_y=[{:.1}..{:.1}] w={:.1} x={:?} h_align={:?} h_anchor={:?} pages_added={} wide={} wrap_below={}",
                                 block_idx, current_page_idx, saved_cursor_y, candidate_y_top, candidate_y_bottom,
