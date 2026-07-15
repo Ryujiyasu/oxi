@@ -7962,6 +7962,25 @@ impl LayoutEngine {
                 let eff_sb = if para.style.contextual_spacing { 0.0 } else { space_before };
                 let eff_psa = if prev_contextual_spacing { 0.0 } else { prev_space_after };
                 effective_spacing = eff_sb.max(eff_psa);
+                // S861 (2026-07-15): contextualSpacing on the PREVIOUS paragraph
+                // removes the ENTIRE below-gap (prev→cur), including cur's OWN
+                // before-spacing — not just prev's after. DERIVED from the Word
+                // PDF of educational__000555ad (contextualSpacing on Normal-style
+                // numbered items with before=180): a ctx list item followed by a
+                // same-style non-ctx continuation renders with gap=0 (Word pitch
+                // 20.16 = one line, no before), where the per-side S782 model kept
+                // cur.before → +9pt/boundary drift → 2 paras spilled a page.
+                // The below-gap is Word-driven by the UPPER paragraph's ctx and is
+                // ASYMMETRIC (a ctx LOWER paragraph does NOT suppress the gap — obs
+                // p60→p61 keeps before). Opt-out: cur explicitly carries
+                // <w:contextualSpacing w:val="0"/> (has_explicit + !contextual) →
+                // keep cur.before (the S782 nyserda '(c) Indirect Costs' case).
+                if prev_contextual_spacing
+                    && !para.style.has_explicit_contextual_spacing
+                    && std::env::var("OXI_S861_DISABLE").is_err()
+                {
+                    effective_spacing = 0.0;
+                }
             }
         }
 
