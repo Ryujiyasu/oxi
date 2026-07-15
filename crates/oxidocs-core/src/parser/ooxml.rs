@@ -2485,30 +2485,36 @@ fn parse_paragraph_properties(
                                     style.space_before =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
+                                    style.has_direct_before = true;
                                 }
                                 "after" => {
                                     style.space_after =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
+                                    style.has_direct_after = true;
                                 }
                                 "beforeLines" => {
                                     style.before_lines = val.parse::<f32>().ok();
                                     style.has_direct_before_after = true;
+                                    style.has_direct_before = true;
                                 }
                                 "afterLines" => {
                                     style.after_lines = val.parse::<f32>().ok();
                                     style.has_direct_before_after = true;
+                                    style.has_direct_after = true;
                                 }
                                 "beforeAutospacing" => {
                                     // CT_OnOff attr: "1"/"true"/"on" => true (S675)
                                     let v = val.as_ref();
                                     style.before_autospacing = v == "1" || v == "true" || v == "on";
                                     style.has_direct_before_after = true;
+                                    style.has_direct_before = true;
                                 }
                                 "afterAutospacing" => {
                                     let v = val.as_ref();
                                     style.after_autospacing = v == "1" || v == "true" || v == "on";
                                     style.has_direct_before_after = true;
+                                    style.has_direct_after = true;
                                 }
                                 "line" => {
                                     line_val = val.parse::<f32>().ok();
@@ -2719,30 +2725,36 @@ fn parse_paragraph_properties(
                                     style.space_before =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
+                                    style.has_direct_before = true;
                                 }
                                 "after" => {
                                     style.space_after =
                                         val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
+                                    style.has_direct_after = true;
                                 }
                                 "beforeLines" => {
                                     style.before_lines = val.parse::<f32>().ok();
                                     style.has_direct_before_after = true;
+                                    style.has_direct_before = true;
                                 }
                                 "afterLines" => {
                                     style.after_lines = val.parse::<f32>().ok();
                                     style.has_direct_before_after = true;
+                                    style.has_direct_after = true;
                                 }
                                 "beforeAutospacing" => {
                                     // CT_OnOff attr: "1"/"true"/"on" => true (S675)
                                     let v = val.as_ref();
                                     style.before_autospacing = v == "1" || v == "true" || v == "on";
                                     style.has_direct_before_after = true;
+                                    style.has_direct_before = true;
                                 }
                                 "afterAutospacing" => {
                                     let v = val.as_ref();
                                     style.after_autospacing = v == "1" || v == "true" || v == "on";
                                     style.has_direct_before_after = true;
+                                    style.has_direct_after = true;
                                 }
                                 "line" => {
                                     line_val = val.parse::<f32>().ok();

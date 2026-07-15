@@ -1196,6 +1196,14 @@ pub struct ParagraphStyle {
     /// cell default (0) when the paragraph does not itself set them.
     #[serde(default)]
     pub has_direct_before_after: bool,
+    /// S865: DIRECT pPr spacing specifies a before-side value
+    /// (before/beforeLines/beforeAutospacing). Kept per-side because Word
+    /// resets an unspecified opposite side to the table-cell default.
+    #[serde(default)]
+    pub has_direct_before: bool,
+    /// S865: DIRECT pPr spacing specifies an after-side value.
+    #[serde(default)]
+    pub has_direct_after: bool,
     /// True when line_spacing was inherited from docDefaults pPrDefault (not from Normal style or direct).
     /// Word resets docDefaults lineSpacing to Single inside table cells but keeps Normal style's lineSpacing.
     #[serde(default)]
@@ -1377,6 +1385,8 @@ impl Default for ParagraphStyle {
             space_after: None,
             has_direct_spacing: false,
             has_direct_before_after: false,
+            has_direct_before: false,
+            has_direct_after: false,
             line_spacing_from_doc_defaults: false,
             before_lines: None,
             after_lines: None,

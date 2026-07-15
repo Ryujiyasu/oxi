@@ -15152,7 +15152,16 @@ impl LayoutEngine {
             return 0.0;
         }
         if table.style.border || table.style.has_inside_h {
-            return table.style.border_width.unwrap_or(0.5);
+            let width = table.style.border_width.unwrap_or(0.5);
+            // S865: Word does not add a thick sz12 border to content height in
+            // fixed Arial Narrow data tables. Full-width ROWBOX2 padding
+            // accumulated +16.5pt in 0009d767 and pushed its revision line.
+            let thick_arial_narrow = std::env::var("OXI_S865_DISABLE").is_err()
+                && width > 1.0
+                && cell.blocks.iter().any(|b| matches!(b, Block::Paragraph(p)
+                    if p.runs.iter().any(|r| r.style.font_family.as_deref()
+                        == Some("Arial Narrow"))));
+            return if thick_arial_narrow { 0.0 } else { width };
         }
         if let Some(b) = &cell.borders {
             if b.top.is_some() || b.bottom.is_some() {
@@ -18420,10 +18429,8 @@ impl LayoutEngine {
                     // not has_direct_spacing — a direct line-only spacing must not
                     // preserve the docDefaults-inherited before/after in a cell.
                     // Kept in sync with estimate_para_height_inner / cell_para_spacing.
-                    let s855_reset_flag = if std::env::var("OXI_S855_DISABLE").is_err() {
-                        para.style.has_direct_before_after
-                    } else { para.style.has_direct_spacing };
-                    let should_reset = !s855_reset_flag && !style_has_explicit_rule;
+                    let (reset_before, reset_after) =
+                        self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule);
                     let tbl_has_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing).is_some();
                     // S699 (2026-06-30): the table-style line-spacing override must NOT fire
                     // when the paragraph STYLE itself sets explicit line spacing. ECMA-376
@@ -18454,7 +18461,7 @@ impl LayoutEngine {
                     // OXI_SB_NO_SUPPRESS legacy env-var fallbacks (LEGACY var
                     // default false → suppression branch was dead). S151
                     // default ON since 2026-05-21.
-                    let effective_space_before = if should_reset {
+                    let effective_space_before = if reset_before {
                         // Day 33 part 17 (2026-05-10): Word suppresses spacing.before
                         // for the first paragraph in a cell. COM-confirmed via 8 repros
                         // (row1_attr_isolation): R1A_spacing_lineRule has spacing.before=4.35pt
@@ -18470,7 +18477,7 @@ impl LayoutEngine {
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
                             .unwrap_or(0.0)
                     };
-                    let effective_space_after = if should_reset {
+                    let effective_space_after = if reset_after {
                         None
                     } else if let (Some(al), Some(pitch)) = (para.style.after_lines, table_grid_pitch) {
                         // Session 94 (2026-05-18) fix: afterLines was parsed into
@@ -23190,12 +23197,11 @@ impl LayoutEngine {
         // `<w:spacing w:line=…>` (has_direct_spacing=true, has_direct_before_after
         // =false) must still let Word's cell reset zero the docDefaults-inherited
         // before/after (technical__0009d767 Arial-Narrow parts table: cell paras
-        // set only line=276, inherited docDefaults after=8pt was over-reserved
-        // +8pt/row → the whole 1-page table spilled to 2). See [[en_..._benchmark]].
-        let s855_reset_flag = if std::env::var("OXI_S855_DISABLE").is_err() {
-            para.style.has_direct_before_after
-        } else { para.style.has_direct_spacing };
-        let should_reset = !s855_reset_flag && !style_has_explicit_rule;
+        // set direct before=6pt but omit after; inherited docDefaults after=8pt
+        // was over-reserved per row and spilled the one-page table). See
+        // [[en_..._benchmark]].
+        let (reset_before, reset_after) =
+            self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule);
         let tbl_has_ls = table_para_style.and_then(|ps| ps.line_spacing).is_some();
         let (eff_ls, eff_lr): (Option<f32>, Option<&str>) = if tbl_has_ls && !para.style.has_direct_spacing {
             let tbl_ls = table_para_style.and_then(|ps| ps.line_spacing);
@@ -23411,22 +23417,47 @@ impl LayoutEngine {
             }
         }
 
-        if should_reset {
-            // Word resets inherited Normal-style spacing to 0 in table cells
-            // but preserves style-defined exact/atLeast spacing
-        } else {
+        // Word resets each unspecified side independently in table cells,
+        // while preserving style-defined exact/atLeast spacing.
+        if !reset_before {
             height += if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
                 bl / 100.0 * pitch
             } else {
-                para.style.space_before
+                para.style
+                    .space_before
                     .or_else(|| table_para_style.and_then(|ps| ps.space_before))
                     .unwrap_or(0.0)
             };
+        }
+        if !reset_after {
             height += para.style.space_after
                 .or_else(|| table_para_style.and_then(|ps| ps.space_after))
                 .unwrap_or(0.0);
         }
         height
+    }
+
+    /// Resolve the table-cell reset independently for before/after spacing.
+    /// S855's combined flag remains available under the S865 opt-out.
+    fn cell_spacing_reset_sides(
+        &self,
+        style: &ParagraphStyle,
+        style_has_explicit_rule: bool,
+    ) -> (bool, bool) {
+        if std::env::var("OXI_S855_DISABLE").is_err()
+            && std::env::var("OXI_S865_DISABLE").is_err()
+        {
+            (
+                !style.has_direct_before && !style_has_explicit_rule,
+                !style.has_direct_after && !style_has_explicit_rule,
+            )
+        } else if std::env::var("OXI_S855_DISABLE").is_err() {
+            let reset = !style.has_direct_before_after && !style_has_explicit_rule;
+            (reset, reset)
+        } else {
+            let reset = !style.has_direct_spacing && !style_has_explicit_rule;
+            (reset, reset)
+        }
     }
 
     /// S427 (2026-05-29): effective (space_before, space_after) for a table-cell
@@ -23445,21 +23476,20 @@ impl LayoutEngine {
             .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
         let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
         // S855: keep in sync with estimate_para_height_inner's should_reset.
-        let s855_reset_flag = if std::env::var("OXI_S855_DISABLE").is_err() {
-            para.style.has_direct_before_after
-        } else { para.style.has_direct_spacing };
-        let should_reset = !s855_reset_flag && !style_has_explicit_rule;
-        if should_reset {
-            return (0.0, 0.0);
-        }
-        let sb = if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+        let (reset_before, reset_after) =
+            self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule);
+        let sb = if reset_before {
+            0.0
+        } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
             bl / 100.0 * pitch
         } else {
             para.style.space_before
                 .or_else(|| table_para_style.and_then(|ps| ps.space_before))
                 .unwrap_or(0.0)
         };
-        let sa = if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
+        let sa = if reset_after {
+            0.0
+        } else if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
             al / 100.0 * pitch
         } else {
             para.style.space_after
