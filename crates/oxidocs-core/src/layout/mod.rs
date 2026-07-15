@@ -15221,15 +15221,21 @@ impl LayoutEngine {
         }
         if table.style.border || table.style.has_inside_h {
             let width = table.style.border_width.unwrap_or(0.5);
-            // S865: Word does not add a thick sz12 border to content height in
-            // fixed Arial Narrow data tables. Full-width ROWBOX2 padding
-            // accumulated +16.5pt in 0009d767 and pushed its revision line.
-            let thick_arial_narrow = std::env::var("OXI_S865_DISABLE").is_err()
+            // S865: a thick border does not pad the cell content top in a
+            // FIXED-layout table. Full-width ROWBOX2 padding accumulated
+            // +16.5pt in 0009d767 and pushed its revision line.
+            // ★The original condition keyed off the cell's FONT
+            // (font_family == "Arial Narrow"), which cannot govern border-box
+            // geometry — it was a scope hack: a font-free `width > 1.0` rule
+            // fires on 29 golden-test docs (incl. the tokumei bottom-N
+            // 6514/a1d6e4/d4d126/de6e32, whose thick borders are sz24 and DO
+            // pad), so the font name was the only thing keeping them safe.
+            // tblLayout is the structural, docx-derivable discriminator:
+            // 0009d767's thick tables are fixed; the tokumei ones are auto.
+            let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
                 && width > 1.0
-                && cell.blocks.iter().any(|b| matches!(b, Block::Paragraph(p)
-                    if p.runs.iter().any(|r| r.style.font_family.as_deref()
-                        == Some("Arial Narrow"))));
-            return if thick_arial_narrow { 0.0 } else { width };
+                && table.style.layout.as_deref() == Some("fixed");
+            return if thick_fixed { 0.0 } else { width };
         }
         if let Some(b) = &cell.borders {
             if b.top.is_some() || b.bottom.is_some() {
