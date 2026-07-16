@@ -8261,27 +8261,49 @@ impl LayoutEngine {
             // the OR-both gate zeroed it). Mixed pairs require a direct val=0
             // override under a contextual style → corpus-wide only nyserda.
             if para.style.style_id.as_deref() == prev_style_id {
-                let eff_sb = if para.style.contextual_spacing { 0.0 } else { space_before };
-                let eff_psa = if prev_contextual_spacing { 0.0 } else { prev_space_after };
-                effective_spacing = eff_sb.max(eff_psa);
-                // S861 (2026-07-15): contextualSpacing on the PREVIOUS paragraph
-                // removes the ENTIRE below-gap (prev→cur), including cur's OWN
-                // before-spacing — not just prev's after. DERIVED from the Word
-                // PDF of educational__000555ad (contextualSpacing on Normal-style
-                // numbered items with before=180): a ctx list item followed by a
-                // same-style non-ctx continuation renders with gap=0 (Word pitch
-                // 20.16 = one line, no before), where the per-side S782 model kept
-                // cur.before → +9pt/boundary drift → 2 paras spilled a page.
-                // The below-gap is Word-driven by the UPPER paragraph's ctx and is
-                // ASYMMETRIC (a ctx LOWER paragraph does NOT suppress the gap — obs
-                // p60→p61 keeps before). Opt-out: cur explicitly carries
-                // <w:contextualSpacing w:val="0"/> (has_explicit + !contextual) →
-                // keep cur.before (the S782 nyserda '(c) Indirect Costs' case).
-                if prev_contextual_spacing
-                    && !para.style.has_explicit_contextual_spacing
-                    && std::env::var("OXI_S861_DISABLE").is_err()
-                {
-                    effective_spacing = 0.0;
+                // S874 (2026-07-16, default ON, opt-out OXI_S874_DISABLE): the
+                // COMPLETE contextualSpacing model, replacing S782 per-side +
+                // S861 zero-out. DERIVED from a 19-point controlled probe
+                // (_pb_ctxsp_gen c1-c6 + _pb_ctxsp2_gen d1-d11, Word COM
+                // Info(6) gaps): the same-style gap is LAYERED —
+                //     gap = [lower layer a = prev.after (owned by PREV)]
+                //         + [excess layer max(0, b - a)  (owned by CUR)]
+                // and contextualSpacing removes only the layer its OWNER owns:
+                //     (prev_ctx, cur_ctx) -> applied gap
+                //     (false, false) -> max(a, b)
+                //     (true,  false) -> max(0, b - a)   [S861's zero was WRONG]
+                //     (false, true)  -> a               [= the S782 per-side]
+                //     (true,  true)  -> 0
+                // Decisive points: d1 (A ctx a=4.5, b=18) = 13.5 = b-a (neither
+                // zero, max, nor pure-removal); d9 (B ctx, 9/9) = 9 = a (the
+                // "lower ctx applies 9" was the REMAINING a, not b). This one
+                // formula closes educational__000555ad (upper ctx, 9/9 -> 0 =
+                // what S861 fixed), forms__00042714 wi179 (upper ctx, a=0,
+                // b=18 -> 18 KEPT — S861 wrongly zeroed it, the doc's -1), and
+                // the c2/c3/c4 counter-probes (upper ctx + b=18, a=... -> Word
+                // KEEPS the excess). An explicit <w:contextualSpacing w:val="0"/>
+                // resolves to cur_ctx=false and takes the (true,false) branch.
+                if std::env::var("OXI_S874_DISABLE").is_err() {
+                    let a = prev_space_after;
+                    let b = space_before;
+                    effective_spacing =
+                        match (prev_contextual_spacing, para.style.contextual_spacing) {
+                            (true, true) => 0.0,
+                            (true, false) => (b - a).max(0.0),
+                            (false, true) => a,
+                            (false, false) => a.max(b),
+                        };
+                } else {
+                    // Legacy S782 per-side + S861 zero-out (superseded).
+                    let eff_sb = if para.style.contextual_spacing { 0.0 } else { space_before };
+                    let eff_psa = if prev_contextual_spacing { 0.0 } else { prev_space_after };
+                    effective_spacing = eff_sb.max(eff_psa);
+                    if prev_contextual_spacing
+                        && !para.style.has_explicit_contextual_spacing
+                        && std::env::var("OXI_S861_DISABLE").is_err()
+                    {
+                        effective_spacing = 0.0;
+                    }
                 }
             }
         }
@@ -23065,7 +23087,22 @@ impl LayoutEngine {
         // S166 (2026-05-21): vertical writing default ON. Stable across 70+
         // sessions; S236 (2026-05-23) removed OXI_LEGACY_NO_VERT_WRITING
         // legacy env-var fallback during hardening pass.
-        cell.text_direction.as_deref() == Some("tbRlV")
+        // S873 (2026-07-16, default ON, opt-out OXI_S873_DISABLE): btLr
+        // (rotated 90° CCW, bottom-to-top) joins tbRlV — the S753 LAYOUT
+        // rules are mirror-identical (one-line contribution to an auto row,
+        // wrap within the row height, vMerge span capacity); only the glyph
+        // rotation direction differs, which the upright-stack render
+        // approximates either way (the S700-class orientation residual).
+        // technical__00236e9d: 35 btLr header cells (11.9pt columns) were
+        // laid out HORIZONTALLY and wrapped to ~500pt (Word: trHeight
+        // 147.35 binds) → Table 2 pushed +325pt → pcd +1. Corpus scope:
+        // btLr = 1 doc in 1,589 docx (all 38 hits in technical__00236e9d)
+        // → single-doc-scoped by construction; tbRlV docs byte-identical.
+        match cell.text_direction.as_deref() {
+            Some("tbRlV") => true,
+            Some("btLr") => std::env::var("OXI_S873_DISABLE").is_err(),
+            _ => false,
+        }
     }
 
     /// S718 (2026-07-02, default ON, opt-out OXI_S718_DISABLE): a TAB-suffix
