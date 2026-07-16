@@ -5375,6 +5375,86 @@ impl LayoutEngine {
                         is_body_floating = pos.v_anchor.as_deref() == Some("page")
                             && candidate_y_top > start_y + 0.1;
                     }
+                    // S878 (2026-07-16, default ON, opt-out OXI_S878_DISABLE): a
+                    // floating table never ROW-SPLITS across pages — Word moves
+                    // the WHOLE float to the next page when it doesn't fit its
+                    // candidate position (and fits a fresh page).
+                    // policies__000f7115: the borderless ToC float (vertAnchor=
+                    // text tblpY=-250, ~333pt) anchored p1 y=584 → candidate
+                    // 571.8 → Oxi row-split it across p1/p2 where Word renders
+                    // it WHOLE at p2 y=59.25 = the fresh-page anchor 72 − 12.5
+                    // (the anchor-relative offset re-applies at the new top,
+                    // reaching into the top margin). SCOPE: vertAnchor text/
+                    // margin only — a page-anchored float's candidate is page-
+                    // invariant so pushing achieves nothing (and 459f05's two
+                    // 685pt page floats stay on their split path); floats
+                    // taller than a page (tokyoshugyo's multi-page 参考 boxes,
+                    // harassbun's 1502pt cell) keep the split path via the
+                    // est ≤ content_height gate. The JP row-split calibration
+                    // (S565/S570/S719/S754) is all non-floating.
+                    // ★SCOPE (derived from the two real specimens): NEGATIVE
+                    // tblpY only. policies' ToC (tblpY=-250) reaches ABOVE its
+                    // anchor — that region is already laid out (immovable, the
+                    // S872 principle), so Word relocates the WHOLE float to the
+                    // next page where the offset is realizable (p2 y=59.25 =
+                    // 72-12.5, into the top margin). A POSITIVE/zero-offset
+                    // float extends downward and SPLITS naturally: ukhealthform's
+                    // six tblpY=1 statement floats (frozen PASS 16pp) split
+                    // across pages in Word — the unscoped rule moved blk=66
+                    // (661pt) whole and blew the doc to 18pp (PASS->FAIL, caught
+                    // by the corpus battery).
+                    if is_floating
+                        && table.style.position.as_ref()
+                            .map_or(false, |p| p.v_anchor.as_deref() != Some("page")
+                                && p.y < -0.5)
+                        && std::env::var("OXI_S878_DISABLE").is_err()
+                    {
+                        let cb = start_y + content_height;
+                        let cw_est = self.resolve_table_col_widths(table, content_width);
+                        let dp = table.style.default_cell_margins.as_ref();
+                        let (pl, pr, pt, pb) = (
+                            dp.and_then(|m| m.left).unwrap_or(5.4),
+                            dp.and_then(|m| m.right).unwrap_or(5.4),
+                            dp.and_then(|m| m.top).unwrap_or(0.0),
+                            dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                        );
+                        let mut est: f32 = 0.0;
+                        for row in &table.rows {
+                            let nat = self.estimate_table_row_natural_h(
+                                row, &cw_est, pl, pr, pt, pb, table,
+                                page.grid_line_pitch, page.grid_char_pitch, None);
+                            let h = row.height.map(|th| match row.height_rule.as_deref() {
+                                Some("exact") => th,
+                                _ => (th + self.rowbox2_trh_bw(table, row)).max(nat),
+                            }).unwrap_or(nat);
+                            est += h;
+                        }
+                        if candidate_y_top + est > cb + 0.5 && est <= content_height {
+                            pages.push(LayoutPage {
+                                width: page.size.width,
+                                height: page.size.height,
+                                elements: std::mem::take(&mut elements),
+                            });
+                            if let Some(g) = s755_geom.as_ref() {
+                                start_y = g.top(pages.len() + 1);
+                                content_height = g.ch(pages.len() + 1);
+                            }
+                            current_page_idx += 1;
+                            lm2_cells = 0;
+                            footnote_reserve_current = 0.0;
+                            footnote_ids_current_page.clear();
+                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                            cursor.set(start_y);
+                            if let Some(ref pos) = table.style.position {
+                                candidate_y_top = match pos.v_anchor.as_deref() {
+                                    Some("margin") => start_y + pos.y,
+                                    _ => cursor.cursor_y + pos.y, // "text"
+                                };
+                            }
+                            cursor.set(candidate_y_top);
+                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                        }
+                    }
                     let pages_before = pages.len();
                     // S740 (2026-07-04, default ON, opt-out OXI_S740_DISABLE):
                     // footnote refs INSIDE table cells reserve footnote-area
