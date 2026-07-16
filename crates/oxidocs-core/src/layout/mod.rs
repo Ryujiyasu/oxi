@@ -7792,6 +7792,32 @@ impl LayoutEngine {
     /// blocks (the extracted reservation incl the Day-33 empty-para and
     /// framePr rules) so first/even/odd variants share one code path.
     fn s755_footer_geom(&self, blocks: &[Block], page: &Page) -> (f32, bool) {
+        // S894 (2026-07-17, default ON, opt-out OXI_S894_DISABLE): an
+        // INK-FREE footer (only empty/whitespace paragraphs — no text, no
+        // table, no image/drawing) reserves the BOTTOM MARGIN ONLY, like no
+        // footer at all. PROBE-DERIVED (_pb_ftext_gen fE10, the corrected
+        // 697.9 constant): a single-empty-para footer's capacity flip sits
+        // at stack ∈ (−0.09, 0.11] = 0 EXACTLY — Word ignores footer_dist +
+        // the phantom line (the S868-report deferred "blank-footer
+        // exemption", now measured). policies__0008ea8f: footer1 = ONE
+        // empty para, pgMar bottom=187tw(9.35) footer=720tw(36) → Oxi
+        // reserved 50.3 (dist+line) vs Word 9.4 → −41pt of page capacity
+        // on EVERY page = the {+1:17} cascade. The S843 header sibling.
+        // Latin scope: 27 JP docs (tokumei/order/albaluna) carry ink-free
+        // footers under the calibrated JP footer model — untouched.
+        if !blocks.is_empty()
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S894_DISABLE").is_err()
+        {
+            let has_ink = blocks.iter().any(|b| match b {
+                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty()),
+                Block::Table(_) | Block::Image(_) => true,
+                _ => false,
+            });
+            if !has_ink {
+                return (page.margin.bottom, false);
+            }
+        }
         let footer_reserved = if !blocks.is_empty() {
             let footer_dist = page.footer_distance.unwrap_or(36.0);
             let cw = page.size.width - page.margin.left - page.margin.right;
