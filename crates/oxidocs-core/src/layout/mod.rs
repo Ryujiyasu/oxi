@@ -8552,7 +8552,18 @@ impl LayoutEngine {
             // (constant, independent of font size / docDefaults / grid; applied as a
             // raw additive, NOT grid-snapped). Overrides any explicit before; the
             // existing max(prev_sa, cur_sb) collapse below matches Word's MAX collapse.
-            13.75
+            // S901 (2026-07-17): the TRUE flat value is 14.0pt — PDF baseline
+            // probe (asp_tnr12/cal11/ar10: pitch − hhea line = 14.000/14.005/
+            // 14.003, font- and size-invariant). The 13.75 was the COM
+            // Information(6) 0.75-quantized under-read (13.75 = 14.0 snapped
+            // down). Latin scope: the JP direct-autospacing docs (kojin/
+            // 29dc6e) + the CELL model (S882) keep their gated 13.75
+            // calibration until re-derived. Opt-out OXI_S901_DISABLE.
+            if !self.doc_body_has_real_cjk && std::env::var("OXI_S901_DISABLE").is_err() {
+                14.0
+            } else {
+                13.75
+            }
         } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
             // beforeLines is specified as percentage of linePitch (e.g., 50 = 0.5 lines).
             // COM-confirmed (2026-04-06): the value is exact (bl/100 * pitch), no grid snap.
@@ -10715,7 +10726,9 @@ impl LayoutEngine {
                         if para.style.after_autospacing
                             && std::env::var("OXI_S675_DISABLE").is_err()
                         {
-                            13.75
+                            if !self.doc_body_has_real_cjk
+                                && std::env::var("OXI_S901_DISABLE").is_err()
+                            { 14.0 } else { 13.75 }
                         } else {
                             para.style.space_after.unwrap_or(0.0)
                         }
@@ -12992,8 +13005,13 @@ impl LayoutEngine {
             // (empty paragraphs included — see space_before).
             && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
         {
-            // S675 (2026-06-26): w:afterAutospacing → flat 13.75pt (see space_before).
-            13.75
+            // S675 (2026-06-26): w:afterAutospacing → flat auto-space (see
+            // space_before; S901: 14.0 Latin / 13.75 JP-calibrated).
+            if !self.doc_body_has_real_cjk && std::env::var("OXI_S901_DISABLE").is_err() {
+                14.0
+            } else {
+                13.75
+            }
         } else if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
             // afterLines: exact value (al/100 * pitch), no grid snap needed.
             al / 100.0 * pitch
