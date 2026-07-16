@@ -3295,10 +3295,17 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                                 let color = sh.fill.clone()
                                     .filter(|c| c.chars().all(|ch| ch.is_ascii_hexdigit()) && c.len() == 6)
                                     .unwrap_or_else(|| "A6A6A6".to_string());
-                                // The rule occupies its own line ~= a default text
-                                // line (rule + vertical margins). 13.8pt matches
-                                // Word's o:hr line box (measured on forms' title HR).
-                                style.inline_object_extent = Some((hr_w, 13.8));
+                                // S879 (2026-07-16, the investigation's Word box
+                                // histogram over ALL 12 solo o:hr paragraphs in
+                                // forms__00042714): an o:hr RULE paragraph's box is
+                                // ~8.25pt (rule + small vertical margins), NOT a
+                                // default text line — the original 13.8 (read off
+                                // the title HR, a mixed context) was +5.5/HR over,
+                                // and inside each form Section that overage was
+                                // PARTIALLY COMPENSATING the object lines' missing
+                                // extra leading (S875) — fixing either alone
+                                // regressed; they ship together.
+                                style.inline_object_extent = Some((hr_w, 8.25));
                                 style.hr_rule = Some((thickness, color));
                             } else {
                                 drawing_result = Some(vml);

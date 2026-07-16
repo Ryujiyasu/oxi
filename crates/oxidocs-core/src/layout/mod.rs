@@ -9204,8 +9204,8 @@ impl LayoutEngine {
                             self.metrics_for_text(&f.text, &f.style, &para.style).win_descent * fs
                         })
                         .fold(0.0f32, f32::max);
-                    // S875 (2026-07-16, ★HELD OPT-IN OXI_S875=1, default OFF
-                    // byte-identical): the line rule's EXTRA LEADING on an
+                    // S875 (2026-07-16, default ON, opt-out OXI_S875_DISABLE):
+                    // the line rule's EXTRA LEADING on an
                     // object line — the
                     // 2-arm model DERIVED by _pb_objline_gen.py (36 configs,
                     // obj {12,18,24} × line {240,276,360} × mixed/solo ×
@@ -9219,20 +9219,21 @@ impl LayoutEngine {
                     // the 240 solo row is obj EXACTLY) and desc×factor (360
                     // predicts 21.5 vs observed 24.0); the Calibri series pins
                     // WIN descent. The old obj+desc (v1) = the 240 degenerate
-                    // form. ★HELD: the sweep and the REAL doc still disagree.
-                    // The per-paragraph line rule surfaces cleanly (member
-                    // rows resolve ls=1.0, drug rows 1.15 — the [S875] trace)
-                    // and the factor now computes correctly, yet applying
-                    // +extra to every inheriting object line (~50 in
-                    // forms__00042714) adds ~95pt where the doc's page
-                    // arithmetic needs only ~20 → {+1:2, pcd+1}. The sweep's
-                    // solo paras were BARE <w:object>; the doc's solo 
-                    // lines are FORMTEXT FIELD-wrapped objects — the likely
-                    // second discriminator, underived. Ship path: a
-                    // faithful-doc per-line Word measurement (map each of the
-                    // ~60 object lines' Word heights) OR a field-wrapped
-                    // variant of _pb_objline_gen, then flip default-ON.
-                    let extra = if std::env::var("OXI_S875").is_ok() {
+                    // form. ★The "sweep vs real doc" contradiction RESOLVED
+                    // (the investigation's Word box histogram over all 40
+                    // solo  lines): the doc is TRI-MODAL — 12 lines are
+                    // o:hr RULE paragraphs (Word box ~8.25; the S852 basis
+                    // 13.8 was +5.5/HR over), 17 are true 18pt object lines
+                    // at obj+1.875 = EXACTLY this extra-leading model (no
+                    // FORMTEXT discriminator exists), 10 carry space-before
+                    // composites. The HR overage was partially COMPENSATING
+                    // the missing object extra inside each Section — S875
+                    // alone exposed it ({+1:2}); S875 + the S879 HR box fix
+                    // ship together, with hr_rule lines EXCLUDED from the
+                    // extra (a rule paragraph has no text leading to scale).
+                    let hr_line = line.fragments.iter()
+                        .any(|f| f.style.hr_rule.is_some());
+                    let extra = if std::env::var("OXI_S875_DISABLE").is_err() && !hr_line {
                         // line_spacing under the auto rule is stored as the
                         // MULTIPLE itself (1.15, not 13.8pt — the [S875] trace:
                         // drug rows ls=Some(1.15), member rows ls=Some(1.0)).
