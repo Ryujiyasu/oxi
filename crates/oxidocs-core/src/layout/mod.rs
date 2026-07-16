@@ -7842,23 +7842,25 @@ impl LayoutEngine {
                     // heights with the trHeight floor, identical to the S731
                     // header arm.
                     //
-                    // ★HELD OPT-IN (OXI_S868=1, default OFF = byte-identical):
-                    // default-ON flips administrative__0006985e FAIL→PASS but
-                    // knocks forms__000ee7c0ec3f9325 PASS→FAIL (+1) = a merge-gate
-                    // violation (n_pass 37 either way, but 1 PASS→FAIL). The two
-                    // real docs CONTRADICT each other and the controlled probe:
-                    //   _pb_ftrtbl_gen.py (administrative's geometry, 230 renders)
-                    //   cT1(table+para) ≡ cP2(2 paras) and cT2 ≡ cP3 EXACTLY
-                    //   ⇒ a footer table costs exactly its rows, no extra term.
-                    // administrative agrees (its footer table must push); forms
-                    // does NOT — Word there keeps cbot at the ~margin (770.4),
-                    // IGNORING a 24pt footer intrusion, though the marker-injection
-                    // pin proves both its table row (ink 747.7) and trailing para
-                    // (759.3) render. The missing discriminator is when a footer
-                    // pushes the body at all (the probe's cP1 shows the same
-                    // anomaly: Word ignored a 5.3pt intrusion but respected 18pt
-                    // at cP2). Ship default-ON only once that is derived.
-                    if std::env::var("OXI_S868").is_ok() {
+                    // ★S868b (2026-07-16, default ON, opt-out OXI_S868_DISABLE):
+                    // the old hold ("the two real docs contradict each other")
+                    // DISSOLVED — both blockers were mis-attributions:
+                    //   * administrative's "~13pt UNEXPLAINED stack" was an
+                    //     ORPHAN readback: its −1 para is a 6-line list Word
+                    //     widow-pushes WHOLE to p3 (line1 fits cbot 751.95 =
+                    //     64.65 + stack 25.3 exactly; line2 doesn't). No extra
+                    //     stack term exists; the existing orphan arm fires.
+                    //   * forms' "Word ignores the intrusion" reading was the
+                    //     pre-S869/S870/S871 ~17pt body drift; with the triple
+                    //     shipped the body ends above the full-stack cbot.
+                    // The stack's TABLE term is the ROWBOX2 row pitch, derived
+                    // by _pb_ftrtbl2_gen.py (126 renders): max(content line,
+                    // trHeight-atLeast) + cellMar t/b (linear, additive) + the
+                    // top/bottom border DRAW widths — single = sz/8 per side,
+                    // DOUBLE = 3×sz/8 per side (double sz4 ≡ single sz12 =
+                    // 1.5pt/side). forms' footer row closes: cell line 9.77 +
+                    // double sz4 1.5×2 = 12.77 ≈ Word 12.72.
+                    if std::env::var("OXI_S868_DISABLE").is_err() {
                         let col_widths = self.resolve_table_col_widths(t, cw);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
@@ -7867,6 +7869,40 @@ impl LayoutEngine {
                             dp.and_then(|m| m.top).unwrap_or(0.0),
                             dp.and_then(|m| m.bottom).unwrap_or(0.0),
                         );
+                        // Effective border draw width for the stack: double
+                        // borders draw 3×(sz/8) per side (probe bD4 ≡ bS12).
+                        let eff_bw = |d: Option<&BorderDef>| -> f32 {
+                            d.map_or(0.0, |b| if b.style == "double" {
+                                b.width * 3.0
+                            } else {
+                                b.width
+                            })
+                        };
+                        // v1 border term: the TABLE-level top/bottom borders
+                        // once per table (corpus footer tables are 1-row; the
+                        // probe measured exactly this shape). Border style
+                        // rides on table.style (border_width/border_style).
+                        let tbl_border_term = if t.style.border {
+                            let w = t.style.border_width.unwrap_or(0.5);
+                            let m = if t.style.border_style.as_deref() == Some("double") {
+                                3.0
+                            } else {
+                                1.0
+                            };
+                            2.0 * w * m
+                        } else {
+                            // cell-level tcBorders on the single row (top of
+                            // the first row + bottom of the last row).
+                            let top = t.rows.first().map_or(0.0, |r| r.cells.iter()
+                                .filter_map(|c| c.borders.as_ref())
+                                .map(|b| eff_bw(b.top.as_ref()))
+                                .fold(0.0f32, f32::max));
+                            let bot = t.rows.last().map_or(0.0, |r| r.cells.iter()
+                                .filter_map(|c| c.borders.as_ref())
+                                .map(|b| eff_bw(b.bottom.as_ref()))
+                                .fold(0.0f32, f32::max));
+                            top + bot
+                        };
                         for row in &t.rows {
                             let nat = self.estimate_table_row_natural_h(
                                 row, &col_widths, pl, pr, pt, pb, t,
@@ -7878,6 +7914,7 @@ impl LayoutEngine {
                             }).unwrap_or(nat);
                             footer_h += h;
                         }
+                        footer_h += tbl_border_term;
                         // A table breaks the paragraph spacing chain (the S813
                         // rule the header arm applies): flush the pending after.
                         if let Some(last) = s803_prev_sa.take() {
