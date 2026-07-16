@@ -25,6 +25,25 @@ pub fn s546_exact_halfwidth() -> bool {
     *V.get_or_init(|| std::env::var("OXI_S546_DISABLE").is_err())
 }
 
+/// S892: U+00A0 NO-BREAK SPACE prices at the ordinary space advance.
+/// Word renders it as a space — VERIFIED by rawdict advances on both
+/// real docs (legal TNR Gazette line: every space AND nbsp = 3.00;
+/// framework Calibri: uniform 4.07) — while the metric tables lack 0xA0
+/// so it fell to the 0.5em unknown-char fallback (+2.9/nbsp @TNR12).
+/// ★HELD OPT-IN (OXI_S892=1, default OFF byte-identical): the correct
+/// narrowing flips uk_framework PASS→FAIL {−1:2} — its p29 «32.
+/// [Companies that employ their own\xa0staff] Staff²⁵» line is a
+/// knife-edge where Word WRAPS 'Staff' (needed ~22pt ≫ the S825 allow
+/// ~4.6) yet Oxi-with-S892 FITS it (rendered end 491.2 vs boundary
+/// ~475) — an unexplained ~16pt of Oxi fit credit (S825/space-credit
+/// family) that the phantom-wide nbsp was compensating (S559). Ships
+/// default-ON once that credit is dissected (DBGFLUSH on the line).
+/// legal__0001482d gains +0.004 (0.9633→0.9675) under it.
+pub fn s892_nbsp_as_space() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_S892").is_ok())
+}
+
 /// Pixel-rounded multiplication matching Word's font metrics.
 /// All font metric values are pre-normalized to [0,1] range (÷UPM),
 /// so this is simply `round(value * ppem)`.
@@ -96,6 +115,16 @@ impl FontMetrics {
             // early where Word fits.
             if c == '\u{2011}' {
                 if let Some(w) = self.char_widths.get(&'-') {
+                    return *w;
+                }
+            }
+            // S892: U+00A0 NO-BREAK SPACE renders at the ordinary space
+            // advance in Word (TNR 0.25em). The metric tables lack it, so
+            // it fell to the 0.5em fallback — legal__0001482d's Gazette
+            // lines («2 Dec 2013 p. 5579; …», 5 NBSPs) measured +11.5pt
+            // vs Word and wrapped one line early.
+            if c == '\u{00A0}' && s892_nbsp_as_space() {
+                if let Some(w) = self.char_widths.get(&' ') {
                     return *w;
                 }
             }
@@ -795,11 +824,17 @@ impl FontMetricsRegistry {
     /// GDI substitutes MS UI Gothic. This method mimics that behavior.
     /// For Latin fonts, GDI hinting overrides are applied when available.
     pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
-        // S888: see char_width_pt_with_gdi_map — U+2011 = the hyphen glyph.
+        // S888/S892: see char_width_pt_with_gdi_map — U+2011 = the hyphen
+        // glyph, U+00A0 = the space advance.
         let c = if c == '\u{2011}' && !metrics.char_widths.contains_key(&c)
             && metrics.char_widths.contains_key(&'-')
         {
             '-'
+        } else if c == '\u{00A0}' && s892_nbsp_as_space()
+            && !metrics.char_widths.contains_key(&c)
+            && metrics.char_widths.contains_key(&' ')
+        {
+            ' '
         } else {
             c
         };
@@ -898,10 +933,16 @@ impl FontMetricsRegistry {
         // 0x2010..=0x2044, so it fell through to the MS-UI-Gothic CJK
         // fallback (6.0pt @TNR12 vs the real '-' 4.0) — legal__0001482d's
         // noBreakHyphen ISBN/Gazette lines wrapped one line early each.
+        // S892: U+00A0 NO-BREAK SPACE likewise = the space advance.
         let c = if c == '\u{2011}' && !metrics.char_widths.contains_key(&c)
             && metrics.char_widths.contains_key(&'-')
         {
             '-'
+        } else if c == '\u{00A0}' && s892_nbsp_as_space()
+            && !metrics.char_widths.contains_key(&c)
+            && metrics.char_widths.contains_key(&' ')
+        {
+            ' '
         } else {
             c
         };
