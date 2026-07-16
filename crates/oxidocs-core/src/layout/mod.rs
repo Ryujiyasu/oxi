@@ -9124,7 +9124,37 @@ impl LayoutEngine {
                             self.metrics_for_text(&f.text, &f.style, &para.style).win_descent * fs
                         })
                         .fold(0.0f32, f32::max);
-                    let target = obj_h + descent;
+                    // S875 (2026-07-16, ★HELD OPT-IN OXI_S875=1, default OFF
+                    // byte-identical): the line rule's EXTRA LEADING on an
+                    // object line — the 2-arm model DERIVED by
+                    // _pb_objline_gen.py (36 configs, obj {12,18,24} × line
+                    // {240,276,360} × mixed/solo × Arial/Calibri, Word COM):
+                    //   MIXED: H = max(normal_line, obj + win_desc + extra)
+                    //   SOLO:  H = obj + extra          (NO descent, NO clamp:
+                    //          c12240s = 12.0 < the 13.43 Calibri text line)
+                    // where extra = rule_line − natural (240→0, 276→+15%,
+                    // 360→+50%). The sweep DECISIVELY rejects two rivals:
+                    // solo=obj+raw-desc (REPORT2's read — the 240 solo row is
+                    // obj EXACTLY) and desc×factor (360 predicts 21.5 vs
+                    // observed 24.0). ★BUT the REAL doc CONTRADICTS the sweep:
+                    // default-ON overshot forms__00042714 the other way
+                    // (0.9895 {-1:1} → 0.9789 {+1:2, pcd+1}) — its member-info
+                    // lines measured gap 23.2 = obj+desc+after WITHOUT extra
+                    // (the S851 v1 calibration) while its drug-block lines
+                    // need +extra (REPORT2). Both are line=276 territory, so a
+                    // PER-LINE second discriminator exists and is underived
+                    // (candidates: a direct line=240 on the member rows, the
+                    // object-dominates-line case, or a FORMCHECKBOX
+                    // interaction). Ships default-ON once a faithful-doc
+                    // per-line probe pins it (the REPORT2-recommended sweep,
+                    // now built as _pb_objline_gen.py, needs the real-doc
+                    // variant).
+                    let extra = if std::env::var("OXI_S875").is_ok() {
+                        (line_heights[li] - natural_line_heights[li]).max(0.0)
+                    } else {
+                        0.0
+                    };
+                    let target = obj_h + descent + extra;
                     if target > line_heights[li] { line_heights[li] = target; }
                     if target > natural_line_heights[li] { natural_line_heights[li] = target; }
                     if target > ink_line_heights[li] { ink_line_heights[li] = target; }
