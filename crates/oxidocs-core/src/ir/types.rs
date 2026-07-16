@@ -1264,6 +1264,14 @@ pub struct ParagraphStyle {
     /// w:spacing@afterAutospacing — flat ~13.75pt auto after-space (see before_autospacing).
     #[serde(default)]
     pub after_autospacing: bool,
+    /// S895: the autospacing flags came from the paragraph STYLE (not direct
+    /// pPr). Word applies STYLE-level HTML autospacing in Latin docs
+    /// (legal__00081e80 Metadata style: measured ~13.95/gap) while the JP
+    /// evidence (S675: harassbosi/b837 Web styles render 0) keeps style-level
+    /// autospacing inert for CJK docs — the layout gates style-sourced flags
+    /// on !doc_body_has_real_cjk.
+    #[serde(default, skip_serializing)]
+    pub autospacing_from_style: bool,
     /// Style ID (e.g. "Normal", "Heading1") for contextual spacing comparison.
     #[serde(default)]
     pub style_id: Option<String>,
@@ -1413,6 +1421,7 @@ impl Default for ParagraphStyle {
             contextual_spacing: false,
             before_autospacing: false,
             after_autospacing: false,
+            autospacing_from_style: false,
             style_id: None,
             tab_stops: Vec::new(),
             shading: None,

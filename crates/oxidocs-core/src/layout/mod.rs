@@ -8365,6 +8365,8 @@ impl LayoutEngine {
         // Word uses max(prev_space_after, space_before) — spacing collapse.
         let space_before = if para.style.before_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
+            // S895: style-sourced autospacing applies in Latin docs only.
+            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
         {
             // S675 (2026-06-26): w:beforeAutospacing → flat 13.75pt, COM-derived
             // (constant, independent of font size / docDefaults / grid; applied as a
@@ -12684,6 +12686,8 @@ impl LayoutEngine {
 
         let space_after = if para.style.after_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
+            // S895: style-sourced autospacing applies in Latin docs only.
+            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
         {
             // S675 (2026-06-26): w:afterAutospacing → flat 13.75pt (see space_before).
             13.75
@@ -24316,7 +24320,10 @@ impl LayoutEngine {
             // autospacing rides the main default-ON gate above.
             || (s864_part("C")
                 && !para.style.has_direct_before_after);
-        if !cellas_enabled {
+        // S895: the general style→para autospacing inheritance is a BODY
+        // rule; CELL paragraphs keep the S864-F/S882 calibrations (S864-F
+        // sets its own flags without from_style for the ≥10-break case).
+        if !cellas_enabled || para.style.autospacing_from_style {
             return (est_sb, est_sa);
         }
         const AUTO: f32 = 13.75;
