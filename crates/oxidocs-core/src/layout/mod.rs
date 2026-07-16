@@ -3708,6 +3708,16 @@ impl LayoutEngine {
         // b837 (-0.0828 net) due to body cascade; see
         // project_fn_reserve_option_b_step1_FALSIFIED.md.
         let mut page_fn_refs: Vec<Vec<u32>> = Vec::new();
+        // S900: notes DEFERRED to a later page's area: (target_page, id, est
+        // height incl the separator for the page's first entry). Folded into
+        // footnote_reserve_current at the page-transition resets.
+        let mut s900_pending_deferred: Vec<(usize, u32, f32)> = Vec::new();
+        let s900_fold = |reserve: &mut f32, ids: &mut Vec<u32>,
+                         pending: &mut Vec<(usize, u32, f32)>, pg: usize| {
+            pending.retain(|&(p, id, h)| if p <= pg {
+                *reserve += h; ids.push(id); false
+            } else { true });
+        };
         // S740: block indices of tables whose cell-footnote ids were attributed
         // per-page via layout_table (skip the coarse block-level attribution).
         let mut s740_attributed_tables: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -3902,6 +3912,7 @@ impl LayoutEngine {
                     current_page_idx += 1;
                     footnote_reserve_current = 0.0;
                     footnote_ids_current_page.clear();
+                    s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                 }
                 s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
                 cursor.advance(band_h);
@@ -3948,6 +3959,7 @@ impl LayoutEngine {
                     current_page_idx += 1;
                     footnote_reserve_current = 0.0;
                     footnote_ids_current_page.clear();
+                    s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                 }
             }
             // S758: resolve wrapSquare bands anchored to this block (band top =
@@ -4011,6 +4023,7 @@ impl LayoutEngine {
                     current_page_idx += 1;
                     footnote_reserve_current = 0.0;
                     footnote_ids_current_page.clear();
+                    s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                 }
                 for (py, w, h, h_align, px, dl, dr) in &s758_srcs {
                     let nat_top = cursor.cursor_y + py.max(0.0);
@@ -4379,6 +4392,7 @@ impl LayoutEngine {
                             None,
                             None,
                             false,
+                            0.0, None, // S900
                         );
                         elements.extend(frame_els);
                         let has_next = page.blocks.get(block_idx + 1)
@@ -4437,6 +4451,7 @@ impl LayoutEngine {
                             None,
                             None,
                             false,
+                            0.0, None, // S900
                         );
                         elements.extend(frame_els);
                         if std::env::var("OXI_DBG898").is_ok() {
@@ -4515,6 +4530,7 @@ impl LayoutEngine {
                             None, // S755
                             None, // S758
                             false, // S835
+                            0.0, None, // S900
                         );
                         elements.extend(frame_els);
                         // Band height: framePr h (hRule atLeast semantics — the
@@ -4731,6 +4747,7 @@ impl LayoutEngine {
                         lm2_cells = 0; // Reset cumul line index for new page
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
+                        s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                         commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
@@ -4774,6 +4791,7 @@ impl LayoutEngine {
                                 // its footnote refs) to the new page.
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
+                                s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                                 commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
@@ -4991,6 +5009,7 @@ impl LayoutEngine {
                                     lm2_cells = 0; current_page_idx += 1;
                                     footnote_reserve_current = 0.0;
                                     footnote_ids_current_page.clear();
+                                    s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                                     commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                                 }
                                 if !pulled.is_empty() {
@@ -5065,6 +5084,7 @@ impl LayoutEngine {
                                 lm2_cells = 0; current_page_idx += 1;
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
+                                s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                                 commit_para_footnotes(&mut footnote_reserve_current, &mut footnote_ids_current_page, current_page_idx, block_idx);
                             }
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
@@ -5197,6 +5217,7 @@ impl LayoutEngine {
                     // Step 0: bucket for per-page fn refs actually rendered by this
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
                     let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
+                    let mut s900_para_deferred: Vec<u32> = Vec::new();
                     // S676: a pending drop-cap indents THIS paragraph's body to the right
                     // of the floated cap (start shifted, available width reduced).
                     let dc_indent = pending_dropcap.take().unwrap_or(0.0);
@@ -5239,6 +5260,8 @@ impl LayoutEngine {
                         s755_geom.as_ref(), // S755
                         s758_para_band, // S758
                         (footnote_reserve_current + delta_if_current) > 0.0, // S835
+                        footnote_reserve_current, // S900
+                        Some(&mut s900_para_deferred), // S900
                     );
                     prev_space_after = sa;
                     if std::env::var("OXI_DBG_PARA").is_ok() {
@@ -5336,6 +5359,7 @@ impl LayoutEngine {
                         // fn area, silently dropping the fns (b837 p5 cascade).
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
+                        s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                         // S829 (2026-07-13, opt-out OXI_S829_DISABLE): re-commit
                         // the refs the AREA mapping above assigns to the FINAL
                         // page, using the SAME saturating arithmetic. The literal
@@ -5390,6 +5414,27 @@ impl LayoutEngine {
                             }
                         }
                     }
+                    // S900: deferred notes belong to the NEXT page's area —
+                    // attribute their ids there and queue their reserve for the
+                    // page-transition fold (the target page's body must keep
+                    // room for them; 81e80 Word p3 opens its area with the
+                    // deferred 16/17/18 ahead of p3's own refs).
+                    if !s900_para_deferred.is_empty() && std::env::var("OXI_S900").is_ok() {
+                        let target = current_page_idx + 1;
+                        while page_fn_refs.len() <= target { page_fn_refs.push(Vec::new()); }
+                        for (k, id) in s900_para_deferred.iter().enumerate() {
+                            if !page_fn_refs[target].contains(id) {
+                                page_fn_refs[target].push(*id);
+                            }
+                            let mut h = estimate_footnote_h(*id);
+                            if k == 0 { h += footnote_sep_alloc(*id); }
+                            s900_pending_deferred.push((target, *id, h));
+                        }
+                        if std::env::var("OXI_DBG900").is_ok() {
+                            eprintln!("[S900] blk={} deferred {:?} -> page {}",
+                                block_idx, s900_para_deferred, target);
+                        }
+                    }
                     // Round 30: render shapes attached to this paragraph (e.g.
                     // bracketPair preset frame around the date block in
                     // b837808d0555). The shape's anchor reference uses the
@@ -5435,6 +5480,7 @@ impl LayoutEngine {
                         lm2_cells = 0;
                         footnote_reserve_current = 0.0;
                         footnote_ids_current_page.clear();
+                        s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                     }
 
                     prev_para_style_id = para.style.style_id.clone();
@@ -5533,6 +5579,7 @@ impl LayoutEngine {
                             lm2_cells = 0;
                             footnote_reserve_current = 0.0;
                             footnote_ids_current_page.clear();
+                            s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                             *block_page_indices.last_mut().unwrap() = current_page_idx;
                             cursor.set(start_y);
                             if let Some(ref pos) = table.style.position {
@@ -5642,6 +5689,7 @@ impl LayoutEngine {
                             if table_pushed {
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
+                                s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                             }
                             for id in last_ids {
                                 if !footnote_ids_current_page.contains(id) {
@@ -5968,6 +6016,7 @@ impl LayoutEngine {
                                 lm2_cells = 0;
                                 footnote_reserve_current = 0.0;
                                 footnote_ids_current_page.clear();
+                                s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                                 cursor.set(start_y);
                                 *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                             } else {
@@ -6238,6 +6287,7 @@ impl LayoutEngine {
                             None, // S755
                             None, // S758
                             false, // S835
+                            0.0, None, // S900
                         );
                         elements.extend(en_elements);
                     }
@@ -6491,6 +6541,7 @@ impl LayoutEngine {
                             None, // S755
                             None, // S758
                             false, // S835
+                            0.0, None, // S900
                         );
                         lp.elements.extend(hdr_elements);
                     } else if let Block::Image(img) = block {
@@ -6546,6 +6597,7 @@ impl LayoutEngine {
                             None, // S755
                             None, // S758
                             false, // S835
+                            0.0, None, // S900
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -6973,6 +7025,7 @@ impl LayoutEngine {
                                         None, // S755
                                         None, // S758
                                         false, // S835
+                                        0.0, None, // S900
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -7339,6 +7392,7 @@ impl LayoutEngine {
                         None, // S755
                         None, // S758
                         false, // S835
+                        0.0, None, // S900
                     );
                     // CLNSP: count this paragraph's rendered LINES (text
                     // elements grouped by y) and push one spec per line —
@@ -8383,6 +8437,19 @@ impl LayoutEngine {
         // the body call site threads a real value; header/footer/footnote/
         // textbox/frame callers pass false (their bottoms are not fn areas).
         fn_boundary_active: bool,
+        // S900 (2026-07-17): the page's committed fn reserve from EARLIER
+        // paragraphs (footnote_reserve_current), in pt. Needed to compute the
+        // ABSOLUTE margin bottom (= effective bottom + reserve + this para's
+        // delta) for the note-deferral test. Only the body call site threads
+        // a real value.
+        fn_reserve_above: f32,
+        // S900: OUT — note ids this paragraph DEFERS to the next page's
+        // footnote area (the anchor line stays; Word rolls notes that cannot
+        // START in the page's remaining area forward: 81e80 p2 = notes 2..15
+        // fill to the margin line, L9 stays with 15 placed and 16/17/18
+        // render at the TOP of Word p3's area). Only the body call site
+        // passes Some.
+        mut fn_deferred_out: Option<&mut Vec<u32>>,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -9238,6 +9305,13 @@ impl LayoutEngine {
         // next page with its fn; no leniency at/after the ref line. FIX: fold
         // the sep part (first_line_extra − Σ para fn heights, clamped ≥0) into
         // the cumulative when the para's FIRST ref commits.
+        // S900: per-line ids first committed by that line (doc order) — the
+        // deferral test walks them to decide which notes still START on the
+        // page. Filled only on the s834 path (Latin fn docs).
+        let mut line_own_fn_ids: Vec<Vec<u32>> = vec![Vec::new(); lines.len()];
+        // S900: note ids DEFERRED to the next page's area (excluded from this
+        // page's per-page bucket; handed to the caller via fn_deferred_out).
+        let mut s900_deferred_ids: Vec<u32> = Vec::new();
         let committed_fn_delta_at_line: Vec<f32> = if !para_fn_heights.is_empty() {
             // ★BUNDLED with S833 (opt-in OXI_S833=1, default OFF byte-identical):
             // S834 alone flips uklocalspending's LRPB-mode gate {-1:1} (an S559
@@ -9296,6 +9370,9 @@ impl LayoutEngine {
                                 seen.push(id);
                                 if let Some(&h) = para_fn_heights.get(&id) {
                                     cumulative += h;
+                                }
+                                if let Some(v) = line_own_fn_ids.get_mut(li) {
+                                    v.push(id);
                                 }
                             }
                         }
@@ -10567,9 +10644,82 @@ impl LayoutEngine {
             {
                 para_font_size / 16.0
             } else { 0.0 };
-            let natural_needs_page_break = if in_textbox || s832_trailing_empty { false } else {
+            let mut natural_needs_page_break = if in_textbox || s832_trailing_empty { false } else {
                 cursor.cursor_y + break_threshold - s835_fn_relief > effective_break_bottom
             };
+            // S900 (2026-07-17, default ON, opt-out OXI_S900_DISABLE): Word
+            // DEFERS a line's footnote NOTES (not the line) when they cannot
+            // START in the page's remaining area. 81e80 p2: notes 2..15 fill
+            // the area to the margin line (710.9 + 9.24 = 720.1), L9 (refs
+            // 15..18) STAYS as the page's last body line with note 15 placed;
+            // notes 16/17/18 render at the TOP of Word p3's area (measured).
+            // Reconciles fnr_Z ("the anchor must co-locate, else it moves"):
+            // there the SINGLE note could not start below the line (empty
+            // area, sep+note past the margin) → the pair moves; deferral
+            // applies only when at least one note places OR earlier notes
+            // already fill the area (moving the line would free nothing).
+            // v1 limitation: later lines of the same paragraph keep the full
+            // committed map (conservative). Latin scope.
+            // ★HELD OPT-IN (OXI_S900=1): the defer DIRECTION is Word-true
+            // (81e80: keeping L9 + rolling notes forward matches Word's p3
+            // area opening with 16/17/18) but the PLACEMENT CUTOFF is not yet
+            // derived — Word placed only note 15 on p2 (area top 591.2 =
+            // body 556.5 + a 34.7 separator STACK this doc's sep model
+            // under-states at ~13) while the est arithmetic placed 15/16/17
+            // → p3 dropped 2 notes + gained a body line = {-1:3}. Next: a
+            // controlled fnr-family probe (multi-ref bottom line × sep stack)
+            // to pin the area-top stack, then default-ON.
+            if natural_needs_page_break
+                && !self.doc_body_has_real_cjk
+                && !para_fn_heights.is_empty()
+                && std::env::var("OXI_S900").is_ok()
+            {
+                let own = line_own_fn_ids.get(line_idx).cloned().unwrap_or_default();
+                if !own.is_empty() {
+                    let committed_prev = if line_idx > 0 {
+                        committed_fn_delta_at_line.get(line_idx - 1).copied().unwrap_or(0.0)
+                    } else { 0.0 };
+                    // Absolute margin bottom = effective bottom (reserve-shrunk)
+                    // + earlier-para reserve + this para's full delta.
+                    let absolute_bottom = effective_break_bottom - line_lenient_extra
+                        + fn_reserve_above + first_line_extra_content_h;
+                    let prior_fill = fn_reserve_above + committed_prev;
+                    let sep_needed = if prior_fill <= 0.0 {
+                        (first_line_extra_content_h
+                            - para_fn_heights.values().sum::<f32>()).max(0.0)
+                    } else { 0.0 };
+                    let line_bottom = cursor.cursor_y + break_threshold;
+                    let mut fill = line_bottom + prior_fill + sep_needed;
+                    let mut placed = 0.0_f32;
+                    let mut deferred: Vec<u32> = Vec::new();
+                    for id in &own {
+                        let h = para_fn_heights.get(id).copied().unwrap_or(0.0);
+                        if deferred.is_empty() && fill + h <= absolute_bottom + 1.0 {
+                            placed += h;
+                            fill += h;
+                        } else {
+                            deferred.push(*id);
+                        }
+                    }
+                    if !deferred.is_empty() && (placed > 0.0 || prior_fill > 0.0) {
+                        let new_committed = committed_prev + sep_needed + placed;
+                        let new_lenient =
+                            (first_line_extra_content_h - new_committed).max(0.0);
+                        let new_bottom = effective_break_bottom - line_lenient_extra
+                            + new_lenient;
+                        if cursor.cursor_y + break_threshold - s835_fn_relief
+                            <= new_bottom
+                        {
+                            natural_needs_page_break = false;
+                            if std::env::var("OXI_DBG900").is_ok() {
+                                eprintln!("[S900] li={} defer={:?} placed={:.1} prior={:.1} abs_bot={:.1}",
+                                    line_idx, deferred, placed, prior_fill, absolute_bottom);
+                            }
+                            s900_deferred_ids.extend(deferred);
+                        }
+                    }
+                }
+            }
             // S391 (2026-05-27): per-LINE LRPB respect. When THIS line is the
             // first to contain a run R that has has_last_rendered_page_break
             // (char_offset==0 for run R's fragment on this line), AND this is
@@ -11144,6 +11294,10 @@ impl LayoutEngine {
                     if let Some(lo) = lo {
                         for r in lo..hi.max(lo) {
                             if let Some(id) = para.runs.get(r).and_then(|x| x.footnote_ref) {
+                                // S900: a deferred note renders on the NEXT
+                                // page's area — keep it out of this page's
+                                // bucket (the caller re-attributes it).
+                                if s900_deferred_ids.contains(&id) { continue; }
                                 if !bucket.contains(&id) { bucket.push(id); }
                             }
                         }
@@ -12938,6 +13092,11 @@ impl LayoutEngine {
             **cells = cumul_line_idx;
         }
 
+        // S900: hand the deferred note ids to the caller (next-page area).
+        if let Some(out) = fn_deferred_out.as_deref_mut() {
+            out.extend(s900_deferred_ids);
+        }
+
         (elements, space_after, cur_col)
     }
 
@@ -13283,7 +13442,37 @@ impl LayoutEngine {
             {
                 flush_word!(fragments[frag_outer_idx - 1].1);
             }
+            // S899 (2026-07-17): flush at a vertAlign boundary — a
+            // superscript/subscript run merged into the accumulated word
+            // keeps the FIRST run's style, so a footnote-ref digit glued to
+            // its word («Clark3;») measured AND rendered at FULL size (12pt
+            // vs Word's 2/3 auto-shrink 8pt). 81e80 L8 carried 4 such refs =
+            // +8pt phantom width → «Suckling6;» wrapped → a 3-line phase
+            // shift by p3 (the {+1:3} residual). The S655/S677 fragment-
+            // flattening class; None==None for ref-free text → byte-identical.
+            if std::env::var("OXI_S899_DISABLE").is_err()
+                && frag_outer_idx > 0
+                && fragments[frag_outer_idx - 1].1.vertical_align != style.vertical_align
+            {
+                flush_word!(fragments[frag_outer_idx - 1].1);
+            }
             let font_size = self.resolve_font_size(style, para_style);
+            // S899b (2026-07-17): the BREAK width of a superscript/subscript
+            // fragment uses the 2/3-shrunk size even when font_size came from
+            // the STYLE chain (resolve_font_size's is_none() gate only covers
+            // the direct-size-absent case, so a style-inherited 12pt fn-ref
+            // digit measured at FULL width 6.67 vs Word's rendered 8.04pt →
+            // 4.47 advance; 81e80 L9 carried 4 refs = +13.2pt phantom →
+            // «Job v. Potton18.» wrapped where Word ends the para on L9).
+            let font_size = if std::env::var("OXI_S899_DISABLE").is_err()
+                && style.font_size.is_some()
+                && matches!(style.vertical_align,
+                    Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript))
+            {
+                (font_size * 2.0 / 3.0 * 2.0).round() / 2.0
+            } else {
+                font_size
+            };
             // S700 (2026-06-30): a vert_in_horz run (eastAsianLayout w:vert, 縦中横
             // / tate-chu-yoko) is an ATOMIC vertical column — its n chars stack
             // downward in ONE 1-em-wide cell, so it advances exactly fs horizontally
