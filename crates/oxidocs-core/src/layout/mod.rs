@@ -7891,6 +7891,33 @@ impl LayoutEngine {
                             est -= p.style.space_before.unwrap_or(0.0)
                                 + p.style.space_after.unwrap_or(0.0);
                         }
+                        // S890 (2026-07-17, default ON, opt-out
+                        // OXI_S890_DISABLE): Latin footer TEXT lines = hhea
+                        // natural. DERIVED (_pb_ftext_gen, relief-calibrated):
+                        // fT10 window → 11.45±0.1 = Arial-10 hhea 11.499 (the
+                        // 10.5 estimate EXCLUDED); fT8 → 9.10 ≈ hhea 9.199
+                        // (est 9.0 excluded); fTE10 (text+trailing empty) →
+                        // 23.05 = 2×hhea; fLGL → 33.70 EXACT. The earlier
+                        // "usnyserda pins 10.5" reading was the S559 pair of
+                        // the missing S889 footer-boundary relief — with the
+                        // relief, hhea stacks reproduce BOTH real docs.
+                        if s806_latin
+                            && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                            && std::env::var("OXI_S890_DISABLE").is_err()
+                        {
+                            if let Some(r) = p.runs.iter().find(|r| !r.text.trim().is_empty()) {
+                                let m = self.metrics_for_text(&r.text, &r.style, &p.style);
+                                if !m.is_cjk_83_64_font() {
+                                    let fs = self.resolve_font_size(&r.style, &p.style);
+                                    let one = self.estimate_para_height(
+                                        p, 100000.0, gp, None, false, None, None);
+                                    if one > 1.0 && est > 1.0 {
+                                        let n = (est / one).round().max(1.0);
+                                        est = n * m.natural_line_height_hhea(fs);
+                                    }
+                                }
+                            }
+                        }
                         est
                     };
                     footer_h += h;
@@ -7898,17 +7925,10 @@ impl LayoutEngine {
                     // a footer paragraph's pBdr consumes stack height — space +
                     // line width (legal__0001482d's empty first footer para
                     // carries pBdr bottom sz=4 space=1 = 1.5pt; S806 only
-                    // counted the FIRST para's TOP border via s780). Stack
-                    // 31.0 → 32.5 lands inside the Word-derived window
-                    // (31.7, 34.0] (Word render-truth: footer ink bottom
-                    // 664.91 = pageH − footer_dist EXACT; body max ink bottom
-                    // 630.5; the wp37 keepNext flip brackets the other side).
-                    // ★A text-line hhea replacement (est 10.5 → 11.5/line)
-                    // ALSO fit legal's window but REGRESSED usnyserda
-                    // {+1:5} — its S828-S835 zero-drift derivation pins the
-                    // footer TEXT line at the 10.5 estimate; the two docs'
-                    // windows only agree on the pBdr term. Latin scope with
-                    // the rest of the stack model.
+                    // counted the FIRST para's TOP border via s780). The
+                    // _pb_ftext probe confirms borders are ADDITIVE: fNY −
+                    // fTE10 = 2.45 ≈ top sz12+space1 = 2.5; fLGL 33.70 incl
+                    // bottom 1.5 EXACT.
                     if s806_latin && std::env::var("OXI_S886_DISABLE").is_err() {
                         if let Some(b) = p.style.borders.as_ref() {
                             if let Some(bt) = b.bottom.as_ref() {
@@ -10375,6 +10395,14 @@ impl LayoutEngine {
             // a committed area is not yet covered).
             let s835_boundary_is_fn = fn_boundary_active
                 || committed_fn_delta_at_line.get(line_idx).copied().unwrap_or(0.0) > 0.0;
+            // (S889 footer-boundary relief ATTEMPTED + FALSIFIED 2026-07-17:
+            // the _pb_ftext "+0.64 uniform bias" that suggested it was a
+            // probe ARITHMETIC BUG — the model constant was 697.25 where
+            // 841.9−144 = 697.9; with the correct constant the blank-footer
+            // flip sits at stack 0 EXACTLY (no relief) and the hhea stack
+            // model needs no companion. A footer-part relief also regressed
+            // uklocalspending 1.0→0.59 / ukframework 1.0→0.97, whose
+            // S806-S835 fine probes close at ±0.05 with NO relief term.)
             let s835_fn_relief = if s835_boundary_is_fn
                 && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S835_DISABLE").is_err()
@@ -10603,8 +10631,27 @@ impl LayoutEngine {
                     // Widow: if the last line would overflow to the next page alone,
                     // break BEFORE this line so at least 2 lines go to the next page.
                     // next line (line_idx+1) is the paragraph's LAST line → S608.
-                    let next_h = last_line_fit_h(line_idx + 1);
-                    cursor.cursor_y + line_height + next_h - s835_fn_relief > page_top + content_height
+                    // S891 (2026-07-17, default ON, opt-out OXI_S891_DISABLE): a
+                    // trailing-BR EMPTY last line (the S832 class) demands NO
+                    // page room — it neither becomes a widow nor pushes the
+                    // paragraph. usnyserda p54 «NYSERDA will format…¶<br>»:
+                    // 2 text lines fit (bottom 694.5 ≤ cbot 706.5) but the
+                    // phantom empty line's box crossed by 0.6pt → the widow
+                    // arm whole-moved the para where Word keeps it (rt.pdf:
+                    // both text lines at p54 667.3/680.6, Option-2 at p55
+                    // top). Latin scope via the S832 shape.
+                    let s891_next_is_trailing_br_empty =
+                        lines.get(line_idx + 1).map_or(false, |l| {
+                            l.fragments.iter().all(|f| f.text.trim().is_empty())
+                        })
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S891_DISABLE").is_err();
+                    if s891_next_is_trailing_br_empty {
+                        false
+                    } else {
+                        let next_h = last_line_fit_h(line_idx + 1);
+                        cursor.cursor_y + line_height + next_h - s835_fn_relief > page_top + content_height
+                    }
                 } else {
                     false
                 }
