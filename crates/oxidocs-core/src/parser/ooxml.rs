@@ -1419,7 +1419,62 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     // sibling Block::Math after the paragraph closes.
                     "oMath" if depth == 0 => {
                         let mb = crate::parser::omml::parse_omath_inline(reader)?;
-                        math_blocks.push(mb);
+                        // S880 (2026-07-16, default ON, opt-out OXI_S880_DISABLE):
+                        // an INLINE <m:oMath> consisting ONLY of plain text
+                        // leaves flows as an inline TEXT run — the sibling
+                        // Block::Math emission gave it its own LINE.
+                        // technical__00148d71: "120 °F (48 °C)" carries ° ×2 as
+                        // inline oMath → each ° became its own ~12pt line →
+                        // +24pt → a steady +27 drift → 3 page bottoms tipped
+                        // ({+1:5}). Word renders plain inline math as inline
+                        // text (Cambria Math face). Structured math (fractions,
+                        // scripts) and display oMathPara keep the block path
+                        // (true inline structured math = a future feature).
+                        // Same conversion the SDT arm already does via
+                        // parse_omml. SCOPE: oMath = 1 EN benchmark doc,
+                        // 0 JP golden docs → byte-identical by construction.
+                        let plain: Option<String> = if std::env::var("OXI_S880_DISABLE").is_err() {
+                            if let crate::ir::math::MathBlock::Inline(ref exprs) = mb {
+                                let mut s = String::new();
+                                let mut ok = !exprs.is_empty();
+                                for e in exprs {
+                                    match e {
+                                        crate::ir::math::MathExpr::Text(t) => s.push_str(t),
+                                        crate::ir::math::MathExpr::Run { text, .. } => s.push_str(text),
+                                        _ => { ok = false; break; }
+                                    }
+                                }
+                                if ok && !s.trim().is_empty() { Some(s) } else { None }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(text) = plain {
+                            runs.push(Run {
+                                text,
+                                style: RunStyle {
+                                    font_family: Some("Cambria Math".to_string()),
+                                    ..RunStyle::default()
+                                },
+                                url: None,
+                                footnote_ref: None,
+                                endnote_ref: None,
+                                comment_range_start: Vec::new(),
+                                comment_range_end: Vec::new(),
+                                comment_references: Vec::new(),
+                                rpr_change: None,
+                                tracked_change: None,
+                                ruby: None,
+                                bookmark_name: None,
+                                is_math: true,
+                                field_type: None,
+                                has_last_rendered_page_break: false,
+                            });
+                        } else {
+                            math_blocks.push(mb);
+                        }
                     }
                     "oMathPara" if depth == 0 => {
                         let mb = crate::parser::omml::parse_omath_para(reader)?;
