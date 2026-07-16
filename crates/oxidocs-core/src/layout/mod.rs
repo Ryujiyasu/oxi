@@ -3442,6 +3442,22 @@ impl LayoutEngine {
                         .map(|p| {
                             let _fng = FnLayoutGuard::new();
                             let mut h = self.estimate_para_height(p, cw, None, None, false, None, None);
+                            // S900b (2026-07-17): a TEXT-EMPTY special para's line
+                            // resolves through the DEFAULT PARAGRAPH STYLE's run
+                            // props — Word sizes the separator by Normal (81e80:
+                            // Arial 12 → 13.8; the est's ¶-mark fallback gave the
+                            // docDefaults theme Calibri 11 = 12.649, one note-slot
+                            // short at the area cutoff). uklocal/framework:
+                            // Normal == docDefaults → value-identical.
+                            if p.runs.iter().all(|r| r.text.trim().is_empty()) {
+                                if let Some(drs) = p.style.default_run_style.as_ref() {
+                                    if let Some(fs) = drs.font_size {
+                                        let m = self.metrics_for(drs, &p.style);
+                                        let line = m.natural_line_height_hhea(fs);
+                                        if line > 0.0 { h = line; }
+                                    }
+                                }
+                            }
                             // S804 convention: the estimate drops STYLE-level
                             // spacing; add it back unless the para carries
                             // direct spacing (the real notice's explicit 0/0).
@@ -5419,7 +5435,7 @@ impl LayoutEngine {
                     // page-transition fold (the target page's body must keep
                     // room for them; 81e80 Word p3 opens its area with the
                     // deferred 16/17/18 ahead of p3's own refs).
-                    if !s900_para_deferred.is_empty() && std::env::var("OXI_S900").is_ok() {
+                    if !s900_para_deferred.is_empty() && std::env::var("OXI_S900_DISABLE").is_err() {
                         let target = current_page_idx + 1;
                         while page_fn_refs.len() <= target { page_fn_refs.push(Vec::new()); }
                         for (k, id) in s900_para_deferred.iter().enumerate() {
@@ -10660,19 +10676,19 @@ impl LayoutEngine {
             // already fill the area (moving the line would free nothing).
             // v1 limitation: later lines of the same paragraph keep the full
             // committed map (conservative). Latin scope.
-            // ★HELD OPT-IN (OXI_S900=1): the defer DIRECTION is Word-true
-            // (81e80: keeping L9 + rolling notes forward matches Word's p3
-            // area opening with 16/17/18) but the PLACEMENT CUTOFF is not yet
-            // derived — Word placed only note 15 on p2 (area top 591.2 =
-            // body 556.5 + a 34.7 separator STACK this doc's sep model
-            // under-states at ~13) while the est arithmetic placed 15/16/17
-            // → p3 dropped 2 notes + gained a body line = {-1:3}. Next: a
-            // controlled fnr-family probe (multi-ref bottom line × sep stack)
-            // to pin the area-top stack, then default-ON.
+            // ★v3 default-ON (opt-out OXI_S900_DISABLE): cutoff closed by
+            // (a) the S900b separator est fix (default-para-style resolution,
+            // 12.649→13.8 for 81e80) + (b) the last-line AFTER-SPACE term +
+            // (c) no epsilon. 81e80 Word arithmetic closes EXACT: fill
+            // 570.25 + sep 13.8 + notes 2..14 → room 15.85 → note 15 places,
+            // 16/17/18 roll = Word's p2/p3 split. The controlled probe
+            // (_pb_fnarea) reproduced the roll (R07 stays, note 7 rolls at
+            // room 3.7 < 9.2) and bracketed the keep-test sep to (13.5,15.5]
+            // ∋ one Normal line = the same model.
             if natural_needs_page_break
                 && !self.doc_body_has_real_cjk
                 && !para_fn_heights.is_empty()
-                && std::env::var("OXI_S900").is_ok()
+                && std::env::var("OXI_S900_DISABLE").is_err()
             {
                 let own = line_own_fn_ids.get(line_idx).cloned().unwrap_or_default();
                 if !own.is_empty() {
@@ -10688,13 +10704,32 @@ impl LayoutEngine {
                         (first_line_extra_content_h
                             - para_fn_heights.values().sum::<f32>()).max(0.0)
                     } else { 0.0 };
-                    let line_bottom = cursor.cursor_y + break_threshold;
+                    // v2 (probe _pb_fnarea + 81e80 closure): the placement cap
+                    // boundary includes the LAST line's paragraph after-space
+                    // (81e80 L9: 556.5 + after 13.75 + sep 13.8 + notes 2..14
+                    // → room 15.85 → note 15 places, 16/17/18 roll = Word
+                    // EXACT; without the after term 16/17 also placed = the
+                    // measured {-1:3}). Approximation: autospacing 13.75 /
+                    // explicit space_after; mid-para ref lines get 0.
+                    let s900_after_term = if line_idx + 1 == lines.len() {
+                        if para.style.after_autospacing
+                            && std::env::var("OXI_S675_DISABLE").is_err()
+                        {
+                            13.75
+                        } else {
+                            para.style.space_after.unwrap_or(0.0)
+                        }
+                    } else { 0.0 };
+                    let line_bottom = cursor.cursor_y + break_threshold + s900_after_term;
                     let mut fill = line_bottom + prior_fill + sep_needed;
                     let mut placed = 0.0_f32;
                     let mut deferred: Vec<u32> = Vec::new();
                     for id in &own {
                         let h = para_fn_heights.get(id).copied().unwrap_or(0.0);
-                        if deferred.is_empty() && fill + h <= absolute_bottom + 1.0 {
+                        // No epsilon: the 81e80 cutoff (note 16 over by 0.35)
+                        // sits inside a ±1 slack — Word's boundary is the
+                        // margin line itself.
+                        if deferred.is_empty() && fill + h <= absolute_bottom {
                             placed += h;
                             fill += h;
                         } else {
