@@ -16863,6 +16863,13 @@ impl LayoutEngine {
         // Apply line spacing rule
         let line_spacing = para_style.line_spacing;
         let line_spacing_rule = para_style.line_spacing_rule.as_deref();
+        if std::env::var("OXI_DBG_LH").is_ok() {
+            let t: String = line.fragments.iter().flat_map(|f| f.text.chars()).take(18).collect();
+            eprintln!("[LH] rule={:?} ls={:?} base={:.2} run_base={:.2} hhea={:.2} fam={} gp={:?} gnt={} snap={} cjk={} t={:?}",
+                line_spacing_rule, line_spacing, base, run_base, hhea_natural_max,
+                hhea_natural_family, grid_pitch, grid_no_type, para_style.snap_to_grid,
+                dominant_cjk_83_64, t);
+        }
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
             (Some("atLeast"), Some(val)) => {
