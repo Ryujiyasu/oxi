@@ -14022,7 +14022,59 @@ impl LayoutEngine {
                             // current_width is relative to the indent start, so we add
                             // indent_left to get the absolute position from margin.
                             let indent_left = para_style.indent_left.unwrap_or(0.0);
-                            let abs_pos = current_width + indent_left;
+                            // S881 (2026-07-16, default ON, opt-out OXI_S881_DISABLE):
+                            // a HANGING-indent paragraph has an IMPLIED tab stop at
+                            // indent_left, and its FIRST line starts at indent_left +
+                            // first_line_indent (fli < 0) — the old abs_pos convention
+                            // (current_width + indent_left) overshot by |fli| on line 1,
+                            // which BOTH mislocated the tab origin AND made the implied
+                            // stop unreachable (position <= abs_pos). legal__0001482d
+                            // (221pp): every 「7.⇥AS 2187…」 clause resolved its first
+                            // tab to the defaultTabStop grid (57.0 = 1140tw) instead of
+                            // the implied stop at the hanging indent (43.95 = 879tw);
+                            // the arithmetic closes EXACTLY on both engines (Word text
+                            // x 164.2 − margin 120.25 = 43.95; Oxi 177.2 − 120.25 =
+                            // 56.95 ≈ 57.0) → line 1 was 13.05pt narrower for every
+                            // clause = the doc's +2/+3-page main-body driver. Scope:
+                            // Latin docs (!doc_body_has_real_cjk) + hanging (fli<0) +
+                            // line 1; the corpus scan (style-chain-resolved) found the
+                            // hanging+literal-tab pattern in 0/1439 golden-test and
+                            // 0/50 docx_corpus/ja docs → JP byte-identical by
+                            // construction (JP list markers use the suffix-tab path,
+                            // not literal run tabs).
+                            let fli = para_style.indent_first_line.unwrap_or(0.0);
+                            // ★scope: paragraphs with NO explicit tab stops only —
+                            // the derived specimens (legal clauses) fall to the
+                            // default grid; ToC paragraphs carry explicit stops and
+                            // their resolution already matches Word (title x=148.85
+                            // verified) — the unscoped v1 disturbed them doc-wide.
+                            // ★HELD OPT-IN (OXI_S881=1, default OFF byte-identical):
+                            // BOTH cuts moved legal the WRONG way (+pages): v1
+                            // (unscoped) collapsed the ToC (explicit right-tab
+                            // paras disturbed, matched 3573->680); v2 (no-explicit-
+                            // stops scope) still +1408 at +3 — the breaker's
+                            // RELATIVE convention is anchored at ind_left (render
+                            // x = margin + ind_left + rel), so changing abs_pos/
+                            // next_relative to the line-start base widened
+                            // current_width by |fli| against an available-width
+                            // budget still computed in the ind_left convention ->
+                            // every clause wrapped ~30pt early. The focused fix
+                            // must express the implied stop IN the ind_left
+                            // convention (implied_conv = ind_left - fli on line 1)
+                            // or co-convert the line-1 budget — needs DBGFLUSH
+                            // instrumentation, not blind conversion.
+                            let s881 = std::env::var("OXI_S881").is_ok()
+                                && !self.doc_body_has_real_cjk
+                                && para_style.tab_stops.is_empty()
+                                && fli < -0.01
+                                && lines.is_empty();
+                            let line_start_abs = if s881 { indent_left + fli } else { indent_left };
+                            let abs_pos = current_width + line_start_abs;
+                            let implied_stop = if s881 && indent_left > abs_pos + 0.01 {
+                                Some(indent_left)
+                            } else {
+                                None
+                            };
                             let (next_pos, tab_align) = if !para_style.tab_stops.is_empty() {
                                 para_style.tab_stops.iter()
                                     .find(|ts| ts.position > abs_pos + 0.01)
@@ -14031,12 +14083,14 @@ impl LayoutEngine {
                                         let tab_stop = self.default_tab_stop;
                                         (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                                     })
+                            } else if let Some(imp) = implied_stop {
+                                (imp, TabStopAlignment::Left)
                             } else {
                                 let tab_stop = self.default_tab_stop;
                                 (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                             };
                             // Convert absolute tab position back to relative width
-                            let next_relative = next_pos - indent_left;
+                            let next_relative = next_pos - line_start_abs;
                             let w = (next_relative - current_width).max(char_width);
                             current_line.fragments.push(LineFragment {
                                 text: TAB_STRING.to_owned(),
