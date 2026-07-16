@@ -9126,34 +9126,57 @@ impl LayoutEngine {
                         .fold(0.0f32, f32::max);
                     // S875 (2026-07-16, ★HELD OPT-IN OXI_S875=1, default OFF
                     // byte-identical): the line rule's EXTRA LEADING on an
-                    // object line — the 2-arm model DERIVED by
-                    // _pb_objline_gen.py (36 configs, obj {12,18,24} × line
-                    // {240,276,360} × mixed/solo × Arial/Calibri, Word COM):
+                    // object line — the
+                    // 2-arm model DERIVED by _pb_objline_gen.py (36 configs,
+                    // obj {12,18,24} × line {240,276,360} × mixed/solo ×
+                    // Arial/Calibri, Word COM):
                     //   MIXED: H = max(normal_line, obj + win_desc + extra)
                     //   SOLO:  H = obj + extra          (NO descent, NO clamp:
                     //          c12240s = 12.0 < the 13.43 Calibri text line)
-                    // where extra = rule_line − natural (240→0, 276→+15%,
-                    // 360→+50%). The sweep DECISIVELY rejects two rivals:
-                    // solo=obj+raw-desc (REPORT2's read — the 240 solo row is
-                    // obj EXACTLY) and desc×factor (360 predicts 21.5 vs
-                    // observed 24.0). ★BUT the REAL doc CONTRADICTS the sweep:
-                    // default-ON overshot forms__00042714 the other way
-                    // (0.9895 {-1:1} → 0.9789 {+1:2, pcd+1}) — its member-info
-                    // lines measured gap 23.2 = obj+desc+after WITHOUT extra
-                    // (the S851 v1 calibration) while its drug-block lines
-                    // need +extra (REPORT2). Both are line=276 territory, so a
-                    // PER-LINE second discriminator exists and is underived
-                    // (candidates: a direct line=240 on the member rows, the
-                    // object-dominates-line case, or a FORMCHECKBOX
-                    // interaction). Ships default-ON once a faithful-doc
-                    // per-line probe pins it (the REPORT2-recommended sweep,
-                    // now built as _pb_objline_gen.py, needs the real-doc
-                    // variant).
+                    // where extra = the AUTO line-rule multiple's addition
+                    // (240→0, 276→+15%, 360→+50%). The sweep DECISIVELY
+                    // rejects two rivals: solo=obj+raw-desc (REPORT2's read —
+                    // the 240 solo row is obj EXACTLY) and desc×factor (360
+                    // predicts 21.5 vs observed 24.0); the Calibri series pins
+                    // WIN descent. The old obj+desc (v1) = the 240 degenerate
+                    // form. ★HELD: the sweep and the REAL doc still disagree.
+                    // The per-paragraph line rule surfaces cleanly (member
+                    // rows resolve ls=1.0, drug rows 1.15 — the [S875] trace)
+                    // and the factor now computes correctly, yet applying
+                    // +extra to every inheriting object line (~50 in
+                    // forms__00042714) adds ~95pt where the doc's page
+                    // arithmetic needs only ~20 → {+1:2, pcd+1}. The sweep's
+                    // solo paras were BARE <w:object>; the doc's solo 
+                    // lines are FORMTEXT FIELD-wrapped objects — the likely
+                    // second discriminator, underived. Ship path: a
+                    // faithful-doc per-line Word measurement (map each of the
+                    // ~60 object lines' Word heights) OR a field-wrapped
+                    // variant of _pb_objline_gen, then flip default-ON.
                     let extra = if std::env::var("OXI_S875").is_ok() {
-                        (line_heights[li] - natural_line_heights[li]).max(0.0)
+                        // line_spacing under the auto rule is stored as the
+                        // MULTIPLE itself (1.15, not 13.8pt — the [S875] trace:
+                        // drug rows ls=Some(1.15), member rows ls=Some(1.0)).
+                        let factor = if matches!(para.style.line_spacing_rule.as_deref(),
+                            None | Some("auto"))
+                        {
+                            para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0)
+                        } else {
+                            1.0
+                        };
+                        if factor > 1.0 {
+                            line_heights[li] * (1.0 - 1.0 / factor)
+                        } else {
+                            0.0
+                        }
                     } else {
                         0.0
                     };
+                    if std::env::var("OXI_DBG_S875").is_ok() {
+                        let txt: String = line.fragments.iter().map(|f| f.text.as_str()).collect::<String>().chars().take(20).collect();
+                        eprintln!("[S875] li={} obj_h={:.1} desc={:.2} extra={:.2} lsr={:?} ls={:?} lh={:.2} txt={:?}",
+                            li, obj_h, descent, extra, para.style.line_spacing_rule,
+                            para.style.line_spacing, line_heights[li], txt);
+                    }
                     let target = obj_h + descent + extra;
                     if target > line_heights[li] { line_heights[li] = target; }
                     if target > natural_line_heights[li] { natural_line_heights[li] = target; }
