@@ -25,23 +25,21 @@ pub fn s546_exact_halfwidth() -> bool {
     *V.get_or_init(|| std::env::var("OXI_S546_DISABLE").is_err())
 }
 
-/// S892: U+00A0 NO-BREAK SPACE prices at the ordinary space advance.
-/// Word renders it as a space — VERIFIED by rawdict advances on both
-/// real docs (legal TNR Gazette line: every space AND nbsp = 3.00;
-/// framework Calibri: uniform 4.07) — while the metric tables lack 0xA0
-/// so it fell to the 0.5em unknown-char fallback (+2.9/nbsp @TNR12).
-/// ★HELD OPT-IN (OXI_S892=1, default OFF byte-identical): the correct
-/// narrowing flips uk_framework PASS→FAIL {−1:2} — its p29 «32.
-/// [Companies that employ their own\xa0staff] Staff²⁵» line is a
-/// knife-edge where Word WRAPS 'Staff' (needed ~22pt ≫ the S825 allow
-/// ~4.6) yet Oxi-with-S892 FITS it (rendered end 491.2 vs boundary
-/// ~475) — an unexplained ~16pt of Oxi fit credit (S825/space-credit
-/// family) that the phantom-wide nbsp was compensating (S559). Ships
-/// default-ON once that credit is dissected (DBGFLUSH on the line).
-/// legal__0001482d gains +0.004 (0.9633→0.9675) under it.
+/// S892 (default ON, opt-out OXI_S892_DISABLE): U+00A0 NO-BREAK SPACE
+/// prices at the ordinary space advance. Word renders it as a space —
+/// VERIFIED by rawdict advances on both real docs (legal TNR Gazette
+/// line: every space AND nbsp = 3.00; framework Calibri: uniform 4.07)
+/// — while the metric tables lack 0xA0 so it fell to the 0.5em
+/// unknown-char fallback (+2.9/nbsp @TNR12; legal's Gazette lines
+/// wrapped one line early ×3). ★The initial hold ("flips uk_framework
+/// {−1:2}") was the S559 pair of the S893 over-wide-marker bug: the
+/// heading «32. [Companies…]» line had 18pt of phantom room because the
+/// suffix tab went BACKWARD to ind_left (54) despite the marker ending
+/// at 58.5 — with S893 tabbing to the grid stop 72 (= Word x 171.3),
+/// framework is PASS 1.0000 with S892 ON.
 pub fn s892_nbsp_as_space() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("OXI_S892").is_ok())
+    *V.get_or_init(|| std::env::var("OXI_S892_DISABLE").is_err())
 }
 
 /// Pixel-rounded multiplication matching Word's font metrics.

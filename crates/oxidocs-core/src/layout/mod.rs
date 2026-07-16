@@ -8629,6 +8629,9 @@ impl LayoutEngine {
         // S789: hanging-less level — the suffix tab's num stop (see the
         // marker block below).
         let mut s789_stop_extra: f32 = 0.0;
+        // S893: over-wide marker pushes the suffix tab to the next default
+        // stop (see the marker block below).
+        let mut s893_stop_extra: f32 = 0.0;
         // S778 (2026-07-10, opt-out OXI_S778_DISABLE): the numbering LEVEL's
         // w:ind left is the marker SUFFIX-TAB stop, and it SURVIVES a direct
         // w:ind override on the paragraph. nyserda's definition list (level
@@ -8711,6 +8714,36 @@ impl LayoutEngine {
                 .sum();
             let list_indent = para.style.list_indent.unwrap_or(18.0);
             let mut marker_x = start_x + indent_left - list_indent;
+            // S893 (2026-07-17, default ON, opt-out OXI_S893_DISABLE): the
+            // list suffix tab can never go BACKWARD. When the MARKER is wider
+            // than the hanging indent (marker end overshoots the ind_left
+            // text stop), Word tabs the text to the next defaultTabStop
+            // multiple past the marker end — Oxi placed the text AT ind_left,
+            // OVERLAPPING the number and gaining phantom line-1 room.
+            // uk_framework Heading2 «32. [Companies that employ their own
+            // staff] Staff²⁵» (numId=20 lvl0 ind left=1080 hanging=360,
+            // Humnst777→Calibri 18): marker '32.' = 22.5pt > hanging 18 →
+            // marker end rel 58.5; Word text x=171.3 = margin + 72 =
+            // ceil(58.5/36)·36 (dts 720tw); Oxi text x=153.2 = ind_left 54,
+            // overlapping the marker end 157.7 by 4.5pt AND giving line 1
+            // 18pt of extra room — the knife-edge that made the correct S892
+            // NBSP width flip wp31 (the S559 pair blocking S892).
+            if std::env::var("OXI_S893_DISABLE").is_err()
+                && !self.doc_body_has_real_cjk
+                && para.style.list_suff.as_deref().unwrap_or("tab") == "tab"
+                && list_consumes_hanging
+                && s778_stop_extra <= 0.0
+                // disjoint from S789 (which requires list_indent == None)
+                && para.style.list_indent.is_some()
+                && marker_width > list_indent + 0.01
+            {
+                let marker_end_rel = (indent_left - list_indent) + marker_width;
+                let dts = self.default_tab_stop;
+                if dts > 0.0 {
+                    let stop = ((marker_end_rel / dts).floor() + 1.0) * dts;
+                    s893_stop_extra = (stop - indent_left).max(0.0);
+                }
+            }
             let line_height = self.line_height(marker_font_size, para.style.line_spacing, para.style.line_spacing_rule.as_deref(), marker_metrics, para.style.snap_to_grid, grid_pitch);
 
             // Determine marker text including suffix
@@ -9012,7 +9045,7 @@ impl LayoutEngine {
         // S241 (2026-05-23): removed OXI_LEGACY_NO_B2_BUNDLE legacy
         // env-var fallback during hardening pass. S168 Phase B-2 bundle
         // is the canonical path.
-        let effective_first_indent = first_line_indent + s776_marker_extra + s778_stop_extra + s789_stop_extra;
+        let effective_first_indent = first_line_indent + s776_marker_extra + s778_stop_extra + s789_stop_extra + s893_stop_extra;
         // S342: mirror the snap_to_grid gate change for cw_ratio (see effective_char_pitch comment).
         let effective_cw_ratio = if in_textbox || snap_gate_active { None } else { page.grid_char_cw_ratio };
         let wrap_width = (available_width - ruby_total_overhang_pt).max(0.0);
