@@ -24050,13 +24050,17 @@ impl LayoutEngine {
     /// neighbour is handled by the existing S427 `prev_cell_sa` machinery. The corpus's
     /// 4 sole empty spacers in 29dc6e thus go from Oxi's explicit 5+5=10pt to Word's 0.
     ///
-    /// OPT-IN (default OFF, enable with OXI_CELLAS=1). The value/edge-suppression are
-    /// COM-CORRECT, but the gate is a WASH: byte-isolated to 29dc6e/d4d126 (the only
-    /// corpus docs with cell autospacing, both tuned SSIM bottom-N form family),
-    /// Phase-1 pagination-neutral (both PASS OFF & ON), SSIM per-doc-mean d4d126 +0.0005
-    /// (floor-ward, improves) / 29dc6e −0.0006 (a compensating over-count exposed, S559).
-    /// Net ≈ 0 with a regression → held opt-in until 29dc6e's compensating error is
-    /// co-fixed (then this + that ship default-ON net-positive). See
+    /// S882 (2026-07-16): DEFAULT ON (opt-out OXI_CELLAS_DISABLE; OXI_CELLAS=1
+    /// was the old opt-in). The value/edge-suppression are COM-CORRECT and the
+    /// old hold reason (a JP SSIM wash: d4d126 +0.0005 / 29dc6e −0.0006, both
+    /// pagination-neutral PASS) is now outweighed by a real-world specimen —
+    /// policies__0008ea8f's income table (36 single-para cells with
+    /// before=100 beforeAutospacing=1 after=100 afterAutospacing=1): Word
+    /// suppresses BOTH edges of a sole cell paragraph (autospacing overrides
+    /// the explicit 5+5 → 0), Oxi applied 10pt/row → +10.6/row × 8 = the
+    /// −84.4 JUMP in its drift table, EXACT. CELLAS=1 recovers +19 matched
+    /// paragraphs (0.787 → 0.899). Honest netting: no PASS↔FAIL anywhere,
+    /// JP SSIM wash ≈ −0.0001 net, a real EN pagination gain. See
     /// [[cell_autospacing_amount]], [[tokumei_form_family_ssim]].
     fn cell_autospace_effective(
         &self,
@@ -24066,11 +24070,9 @@ impl LayoutEngine {
         est_sb: f32,
         est_sa: f32,
     ) -> (f32, f32) {
-        let cellas_enabled = std::env::var("OXI_CELLAS")
-            .map(|v| v != "0" && !v.is_empty())
-            .unwrap_or(false)
+        let cellas_enabled = std::env::var("OXI_CELLAS_DISABLE").is_err()
             // S864 enables only the style-derived cell case. Direct-pPr
-            // autospacing remains under the existing OXI_CELLAS experiment.
+            // autospacing rides the main default-ON gate above.
             || (s864_part("C")
                 && !para.style.has_direct_before_after);
         if !cellas_enabled {
