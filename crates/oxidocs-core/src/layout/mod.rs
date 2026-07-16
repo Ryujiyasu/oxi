@@ -14090,7 +14090,38 @@ impl LayoutEngine {
                                 (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
                             };
                             // Convert absolute tab position back to relative width
-                            let next_relative = next_pos - line_start_abs;
+                            let mut next_relative = next_pos - line_start_abs;
+                            // S883 (2026-07-16, default ON, opt-out OXI_S883_DISABLE):
+                            // a RIGHT-tab stop BEYOND the line's wrap boundary is a
+                            // stale stop — Word CLAMPS it to the boundary and the tab's
+                            // content does NOT force a wrap. legal__0001482d's TOC8:
+                            // stop 340.2 vs boundary 297.65 (content − ind_right); Oxi
+                            // jumped to the stop, so the page number '1' flush wrapped
+                            // whenever titleW > avail − w('1') — the measured Oxi flip
+                            // window (221.16, 223.32] vs Word's (226.35, 230.34] ∋
+                            // avail 226.75 differs by EXACTLY w('1') 5.5pt (209 ToC
+                            // records; #97=220.26pt / #112=223.32pt are a perfect 3pt
+                            // A/B pair, both 1 line in Word). Clamp + exempt the tab
+                            // content from the overflow check (the right-aligned
+                            // segment pulls LEFT from the stop; it never extends the
+                            // line). Latin scope; the ToC over-wrap is the first-2-page
+                            // ×4 (+12.6pt each) driver of legal's +1 band.
+                            let mut s883_nowrap = false;
+                            if tab_align == TabStopAlignment::Right
+                                && std::env::var("OXI_S883_DISABLE").is_err()
+                                && !self.doc_body_has_real_cjk
+                            {
+                                let avail_rel = available_tw as f32 / 20.0;
+                                if next_relative > avail_rel + 0.01 {
+                                    next_relative = avail_rel;
+                                    s883_nowrap = true;
+                                }
+                            }
+                            let next_pos = if s883_nowrap {
+                                next_relative + line_start_abs
+                            } else {
+                                next_pos
+                            };
                             let w = (next_relative - current_width).max(char_width);
                             current_line.fragments.push(LineFragment {
                                 text: TAB_STRING.to_owned(),
@@ -14131,7 +14162,12 @@ impl LayoutEngine {
                                 // S774: a RIGHT tab's jump is slack the following
                                 // segment consumes leftward (see the declaration).
                                 // A new tab of any kind resets the prior slack.
-                                right_tab_slack_tw = if tab_align == TabStopAlignment::Right
+                                right_tab_slack_tw = if s883_nowrap {
+                                    // S883: a clamped out-of-bounds right tab's content
+                                    // never wraps the line (right-aligned content pulls
+                                    // left from the boundary).
+                                    i32::MAX / 4
+                                } else if tab_align == TabStopAlignment::Right
                                     && std::env::var("OXI_S774_DISABLE").is_err()
                                 {
                                     pt_to_tw(w)
