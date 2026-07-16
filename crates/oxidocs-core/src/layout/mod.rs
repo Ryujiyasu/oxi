@@ -3826,6 +3826,11 @@ impl LayoutEngine {
         // DECLARED (x, y): (decl_x, decl_y, first_fx, running_bottom_y). Reset
         // when a non-frame block intervenes or the declared key changes.
         let mut s847_frame: Option<(f32, f32, f32, f32)> = None;
+        // S898b: a wrap="notBeside" page-anchored frame group excludes the
+        // body from its whole vertical extent — the flow resumes below the
+        // STACKED frame bottom (00054c43: Commonwealth letterhead frame
+        // 35.25 + 4 lines = 104.25 = Word's measured flow start EXACT).
+        let mut s898_notbeside_bottom: Option<f32> = None;
         // S863: consecutive identical vAnchor="text" framePr
         // paragraphs with a negative Y and an exact height form ONE frame.
         // State: (decl_x, decl_y, first_x, running_content_bottom,
@@ -4393,6 +4398,54 @@ impl LayoutEngine {
                         continue;
                     }
                     s863_frame = None;
+                    // S898a (2026-07-17): a vAnchor="text" framePr with NEGATIVE y
+                    // reaches ABOVE its anchor — that region is already laid out,
+                    // so Word FLOATS the frame there (no flow consumption). The
+                    // 00054c43 state-seal frame (y=-951tw, an inline 90.75pt image)
+                    // renders at anchor-47.55 = Word's 24.75 while the body flows
+                    // on; Oxi's in-flow path reserved ~98pt (the whole +65 p1
+                    // drift the missing style-autospacing was compensating).
+                    // Exact-height "around" runs are consumed by S863 above.
+                    if std::env::var("OXI_S898_DISABLE").is_err()
+                        && para.style.frame_pr.as_ref().map_or(false, |fp|
+                            fp.drop_cap.is_none()
+                            && fp.v_anchor.as_deref() == Some("text")
+                            && fp.y < -0.01)
+                    {
+                        let fp = para.style.frame_pr.as_ref().unwrap();
+                        let fx = if fp.h_anchor.as_deref() == Some("page") {
+                            fp.x
+                        } else {
+                            page.margin.left + fp.x
+                        };
+                        let fy = (cursor.cursor_y + fp.y).max(1.0);
+                        let fw = fp.width.unwrap_or(content_width * 0.3).max(20.0);
+                        let mut fcy = LayoutCursor::new(fy);
+                        let empty_fn_frame = std::collections::HashMap::new();
+                        let (frame_els, _, _) = self.layout_paragraph(
+                            para, fx, &mut fcy, fw,
+                            page.size.height, fy, page,
+                            &mut Vec::new(), &mut Vec::new(),
+                            grid_pitch, None, false,
+                            None, false, false, 0.0, Some(block_idx), None, None,
+                            false, false, None,
+                            0.0,
+                            &empty_fn_frame,
+                            1, 0, &[], 0.0,
+                            false,
+                            false,
+                            None,
+                            None,
+                            false,
+                        );
+                        elements.extend(frame_els);
+                        if std::env::var("OXI_DBG898").is_ok() {
+                            eprintln!("[S898a] blk={} anchor={:.2} fy={:.2} bottom={:.2}",
+                                block_idx, cursor.cursor_y, fy, fcy.cursor_y);
+                        }
+                        prev_space_after = 0.0;
+                        continue;
+                    }
                     // S758c (2026-07-06): a PAGE-anchored framePr paragraph is a
                     // fixed-position frame — the body flows AROUND it (side-wrap
                     // band) and the frame consumes NO flow height (probeqframepg:
@@ -4424,7 +4477,12 @@ impl LayoutEngine {
                         // negative-y frame + flow paras) is still unpositioned.
                         // Ships default-ON once frame line-height precision + the
                         // vAnchor=text officials frame are also handled.
-                        let s847_on = std::env::var("OXI_S847").is_ok();
+                        // S898b: notBeside frames MUST stack (the flow-push needs
+                        // the true group bottom), so grouping is default-ON for
+                        // them; other page frames keep the S847 opt-in hold.
+                        let s847_on = std::env::var("OXI_S847").is_ok()
+                            || (std::env::var("OXI_S898_DISABLE").is_err()
+                                && fp.wrap.as_deref() == Some("notBeside"));
                         let (fx, fy) = match s847_frame {
                             Some((px, py, first_fx, run_bottom))
                                 if s847_on
@@ -4473,12 +4531,32 @@ impl LayoutEngine {
                         // bottom so the NEXT consecutive same-key paragraph
                         // inherits fx and stacks below it.
                         s847_frame = Some((fp.x, fy_decl, fx, fcy.cursor_y));
+                        // S898b: record the notBeside group's running bottom.
+                        if std::env::var("OXI_S898_DISABLE").is_err()
+                            && fp.wrap.as_deref() == Some("notBeside")
+                        {
+                            let b = fcy.cursor_y;
+                            s898_notbeside_bottom = Some(
+                                s898_notbeside_bottom.map_or(b, |p: f32| p.max(b)));
+                        }
                         // Float: no flow consumption.
                         prev_space_after = 0.0;
                         continue;
                     }
                     // S847: a non-frame block breaks the consecutive-frame run.
                     s847_frame = None;
+                    // S898b: the first normal block after a notBeside frame
+                    // group resumes BELOW the stacked frame bottom.
+                    if let Some(b) = s898_notbeside_bottom.take() {
+                        if b > cursor.cursor_y && b - cursor.cursor_y < content_height {
+                            if std::env::var("OXI_DBG898").is_ok() {
+                                eprintln!("[S898b] blk={} push {:.2} -> {:.2}",
+                                    block_idx, cursor.cursor_y, b);
+                            }
+                            cursor.set(b);
+                            prev_space_after = 0.0;
+                        }
+                    }
                     // Round 29: compute footnote contribution if this paragraph is
                     // laid out on the CURRENT page (delta added) vs a NEW page
                     // (full from-scratch). Used by overflow checks below.
@@ -8381,13 +8459,11 @@ impl LayoutEngine {
         // Word uses max(prev_space_after, space_before) — spacing collapse.
         let space_before = if para.style.before_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
-            // S895: style-sourced autospacing applies in Latin docs only, and
-            // NOT to EMPTY paragraphs (HTML empty-block margin collapse:
-            // correspondence__00054c43's empty NormalWeb para renders the
-            // explicit 5pt in Word, not the 13.75 auto).
-            && (!para.style.autospacing_from_style
-                || (!self.doc_body_has_real_cjk
-                    && para.runs.iter().any(|r| !r.text.trim().is_empty())))
+            // S895: style-sourced autospacing applies in Latin docs only.
+            // Empty paragraphs get FULL autospacing too (the earlier empty-
+            // exclusion was falsified: _pb_autosp cTET probe 27.75 == the
+            // 00054c43 DATE→empty→body gap in the Word PDF, 27.75 EXACT).
+            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
         {
             // S675 (2026-06-26): w:beforeAutospacing → flat 13.75pt, COM-derived
             // (constant, independent of font size / docDefaults / grid; applied as a
@@ -10545,8 +10621,9 @@ impl LayoutEngine {
                 // S811: distrusted saved LRPBs (metric-incompatible font
                 // substitution) skip the per-line respect too.
                 && !self.doc_lrpb_distrust
-                // S897 (2026-07-17, ★HELD OPT-IN OXI_S897=1, ships WITH
-                // S895 — separately each is a PASS-doc trade): LATIN docs
+                // S897 (2026-07-17, default ON, opt-out OXI_S897_DISABLE;
+                // ships WITH S895+S898 — separately each is a PASS-doc
+                // trade): LATIN docs
                 // retire the per-line LRPB respect too — the S836
                 // block-level drop completed. The whole frozen EN 6 is PASS
                 // 1.0000 with per-line OFF (measured), i.e. the Latin natural
@@ -10559,7 +10636,7 @@ impl LayoutEngine {
                 // the doc reads 0.9746 vs 0.83 with the mark). JP keeps the
                 // full LRPB model (b837/d77a/3a4f load-bearing).
                 && (self.doc_body_has_real_cjk
-                    || std::env::var("OXI_S897").is_err());
+                    || std::env::var("OXI_S897_DISABLE").is_ok());
             let s391_lrpb_break = if line_idx > 0 && !in_textbox && s391_on {
                 let has_lrpb_here = line.fragments.iter().any(|f| {
                     f.char_offset == 0
@@ -12722,11 +12799,9 @@ impl LayoutEngine {
 
         let space_after = if para.style.after_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
-            // S895: style-sourced autospacing applies in Latin docs only, and
-            // not to EMPTY paragraphs (see space_before).
-            && (!para.style.autospacing_from_style
-                || (!self.doc_body_has_real_cjk
-                    && para.runs.iter().any(|r| !r.text.trim().is_empty())))
+            // S895: style-sourced autospacing applies in Latin docs only
+            // (empty paragraphs included — see space_before).
+            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
         {
             // S675 (2026-06-26): w:afterAutospacing → flat 13.75pt (see space_before).
             13.75

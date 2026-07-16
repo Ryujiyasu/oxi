@@ -1051,7 +1051,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, ctx, styles, true)?;
+                        let mut pr = parse_paragraph(&mut reader, ctx, styles, true)?;
                         // S525 (coverage): a paragraph whose ONLY content is display
                         // math (oMathPara, no runs/images/shapes) must NOT emit an
                         // empty paragraph line before the math — the Math block IS
@@ -1075,6 +1075,17 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && pr.math_blocks.is_empty()
                             && std::env::var("OXI_S537_DISABLE").is_err();
+                        // S898a: capture the frame before pr.paragraph may move.
+                        let s898_fp: Option<crate::ir::FrameProperties> =
+                            if std::env::var("OXI_S898_DISABLE").is_err() && image_only {
+                                pr.paragraph.style.frame_pr.as_ref()
+                                    .filter(|fp| fp.drop_cap.is_none()
+                                        && fp.v_anchor.as_deref() == Some("text")
+                                        && fp.y < -0.01)
+                                    .cloned()
+                            } else {
+                                None
+                            };
                         if !math_only && !image_only {
                             // S784 (2026-07-11, opt-out OXI_S784_DISABLE): a NON-EMPTY
                             // paragraph whose ¶ MARK is hidden (`<w:pPr><w:rPr>
@@ -1116,6 +1127,39 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         // OMML math blocks become sibling Block::Math entries.
                         for mb in pr.math_blocks {
                             current_blocks.push(Block::Math(mb));
+                        }
+                        // S898a (2026-07-17): an image-only paragraph inside a
+                        // NEGATIVE-y vAnchor="text" framePr FLOATS (frame
+                        // semantics — the frame reaches ABOVE its anchor into
+                        // already-laid-out space, so Word renders it there with
+                        // ZERO flow consumption). Carry the frame position onto
+                        // the image (the S566 pattern): 00054c43's state seal
+                        // (y=-951tw, 90.75pt image) renders at anchor-47.55 =
+                        // Word's 24.75 instead of reserving ~98pt of flow.
+                        if let Some(fp) = s898_fp {
+                            let anchor_idx = current_blocks.len().saturating_sub(1);
+                            for b in pr.inline_images.drain(..) {
+                                if let Block::Image(mut img) = b {
+                                    img.position = Some(crate::ir::FloatingPosition {
+                                        x: fp.x,
+                                        y: fp.y,
+                                        h_relative: Some(
+                                            if fp.h_anchor.as_deref() == Some("page") {
+                                                "page"
+                                            } else {
+                                                "column"
+                                            }.to_string()),
+                                        v_relative: Some("paragraph".to_string()),
+                                        h_align: None,
+                                        v_align: None,
+                                        dist_l: None,
+                                        dist_r: None,
+                                    });
+                                    img.wrap_type = Some(crate::ir::WrapType::None);
+                                    img.anchor_block_index = anchor_idx;
+                                    current_floating_images.push(img);
+                                }
+                            }
                         }
                         // Inline images become separate blocks after the paragraph
                         current_blocks.extend(pr.inline_images);
@@ -2045,7 +2089,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // the style's autospacing must NOT leak past it (ECMA property
             // override; the first cut leaked and flipped 4 EN PASS docs whose
             // NormalWeb paras carry direct spacing).
-            if std::env::var("OXI_S895").is_ok() {
+            if std::env::var("OXI_S895_DISABLE").is_err() {
                 if ds.before_autospacing && !style.before_autospacing
                     && !style.has_direct_before
                 {
