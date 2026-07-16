@@ -87,6 +87,18 @@ impl FontMetrics {
     /// Falls back to fullwidth/halfwidth heuristics for unmeasured chars.
     pub fn char_width_em(&self, c: char) -> f32 {
         self.char_widths.get(&c).copied().unwrap_or_else(|| {
+            // S888: U+2011 NON-BREAKING HYPHEN (the S747 noBreakHyphen
+            // mapping) renders with the ordinary hyphen glyph in Word —
+            // same advance as '-'. The metric tables lack U+2011, so it
+            // fell to the 0.5em fallback (6.0pt @TNR12 vs the real 4.0)
+            // — legal__0001482d's noBreakHyphen-riddled ISBN/Gazette
+            // lines each measured +2pt per hyphen and wrapped one line
+            // early where Word fits.
+            if c == '\u{2011}' {
+                if let Some(w) = self.char_widths.get(&'-') {
+                    return *w;
+                }
+            }
             if is_halfwidth_katakana(c) {
                 0.5
             } else if is_fullwidth(c) {
@@ -783,6 +795,14 @@ impl FontMetricsRegistry {
     /// GDI substitutes MS UI Gothic. This method mimics that behavior.
     /// For Latin fonts, GDI hinting overrides are applied when available.
     pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
+        // S888: see char_width_pt_with_gdi_map — U+2011 = the hyphen glyph.
+        let c = if c == '\u{2011}' && !metrics.char_widths.contains_key(&c)
+            && metrics.char_widths.contains_key(&'-')
+        {
+            '-'
+        } else {
+            c
+        };
         // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly.
         // EXCEPTION: MS PGothic / MS PMincho are proportional (see char_width_pt_with_gdi_map).
         let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho"
@@ -872,6 +892,19 @@ impl FontMetricsRegistry {
         metrics: &FontMetrics,
         gdi_map: Option<&HashMap<u32, u32>>,
     ) -> f32 {
+        // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen mapping)
+        // renders with the ordinary hyphen glyph in Word (same advance).
+        // The metric tables lack U+2011 AND is_cjk_or_symbol covers
+        // 0x2010..=0x2044, so it fell through to the MS-UI-Gothic CJK
+        // fallback (6.0pt @TNR12 vs the real '-' 4.0) — legal__0001482d's
+        // noBreakHyphen ISBN/Gazette lines wrapped one line early each.
+        let c = if c == '\u{2011}' && !metrics.char_widths.contains_key(&c)
+            && metrics.char_widths.contains_key(&'-')
+        {
+            '-'
+        } else {
+            c
+        };
         // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly,
         // NOT GDI table (GDI returns ceil_even which is wrong for Word layout).
         // EXCEPTION: MS PGothic / MS PMincho are proportional CJK fonts —

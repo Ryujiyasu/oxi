@@ -2382,9 +2382,13 @@ impl LayoutEngine {
         // The S763c eastAsia-LANG gate keeps CJK-lang docs on the eastAsia
         // chain exactly as before (JP byte-identical by construction).
         let s830 = std::env::var("OXI_S830_DISABLE").is_err();
+        // S888: U+2011/U+2010 (noBreakHyphen / hyphen) join the ambiguous
+        // class — see metrics_for_char_in.
+        let s888 = std::env::var("OXI_S888_DISABLE").is_err();
         let is_q = move |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
             || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
-            || (s830 && matches!(c, '\u{2026}'));
+            || (s830 && matches!(c, '\u{2026}'))
+            || (s888 && matches!(c, '\u{2011}' | '\u{2010}'));
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
         // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
@@ -2521,7 +2525,15 @@ impl LayoutEngine {
         // Latin run; CJK-companion runs keep eastAsia.
         let quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
             || (std::env::var("OXI_S801_DISABLE").is_err()
-                && matches!(ch, '\u{2013}' | '\u{2014}'));
+                && matches!(ch, '\u{2013}' | '\u{2014}'))
+            // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen) is the
+            // same ambiguous General-Punctuation class — is_cjk routed it to
+            // the eastAsia chain, where S634's Latin-only substitution (MS
+            // Mincho, upm-256) priced it at fs/2 = 6.0 @TNR12 vs Word's
+            // hyphen 4.0. legal__0001482d's noBreakHyphen ISBN/Gazette lines
+            // wrapped one line early each (+14..17pt ×4 anomalies).
+            || (std::env::var("OXI_S888_DISABLE").is_err()
+                && matches!(ch, '\u{2011}' | '\u{2010}'));
         let cjk_class = kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk);
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
@@ -7882,6 +7894,28 @@ impl LayoutEngine {
                         est
                     };
                     footer_h += h;
+                    // S886 (2026-07-16, default ON, opt-out OXI_S886_DISABLE):
+                    // a footer paragraph's pBdr consumes stack height — space +
+                    // line width (legal__0001482d's empty first footer para
+                    // carries pBdr bottom sz=4 space=1 = 1.5pt; S806 only
+                    // counted the FIRST para's TOP border via s780). Stack
+                    // 31.0 → 32.5 lands inside the Word-derived window
+                    // (31.7, 34.0] (Word render-truth: footer ink bottom
+                    // 664.91 = pageH − footer_dist EXACT; body max ink bottom
+                    // 630.5; the wp37 keepNext flip brackets the other side).
+                    // ★A text-line hhea replacement (est 10.5 → 11.5/line)
+                    // ALSO fit legal's window but REGRESSED usnyserda
+                    // {+1:5} — its S828-S835 zero-drift derivation pins the
+                    // footer TEXT line at the 10.5 estimate; the two docs'
+                    // windows only agree on the pBdr term. Latin scope with
+                    // the rest of the stack model.
+                    if s806_latin && std::env::var("OXI_S886_DISABLE").is_err() {
+                        if let Some(b) = p.style.borders.as_ref() {
+                            if let Some(bt) = b.bottom.as_ref() {
+                                footer_h += bt.space + bt.width;
+                            }
+                        }
+                    }
                     if std::env::var("OXI_DBG_FTR").is_ok() {
                         eprintln!("[FTR-P] h={:.3} sb={:?} sa={:?} direct={} lsr={:?} ls={:?} n_runs={}",
                             h, p.style.space_before, p.style.space_after,
@@ -12738,6 +12772,12 @@ impl LayoutEngine {
         // session471 finding + workflow wtvi6fvix.
         let mut current_capw_tw: i32 = pt_to_tw(first_line_indent);
         let mut compress_used = false; // true after compression-based overflow absorption
+        // S885: the most recent RIGHT/CENTER tab on the current line —
+        // (stop_rel, cw_before_jump, cw_after_jump, alignment, lines.len()).
+        // Content under it ends AT the stop (right) / centered on it, so the
+        // NEXT tab must resolve from the aligned end, not the provisional
+        // left-advance (stop + content width). Line identity via lines.len().
+        let mut rc_prev_tab: Option<(f32, f32, f32, TabStopAlignment, usize)> = None;
         // S243 (2026-05-24): removed dead variable `current_grid_extra`
         // (assigned/incremented in 8 sites but never read).
 
@@ -13646,7 +13686,19 @@ impl LayoutEngine {
                 let s801_latin_dash = matches!(ch, '\u{2013}' | '\u{2014}')
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S801_DISABLE").is_err();
+                // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen) +
+                // U+2010 HYPHEN join the ambiguous class — is_cjk routed them
+                // to the eastAsia metrics, where S634's Latin-only
+                // substitution (MS Mincho, upm-256) priced them at fs/2 =
+                // 6.0 @TNR12 vs Word's hyphen 4.0 (legal__0001482d's
+                // noBreakHyphen ISBN/Gazette lines wrapped one line early:
+                // +14..17pt ×4 gap anomalies). Doc-level Latin gate like
+                // S801 → JP byte-identical by construction.
+                let s888_latin_hyphen = matches!(ch, '\u{2011}' | '\u{2010}')
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S888_DISABLE").is_err();
                 let latin_ctx_quote = s801_latin_dash
+                    || s888_latin_hyphen
                     || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                     && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
                     && {
@@ -14018,76 +14070,91 @@ impl LayoutEngine {
                     } else {
                         // Space or tab
                         if ch == '\t' {
+                            // S885 (2026-07-16, default ON, opt-out OXI_S885_DISABLE):
+                            // content under a RIGHT/CENTER tab ends AT its stop
+                            // (right-aligned) or centered ON it — the provisional
+                            // left-advance (stop + content width) overstates the line
+                            // position, which (a) skips the S881 implied hanging stop
+                            // whenever stop + w crosses ind_left, and (b) resolves the
+                            // next tab from a phantom position. Correct current_width
+                            // to the aligned end before resolving this tab (the S841
+                            // post-pass already fixes the RENDER positions; this fixes
+                            // the BREAK-time resolution). legal__0001482d Defpara2
+                            // 「⇥(ii)⇥it is classified…」: right@102.05 + (ii) 14.66 →
+                            // provisional 116.71 crossed the hanging stop 116.3 → fell
+                            // to the defaultTabStop grid (Word tabs to 116.3).
+                            if let Some((stop_rel, cw_before, cw_after, align, njump)) = rc_prev_tab.take() {
+                                if njump == lines.len()
+                                    && !self.doc_body_has_real_cjk
+                                    && std::env::var("OXI_S885_DISABLE").is_err()
+                                {
+                                    let w_content = current_width - cw_after;
+                                    if w_content >= 0.0 {
+                                        let true_cw = match align {
+                                            TabStopAlignment::Center => {
+                                                (stop_rel + w_content / 2.0)
+                                                    .max(cw_before + w_content)
+                                            }
+                                            _ => stop_rel.max(cw_before + w_content),
+                                        };
+                                        if true_cw < current_width - 0.01 {
+                                            current_width = true_cw;
+                                            current_width_tw = pt_to_tw(current_width);
+                                            current_capw_tw = current_width_tw;
+                                        }
+                                    }
+                                }
+                            }
                             // COM-confirmed: tab positions are absolute from left margin.
                             // current_width is relative to the indent start, so we add
                             // indent_left to get the absolute position from margin.
                             let indent_left = para_style.indent_left.unwrap_or(0.0);
-                            // S881 (2026-07-16, default ON, opt-out OXI_S881_DISABLE):
-                            // a HANGING-indent paragraph has an IMPLIED tab stop at
-                            // indent_left, and its FIRST line starts at indent_left +
-                            // first_line_indent (fli < 0) — the old abs_pos convention
-                            // (current_width + indent_left) overshot by |fli| on line 1,
-                            // which BOTH mislocated the tab origin AND made the implied
-                            // stop unreachable (position <= abs_pos). legal__0001482d
-                            // (221pp): every 「7.⇥AS 2187…」 clause resolved its first
-                            // tab to the defaultTabStop grid (57.0 = 1140tw) instead of
-                            // the implied stop at the hanging indent (43.95 = 879tw);
-                            // the arithmetic closes EXACTLY on both engines (Word text
-                            // x 164.2 − margin 120.25 = 43.95; Oxi 177.2 − 120.25 =
-                            // 56.95 ≈ 57.0) → line 1 was 13.05pt narrower for every
-                            // clause = the doc's +2/+3-page main-body driver. Scope:
-                            // Latin docs (!doc_body_has_real_cjk) + hanging (fli<0) +
-                            // line 1; the corpus scan (style-chain-resolved) found the
-                            // hanging+literal-tab pattern in 0/1439 golden-test and
-                            // 0/50 docx_corpus/ja docs → JP byte-identical by
-                            // construction (JP list markers use the suffix-tab path,
-                            // not literal run tabs).
-                            let fli = para_style.indent_first_line.unwrap_or(0.0);
-                            // ★scope: paragraphs with NO explicit tab stops only —
-                            // the derived specimens (legal clauses) fall to the
-                            // default grid; ToC paragraphs carry explicit stops and
-                            // their resolution already matches Word (title x=148.85
-                            // verified) — the unscoped v1 disturbed them doc-wide.
-                            // ★HELD OPT-IN (OXI_S881=1, default OFF byte-identical):
-                            // BOTH cuts moved legal the WRONG way (+pages): v1
-                            // (unscoped) collapsed the ToC (explicit right-tab
-                            // paras disturbed, matched 3573->680); v2 (no-explicit-
-                            // stops scope) still +1408 at +3 — the breaker's
-                            // RELATIVE convention is anchored at ind_left (render
-                            // x = margin + ind_left + rel), so changing abs_pos/
-                            // next_relative to the line-start base widened
-                            // current_width by |fli| against an available-width
-                            // budget still computed in the ind_left convention ->
-                            // every clause wrapped ~30pt early. The focused fix
-                            // must express the implied stop IN the ind_left
-                            // convention (implied_conv = ind_left - fli on line 1)
-                            // or co-convert the line-1 budget — needs DBGFLUSH
-                            // instrumentation, not blind conversion.
-                            let s881 = std::env::var("OXI_S881").is_ok()
+                            // S881 (re-derived 2026-07-16, default ON, opt-out
+                            // OXI_S881_DISABLE): a HANGING indent creates an IMPLIED
+                            // tab stop at indent_left (Word merges it into the sorted
+                            // stop list). ★The prior opt-in v1/v2 failed by re-basing
+                            // line_start_abs at ind_left+fli while `current_width` is
+                            // ALREADY SEEDED with first_line_indent (12729) — abs_pos
+                            // was correct all along; re-basing double-counted |fli| and
+                            // wrapped every clause early. The ONLY missing piece is the
+                            // implied stop in the CANDIDATE LIST, including when
+                            // explicit stops exist but are exhausted (all <= abs_pos):
+                            // legal__0001482d Defpara 「⇥(b)⇥that is not ammunition…」
+                            // (right@66.6 + ind left=80.8 hanging=80.8) — after the
+                            // right stop, Word tabs to the hanging stop 80.8 (text x
+                            // 201.0); Oxi fell to the defaultTabStop grid 100.1 →
+                            // line 1 was 19.3pt narrower → 90 paragraphs doc-wide
+                            // wrapped one line early (each ~+13pt, net +1178pt ≈ the
+                            // doc's +2 pages). The effective (seeded) first_line_indent
+                            // param is the gate — list_consumes_hanging paras zero it,
+                            // so numbering suffix-tab machinery is untouched. Scope:
+                            // Latin (!doc_body_has_real_cjk); the hanging+literal-tab
+                            // pattern is 0/1439 golden-test + 0 docx_corpus/ja → JP
+                            // byte-identical by construction.
+                            let s881 = std::env::var("OXI_S881_DISABLE").is_err()
                                 && !self.doc_body_has_real_cjk
-                                && para_style.tab_stops.is_empty()
-                                && fli < -0.01
-                                && lines.is_empty();
-                            let line_start_abs = if s881 { indent_left + fli } else { indent_left };
+                                && first_line_indent < -0.01;
+                            let line_start_abs = indent_left;
                             let abs_pos = current_width + line_start_abs;
+                            // Continuation lines start at rel=0 → abs_pos == ind_left,
+                            // so the `>` guard auto-scopes the implied stop to line 1.
                             let implied_stop = if s881 && indent_left > abs_pos + 0.01 {
                                 Some(indent_left)
                             } else {
                                 None
                             };
-                            let (next_pos, tab_align) = if !para_style.tab_stops.is_empty() {
-                                para_style.tab_stops.iter()
-                                    .find(|ts| ts.position > abs_pos + 0.01)
-                                    .map(|ts| (ts.position, ts.alignment))
-                                    .unwrap_or_else(|| {
-                                        let tab_stop = self.default_tab_stop;
-                                        (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
-                                    })
-                            } else if let Some(imp) = implied_stop {
-                                (imp, TabStopAlignment::Left)
-                            } else {
-                                let tab_stop = self.default_tab_stop;
-                                (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
+                            let explicit_stop = para_style.tab_stops.iter()
+                                .find(|ts| ts.position > abs_pos + 0.01);
+                            let (next_pos, tab_align) = match (explicit_stop, implied_stop) {
+                                (Some(ts), Some(imp)) if imp < ts.position - 0.01 => {
+                                    (imp, TabStopAlignment::Left)
+                                }
+                                (Some(ts), _) => (ts.position, ts.alignment),
+                                (None, Some(imp)) => (imp, TabStopAlignment::Left),
+                                (None, None) => {
+                                    let tab_stop = self.default_tab_stop;
+                                    (((abs_pos / tab_stop).floor() + 1.0) * tab_stop, TabStopAlignment::Left)
+                                }
                             };
                             // Convert absolute tab position back to relative width
                             let mut next_relative = next_pos - line_start_abs;
@@ -14134,7 +14201,17 @@ impl LayoutEngine {
                                 run_index: frag_run_index,
                                 char_offset: char_pos_in_run,
                             });
+                            // S885: remember a right/center tab so the NEXT tab (and
+                            // the implied-stop guard) resolves from the aligned end.
+                            let s885_cw_before_jump = current_width;
                             current_width += w;
+                            rc_prev_tab = match tab_align {
+                                TabStopAlignment::Right | TabStopAlignment::Center => {
+                                    Some((next_relative, s885_cw_before_jump, current_width,
+                                          tab_align, lines.len()))
+                                }
+                                _ => None,
+                            };
                             // TABTW (2026-07-10, default ON, opt-out OXI_TABTW_DISABLE):
                             // a tab re-anchors the position at its ABSOLUTE tab stop, but
                             // only the float track advanced — current_width_tw (the track
@@ -16299,6 +16376,28 @@ impl LayoutEngine {
                 // R55 (2026-05-17): `line=0 atLeast` uses NATURAL line height
                 // without grid-snap. COM-confirmed via L1-L8 minimal repros.
                 // See line_height_inner counterpart for full reasoning.
+                // S887 (2026-07-16, default ON, opt-out OXI_S887_DISABLE): a
+                // Latin atLeast line's NATURAL component = hhea EXACT — the
+                // S671/S805 model reaching the atLeast rule (the cumulative
+                // S805 basis excludes atLeast; the no-type-grid path also
+                // applied the S609 per-line 0.75 device floor, which S671's
+                // derivation showed Word does NOT do per line — exact
+                // accumulate, render-time snap). legal__0001482d Indenta/
+                // Defpara (atLeast line=260, TNR 12, no-type docGrid 326):
+                // Word renders max(13.0, hhea 13.799) = 13.8/line vs Oxi's
+                // 0.75-floored 13.5 → −0.3 × ~27 lines/page ≈ −8pt/page
+                // systematic under-fill (measured: Word first→last para span
+                // per full page 475.5..482.3 vs Oxi 467.8..474.0 = −7.5..
+                // −8.3 EVERY page) = the doc-wide pcd −3 exposed once S881/
+                // S885 removed the compensating over-wraps.
+                if !self.doc_body_has_real_cjk
+                    && !dominant_cjk_83_64
+                    && hhea_natural_max > 0.0
+                    && (grid_pitch.is_none() || grid_no_type)
+                    && std::env::var("OXI_S887_DISABLE").is_err()
+                {
+                    return hhea_natural_max.max(val);
+                }
                 if val == 0.0 {
                     return base;
                 }

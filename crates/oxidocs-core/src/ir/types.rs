@@ -1279,6 +1279,11 @@ pub struct ParagraphStyle {
     /// Page break before this paragraph (w:pageBreakBefore)
     #[serde(default)]
     pub page_break_before: bool,
+    /// Whether pageBreakBefore was explicitly set in the paragraph's direct pPr.
+    /// A direct `<w:pageBreakBefore w:val="0"/>` overrides a style's
+    /// pageBreakBefore (S884 — same tri-state pattern as has_explicit_snap_to_grid).
+    #[serde(default, skip_serializing)]
+    pub has_explicit_page_break_before: bool,
     /// Page break AFTER this paragraph (empty-paragraph-with-inline-br pattern).
     /// Word renders the empty paragraph's mark on the CURRENT page then breaks.
     #[serde(default)]
@@ -1413,6 +1418,7 @@ impl Default for ParagraphStyle {
             shading: None,
             ppr_rpr: None,
             page_break_before: false,
+            has_explicit_page_break_before: false,
             page_break_after: false,
             borders: None,
             keep_next: false,

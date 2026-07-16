@@ -2023,8 +2023,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if style.shading.is_none() {
                 style.shading = ds.shading.clone();
             }
-            // Inherit page_break_before from style
-            if ds.page_break_before {
+            // Inherit page_break_before from style.
+            // S884: a DIRECT `<w:pageBreakBefore w:val="0"/>` overrides the
+            // style's pageBreakBefore (Word-confirmed on legal__0001482d:
+            // Heading2 sets pbb, the body "Part 1" heading disables it with
+            // val=0 and Word keeps it on the title page). Same tri-state
+            // pattern as has_explicit_snap_to_grid (S606b).
+            let s884 = std::env::var("OXI_S884_DISABLE").is_err();
+            if ds.page_break_before && !(s884 && style.has_explicit_page_break_before) {
                 style.page_break_before = true;
             }
             // Inherit snap_to_grid from style (false overrides struct default true).
@@ -2979,6 +2985,7 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.page_break_before = enabled;
+                        style.has_explicit_page_break_before = true;
                     }
                     "keepNext" => {
                         // CT_OnOff: presence alone = true; val="0"/"false"/"off"
