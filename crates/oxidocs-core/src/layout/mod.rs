@@ -4024,7 +4024,47 @@ impl LayoutEngine {
             // is now consumed), skip the cursor past the float (body wraps below).
             if let Some((ft_top, ft_bot, ft_page)) = text_float_region {
                 if current_page_idx == ft_page {
+                    // S872 (2026-07-16, default ON, opt-out OXI_S872_DISABLE): an
+                    // EMPTY paragraph whose line BOX would cross the float's top
+                    // is bumped below the float — the cursor-start-only test let
+                    // it overlap. policies__0009e9db Word COM truth: 7 empties
+                    // follow the centered Pathway float; Word puts #1 above the
+                    // float (box 367.5..382 fits above top 401.9) and bumps #2
+                    // (box 390..404.5 CROSSES) below to 642; Oxi placed #2 at
+                    // 390.4 in the gap. The downstream shift is what put the
+                    // vertAnchor=page Cognition float's flow position on page 1
+                    // (Word: page 2 — a float renders at tblpY on the page of
+                    // its FLOW position; probe _pb_floatanchor_gen: the float
+                    // stays with its flow position even at 1.5pt room, and the
+                    // flow position advances a page when the empties push past
+                    // the content bottom). Scoped to EMPTY paragraphs (the
+                    // S562b/S736 "empty paras use the full box" principle) —
+                    // text lines keep the cursor-only test (kyotei's 様式 label
+                    // sits in a gap its box may graze; S638 canary).
+                    // The line-box test must include the collapsed before-spacing
+                    // (max(prev_sa, own sb)) — the snap runs BEFORE layout_paragraph
+                    // applies it (policies pi10: cursor 382.36 + 8 + 14.49 = 404.85
+                    // crosses top 399.2; without the spacing 396.85 misses).
+                    // ★LATIN scope (!doc_body_has_real_cjk): the JP S638 gap-flow
+                    // (2ea81a/kyotei) is a calibrated balance under the cursor-only
+                    // rule — unscoped, S872 bumped 2ea81a's gap empty and cost
+                    // −0.0718 SSIM (ssim_ab, the only changed doc). The empty-box
+                    // rule is measured on policies (Word COM); a JP derivation
+                    // would need its own session.
+                    let s872_empty_cross = std::env::var("OXI_S872_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && cursor.cursor_y < ft_top - 0.1
+                        && matches!(block, Block::Paragraph(p)
+                            if p.runs.iter().all(|r| r.text.is_empty())
+                                && cursor.cursor_y
+                                    + prev_space_after.max(p.style.space_before.unwrap_or(0.0))
+                                    + self.estimate_para_height(p, content_width, grid_pitch,
+                                        None, false, None, None)
+                                    > ft_top + 0.1);
                     if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
+                        cursor.set(ft_bot);
+                        text_float_region = None;
+                    } else if s872_empty_cross {
                         cursor.set(ft_bot);
                         text_float_region = None;
                     } else if cursor.cursor_y >= ft_bot {
@@ -15247,7 +15287,7 @@ impl LayoutEngine {
         0.0
     }
 
-    /// S870 (2026-07-16, HELD OPT-IN OXI_S870=1, default OFF byte-identical):
+    /// S870 (2026-07-16, default ON, opt-out OXI_S870_DISABLE):
     /// the horizontal border ABOVE `row_idx`, which pads that row's content top.
     ///
     /// DERIVED from forms__000ee7c0 Word render-truth (PDF vectors + baselines,
@@ -15269,7 +15309,7 @@ impl LayoutEngine {
     /// byte-identical BY CONSTRUCTION.
     fn s870_row_top_border(&self, table: &Table, row_idx: usize) -> f32 {
         if self.doc_body_has_real_cjk
-            || std::env::var("OXI_S870").is_err()
+            || std::env::var("OXI_S870_DISABLE").is_ok()
             || table.style.border
             || table.style.has_inside_h
         {
@@ -15301,7 +15341,7 @@ impl LayoutEngine {
             return 0.0;
         }
         if !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S870").is_ok()
+            && std::env::var("OXI_S870_DISABLE").is_err()
             && !table.style.border
             && !table.style.has_inside_h
         {
@@ -19487,8 +19527,8 @@ impl LayoutEngine {
                                 }
                                 let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
-                                // S869 (2026-07-16, HELD OPT-IN OXI_S869=1, default OFF
-                                // byte-identical): LATINEM for the CELL wrapper. The cell
+                                // S869 (2026-07-16, default ON, opt-out OXI_S869_DISABLE):
+                                // LATINEM for the CELL wrapper. The cell
                                 // breaker is a SEPARATE greedy wrapper from break_into_lines,
                                 // so LATINEM (no-kern Latin breaks at the UN-ROUNDED em
                                 // advance) never reached a cell: char_width_pt_with_fallback
@@ -19502,14 +19542,12 @@ impl LayoutEngine {
                                 // width is CORRECT (verified on policies__0009e9db too: its
                                 // "Entry Level 3 and Level 1-2" float cell renders 1 line in
                                 // Word = the S869-ON wrap; float #1 bottom 641.92 = Word
-                                // 641.26). But it flips policies__0009e9db PASS→FAIL: the
-                                // correct, shorter float exposes a SEPARATE page-anchored
-                                // float bug (Word pushes the following body to page 2 via
-                                // the vertAnchor=page Cognition float's reservation; Oxi
-                                // keeps it on page 1 → 2pp vs Word 3pp). Ships default-ON
-                                // with that page-anchored float reservation fix.
+                                // 641.26). The policies PASS→FAIL this initially caused was
+                                // an S872 exposure (an empty para placed in a float gap its
+                                // line box crosses), fixed there — the S869+S870+S871+S872
+                                // set ships together (forms 1.000 + policies 1.000).
                                 // Same rule, same scope as break_into_lines' LATINEM.
-                                if std::env::var("OXI_S869").is_ok() {
+                                if std::env::var("OXI_S869_DISABLE").is_err() {
                                     let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
                                         && run.style.kern
                                             .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
@@ -22694,7 +22732,7 @@ impl LayoutEngine {
                 // cell wrapper): count_cell_lines MUST measure identically to
                 // the render or the row height diverges from the placed lines
                 // (the S716/S751 three-pass lesson).
-                if std::env::var("OXI_S869").is_ok() {
+                if std::env::var("OXI_S869_DISABLE").is_err() {
                     let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
                         && run.style.kern
                             .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
