@@ -35,21 +35,21 @@ Oxi's layout engine is measured against Microsoft Word using pixel-level SSIM ac
 ```mermaid
 xychart-beta
   title "Average SSIM vs Microsoft Word (235 docs, 410 pages)"
-  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12", "06-30", "07-12"]
+  x-axis ["03-28", "04-06", "04-14", "04-21", "04-28", "05-08", "05-12", "05-30", "06-03", "06-12", "06-30", "07-12", "07-17"]
   y-axis 0.78 --> 1.0
-  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189, 0.9253, 0.9370]
+  line [0.7884, 0.8430, 0.8584, 0.8625, 0.8699, 0.8855, 0.8895, 0.8862, 0.9126, 0.9189, 0.9253, 0.9370, 0.9378]
 ```
 
 > The small step at **05-30** is not a regression: the SSIM baseline was
 > recomputed from scratch that day, so points before and after sit on
-> slightly different measurement bases. The **07-12** point is a per-page mean;
-> the current (2026-07-14) figures are per-page mean **0.9373** (std 0.0632)
-> and per-doc mean **0.9590** (std 0.0437) over the 235-document Japanese
+> slightly different measurement bases. The line is a per-page mean;
+> the current (2026-07-17) figures are per-page mean **0.9378** (std 0.0625)
+> and per-doc mean **0.9591** (std 0.0434) over the 235-document Japanese
 > corpus.
 
 Two things make this number trustworthy rather than asserted:
 
-- **Every document clears a floor, not just the average.** As of 2026-07-14 the worst-scoring document in the whole corpus sits at **SSIM 0.80** — across all 235 Japanese documents *and* 6 English documents, none renders below 0.80 structural similarity to Word. A per-document floor is a stronger guarantee than a mean: it says *whichever* file you open, this is the least fidelity you get. The spread is tight around a high mean — Japanese per-document **mean 0.959, standard deviation 0.044** (211 of 235 documents score ≥ 0.90); English per-document **mean 0.847, standard deviation 0.023**. The floor (Japanese 0.802, English 0.820) is a genuine tail, not a broad shortfall.
+- **Every document clears a floor, not just the average.** As of 2026-07-17 the worst-scoring document in the whole corpus sits at **SSIM 0.80** — across all 235 Japanese documents *and* 6 English documents, none renders below 0.80 structural similarity to Word. A per-document floor is a stronger guarantee than a mean: it says *whichever* file you open, this is the least fidelity you get. The spread is tight around a high mean — Japanese per-document **mean 0.959, standard deviation 0.043** (212 of 235 documents score ≥ 0.90); English per-document **mean 0.853, standard deviation 0.029**. The floor (Japanese 0.802, English 0.822) is a genuine tail, not a broad shortfall.
 - **Pagination is exact.** Every paragraph of every corpus document lands on the same page as Microsoft Word (per-paragraph page match: **87/87 documents = 100%**, reached 2026-07-03, measured via Word COM). SSIM measures how a page looks; pagination measures whether it *is the same page*. A renderer can look plausible while shifting content across pages — the two metrics together close that gap.
 - **The gate is external, and it changed whenever it went blind.** Every score is against Microsoft Word's own render — never against Oxi's previous output. And when a measure plateaued because it structurally could not see the remaining error, the merge gate moved to one that could. The date-by-date progress table is in [docs/layout_accuracy.md](docs/layout_accuracy.md); the derivation log is [RESEARCH_LOG.md](RESEARCH_LOG.md).
 
@@ -63,17 +63,17 @@ The same SSIM pipeline scores third-party engines on identical inputs: each engi
 
 | Engine | mean SSIM vs Word (per page) | pages where best |
 |--------|------------------------------|------------------|
-| **Oxi** (2026-07-12 build) | **0.9370** | **188** / 406 |
-| ONLYOFFICE (x2t headless → PDF) | 0.8913 | 135 / 406 |
-| LibreOffice (soffice headless → PDF) | 0.8872 | 83 / 406 |
+| **Oxi** (2026-07-17 build) | **0.9377** | **188** / 406 |
+| ONLYOFFICE (x2t headless → PDF) | 0.8913 | 134 / 406 |
+| LibreOffice (soffice headless → PDF) | 0.8872 | 84 / 406 |
 
-Corpus: the 235-document / 410-page Japanese business-document baseline (regulations, government forms, contracts). LibreOffice and ONLYOFFICE page scores were rendered 2026-05-31 (both engines are deterministic; their output for these files does not change); the Oxi column is the current build. On 109 pages both third-party engines still beat Oxi — exactly those pages feed the bug-finder loop ("everyone matches Word except Oxi" = a guaranteed-fixable bug), so this table is a work queue, not just a scoreboard.
+Corpus: the 235-document / 410-page Japanese business-document baseline (regulations, government forms, contracts). LibreOffice and ONLYOFFICE page scores were rendered 2026-05-31 (both engines are deterministic; their output for these files does not change); the Oxi column is the current build. On 111 pages both third-party engines still beat Oxi — exactly those pages feed the bug-finder loop ("everyone matches Word except Oxi" = a guaranteed-fixable bug), so this table is a work queue, not just a scoreboard.
 
 Against **@silurus/ooxml** (the closest architectural neighbor — also Rust/WASM + canvas, driven headlessly via Playwright): on an 8-document Japanese **vertical-writing** subset (30 paired pages, same Word ground truth; silurus built from source at `797a3efab0da`, 2026-07-13, including its newest vertical-glyph work) — **Oxi 0.861 / LibreOffice 0.785 / silurus 0.755**, Oxi ahead of silurus on 29/30 pages. (LibreOffice's 0.785 here vs 0.887 on the full baseline above is a different corpus, not a contradiction: every engine scores lower on this subset — Oxi included, 0.861 vs 0.937 — because vertical writing is where all engines lose the most.) silurus's recent real-`vert`-glyph rendering (long marks, dashes) is visually correct, but it does not close the distance to Word: glyph orientation and Word fidelity are different problems, and the difference is the measurement loop, not the tech stack. silurus also mis-paginates the corpus (101 pages vs Word's 94 on a split-table document; 18 vs 16 on an index document; 2 vs 1 on a single-page form).
 
-Honest counterpoint: on the newer 6-document **English** corpus (UK/US government forms and contracts, opened 2026-07-08) the engines are currently tied at ~0.8 per-doc, with LibreOffice slightly ahead — Japanese typography is where Oxi's measured differentiation is today. The English documents are in the same pagination gate and closing week by week (3 of 6 already at 100% paragraph-page match).
+English is no longer a blanket counterpoint, but it is not closed either. On the 6-document **English** corpus (UK/US government forms and contracts, opened 2026-07-08) Oxi now leads: per-doc **Oxi 0.853 vs LibreOffice 0.789** (2026-07-17; Oxi ahead on 5 of 6 documents), and all 6 documents reached **100% paragraph-page pagination match** on 2026-07-14 — the "closing week by week" prediction landed. The honest counterpoint has moved to the wild: on a broader 50-document English benchmark sampled from the public docx-corpus (5 per document type, frozen selection rule, same Word ground truth) LibreOffice is still ahead — per-doc **Oxi 0.820 vs LibreOffice 0.853**, LibreOffice best on 33 of 49 pairs — and 41 of those 50 documents already match Word's pagination. That gap is the current English work queue.
 
-Reproduce: `tools/metrics/compare_renderers_3way.py` (Libra/OO), `tools/metrics/render_libra.py`, `tools/metrics/render_onlyoffice.py`, `tools/metrics/browser_oracle.py` + `tools/browser-oracle/` (silurus), `tools/metrics/ssim_now.py` (Oxi absolute re-measure).
+Reproduce: `tools/metrics/compare_renderers_3way.py` (Libra/OO), `tools/metrics/render_libra.py`, `tools/metrics/render_onlyoffice.py`, `tools/metrics/browser_oracle.py` + `tools/browser-oracle/` (silurus), `tools/metrics/ssim_now.py` (Oxi absolute re-measure), `tools/metrics/en_bench.py` (English wild-corpus benchmark).
 
 ---
 
@@ -266,7 +266,7 @@ Oxi treats every document as untrusted input. A hostile file can render wrong �
 ## Roadmap
 
 - **v1 — Foundation (current):** Word-compatible .docx rendering — pagination 87/87 = 100%, SSIM convergence via the Ra loop; .xlsx/.pptx/PDF parsing and basic rendering; round-trip editing; WASM + Canvas editor
-- **v1.x — Word parity:** close the remaining per-page SSIM gap (0.937 → 0.99+); English corpus to parity; IME (Japanese/CJK input) and editor polish; .xlsx/.pptx layout engines
+- **v1.x — Word parity:** close the remaining per-page SSIM gap (0.938 → 0.99+); English corpus to parity; IME (Japanese/CJK input) and editor polish; .xlsx/.pptx layout engines
 - **v2 — Format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level; round-trip preservation tests
 
 The measurement loop (deterministic reference output, falsifiable hypotheses, external merge gate) transfers to ODF once the v2 baseline lands — only the reference renderer changes.
