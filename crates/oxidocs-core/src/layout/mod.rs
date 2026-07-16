@@ -15247,6 +15247,69 @@ impl LayoutEngine {
         0.0
     }
 
+    /// S870 (2026-07-16, HELD OPT-IN OXI_S870=1, default OFF byte-identical):
+    /// the horizontal border ABOVE `row_idx`, which pads that row's content top.
+    ///
+    /// DERIVED from forms__000ee7c0 Word render-truth (PDF vectors + baselines,
+    /// Calibri 10, a fixed-layout table with NO tblBorders but cell-level
+    /// `tcBorders bottom sz=4`): Word starts a row's content at the BOTTOM of the
+    /// rule above it, so
+    ///     row pitch  = border 0.48 + line 12.207 = 12.69   (measured 12.720)
+    ///     baseline   = rule_y1 121.58 + win_ascent 9.52 = 131.10 (measured 131.060)
+    ///     row 0      = line only 12.16 (no rule above)     (measured, confirms)
+    /// This is the derived _rowbox_sweep model ("insideH sz4 -> 0.56; cell
+    /// tcBorders == table insideH") for the case it never covered: the border is
+    /// a ROW-level rule, but `rowbox2_border_pad` keys off the cell's OWN
+    /// tcBorders — so the cell carrying the TEXT (which declares none here) got
+    /// pad 0 and every row came out one border short (-0.5/row, ~-17pt/page).
+    ///
+    /// Scope: only when the table has no table-level horizontal border (those
+    /// already pad every cell via rowbox2_border_pad) and the doc has no real
+    /// CJK -> the JP corpus + S666's docGrid cell-tcBorder path are
+    /// byte-identical BY CONSTRUCTION.
+    fn s870_row_top_border(&self, table: &Table, row_idx: usize) -> f32 {
+        if self.doc_body_has_real_cjk
+            || std::env::var("OXI_S870").is_err()
+            || table.style.border
+            || table.style.has_inside_h
+        {
+            return 0.0;
+        }
+        // widest horizontal tcBorder on a row's cells (side: false=top, true=bottom)
+        let horiz = |row: &TableRow, bottom: bool| -> f32 {
+            row.cells.iter()
+                .filter_map(|c| c.borders.as_ref())
+                .filter_map(|b| if bottom { b.bottom.as_ref() } else { b.top.as_ref() })
+                .map(|d| d.width)
+                .fold(0.0f32, f32::max)
+        };
+        let Some(this) = table.rows.get(row_idx) else { return 0.0 };
+        if row_idx == 0 {
+            // No rule above unless this row declares its own top border.
+            horiz(this, false)
+        } else {
+            // The rule above = the previous row's bottom border (or this row's top).
+            table.rows.get(row_idx - 1).map_or(0.0, |p| horiz(p, true))
+                .max(horiz(this, false))
+        }
+    }
+
+    /// ROWBOX2 border pad for a cell, with the S870 row-level rule for Latin
+    /// docs (see s870_row_top_border). Falls back to the legacy per-cell value.
+    fn rowbox2_border_pad_row(&self, table: &Table, row_idx: usize, cell: &TableCell) -> f32 {
+        if !self.rowbox2_pad_on() {
+            return 0.0;
+        }
+        if !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S870").is_ok()
+            && !table.style.border
+            && !table.style.has_inside_h
+        {
+            return self.s870_row_top_border(table, row_idx);
+        }
+        self.rowbox2_border_pad(table, cell)
+    }
+
     /// ROWBOX2: the border width added to a BINDING atLeast trHeight
     /// (row pitch = trH + bw; hRule=exact stays trH exactly — the derived
     /// border-box model, _rowbox_sweep.py). Row-level: table border /
@@ -17269,7 +17332,8 @@ impl LayoutEngine {
                 if self.rowbox2_pad_on() {
                     // ROWBOX2: generalized Round30 — bw pads the content top
                     // ADDITIVELY with explicit cellMar, incl. cell tcBorders.
-                    pad_t += self.rowbox2_border_pad(table, cell);
+                    // S870: Latin docs use the ROW's rule (see the helper).
+                    pad_t += self.rowbox2_border_pad_row(table, row_idx, cell);
                 } else if pad_t == 0.0 && table.style.border {
                     pad_t = table.style.border_width.unwrap_or(0.4);
                 }
@@ -18178,7 +18242,8 @@ impl LayoutEngine {
                 // (see height-calc site above; -0.0082 corpus regression).
                 if self.rowbox2_pad_on() {
                     // ROWBOX2: generalized Round30 (see the first-pass site).
-                    pad_t += self.rowbox2_border_pad(table, cell);
+                    // S870: Latin docs use the ROW's rule (see the helper).
+                    pad_t += self.rowbox2_border_pad_row(table, row_idx, cell);
                 } else if pad_t == 0.0 && table.style.border {
                     let bw = table.style.border_width.unwrap_or(0.4);
                     pad_t = bw;
@@ -19422,6 +19487,42 @@ impl LayoutEngine {
                                 }
                                 let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                                // S869 (2026-07-16, HELD OPT-IN OXI_S869=1, default OFF
+                                // byte-identical): LATINEM for the CELL wrapper. The cell
+                                // breaker is a SEPARATE greedy wrapper from break_into_lines,
+                                // so LATINEM (no-kern Latin breaks at the UN-ROUNDED em
+                                // advance) never reached a cell: char_width_pt_with_fallback
+                                // rounds every char to 10tw (0.5pt), which for Calibri 10pt
+                                // biases +0.144/char. forms__000ee7c0 render-truth: Word
+                                // fits "Has student previously received an Individual
+                                // Evaluation?" on ONE line at 233.45pt = EXACTLY the em
+                                // width from the real Calibri TTF (Oxi's width table is
+                                // unit-exact); the 10tw round summed 241.50 > wrap 238.05
+                                // so Oxi wrapped to 2 lines (+11.67pt) on four rows. The em
+                                // width is CORRECT (verified on policies__0009e9db too: its
+                                // "Entry Level 3 and Level 1-2" float cell renders 1 line in
+                                // Word = the S869-ON wrap; float #1 bottom 641.92 = Word
+                                // 641.26). But it flips policies__0009e9db PASS→FAIL: the
+                                // correct, shorter float exposes a SEPARATE page-anchored
+                                // float bug (Word pushes the following body to page 2 via
+                                // the vertAnchor=page Cognition float's reservation; Oxi
+                                // keeps it on page 1 → 2pp vs Word 3pp). Ships default-ON
+                                // with that page-anchored float reservation fix.
+                                // Same rule, same scope as break_into_lines' LATINEM.
+                                if std::env::var("OXI_S869").is_ok() {
+                                    let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                                        && run.style.kern
+                                            .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                                            .map_or(false, |k| k > 0.0 && font_size >= k);
+                                    if !kern_active
+                                        && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                                        && !self.doc_body_has_real_cjk
+                                        && !kinsoku::is_cjk(ch)
+                                        && cm.char_widths.contains_key(&ch)
+                                    {
+                                        cw = cm.char_width_em(ch) * font_size;
+                                    }
+                                }
                                 // S691 (2026-06-29) FALSIFIED: forcing full-width digits (U+FF1x)
                                 // to font_size in the cell break (OXI_FWDIGIT) was a NO-OP — the
                                 // 第N条-marker break-width discrepancy (--dump-layout 9.5/char vs
@@ -22589,6 +22690,24 @@ impl LayoutEngine {
                 }
                 let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                // S869 estimate mirror (see the render-loop comment at the
+                // cell wrapper): count_cell_lines MUST measure identically to
+                // the render or the row height diverges from the placed lines
+                // (the S716/S751 three-pass lesson).
+                if std::env::var("OXI_S869").is_ok() {
+                    let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                        && run.style.kern
+                            .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                            .map_or(false, |k| k > 0.0 && font_size >= k);
+                    if !kern_active
+                        && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && !kinsoku::is_cjk(ch)
+                        && cm.char_widths.contains_key(&ch)
+                    {
+                        cw = cm.char_width_em(ch) * font_size;
+                    }
+                }
                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
                 // S342 SHIP (2026-05-27): default ON. Drops snap_to_grid gate from
