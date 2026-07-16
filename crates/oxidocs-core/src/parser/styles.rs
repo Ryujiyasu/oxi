@@ -86,6 +86,11 @@ pub fn parse_styles(xml: &str, theme: &ThemeColors) -> Result<StyleSheet, ParseE
                             if typ == "paragraph" && is_default {
                                 styles.default_paragraph_style_id = Some(id.clone());
                             }
+                            // S871: track the default TABLE style too — a table
+                            // with no w:tblStyle still inherits it (ECMA-376).
+                            if typ == "table" && is_default {
+                                styles.default_table_style_id = Some(id.clone());
+                            }
                             if typ == "paragraph" || typ == "character" {
                                 let (pstyle, based_on, align) = parse_style_definition(&mut reader, theme)?;
                                 styles.styles.insert(

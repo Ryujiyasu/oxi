@@ -1706,6 +1706,12 @@ pub struct StyleSheet {
     /// Default paragraph style ID (w:type="paragraph" w:default="1")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_paragraph_style_id: Option<String>,
+    /// Default TABLE style ID (w:type="table" w:default="1", normally
+    /// "TableNormal"). Per ECMA-376 a table with no explicit `w:tblStyle`
+    /// still inherits the default table style — which is where Word's
+    /// "default" 108tw cellMar actually lives. See S871.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_table_style_id: Option<String>,
     /// Font table from word/fontTable.xml: font_name -> FontInfo
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub font_table: HashMap<String, FontInfo>,

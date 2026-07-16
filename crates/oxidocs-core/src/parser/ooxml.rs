@@ -6208,7 +6208,30 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
     // af defines tblCellMar left/right=108tw, the table itself has explicit
     // tblBorders) dropped the inherited 108tw cellMar and fell back to the 4.95pt
     // default — making the cell wrap budget ~10.8pt too wide (+1 char/line).
-    if let Some(ref style_id) = style.style_id {
+    // S871 (2026-07-16, default ON, opt-out OXI_S871_DISABLE): a
+    // table with NO explicit `w:tblStyle` still inherits the DEFAULT table style
+    // (ECMA-376 §17.7.6: w:type="table" w:default="1", normally "TableNormal") —
+    // where Word's "default" cellMar actually lives. S531 fixed the inheritance
+    // but gated it on an explicit style_id, so a style-less table fell back to
+    // the hardcoded 4.95pt (99tw) instead of TableNormal's declared 108tw
+    // (5.4pt). forms__000ee7c0 render-truth: Word's cell text starts at x=41.40
+    // = cell_x 36.0 + 5.4 (Oxi: 40.95 = +4.95), and the narrower budget is what
+    // makes Word wrap "Chair / ODR" (44.209pt) in a 44.1pt inner width where Oxi
+    // fit it on one line. Same "the default style applies when none is named"
+    // class as S657 (contextualSpacing).
+    // ★Ships as the S869+S870+S871+S872 set (SSIM +0.1747, 10 improved / 0
+    // regressed, 0 corpus pagination flips): the three are a compensating
+    // TRIPLE for forms__000ee7c0 (each alone pushes forms −1; together 1.000)
+    // and S872 fixes the float-gap empty-para exposure S869 surfaced in
+    // policies__0009e9db.
+    let eff_tbl_style_id = style.style_id.clone().or_else(|| {
+        if std::env::var("OXI_S871_DISABLE").is_ok() {
+            None
+        } else {
+            styles.default_table_style_id.clone()
+        }
+    });
+    if let Some(ref style_id) = eff_tbl_style_id {
         if let Some(tbl_style) = styles.table_styles.get(style_id) {
             if style.default_cell_margins.is_none() {
                 style.default_cell_margins = tbl_style.default_cell_margins.clone();

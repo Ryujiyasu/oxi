@@ -4024,7 +4024,47 @@ impl LayoutEngine {
             // is now consumed), skip the cursor past the float (body wraps below).
             if let Some((ft_top, ft_bot, ft_page)) = text_float_region {
                 if current_page_idx == ft_page {
+                    // S872 (2026-07-16, default ON, opt-out OXI_S872_DISABLE): an
+                    // EMPTY paragraph whose line BOX would cross the float's top
+                    // is bumped below the float — the cursor-start-only test let
+                    // it overlap. policies__0009e9db Word COM truth: 7 empties
+                    // follow the centered Pathway float; Word puts #1 above the
+                    // float (box 367.5..382 fits above top 401.9) and bumps #2
+                    // (box 390..404.5 CROSSES) below to 642; Oxi placed #2 at
+                    // 390.4 in the gap. The downstream shift is what put the
+                    // vertAnchor=page Cognition float's flow position on page 1
+                    // (Word: page 2 — a float renders at tblpY on the page of
+                    // its FLOW position; probe _pb_floatanchor_gen: the float
+                    // stays with its flow position even at 1.5pt room, and the
+                    // flow position advances a page when the empties push past
+                    // the content bottom). Scoped to EMPTY paragraphs (the
+                    // S562b/S736 "empty paras use the full box" principle) —
+                    // text lines keep the cursor-only test (kyotei's 様式 label
+                    // sits in a gap its box may graze; S638 canary).
+                    // The line-box test must include the collapsed before-spacing
+                    // (max(prev_sa, own sb)) — the snap runs BEFORE layout_paragraph
+                    // applies it (policies pi10: cursor 382.36 + 8 + 14.49 = 404.85
+                    // crosses top 399.2; without the spacing 396.85 misses).
+                    // ★LATIN scope (!doc_body_has_real_cjk): the JP S638 gap-flow
+                    // (2ea81a/kyotei) is a calibrated balance under the cursor-only
+                    // rule — unscoped, S872 bumped 2ea81a's gap empty and cost
+                    // −0.0718 SSIM (ssim_ab, the only changed doc). The empty-box
+                    // rule is measured on policies (Word COM); a JP derivation
+                    // would need its own session.
+                    let s872_empty_cross = std::env::var("OXI_S872_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && cursor.cursor_y < ft_top - 0.1
+                        && matches!(block, Block::Paragraph(p)
+                            if p.runs.iter().all(|r| r.text.is_empty())
+                                && cursor.cursor_y
+                                    + prev_space_after.max(p.style.space_before.unwrap_or(0.0))
+                                    + self.estimate_para_height(p, content_width, grid_pitch,
+                                        None, false, None, None)
+                                    > ft_top + 0.1);
                     if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
+                        cursor.set(ft_bot);
+                        text_float_region = None;
+                    } else if s872_empty_cross {
                         cursor.set(ft_bot);
                         text_float_region = None;
                     } else if cursor.cursor_y >= ft_bot {
@@ -7802,23 +7842,25 @@ impl LayoutEngine {
                     // heights with the trHeight floor, identical to the S731
                     // header arm.
                     //
-                    // ★HELD OPT-IN (OXI_S868=1, default OFF = byte-identical):
-                    // default-ON flips administrative__0006985e FAIL→PASS but
-                    // knocks forms__000ee7c0ec3f9325 PASS→FAIL (+1) = a merge-gate
-                    // violation (n_pass 37 either way, but 1 PASS→FAIL). The two
-                    // real docs CONTRADICT each other and the controlled probe:
-                    //   _pb_ftrtbl_gen.py (administrative's geometry, 230 renders)
-                    //   cT1(table+para) ≡ cP2(2 paras) and cT2 ≡ cP3 EXACTLY
-                    //   ⇒ a footer table costs exactly its rows, no extra term.
-                    // administrative agrees (its footer table must push); forms
-                    // does NOT — Word there keeps cbot at the ~margin (770.4),
-                    // IGNORING a 24pt footer intrusion, though the marker-injection
-                    // pin proves both its table row (ink 747.7) and trailing para
-                    // (759.3) render. The missing discriminator is when a footer
-                    // pushes the body at all (the probe's cP1 shows the same
-                    // anomaly: Word ignored a 5.3pt intrusion but respected 18pt
-                    // at cP2). Ship default-ON only once that is derived.
-                    if std::env::var("OXI_S868").is_ok() {
+                    // ★S868b (2026-07-16, default ON, opt-out OXI_S868_DISABLE):
+                    // the old hold ("the two real docs contradict each other")
+                    // DISSOLVED — both blockers were mis-attributions:
+                    //   * administrative's "~13pt UNEXPLAINED stack" was an
+                    //     ORPHAN readback: its −1 para is a 6-line list Word
+                    //     widow-pushes WHOLE to p3 (line1 fits cbot 751.95 =
+                    //     64.65 + stack 25.3 exactly; line2 doesn't). No extra
+                    //     stack term exists; the existing orphan arm fires.
+                    //   * forms' "Word ignores the intrusion" reading was the
+                    //     pre-S869/S870/S871 ~17pt body drift; with the triple
+                    //     shipped the body ends above the full-stack cbot.
+                    // The stack's TABLE term is the ROWBOX2 row pitch, derived
+                    // by _pb_ftrtbl2_gen.py (126 renders): max(content line,
+                    // trHeight-atLeast) + cellMar t/b (linear, additive) + the
+                    // top/bottom border DRAW widths — single = sz/8 per side,
+                    // DOUBLE = 3×sz/8 per side (double sz4 ≡ single sz12 =
+                    // 1.5pt/side). forms' footer row closes: cell line 9.77 +
+                    // double sz4 1.5×2 = 12.77 ≈ Word 12.72.
+                    if std::env::var("OXI_S868_DISABLE").is_err() {
                         let col_widths = self.resolve_table_col_widths(t, cw);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
@@ -7827,6 +7869,40 @@ impl LayoutEngine {
                             dp.and_then(|m| m.top).unwrap_or(0.0),
                             dp.and_then(|m| m.bottom).unwrap_or(0.0),
                         );
+                        // Effective border draw width for the stack: double
+                        // borders draw 3×(sz/8) per side (probe bD4 ≡ bS12).
+                        let eff_bw = |d: Option<&BorderDef>| -> f32 {
+                            d.map_or(0.0, |b| if b.style == "double" {
+                                b.width * 3.0
+                            } else {
+                                b.width
+                            })
+                        };
+                        // v1 border term: the TABLE-level top/bottom borders
+                        // once per table (corpus footer tables are 1-row; the
+                        // probe measured exactly this shape). Border style
+                        // rides on table.style (border_width/border_style).
+                        let tbl_border_term = if t.style.border {
+                            let w = t.style.border_width.unwrap_or(0.5);
+                            let m = if t.style.border_style.as_deref() == Some("double") {
+                                3.0
+                            } else {
+                                1.0
+                            };
+                            2.0 * w * m
+                        } else {
+                            // cell-level tcBorders on the single row (top of
+                            // the first row + bottom of the last row).
+                            let top = t.rows.first().map_or(0.0, |r| r.cells.iter()
+                                .filter_map(|c| c.borders.as_ref())
+                                .map(|b| eff_bw(b.top.as_ref()))
+                                .fold(0.0f32, f32::max));
+                            let bot = t.rows.last().map_or(0.0, |r| r.cells.iter()
+                                .filter_map(|c| c.borders.as_ref())
+                                .map(|b| eff_bw(b.bottom.as_ref()))
+                                .fold(0.0f32, f32::max));
+                            top + bot
+                        };
                         for row in &t.rows {
                             let nat = self.estimate_table_row_natural_h(
                                 row, &col_widths, pl, pr, pt, pb, t,
@@ -7838,6 +7914,7 @@ impl LayoutEngine {
                             }).unwrap_or(nat);
                             footer_h += h;
                         }
+                        footer_h += tbl_border_term;
                         // A table breaks the paragraph spacing chain (the S813
                         // rule the header arm applies): flush the pending after.
                         if let Some(last) = s803_prev_sa.take() {
@@ -8184,27 +8261,49 @@ impl LayoutEngine {
             // the OR-both gate zeroed it). Mixed pairs require a direct val=0
             // override under a contextual style → corpus-wide only nyserda.
             if para.style.style_id.as_deref() == prev_style_id {
-                let eff_sb = if para.style.contextual_spacing { 0.0 } else { space_before };
-                let eff_psa = if prev_contextual_spacing { 0.0 } else { prev_space_after };
-                effective_spacing = eff_sb.max(eff_psa);
-                // S861 (2026-07-15): contextualSpacing on the PREVIOUS paragraph
-                // removes the ENTIRE below-gap (prev→cur), including cur's OWN
-                // before-spacing — not just prev's after. DERIVED from the Word
-                // PDF of educational__000555ad (contextualSpacing on Normal-style
-                // numbered items with before=180): a ctx list item followed by a
-                // same-style non-ctx continuation renders with gap=0 (Word pitch
-                // 20.16 = one line, no before), where the per-side S782 model kept
-                // cur.before → +9pt/boundary drift → 2 paras spilled a page.
-                // The below-gap is Word-driven by the UPPER paragraph's ctx and is
-                // ASYMMETRIC (a ctx LOWER paragraph does NOT suppress the gap — obs
-                // p60→p61 keeps before). Opt-out: cur explicitly carries
-                // <w:contextualSpacing w:val="0"/> (has_explicit + !contextual) →
-                // keep cur.before (the S782 nyserda '(c) Indirect Costs' case).
-                if prev_contextual_spacing
-                    && !para.style.has_explicit_contextual_spacing
-                    && std::env::var("OXI_S861_DISABLE").is_err()
-                {
-                    effective_spacing = 0.0;
+                // S874 (2026-07-16, default ON, opt-out OXI_S874_DISABLE): the
+                // COMPLETE contextualSpacing model, replacing S782 per-side +
+                // S861 zero-out. DERIVED from a 19-point controlled probe
+                // (_pb_ctxsp_gen c1-c6 + _pb_ctxsp2_gen d1-d11, Word COM
+                // Info(6) gaps): the same-style gap is LAYERED —
+                //     gap = [lower layer a = prev.after (owned by PREV)]
+                //         + [excess layer max(0, b - a)  (owned by CUR)]
+                // and contextualSpacing removes only the layer its OWNER owns:
+                //     (prev_ctx, cur_ctx) -> applied gap
+                //     (false, false) -> max(a, b)
+                //     (true,  false) -> max(0, b - a)   [S861's zero was WRONG]
+                //     (false, true)  -> a               [= the S782 per-side]
+                //     (true,  true)  -> 0
+                // Decisive points: d1 (A ctx a=4.5, b=18) = 13.5 = b-a (neither
+                // zero, max, nor pure-removal); d9 (B ctx, 9/9) = 9 = a (the
+                // "lower ctx applies 9" was the REMAINING a, not b). This one
+                // formula closes educational__000555ad (upper ctx, 9/9 -> 0 =
+                // what S861 fixed), forms__00042714 wi179 (upper ctx, a=0,
+                // b=18 -> 18 KEPT — S861 wrongly zeroed it, the doc's -1), and
+                // the c2/c3/c4 counter-probes (upper ctx + b=18, a=... -> Word
+                // KEEPS the excess). An explicit <w:contextualSpacing w:val="0"/>
+                // resolves to cur_ctx=false and takes the (true,false) branch.
+                if std::env::var("OXI_S874_DISABLE").is_err() {
+                    let a = prev_space_after;
+                    let b = space_before;
+                    effective_spacing =
+                        match (prev_contextual_spacing, para.style.contextual_spacing) {
+                            (true, true) => 0.0,
+                            (true, false) => (b - a).max(0.0),
+                            (false, true) => a,
+                            (false, false) => a.max(b),
+                        };
+                } else {
+                    // Legacy S782 per-side + S861 zero-out (superseded).
+                    let eff_sb = if para.style.contextual_spacing { 0.0 } else { space_before };
+                    let eff_psa = if prev_contextual_spacing { 0.0 } else { prev_space_after };
+                    effective_spacing = eff_sb.max(eff_psa);
+                    if prev_contextual_spacing
+                        && !para.style.has_explicit_contextual_spacing
+                        && std::env::var("OXI_S861_DISABLE").is_err()
+                    {
+                        effective_spacing = 0.0;
+                    }
                 }
             }
         }
@@ -9025,7 +9124,60 @@ impl LayoutEngine {
                             self.metrics_for_text(&f.text, &f.style, &para.style).win_descent * fs
                         })
                         .fold(0.0f32, f32::max);
-                    let target = obj_h + descent;
+                    // S875 (2026-07-16, ★HELD OPT-IN OXI_S875=1, default OFF
+                    // byte-identical): the line rule's EXTRA LEADING on an
+                    // object line — the
+                    // 2-arm model DERIVED by _pb_objline_gen.py (36 configs,
+                    // obj {12,18,24} × line {240,276,360} × mixed/solo ×
+                    // Arial/Calibri, Word COM):
+                    //   MIXED: H = max(normal_line, obj + win_desc + extra)
+                    //   SOLO:  H = obj + extra          (NO descent, NO clamp:
+                    //          c12240s = 12.0 < the 13.43 Calibri text line)
+                    // where extra = the AUTO line-rule multiple's addition
+                    // (240→0, 276→+15%, 360→+50%). The sweep DECISIVELY
+                    // rejects two rivals: solo=obj+raw-desc (REPORT2's read —
+                    // the 240 solo row is obj EXACTLY) and desc×factor (360
+                    // predicts 21.5 vs observed 24.0); the Calibri series pins
+                    // WIN descent. The old obj+desc (v1) = the 240 degenerate
+                    // form. ★HELD: the sweep and the REAL doc still disagree.
+                    // The per-paragraph line rule surfaces cleanly (member
+                    // rows resolve ls=1.0, drug rows 1.15 — the [S875] trace)
+                    // and the factor now computes correctly, yet applying
+                    // +extra to every inheriting object line (~50 in
+                    // forms__00042714) adds ~95pt where the doc's page
+                    // arithmetic needs only ~20 → {+1:2, pcd+1}. The sweep's
+                    // solo paras were BARE <w:object>; the doc's solo 
+                    // lines are FORMTEXT FIELD-wrapped objects — the likely
+                    // second discriminator, underived. Ship path: a
+                    // faithful-doc per-line Word measurement (map each of the
+                    // ~60 object lines' Word heights) OR a field-wrapped
+                    // variant of _pb_objline_gen, then flip default-ON.
+                    let extra = if std::env::var("OXI_S875").is_ok() {
+                        // line_spacing under the auto rule is stored as the
+                        // MULTIPLE itself (1.15, not 13.8pt — the [S875] trace:
+                        // drug rows ls=Some(1.15), member rows ls=Some(1.0)).
+                        let factor = if matches!(para.style.line_spacing_rule.as_deref(),
+                            None | Some("auto"))
+                        {
+                            para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0)
+                        } else {
+                            1.0
+                        };
+                        if factor > 1.0 {
+                            line_heights[li] * (1.0 - 1.0 / factor)
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+                    if std::env::var("OXI_DBG_S875").is_ok() {
+                        let txt: String = line.fragments.iter().map(|f| f.text.as_str()).collect::<String>().chars().take(20).collect();
+                        eprintln!("[S875] li={} obj_h={:.1} desc={:.2} extra={:.2} lsr={:?} ls={:?} lh={:.2} txt={:?}",
+                            li, obj_h, descent, extra, para.style.line_spacing_rule,
+                            para.style.line_spacing, line_heights[li], txt);
+                    }
+                    let target = obj_h + descent + extra;
                     if target > line_heights[li] { line_heights[li] = target; }
                     if target > natural_line_heights[li] { natural_line_heights[li] = target; }
                     if target > ink_line_heights[li] { ink_line_heights[li] = target; }
@@ -15247,6 +15399,69 @@ impl LayoutEngine {
         0.0
     }
 
+    /// S870 (2026-07-16, default ON, opt-out OXI_S870_DISABLE):
+    /// the horizontal border ABOVE `row_idx`, which pads that row's content top.
+    ///
+    /// DERIVED from forms__000ee7c0 Word render-truth (PDF vectors + baselines,
+    /// Calibri 10, a fixed-layout table with NO tblBorders but cell-level
+    /// `tcBorders bottom sz=4`): Word starts a row's content at the BOTTOM of the
+    /// rule above it, so
+    ///     row pitch  = border 0.48 + line 12.207 = 12.69   (measured 12.720)
+    ///     baseline   = rule_y1 121.58 + win_ascent 9.52 = 131.10 (measured 131.060)
+    ///     row 0      = line only 12.16 (no rule above)     (measured, confirms)
+    /// This is the derived _rowbox_sweep model ("insideH sz4 -> 0.56; cell
+    /// tcBorders == table insideH") for the case it never covered: the border is
+    /// a ROW-level rule, but `rowbox2_border_pad` keys off the cell's OWN
+    /// tcBorders — so the cell carrying the TEXT (which declares none here) got
+    /// pad 0 and every row came out one border short (-0.5/row, ~-17pt/page).
+    ///
+    /// Scope: only when the table has no table-level horizontal border (those
+    /// already pad every cell via rowbox2_border_pad) and the doc has no real
+    /// CJK -> the JP corpus + S666's docGrid cell-tcBorder path are
+    /// byte-identical BY CONSTRUCTION.
+    fn s870_row_top_border(&self, table: &Table, row_idx: usize) -> f32 {
+        if self.doc_body_has_real_cjk
+            || std::env::var("OXI_S870_DISABLE").is_ok()
+            || table.style.border
+            || table.style.has_inside_h
+        {
+            return 0.0;
+        }
+        // widest horizontal tcBorder on a row's cells (side: false=top, true=bottom)
+        let horiz = |row: &TableRow, bottom: bool| -> f32 {
+            row.cells.iter()
+                .filter_map(|c| c.borders.as_ref())
+                .filter_map(|b| if bottom { b.bottom.as_ref() } else { b.top.as_ref() })
+                .map(|d| d.width)
+                .fold(0.0f32, f32::max)
+        };
+        let Some(this) = table.rows.get(row_idx) else { return 0.0 };
+        if row_idx == 0 {
+            // No rule above unless this row declares its own top border.
+            horiz(this, false)
+        } else {
+            // The rule above = the previous row's bottom border (or this row's top).
+            table.rows.get(row_idx - 1).map_or(0.0, |p| horiz(p, true))
+                .max(horiz(this, false))
+        }
+    }
+
+    /// ROWBOX2 border pad for a cell, with the S870 row-level rule for Latin
+    /// docs (see s870_row_top_border). Falls back to the legacy per-cell value.
+    fn rowbox2_border_pad_row(&self, table: &Table, row_idx: usize, cell: &TableCell) -> f32 {
+        if !self.rowbox2_pad_on() {
+            return 0.0;
+        }
+        if !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S870_DISABLE").is_err()
+            && !table.style.border
+            && !table.style.has_inside_h
+        {
+            return self.s870_row_top_border(table, row_idx);
+        }
+        self.rowbox2_border_pad(table, cell)
+    }
+
     /// ROWBOX2: the border width added to a BINDING atLeast trHeight
     /// (row pitch = trH + bw; hRule=exact stays trH exactly — the derived
     /// border-box model, _rowbox_sweep.py). Row-level: table border /
@@ -17269,7 +17484,8 @@ impl LayoutEngine {
                 if self.rowbox2_pad_on() {
                     // ROWBOX2: generalized Round30 — bw pads the content top
                     // ADDITIVELY with explicit cellMar, incl. cell tcBorders.
-                    pad_t += self.rowbox2_border_pad(table, cell);
+                    // S870: Latin docs use the ROW's rule (see the helper).
+                    pad_t += self.rowbox2_border_pad_row(table, row_idx, cell);
                 } else if pad_t == 0.0 && table.style.border {
                     pad_t = table.style.border_width.unwrap_or(0.4);
                 }
@@ -18178,7 +18394,8 @@ impl LayoutEngine {
                 // (see height-calc site above; -0.0082 corpus regression).
                 if self.rowbox2_pad_on() {
                     // ROWBOX2: generalized Round30 (see the first-pass site).
-                    pad_t += self.rowbox2_border_pad(table, cell);
+                    // S870: Latin docs use the ROW's rule (see the helper).
+                    pad_t += self.rowbox2_border_pad_row(table, row_idx, cell);
                 } else if pad_t == 0.0 && table.style.border {
                     let bw = table.style.border_width.unwrap_or(0.4);
                     pad_t = bw;
@@ -19422,6 +19639,40 @@ impl LayoutEngine {
                                 }
                                 let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                                // S869 (2026-07-16, default ON, opt-out OXI_S869_DISABLE):
+                                // LATINEM for the CELL wrapper. The cell
+                                // breaker is a SEPARATE greedy wrapper from break_into_lines,
+                                // so LATINEM (no-kern Latin breaks at the UN-ROUNDED em
+                                // advance) never reached a cell: char_width_pt_with_fallback
+                                // rounds every char to 10tw (0.5pt), which for Calibri 10pt
+                                // biases +0.144/char. forms__000ee7c0 render-truth: Word
+                                // fits "Has student previously received an Individual
+                                // Evaluation?" on ONE line at 233.45pt = EXACTLY the em
+                                // width from the real Calibri TTF (Oxi's width table is
+                                // unit-exact); the 10tw round summed 241.50 > wrap 238.05
+                                // so Oxi wrapped to 2 lines (+11.67pt) on four rows. The em
+                                // width is CORRECT (verified on policies__0009e9db too: its
+                                // "Entry Level 3 and Level 1-2" float cell renders 1 line in
+                                // Word = the S869-ON wrap; float #1 bottom 641.92 = Word
+                                // 641.26). The policies PASS→FAIL this initially caused was
+                                // an S872 exposure (an empty para placed in a float gap its
+                                // line box crosses), fixed there — the S869+S870+S871+S872
+                                // set ships together (forms 1.000 + policies 1.000).
+                                // Same rule, same scope as break_into_lines' LATINEM.
+                                if std::env::var("OXI_S869_DISABLE").is_err() {
+                                    let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                                        && run.style.kern
+                                            .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                                            .map_or(false, |k| k > 0.0 && font_size >= k);
+                                    if !kern_active
+                                        && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                                        && !self.doc_body_has_real_cjk
+                                        && !kinsoku::is_cjk(ch)
+                                        && cm.char_widths.contains_key(&ch)
+                                    {
+                                        cw = cm.char_width_em(ch) * font_size;
+                                    }
+                                }
                                 // S691 (2026-06-29) FALSIFIED: forcing full-width digits (U+FF1x)
                                 // to font_size in the cell break (OXI_FWDIGIT) was a NO-OP — the
                                 // 第N条-marker break-width discrepancy (--dump-layout 9.5/char vs
@@ -22589,6 +22840,24 @@ impl LayoutEngine {
                 }
                 let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
+                // S869 estimate mirror (see the render-loop comment at the
+                // cell wrapper): count_cell_lines MUST measure identically to
+                // the render or the row height diverges from the placed lines
+                // (the S716/S751 three-pass lesson).
+                if std::env::var("OXI_S869_DISABLE").is_err() {
+                    let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                        && run.style.kern
+                            .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                            .map_or(false, |k| k > 0.0 && font_size >= k);
+                    if !kern_active
+                        && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && !kinsoku::is_cjk(ch)
+                        && cm.char_widths.contains_key(&ch)
+                    {
+                        cw = cm.char_width_em(ch) * font_size;
+                    }
+                }
                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
                 // OXI_S342_NO_SNAP_GATE gate-drop rationale.
                 // S342 SHIP (2026-05-27): default ON. Drops snap_to_grid gate from
@@ -22871,7 +23140,22 @@ impl LayoutEngine {
         // S166 (2026-05-21): vertical writing default ON. Stable across 70+
         // sessions; S236 (2026-05-23) removed OXI_LEGACY_NO_VERT_WRITING
         // legacy env-var fallback during hardening pass.
-        cell.text_direction.as_deref() == Some("tbRlV")
+        // S873 (2026-07-16, default ON, opt-out OXI_S873_DISABLE): btLr
+        // (rotated 90° CCW, bottom-to-top) joins tbRlV — the S753 LAYOUT
+        // rules are mirror-identical (one-line contribution to an auto row,
+        // wrap within the row height, vMerge span capacity); only the glyph
+        // rotation direction differs, which the upright-stack render
+        // approximates either way (the S700-class orientation residual).
+        // technical__00236e9d: 35 btLr header cells (11.9pt columns) were
+        // laid out HORIZONTALLY and wrapped to ~500pt (Word: trHeight
+        // 147.35 binds) → Table 2 pushed +325pt → pcd +1. Corpus scope:
+        // btLr = 1 doc in 1,589 docx (all 38 hits in technical__00236e9d)
+        // → single-doc-scoped by construction; tbRlV docs byte-identical.
+        match cell.text_direction.as_deref() {
+            Some("tbRlV") => true,
+            Some("btLr") => std::env::var("OXI_S873_DISABLE").is_err(),
+            _ => false,
+        }
     }
 
     /// S718 (2026-07-02, default ON, opt-out OXI_S718_DISABLE): a TAB-suffix
