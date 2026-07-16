@@ -1402,7 +1402,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) = parse_paragraph_properties(reader)?;
+                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) = parse_paragraph_properties(reader, &ctx.theme)?;
                         style = s;
                         if let Some(a) = explicit_align {
                             alignment = a;
@@ -2337,6 +2337,13 @@ struct NumPrRef {
 /// Returns: (style, alignment, style_id, numPr, optional section properties for section break)
 fn parse_paragraph_properties(
     reader: &mut Reader<&[u8]>,
+    // S877 (2026-07-16): the ¶-mark rPr parser dropped asciiTheme/hAnsiTheme/
+    // eastAsiaTheme (only literal ascii/hAnsi/eastAsia were read) — a
+    // theme-fonted empty paragraph fell through to the Normal style's font
+    // for its line height (correspondence__000a79e2: mark asciiTheme=
+    // minorHAnsi = Calibri, but Oxi resolved Normal's Times New Roman →
+    // empty pitch 12.074 vs Word 12.81). Thread the theme for resolution.
+    theme: &super::theme::ThemeColors,
 ) -> Result<
     (
         ParagraphStyle,
@@ -2405,6 +2412,32 @@ fn parse_paragraph_properties(
                                                 "eastAsia" => {
                                                     ppr_rpr.font_family_east_asia = Some(v);
                                                     ppr_rpr.has_explicit_east_asia = true;
+                                                }
+                                                // S877 (default ON, opt-out OXI_S877_DISABLE):
+                                                // theme-referenced mark fonts (the main run
+                                                // parser's resolution, mirrored). Literal
+                                                // ascii/hAnsi win when both present.
+                                                "asciiTheme" | "hAnsiTheme" => {
+                                                    if ppr_rpr.font_family.is_none()
+                                                        && std::env::var("OXI_S877_DISABLE").is_err()
+                                                    {
+                                                        if let Some(f) =
+                                                            super::styles::resolve_theme_font_pub(&v, theme)
+                                                        {
+                                                            ppr_rpr.font_family = Some(f);
+                                                        }
+                                                    }
+                                                }
+                                                "eastAsiaTheme" => {
+                                                    if ppr_rpr.font_family_east_asia.is_none()
+                                                        && std::env::var("OXI_S877_DISABLE").is_err()
+                                                    {
+                                                        if let Some(f) =
+                                                            super::styles::resolve_theme_font_pub(&v, theme)
+                                                        {
+                                                            ppr_rpr.font_family_east_asia = Some(f);
+                                                        }
+                                                    }
                                                 }
                                                 _ => {}
                                             }
@@ -2580,7 +2613,7 @@ fn parse_paragraph_properties(
                                 Event::Start(inner) => {
                                     if local_name(inner.name().as_ref()) == "pPr" {
                                         let (prior, prior_explicit_align, _sid, _npr, _spr, _nested, _pmr) =
-                                            parse_paragraph_properties(reader)?;
+                                            parse_paragraph_properties(reader, theme)?;
                                         pc.prior_paragraph_style = Some(Box::new(prior));
                                         // R72: capture prior <w:jc> if the inner pPr
                                         // declared one. Only set when explicit — a
@@ -8683,7 +8716,7 @@ mod tests {
             }
         }
         let (_style, alignment, _sid, _npr, _spr, ppr_change, _pmark) =
-            parse_paragraph_properties(&mut reader).expect("parse");
+            parse_paragraph_properties(&mut reader, &super::ThemeColors::default()).expect("parse");
         assert_eq!(
             alignment,
             Some(crate::ir::Alignment::Left),
@@ -8853,7 +8886,7 @@ mod tests {
             }
         }
         let (_s, _a, _sid, _npr, _spr, _pc, pmark) =
-            parse_paragraph_properties(&mut reader).expect("parse");
+            parse_paragraph_properties(&mut reader, &super::ThemeColors::default()).expect("parse");
         let tc = pmark.expect("paragraph_mark_revision populated");
         assert_eq!(tc.change_type, "insert");
         assert_eq!(tc.pair_id.as_deref(), Some("77"));
@@ -8878,7 +8911,7 @@ mod tests {
             }
         }
         let (_s, _a, _sid, _npr, _spr, _pc, pmark) =
-            parse_paragraph_properties(&mut reader).expect("parse");
+            parse_paragraph_properties(&mut reader, &super::ThemeColors::default()).expect("parse");
         let tc = pmark.expect("paragraph_mark_revision populated");
         assert_eq!(tc.change_type, "delete");
         assert_eq!(tc.pair_id.as_deref(), Some("88"));

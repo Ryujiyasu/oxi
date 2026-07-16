@@ -9575,6 +9575,31 @@ impl LayoutEngine {
                     // fn_probe PDF para pitch 24.6 = 12.649 device-floored).
                     // Same value/model as S671's no-type-grid Latin.
                     let mut s805_hhea_max: f32 = 0.0;
+                    // S876 (2026-07-16, default ON, opt-out OXI_S876_DISABLE):
+                    // a Latin-doc EMPTY paragraph takes the SAME hhea basis as
+                    // its text lines — the fragment loop below never runs for
+                    // an empty para, so it fell to the GDI/com-table
+                    // word_line_height_no_grid (Calibri 10.5: 12.0 vs hhea
+                    // 12.817). correspondence__000a79e2: 5 empties before
+                    // "EXPLORE/CONTEMPLATE:" at Word pitch 12.75-12.81 (the
+                    // page arithmetic pins ~12.81 = hhea) vs Oxi 12.00 →
+                    // −4.03pt → the knife-edge para stayed on the wrong page.
+                    // The S815(cell)/S862(header) family: hhea-exact reaching
+                    // the last un-covered empty-para path. Latin scope; the JP
+                    // empty-para calibration (S583/S195/S707) is untouched.
+                    if first_line.fragments.is_empty()
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S876_DISABLE").is_err()
+                    {
+                        let font_size = para.style.ppr_rpr.as_ref()
+                            .and_then(|r| r.font_size)
+                            .unwrap_or(para_font_size);
+                        let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, true);
+                        if !m.is_cjk_83_64_font() {
+                            s805_hhea_max = m.natural_line_height_hhea(font_size);
+                        }
+                    }
                     for frag in &first_line.fragments {
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
