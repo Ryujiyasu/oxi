@@ -9984,7 +9984,20 @@ impl LayoutEngine {
                     // The S815(cell)/S862(header) family: hhea-exact reaching
                     // the last un-covered empty-para path. Latin scope; the JP
                     // empty-para calibration (S583/S195/S707) is untouched.
-                    if first_line.fragments.is_empty()
+                    // S902 (2026-07-17, opt-out OXI_S902_DISABLE): a line whose
+                    // runs are ALL WHITESPACE does not take its height from
+                    // them — the ¶ MARK's rPr governs, exactly like the empty
+                    // para (the CELLPAIR "whitespace-only runs excluded from
+                    // the cell line height" rule, body sibling). 0008ea8f p3:
+                    // a spacer para = one 12pt SPACE run + an 8pt mark renders
+                    // ~9.2 in Word (mark) vs Oxi 13.8 (the space run) — the
+                    // +4.6 jump before SECTION TWO that pushed the checkbox
+                    // table off p3.
+                    let s902_all_ws = !first_line.fragments.is_empty()
+                        && first_line.fragments.iter().all(|f| f.text.trim().is_empty())
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S902_DISABLE").is_err();
+                    if (first_line.fragments.is_empty() || s902_all_ws)
                         && !self.doc_body_has_real_cjk
                         && std::env::var("OXI_S876_DISABLE").is_err()
                     {
@@ -9998,6 +10011,7 @@ impl LayoutEngine {
                         }
                     }
                     for frag in &first_line.fragments {
+                        if s902_all_ws { continue; }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         let mut h = m.word_line_height_no_grid(fs);
@@ -16628,7 +16642,20 @@ impl LayoutEngine {
         // adjustLineHeightInTable=true: use standard height without CJK 83/64
         let use_standard = in_table_cell && self.adjust_line_height_in_table;
 
-        if line.fragments.is_empty() {
+        // S902 (2026-07-17, opt-out OXI_S902_DISABLE): a BODY line whose runs
+        // are ALL WHITESPACE takes its height from the ¶ MARK, not the space
+        // runs — the CELLPAIR "whitespace-only runs excluded from the line
+        // height" rule's body sibling. 0008ea8f p3: a spacer para (one 12pt
+        // SPACE run, 8pt mark) renders ~9.2 in Word vs Oxi 13.8 = the +4.6
+        // jump before SECTION TWO. Latin scope; cells keep the CELLPAIR
+        // calibration (in_table_cell excluded).
+        let s902_all_ws = !line.fragments.is_empty()
+            && !in_table_cell
+            && !self.doc_body_has_real_cjk
+            && line.fragments.iter().all(|f| f.text.trim().is_empty())
+            && std::env::var("OXI_S902_DISABLE").is_err();
+
+        if line.fragments.is_empty() || s902_all_ws {
             // Empty paragraph: use pPr/rPr font size if available (direct paragraph property),
             // otherwise fall back to paragraph style's default run style.
             // COM-confirmed: 3a4f P1 empty, pPr/rPr/sz=48 (24pt) → uses Century 24pt height.
