@@ -2023,30 +2023,38 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if style.shading.is_none() {
                 style.shading = ds.shading.clone();
             }
-            // S895 (2026-07-17, ★HELD OPT-IN OXI_S895=1, default OFF
-            // byte-identical): inherit STYLE-level HTML autospacing, marked
-            // from_style — the LAYOUT applies style-sourced flags only for
-            // Latin docs (!doc_body_has_real_cjk). legal__00081e80's
-            // Metadata/body styles carry `before=100 beforeAutospacing=1
-            // after=100 afterAutospacing=1` and Word renders ~13.95/gap
-            // (measured: 1-line para pitch 27.75 = line 13.8 + ~14) where Oxi
-            // applied the explicit 5pt → every gap −9pt. ★WITH S895 the
-            // per-gap table is CLEAN (0 anomalies >3pt) yet the doc gets
-            // WORSE (0.898→0.83, pcd+1) — the recorded "fn stack ⊕
-            // autospacing S559 pair": the −9/gap was compensating a footnote
-            // area over-reservation ([FN_PLACE] gap body_bot→area_top =
-            // 39-48pt vs Word's ~14 separator region; per-note 9.20 = Word
-            // 9.24 ✓ correct). Ships default-ON together with the fn-area
-            // derivation (the multi-session half). The JP S675 evidence
-            // (style-level renders 0: harassbosi/b837) keeps CJK docs
-            // byte-identical via the layout gate; cell paths ignore
+            // S895 (2026-07-17, ★HELD OPT-IN OXI_S895=1 — ships together
+            // with S897; see the S897 hold note in layout/mod.rs):
+            // inherit STYLE-level HTML autospacing, marked from_style — the
+            // LAYOUT applies style-sourced flags only for Latin docs
+            // (!doc_body_has_real_cjk). legal__00081e80's Metadata/body
+            // styles carry `before=100 beforeAutospacing=1 after=100
+            // afterAutospacing=1` and Word renders ~13.95/gap (measured:
+            // 1-line para pitch 27.75 = line 13.8 + ~14) where Oxi applied
+            // the explicit 5pt → every gap −9pt; with S895 the per-gap
+            // table is CLEAN (0 anomalies >3pt). ★The S559 counterpart that
+            // first blocked this (0.898→0.83 with S895 alone) was NOT the
+            // fn area — it was STALE per-line LRPBs replaying the saved
+            // break one line early; with S897 (Latin per-line LRPB drop)
+            // the pair ships together (81e80 → 0.9746). The JP S675
+            // evidence (style-level renders 0: harassbosi/b837) keeps CJK
+            // docs byte-identical via the layout gate; cell paths ignore
             // style-sourced flags entirely (S864-F/S882 calibrations).
+            // ★Per-side direct-override guard: a DIRECT w:spacing before/after
+            // on the paragraph replaces the style's spacing for that side —
+            // the style's autospacing must NOT leak past it (ECMA property
+            // override; the first cut leaked and flipped 4 EN PASS docs whose
+            // NormalWeb paras carry direct spacing).
             if std::env::var("OXI_S895").is_ok() {
-                if ds.before_autospacing && !style.before_autospacing {
+                if ds.before_autospacing && !style.before_autospacing
+                    && !style.has_direct_before
+                {
                     style.before_autospacing = true;
                     style.autospacing_from_style = true;
                 }
-                if ds.after_autospacing && !style.after_autospacing {
+                if ds.after_autospacing && !style.after_autospacing
+                    && !style.has_direct_after
+                {
                     style.after_autospacing = true;
                     style.autospacing_from_style = true;
                 }

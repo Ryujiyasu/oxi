@@ -6544,7 +6544,23 @@ impl LayoutEngine {
                         let _fng = FnLayoutGuard::new();
                         // Footnote area bottom: just above the footer, or at the
                         // bottom margin if no footer is present.
-                        let footnote_bottom = if !page.footer.is_empty() {
+                        // S896 (2026-07-17, default ON, opt-out OXI_S896_DISABLE):
+                        // an INK-FREE footer doesn't lower the footnote area either
+                        // — the S894 exemption mirrored onto this legacy footer
+                        // recompute (which predates s755_footer_geom and never saw
+                        // S806/S894). legal__00081e80: 3 blank footers → this path
+                        // put fn_bot at 792−39.6−15.9−4 = 732.5 vs Word's 720.6 =
+                        // pageH − bottom margin EXACT (rt.pdf: notes 591.22 +
+                        // 14×9.24 = 720.6; margin 1440tw). Latin scope with S894.
+                        let s896_blank_footer = !page.footer.is_empty()
+                            && !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S896_DISABLE").is_err()
+                            && !page.footer.iter().any(|b| match b {
+                                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty()),
+                                Block::Table(_) | Block::Image(_) => true,
+                                _ => false,
+                            });
+                        let footnote_bottom = if !page.footer.is_empty() && !s896_blank_footer {
                             // Recompute footer top here (mirrors lines 832-839 above).
                             // Day 33 part 18: skip framePr paragraphs (floating frames).
                             let mut footer_h: f32 = 0.0;
@@ -8365,8 +8381,13 @@ impl LayoutEngine {
         // Word uses max(prev_space_after, space_before) — spacing collapse.
         let space_before = if para.style.before_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
-            // S895: style-sourced autospacing applies in Latin docs only.
-            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
+            // S895: style-sourced autospacing applies in Latin docs only, and
+            // NOT to EMPTY paragraphs (HTML empty-block margin collapse:
+            // correspondence__00054c43's empty NormalWeb para renders the
+            // explicit 5pt in Word, not the 13.75 auto).
+            && (!para.style.autospacing_from_style
+                || (!self.doc_body_has_real_cjk
+                    && para.runs.iter().any(|r| !r.text.trim().is_empty())))
         {
             // S675 (2026-06-26): w:beforeAutospacing → flat 13.75pt, COM-derived
             // (constant, independent of font size / docDefaults / grid; applied as a
@@ -10523,7 +10544,22 @@ impl LayoutEngine {
                 .unwrap_or(true)
                 // S811: distrusted saved LRPBs (metric-incompatible font
                 // substitution) skip the per-line respect too.
-                && !self.doc_lrpb_distrust;
+                && !self.doc_lrpb_distrust
+                // S897 (2026-07-17, ★HELD OPT-IN OXI_S897=1, ships WITH
+                // S895 — separately each is a PASS-doc trade): LATIN docs
+                // retire the per-line LRPB respect too — the S836
+                // block-level drop completed. The whole frozen EN 6 is PASS
+                // 1.0000 with per-line OFF (measured), i.e. the Latin natural
+                // flow is fully LRPB-independent after S827-S835/S884-S894;
+                // what remains of per-line respect only re-plays STALE saved
+                // breaks (legal__00081e80: the saved mark sits one line EARLY
+                // vs fresh Word — Word keeps «plaintiffs, in the issues…» on
+                // p1 at box 696.5 ≤ cbot ~696.8, the mark forced it to p2 =
+                // the doc-wide +13.3 chain; with S895's correct autospacing
+                // the doc reads 0.9746 vs 0.83 with the mark). JP keeps the
+                // full LRPB model (b837/d77a/3a4f load-bearing).
+                && (self.doc_body_has_real_cjk
+                    || std::env::var("OXI_S897").is_err());
             let s391_lrpb_break = if line_idx > 0 && !in_textbox && s391_on {
                 let has_lrpb_here = line.fragments.iter().any(|f| {
                     f.char_offset == 0
@@ -12686,8 +12722,11 @@ impl LayoutEngine {
 
         let space_after = if para.style.after_autospacing
             && std::env::var("OXI_S675_DISABLE").is_err()
-            // S895: style-sourced autospacing applies in Latin docs only.
-            && (!para.style.autospacing_from_style || !self.doc_body_has_real_cjk)
+            // S895: style-sourced autospacing applies in Latin docs only, and
+            // not to EMPTY paragraphs (see space_before).
+            && (!para.style.autospacing_from_style
+                || (!self.doc_body_has_real_cjk
+                    && para.runs.iter().any(|r| !r.text.trim().is_empty())))
         {
             // S675 (2026-06-26): w:afterAutospacing → flat 13.75pt (see space_before).
             13.75
