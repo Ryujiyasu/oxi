@@ -8605,7 +8605,14 @@ impl LayoutEngine {
             // down). Latin scope: the JP direct-autospacing docs (kojin/
             // 29dc6e) + the CELL model (S882) keep their gated 13.75
             // calibration until re-derived. Opt-out OXI_S901_DISABLE.
+            // S907 (2026-07-17): the JP true value is ALSO 14.0 — PDF probe
+            // aspj_nogrid (MS Mincho 10.5): pitch 27.62 − line 13.617 =
+            // 14.006; grid360: 18 + 14 = 32.0 EXACT. The 13.75 was the same
+            // COM quantization artifact as the Latin one. Opt-out
+            // OXI_S907_DISABLE restores 13.75 for CJK docs.
             if !self.doc_body_has_real_cjk && std::env::var("OXI_S901_DISABLE").is_err() {
+                14.0
+            } else if std::env::var("OXI_S907_DISABLE").is_err() {
                 14.0
             } else {
                 13.75
@@ -10786,8 +10793,9 @@ impl LayoutEngine {
                         if para.style.after_autospacing
                             && std::env::var("OXI_S675_DISABLE").is_err()
                         {
-                            if !self.doc_body_has_real_cjk
-                                && std::env::var("OXI_S901_DISABLE").is_err()
+                            if std::env::var("OXI_S907_DISABLE").is_err()
+                                || (!self.doc_body_has_real_cjk
+                                    && std::env::var("OXI_S901_DISABLE").is_err())
                             { 14.0 } else { 13.75 }
                         } else {
                             para.style.space_after.unwrap_or(0.0)
@@ -13067,7 +13075,14 @@ impl LayoutEngine {
         {
             // S675 (2026-06-26): w:afterAutospacing → flat auto-space (see
             // space_before; S901: 14.0 Latin / 13.75 JP-calibrated).
+            // S907 (2026-07-17): the JP true value is ALSO 14.0 — PDF probe
+            // aspj_nogrid (MS Mincho 10.5): pitch 27.62 − line 13.617 =
+            // 14.006; grid360: 18 + 14 = 32.0 EXACT. The 13.75 was the same
+            // COM quantization artifact as the Latin one. Opt-out
+            // OXI_S907_DISABLE restores 13.75 for CJK docs.
             if !self.doc_body_has_real_cjk && std::env::var("OXI_S901_DISABLE").is_err() {
+                14.0
+            } else if std::env::var("OXI_S907_DISABLE").is_err() {
                 14.0
             } else {
                 13.75
@@ -24833,7 +24848,10 @@ impl LayoutEngine {
         if !cellas_enabled || para.style.autospacing_from_style {
             return (est_sb, est_sa);
         }
-        const AUTO: f32 = 13.75;
+        // S907: 14.0 (the PDF-true value; 13.75 was COM-quantized).
+        let auto_v: f32 = if std::env::var("OXI_S907_DISABLE").is_err() { 14.0 } else { 13.75 };
+        #[allow(non_snake_case)]
+        let AUTO: f32 = auto_v;
         let sb = if para.style.before_autospacing {
             if is_first { 0.0 } else { AUTO }
         } else {
