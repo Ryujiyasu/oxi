@@ -7992,6 +7992,65 @@ impl LayoutEngine {
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
+            // S909 (2026-07-17, opt-out OXI_S909_DISABLE): the untouched-blank
+            // exemption applies only to an UNTOUCHED footer para. A blank
+            // footer para carrying DIRECT formatting (tabs / indents — bd832's
+            // tabs+ind+bold) reserves the FULL text-footer stack (dist + line
+            // + resolved after), like a text footer. DERIVED (bdcap ladders on
+            // policies__000bd832, 0.1pt exact-spacer): base cbot (791.8,
+            // 793.85] ∋ dist+line+after 792.12; footer after=0 explicit →
+            // (799.8, 801.85] ∋ 800.12; dist 567→400tw → ∋ 800.47 — the flips
+            // track the S806 stack. The probe side (fpa/fnr/fE10/+grid/+compat
+            // /+header): an UNFORMATTED bare para stays stack-0; fpb (probe +
+            // bd832's tabs/ind/bold para verbatim) COUNTS — the para carries
+            // it. ea8f (pStyle Footer only, no direct props) = untouched →
+            // keeps the S905 dist−line model (gate-validated). fE10's mark-rPr
+            // sz is NOT a "touch" (measured stack 0) — rPr excluded from the
+            // discriminator. (F_STRIP shows Word also counts a direct-spacing
+            // para whose values differ from the style chain — synthetic-only,
+            // needs the equality machinery; not implemented.)
+            let s909_formatted = std::env::var("OXI_S909_DISABLE").is_err()
+                && blocks.iter().any(|b| match b {
+                    // DIRECT pPr tabs/ind only — ea8f's pStyle "Footer"
+                    // (style-inherited tab stops) stays untouched; bd832's
+                    // direct tabs+ind counts (the first cut used the merged
+                    // tab_stops/indents and flipped ea8f PASS->FAIL).
+                    Block::Paragraph(p) => p.style.has_direct_tabs_or_ind,
+                    _ => false,
+                });
+            if !has_ink && s909_formatted {
+                // Full stack computed here: the shared stack path's S803
+                // add-back is gated on !has_direct_spacing, which a line-only
+                // direct spacing defeats (bd832) — the para's space_before/
+                // space_after are already style-chain-resolved by the parser,
+                // so sum them directly: sb_first + Σ line + interior
+                // max-collapse + sa_last (bd832: 0 + 13.43 + 8 = 21.43 →
+                // reserved 49.78 → cbot 792.12 = the measured window).
+                let mut stack = 0.0f32;
+                let mut prev_sa: Option<f32> = None;
+                for b in blocks {
+                    if let Block::Paragraph(p) = b {
+                        let fs = p.style.ppr_rpr.as_ref()
+                            .and_then(|r| r.font_size)
+                            .or_else(|| p.style.default_run_style.as_ref()
+                                .and_then(|r| r.font_size))
+                            .unwrap_or(self.default_font_size);
+                        let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let m = self.metrics_for_para_mark_g(&rpr, &p.style, true);
+                        let sb = p.style.space_before.unwrap_or(0.0);
+                        let sa = p.style.space_after.unwrap_or(0.0);
+                        stack += match prev_sa {
+                            None => sb,
+                            Some(psa) => psa.max(sb),
+                        };
+                        stack += m.natural_line_height_hhea(fs);
+                        prev_sa = Some(sa);
+                    }
+                }
+                stack += prev_sa.unwrap_or(0.0);
+                let dist = page.footer_distance.unwrap_or(36.0);
+                return ((dist + stack).max(page.margin.bottom), false);
+            }
             if !has_ink {
                 // S905 (2026-07-17, opt-out OXI_S905_DISABLE): when footer_dist
                 // EXCEEDS the bottom margin, the blank footer still pins the

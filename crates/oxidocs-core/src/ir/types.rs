@@ -1196,6 +1196,12 @@ pub struct ParagraphStyle {
     /// cell default (0) when the paragraph does not itself set them.
     #[serde(default)]
     pub has_direct_before_after: bool,
+    /// S909: DIRECT pPr carries <w:tabs> / <w:ind> (as opposed to
+    /// style-inherited tab stops / indents — ea8f's pStyle "Footer" tabs
+    /// must NOT defeat the untouched-blank-footer exemption; bd832's
+    /// direct tabs+ind must).
+    #[serde(default)]
+    pub has_direct_tabs_or_ind: bool,
     /// S865: DIRECT pPr spacing specifies a before-side value
     /// (before/beforeLines/beforeAutospacing). Kept per-side because Word
     /// resets an unspecified opposite side to the table-cell default.
@@ -1406,6 +1412,7 @@ impl Default for ParagraphStyle {
             space_after: None,
             has_direct_spacing: false,
             has_direct_before_after: false,
+            has_direct_tabs_or_ind: false,
             has_direct_before: false,
             has_direct_after: false,
             line_spacing_from_doc_defaults: false,

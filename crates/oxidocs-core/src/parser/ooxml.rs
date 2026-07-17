@@ -2727,6 +2727,7 @@ fn parse_paragraph_properties(
                     }
                     "tabs" if depth == 0 => {
                         style.tab_stops = parse_tab_stops(reader)?;
+                        style.has_direct_tabs_or_ind = true;
                     }
                     "pBdr" if depth == 0 => {
                         style.borders = Some(parse_paragraph_borders(reader)?);
@@ -2968,6 +2969,7 @@ fn parse_paragraph_properties(
                         }
                     }
                     "ind" => {
+                        style.has_direct_tabs_or_ind = true;
                         // Track leftChars/rightChars for override logic
                         // Must be outside attr loop: leftChars overrides left regardless of XML attr order
                         let mut left_chars: Option<f32> = None;
