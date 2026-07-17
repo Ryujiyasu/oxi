@@ -24719,6 +24719,20 @@ impl LayoutEngine {
             // single-para cells fit. Needs the probe matrix (cell para
             // count × spacing source × tbl-style declaration) before
             // default-ON.
+            // v2 (probe _pb_cellsp, 14 configs, 2026-07-17): the derived rule —
+            //   Normal/named-STYLE-sourced spacing: ALWAYS kept in cells
+            //     (survives even a tbl-style after=0 declaration; ECMA
+            //     paragraph style > table style pPr);
+            //   docDefaults-sourced: reset ONLY when the table style
+            //     DECLARES that side (decl0 → 0; line-only / no spacing /
+            //     no tblStyle → KEPT);
+            //   NO edge suppression for regular spacing (even the LAST
+            //     para's after counts in the row: row = Σ(line+after)+pads;
+            //     the S882 edge rule is AUTOSPACING-only).
+            // Still held opt-in: uklocal/healthform's calibrated stacks
+            // (S815-S819 rowbox etc.) were fitted WITH reset-to-0 — the
+            // probe-true rule exposes their compensations ({+1:40}) and
+            // needs the coupled recalibration session.
             if !self.doc_body_has_real_cjk && std::env::var("OXI_S906").is_ok() {
                 let keep_b = style.space_before.is_some()
                     && !style.space_before_from_doc_defaults
