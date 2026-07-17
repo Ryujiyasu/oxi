@@ -4465,6 +4465,7 @@ impl LayoutEngine {
                             false,
                             0.0, None, // S900
                             None, // S903
+                            false, // S916
                         );
                         elements.extend(frame_els);
                         let has_next = page.blocks.get(block_idx + 1)
@@ -4525,6 +4526,7 @@ impl LayoutEngine {
                             false,
                             0.0, None, // S900
                             None, // S903
+                            false, // S916
                         );
                         elements.extend(frame_els);
                         if std::env::var("OXI_DBG898").is_ok() {
@@ -4605,6 +4607,7 @@ impl LayoutEngine {
                             false, // S835
                             0.0, None, // S900
                             None, // S903
+                            false, // S916
                         );
                         elements.extend(frame_els);
                         // Band height: framePr h (hRule atLeast semantics — the
@@ -4878,6 +4881,10 @@ impl LayoutEngine {
                     // on the current page but heading+next doesn't, Word keeps the heading
                     // and sends the next paragraph to the next page. Only advance page when
                     // the heading itself doesn't fit.
+                    // S916 (2026-07-18): set by the keepNext lookahead when a
+                    // MULTI-LINE keepNext paragraph should SPLIT (keep n-2 head
+                    // lines, move a 2-line tail + follower) instead of whole-moving.
+                    let mut s916_split = false;
                     if para.style.keep_next && !elements.is_empty() {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
                             let this_h0 = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
@@ -5089,11 +5096,65 @@ impl LayoutEngine {
                             };
                             let pair_overflows = this_h + unit_next_h > remaining
                                 && this_h + unit_next_h <= effective_content_h;
-                            let do_push = if s635 {
+                            let mut do_push = if s635 {
                                 pair_overflows && (this_h > remaining || follower_moves_wholly)
                             } else {
                                 pair_overflows && this_h > remaining
                             };
+                            // S916 (2026-07-18, opt-out OXI_S916_DISABLE): when
+                            // the push fires in CASE B — `this_h <= remaining` (the
+                            // keepNext para itself FITS; the push is driven only by
+                            // `follower_moves_wholly`, NOT this_h > remaining) — and
+                            // the para is a MULTI-LINE body paragraph (>= 4 lines),
+                            // do NOT whole-move it. SPLIT: keep n-2 head lines on
+                            // this page, move a 2-line tail + the follower to the
+                            // next page (Word only requires the para's LAST line to
+                            // stay with the follower). legal pi=2128 (a 5-line
+                            // `<w:keepNext/>` Indenti para): Word's own saved
+                            // mid-paragraph LRPB splits it 3+2 where Oxi whole-moved
+                            // -> the wp158-162 +1x5 cascade. VERIFIED "keep n-2 /
+                            // move 2-line tail" matches Word on pi=2128 (5->3+2) and
+                            // pi=386 (wp40, 4->2+2). The line estimate under-counts
+                            // (<= real), so gating on estimate>=4 guarantees the
+                            // layout-side real-count gate (>=4) also holds. Blast
+                            // radius (Unit B3, KN635 trace, 519 docs): golden 0, ja
+                            // 0, word_png 0; 2 EN decisions (legal only). Unscoped
+                            // (rule-10 clean).
+                            if do_push && s635 && this_h <= remaining
+                                && std::env::var("OXI_S916_DISABLE").is_err()
+                            {
+                                let para_one_line = self.estimate_para_height(
+                                    para, 1.0e6, grid_pitch, None, false, None, None);
+                                // Accurate line count (S915 technique): subtract the
+                                // estimate-included space_before from BOTH this_h0 and
+                                // para_one_line so round() is not dragged below the real
+                                // count by the spacing (plain this_h0/para_one_line
+                                // under-counts pi=386 4->3). Still cannot OVER-count (a
+                                // non-zero space_after only lowers it), so estimate>=4 =>
+                                // real lines>=4 — the layout-side gate stays sound.
+                                let raw_lr = para.style.line_spacing_rule.as_deref();
+                                let p_explicit_rule =
+                                    raw_lr == Some("exact") || raw_lr == Some("atLeast");
+                                let para_sb = if !para.style.has_direct_before
+                                    && !p_explicit_rule
+                                {
+                                    0.0
+                                } else if let (Some(bl), Some(pitch)) =
+                                    (para.style.before_lines, grid_pitch)
+                                {
+                                    bl / 100.0 * pitch
+                                } else {
+                                    para.style.space_before.unwrap_or(0.0)
+                                };
+                                let para_lines = (((this_h0 - para_sb)
+                                    / (para_one_line - para_sb).max(0.01))
+                                    .round() as usize)
+                                    .max(1);
+                                if para_lines >= 4 {
+                                    s916_split = true;
+                                    do_push = false;
+                                }
+                            }
                             if std::env::var("OXI_DBG_KN635").is_ok() {
                                 let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(16).collect();
                                 eprintln!("[KN635] {:?} this_h={:.1} next_h={:.1} rem={:.1} 1line={:.1} nlines={} wc={} pair_ov={} fmw={} do_push={}",
@@ -5426,6 +5487,7 @@ impl LayoutEngine {
                         footnote_reserve_current, // S900
                         Some(&mut s900_para_deferred), // S900
                         s903_next_borders_body, // S903
+                        s916_split, // S916
                     );
                     prev_space_after = sa;
                     if std::env::var("OXI_DBG_PARA").is_ok() {
@@ -6453,6 +6515,7 @@ impl LayoutEngine {
                             false, // S835
                             0.0, None, // S900
                             None, // S903
+                            false, // S916
                         );
                         elements.extend(en_elements);
                     }
@@ -6708,6 +6771,7 @@ impl LayoutEngine {
                             false, // S835
                             0.0, None, // S900
                             None, // S903
+                            false, // S916
                         );
                         lp.elements.extend(hdr_elements);
                     } else if let Block::Image(img) = block {
@@ -6765,6 +6829,7 @@ impl LayoutEngine {
                             false, // S835
                             0.0, None, // S900
                             None, // S903
+                            false, // S916
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -7194,6 +7259,7 @@ impl LayoutEngine {
                                         false, // S835
                                         0.0, None, // S900
                                         None, // S903
+                                        false, // S916
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -7562,6 +7628,7 @@ impl LayoutEngine {
                         false, // S835
                         0.0, None, // S900
                         None, // S903
+                        false, // S916
                     );
                     // CLNSP: count this paragraph's rendered LINES (text
                     // elements grouped by y) and push one spec per line —
@@ -8710,6 +8777,15 @@ impl LayoutEngine {
         // Oxi added +0.25/para). The S658 top-side merge gate's bottom
         // sibling. Only the body call site threads a real value.
         s903_next_borders: Option<&ParagraphBorders>,
+        // S916 (2026-07-18): SPLIT a multi-line keepNext paragraph at
+        // lines.len()-2 (keep n-2 head lines here, move a 2-line tail + the
+        // follower to the next page) instead of the block-level whole-move.
+        // Set true by the keepNext lookahead's Case-B (para fits, push driven
+        // by the follower) when the para estimate is >=4 lines; layout re-gates
+        // on the REAL lines.len() >= 4 (estimate <= real, so estimate>=4 =>
+        // real>=4 — the double-gate cannot over-fire). Only the body call site
+        // threads a real value; all other callers pass false.
+        s916_tail_split: bool,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -10960,6 +11036,25 @@ impl LayoutEngine {
             let mut natural_needs_page_break = if in_textbox || s832_trailing_empty { false } else {
                 cursor.cursor_y + break_threshold - s835_fn_relief > effective_break_bottom
             };
+            // S916 (2026-07-18, opt-out OXI_S916_DISABLE): force the split at
+            // lines.len()-2 for a multi-line keepNext paragraph (the keepNext
+            // lookahead requested s916_tail_split). This keeps n-2 head lines on
+            // the current page and lets the existing mid-paragraph natural-break
+            // handler move the 2-line tail (and, being the next block, the
+            // follower) to the next page — matching Word, which SPLITS a
+            // multi-line keepNext body paragraph 3+2 (legal pi=2128, its own
+            // saved mid-paragraph LRPB) rather than whole-moving it. Re-gated on
+            // the REAL lines.len() (>= 4 => len-2 keeps >= 2 head lines, so no
+            // orphan). line_idx > 0 by construction (len-2 >= 2). Fires exactly
+            // once (line_idx reaches len-2 on the current page — the para fits,
+            // so there is no competing natural break before it).
+            if s916_tail_split
+                && lines.len() >= 4
+                && line_idx == lines.len() - 2
+                && std::env::var("OXI_S916_DISABLE").is_err()
+            {
+                natural_needs_page_break = true;
+            }
             // S900 (2026-07-17, default ON, opt-out OXI_S900_DISABLE): Word
             // DEFERS a line's footnote NOTES (not the line) when they cannot
             // START in the page's remaining area. 81e80 p2: notes 2..15 fill
