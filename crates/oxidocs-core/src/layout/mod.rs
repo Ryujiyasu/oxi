@@ -2247,6 +2247,71 @@ impl LayoutEngine {
 
         // Post-layout pass: substitute PAGE and NUMPAGES field placeholders
         let total_pages = pages.len();
+
+        // S912 (2026-07-17): a PAGE field renders the page's number within its
+        // SECTION's numbering sequence, not its physical index. A section
+        // declaring `<w:pgNumType w:start="N"/>` RESTARTS the sequence at N on
+        // its first page; a section without one CONTINUES from the previous
+        // page. DERIVED from Word render-truth (tools/metrics/_pb_pgnum_gen.py,
+        // 6 controlled cases, footer "PG=<PAGE>" read out of the PDF):
+        //   base       no pgNumType            -> 1,2,3,4   (physical == logical)
+        //   s1start5   sec1 start=5            -> 5,6,7,8   (sec2 CONTINUES, no reset)
+        //   s2start1   sec2 start=1            -> 1,2,1,2   (restart)
+        //   s2start10  sec2 start=10           -> 1,2,10,11 (restart, then increments)
+        //   s2fmtonly  sec2 fmt, no start      -> 1,2,iii,iv (fmt alone never resets)
+        // Confirmed on real docs: us_nyserda_agreement (56pp, sec2 restarts at
+        // p8) matches Word render-truth 56/56 with this rule vs 7/56 without;
+        // albaluna2col_3227 (start=3) renders "3" in Word's footer, Oxi "1".
+        //
+        // ★HELD OPT-IN (OXI_S912=1; default OFF = byte-identical). The rule is
+        // correct but default-ON is net-NEGATIVE on the SSIM gate: ssim_ab
+        // OXI_S912_DISABLE = 238 checked / 5 changed / TOTAL net -0.0023 /
+        // improved 0 / regressed 2 (6514 -0.0009, de6e32 -0.0009, 87b29ca /
+        // 9a8e / e8caed -0.0002..-0.0001). ROOT = a SEPARATE pre-existing bug
+        // this fix EXPOSES (the S559 compensating pattern): those docs put
+        // their PAGE field in an **even** footer, and ECMA-376 §17.10.2 says an
+        // even reference is inert without `<w:evenAndOddHeaders/>` — Word
+        // renders NO footer on them (verified: word_png 6514 has zero footer
+        // ink on all 7 pages). Oxi renders one anyway because pick_fallback
+        // (parser/ooxml.rs) DELIBERATELY keeps even refs as a last-resort
+        // fallback "to avoid pagination regressions" (its own comment) — the
+        // spurious footer is load-bearing for body-area RESERVATION. S912 only
+        // makes that spurious number more visible ("1" -> "25").
+        //
+        // SHIP PATH: derive Word's real reservation for an even-only-ref
+        // section (does Word reserve the footer band it does not draw?), fix
+        // pick_fallback, re-gate Phase-1 on the tokumei/order family, then flip
+        // S912 default-ON — the two ship together as a pair. Until then the
+        // only docs S912 would change are the spurious-footer ones, so
+        // default-ON buys nothing measurable and costs -0.0023.
+        //
+        // RESIDUAL (independent of the gate): a CONTINUOUS section's pgNumType
+        // is dropped at parse (S560 merges the section into the previous IR
+        // Page without carrying page_number_start), so probe case cont_s2s7 —
+        // Word 1,2,8 — renders 1,2,3 either way. Fixing it needs the start to
+        // survive the merge as a per-section run.
+        let s912 = std::env::var("OXI_S912").is_ok();
+        let page_numbers: Vec<u32> = {
+            let mut nums = Vec::with_capacity(pages.len());
+            let mut num: u32 = 0;
+            let mut prev_ir: Option<usize> = None;
+            for page_idx in 0..pages.len() {
+                let ir = layout_to_ir_page.get(page_idx).copied();
+                // The first LayoutPage mapping to a given IR page is that
+                // section's first page — the only place a restart can fire.
+                let start = if s912 && ir != prev_ir {
+                    ir.and_then(|i| doc_resolved.pages.get(i))
+                        .and_then(|p| p.page_number_start)
+                } else {
+                    None
+                };
+                num = start.unwrap_or(num + 1);
+                nums.push(num);
+                prev_ir = ir;
+            }
+            nums
+        };
+
         for (page_idx, page) in pages.iter_mut().enumerate() {
             // S534 (2026-06-10): apply the section's pgNumType format to the
             // PAGE field. 3a4f's footer section sets `<w:pgNumType
@@ -2259,11 +2324,14 @@ impl LayoutEngine {
             for elem in &mut page.elements {
                 if let LayoutContent::Text { text, field_type: Some(ft), font_size, .. } = &mut elem.content {
                     let new_text = match ft {
-                        FieldType::Page => match page_num_fmt.as_deref() {
-                            Some(fmt) => crate::parser::numbering::format_number(
-                                (page_idx + 1) as u32, fmt),
-                            None => format!("{}", page_idx + 1),
-                        },
+                        FieldType::Page => {
+                            // S912: the section-relative number, not page_idx + 1.
+                            let n = page_numbers[page_idx];
+                            match page_num_fmt.as_deref() {
+                                Some(fmt) => crate::parser::numbering::format_number(n, fmt),
+                                None => format!("{}", n),
+                            }
+                        }
                         FieldType::NumPages => format!("{}", total_pages),
                         // CrossRef (S685) / Cached (S708): the display text is the cached
                         // result run («第１９条» / «2026/06/30»), a SEPARATE element; this
