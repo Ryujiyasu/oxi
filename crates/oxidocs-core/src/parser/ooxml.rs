@@ -1433,6 +1433,19 @@ struct ParagraphResult {
     math_blocks: Vec<crate::ir::MathBlock>,
 }
 
+/// Resolve Word's application-level size when a paragraph style deliberately
+/// starts a new inheritance chain and no OOXML run-size property supplies one.
+fn application_default_font_size_override(default_paragraph_size: Option<f32>) -> Option<f32> {
+    match default_paragraph_size {
+        // The engine's ordinary unresolved fallback is already 11pt.  Do not
+        // materialize an equivalent style property: paragraph-mark and line-box
+        // code intentionally distinguish an inherited fallback from an explicit
+        // style size.
+        Some(size) if (size - 11.0).abs() < 0.01 => None,
+        _ => Some(10.0),
+    }
+}
+
 fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
@@ -2038,6 +2051,29 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     super::styles::merge_run_style(para_rs, style_rs);
                 } else {
                     style.default_run_style = ds.default_run_style.clone();
+                }
+            }
+            // A paragraph style without w:basedOn does not inherit the default
+            // paragraph style's run properties.  If neither that style nor
+            // docDefaults declares w:sz, Word falls back to the application's
+            // document default: 11pt when the default paragraph style explicitly
+            // establishes the modern 11pt baseline, otherwise the legacy 10pt
+            // baseline.  Keeping this resolution at the style layer avoids a
+            // family-specific layout exception (legal DefinedTerms is TNR, but
+            // the rule is independent of the selected typeface).
+            if std::env::var("OXI_S923_DISABLE").is_err()
+                && defined.based_on.is_none()
+                && style.default_run_style.as_ref().and_then(|r| r.font_size).is_none()
+                && styles.doc_default_run_style.as_ref().and_then(|r| r.font_size).is_none()
+            {
+                let normal_size = styles.default_paragraph_style_id.as_ref()
+                    .and_then(|id| styles.styles.get(id))
+                    .and_then(|normal| normal.paragraph.default_run_style.as_ref())
+                    .and_then(|r| r.font_size);
+                if let Some(app_size) = application_default_font_size_override(normal_size) {
+                    style.default_run_style
+                        .get_or_insert_with(RunStyle::default)
+                        .font_size = Some(app_size);
                 }
             }
             // Inherit keepNext, keepLines, contextualSpacing, widowControl from style
@@ -8880,6 +8916,13 @@ fn local_name(name: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::ir::Block;
+
+    #[test]
+    fn unbased_style_application_default_tracks_only_the_modern_baseline() {
+        assert_eq!(application_default_font_size_override(Some(11.0)), None);
+        assert_eq!(application_default_font_size_override(Some(12.0)), Some(10.0));
+        assert_eq!(application_default_font_size_override(None), Some(10.0));
+    }
 
     #[test]
     fn parse_comments_xml_captures_initials_and_metadata() {

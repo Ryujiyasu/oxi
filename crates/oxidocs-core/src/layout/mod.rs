@@ -16785,10 +16785,13 @@ impl LayoutEngine {
             } else if in_table_cell && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S815_DISABLE").is_err()
                 // S922: S815's hhea basis is specific to Single spacing.
-                // For Multiple spacing Word multiplies the measured GDI
-                // single-line height when one is available. Keep an opt-out
-                // for corpus A/B.
-                && (is_single || std::env::var("OXI_S922_DISABLE").is_ok())
+                // Multiple spacing uses a GDI single-line height only when an
+                // independently measured supplemental value exists. Generated
+                // table coverage alone is not evidence for changing the basis
+                // (uklocalspending's calibrated cells must remain on hhea).
+                && (is_single
+                    || !self.registry.has_gdi_height_supplement(&metrics.family, ppem)
+                    || std::env::var("OXI_S922_DISABLE").is_ok())
             {
                 // S815 (2026-07-13, default ON, opt-out OXI_S815_DISABLE): a LATIN
                 // document's table-cell LINE is the hhea natural EXACT — the

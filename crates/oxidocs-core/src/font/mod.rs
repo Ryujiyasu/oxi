@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub mod math_constants;
 pub mod math_substitute;
@@ -416,6 +416,10 @@ pub struct FontMetricsRegistry {
     /// GDI-measured tmHeight/tmAscent/tmDescent: font → ppem → (height, ascent, descent) in pixels
     /// ceil(winAscent/upm*ppem) + ceil(winDescent/upm*ppem) ≠ tmHeight due to hinting.
     gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>>,
+    /// Font/ppem pairs supplied by the independently measured supplement.
+    /// These are safe to use for rules that require explicit measurement
+    /// rather than a generated-table fallback.
+    gdi_height_supplements: HashSet<(String, u32)>,
     /// COM-measured character widths in twips: font → size_key → codepoint → twips
     /// Higher precision than GDI pixel overrides. Used where the standard twips formula
     /// (round(advance*fontSize*20/UPM)) doesn't match Word's actual character placement.
@@ -587,7 +591,10 @@ impl FontMetricsRegistry {
         };
 
         // Load GDI-measured tmHeight table
-        let gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>> = {
+        let (gdi_heights, gdi_height_supplements): (
+            HashMap<String, HashMap<u32, (u32, u32, u32)>>,
+            HashSet<(String, u32)>,
+        ) = {
             let ht_json = include_str!("data/gdi_height_table.json");
             let raw: HashMap<String, HashMap<String, serde_json::Value>> =
                 serde_json::from_str(ht_json).unwrap_or_default();
@@ -616,19 +623,21 @@ impl FontMetricsRegistry {
             let supplement_json = include_str!("data/gdi_height_supplement.json");
             let supplement: HashMap<String, HashMap<String, serde_json::Value>> =
                 serde_json::from_str(supplement_json).unwrap_or_default();
+            let mut supplement_keys = HashSet::new();
             for (font, ppem_map) in supplement {
                 let font_name = font.replace('_', " ");
-                let target = result.entry(font_name).or_insert_with(HashMap::new);
+                let target = result.entry(font_name.clone()).or_insert_with(HashMap::new);
                 for (ppem_str, val) in ppem_map {
                     if let (Ok(ppem), Some(obj)) = (ppem_str.parse::<u32>(), val.as_object()) {
                         let h = obj.get("h").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         let a = obj.get("a").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         let d = obj.get("d").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         target.insert(ppem, (h, a, d));
+                        supplement_keys.insert((font_name.clone(), ppem));
                     }
                 }
             }
-            result
+            (result, supplement_keys)
         };
 
         // Load COM-measured twips width overrides (higher precision than GDI pixel).
@@ -673,6 +682,7 @@ impl FontMetricsRegistry {
             com_line_heights,
             gdi_widths,
             gdi_heights,
+            gdi_height_supplements,
             com_twips_widths,
             lm0_lineauto_base,
             latin_kern,
@@ -835,6 +845,14 @@ impl FontMetricsRegistry {
         self.gdi_heights.get(family)
             .or_else(|| self.gdi_heights.get(&normalized))
             .and_then(|ppem_map| ppem_map.get(&ppem).copied())
+    }
+
+    /// Whether this font/size has an independently measured supplemental
+    /// GDI height, rather than only a generated-table entry.
+    pub fn has_gdi_height_supplement(&self, family: &str, ppem: u32) -> bool {
+        let normalized = normalize_family_name(family);
+        self.gdi_height_supplements.contains(&(family.to_string(), ppem))
+            || self.gdi_height_supplements.contains(&(normalized, ppem))
     }
 
     /// Character width with GDI font fallback and hinting overrides.
@@ -1378,6 +1396,8 @@ mod tests {
     fn test_gdi_height_supplement_loads() {
         let reg = FontMetricsRegistry::load();
         assert_eq!(reg.gdi_height("Arial Narrow", 13), Some((16, 13, 3)));
+        assert!(reg.has_gdi_height_supplement("Arial Narrow", 13));
+        assert!(!reg.has_gdi_height_supplement("Arial", 13));
     }
 
     #[test]
