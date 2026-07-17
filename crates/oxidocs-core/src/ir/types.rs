@@ -1208,6 +1208,14 @@ pub struct ParagraphStyle {
     /// Word resets docDefaults lineSpacing to Single inside table cells but keeps Normal style's lineSpacing.
     #[serde(default)]
     pub line_spacing_from_doc_defaults: bool,
+    /// S906: space_before/space_after were merged from docDefaults (not a
+    /// named/default paragraph style). The table-style cell spacing layer
+    /// overrides docDefaults-sourced spacing but NOT style-sourced spacing
+    /// (ECMA: docDefaults < table style pPr < paragraph style < direct).
+    #[serde(default)]
+    pub space_before_from_doc_defaults: bool,
+    #[serde(default)]
+    pub space_after_from_doc_defaults: bool,
     /// w:spacing beforeLines — in 1/100 of a line (raw value from OOXML)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_lines: Option<f32>,
@@ -1401,6 +1409,8 @@ impl Default for ParagraphStyle {
             has_direct_before: false,
             has_direct_after: false,
             line_spacing_from_doc_defaults: false,
+            space_before_from_doc_defaults: false,
+            space_after_from_doc_defaults: false,
             before_lines: None,
             after_lines: None,
             indent_left: None,

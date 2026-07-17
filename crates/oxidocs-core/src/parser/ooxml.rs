@@ -2178,9 +2178,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     if let Some(ref doc_para) = styles.doc_default_para_style {
         if style.space_before.is_none() {
             style.space_before = doc_para.space_before;
+            style.space_before_from_doc_defaults = doc_para.space_before.is_some();
         }
         if style.space_after.is_none() {
             style.space_after = doc_para.space_after;
+            style.space_after_from_doc_defaults = doc_para.space_after.is_some();
         }
         if style.before_lines.is_none() {
             style.before_lines = doc_para.before_lines;
@@ -8006,8 +8008,14 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
         style.default_run_style = styles.doc_default_run_style.clone();
     }
     if let Some(ref doc_para) = styles.doc_default_para_style {
-        if style.space_before.is_none() { style.space_before = doc_para.space_before; }
-        if style.space_after.is_none() { style.space_after = doc_para.space_after; }
+        if style.space_before.is_none() {
+            style.space_before = doc_para.space_before;
+            style.space_before_from_doc_defaults = doc_para.space_before.is_some();
+        }
+        if style.space_after.is_none() {
+            style.space_after = doc_para.space_after;
+            style.space_after_from_doc_defaults = doc_para.space_after.is_some();
+        }
         if style.line_spacing.is_none() {
             style.line_spacing = doc_para.line_spacing;
             style.line_spacing_rule = doc_para.line_spacing_rule.clone();

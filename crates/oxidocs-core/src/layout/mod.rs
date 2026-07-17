@@ -24694,10 +24694,41 @@ impl LayoutEngine {
         if std::env::var("OXI_S855_DISABLE").is_err()
             && std::env::var("OXI_S865_DISABLE").is_err()
         {
-            (
+            let (rb, ra) = (
                 !style.has_direct_before && !style_has_explicit_rule,
                 !style.has_direct_after && !style_has_explicit_rule,
-            )
+            );
+            // S906 (2026-07-17, opt-out OXI_S906_DISABLE): the cell "reset"
+            // is the TABLE-STYLE spacing layer, which sits BELOW the
+            // paragraph style (ECMA: docDefaults < table style pPr <
+            // paragraph style < direct). A side whose value came from a
+            // PARAGRAPH STYLE (Normal etc., not docDefaults) is KEPT:
+            // bd832's TableGrid declares no spacing and its Normal carries
+            // after=8 — Word renders every spec-table row ~8pt taller than
+            // Oxi's reset (-8/row → the -1×2). S855doc's after came from
+            // docDefaults → still reset ✓ (technical__0009d767 preserved).
+            // Latin scope: the JP form-family reset calibration untouched.
+            // ★HELD OPT-IN (OXI_S906=1): the provenance rule alone is WRONG —
+            // it flipped uklocalspending {+1:40} + ukhealthform {+1:2}
+            // (their style-less/no-spacing-declaring tables RESET style-
+            // sourced spacing in Word, while bd832's KEEPS it). The live
+            // hypothesis: STYLE-sourced cell spacing obeys the S882-style
+            // EDGE SUPPRESSION (interior paragraph boundaries keep the
+            // after; single-para cells suppress both edges → reset-
+            // equivalent) — bd832's multi-para spec cells vs uklocal's
+            // single-para cells fit. Needs the probe matrix (cell para
+            // count × spacing source × tbl-style declaration) before
+            // default-ON.
+            if !self.doc_body_has_real_cjk && std::env::var("OXI_S906").is_ok() {
+                let keep_b = style.space_before.is_some()
+                    && !style.space_before_from_doc_defaults
+                    && !style.has_direct_before;
+                let keep_a = style.space_after.is_some()
+                    && !style.space_after_from_doc_defaults
+                    && !style.has_direct_after;
+                return (rb && !keep_b, ra && !keep_a);
+            }
+            (rb, ra)
         } else if std::env::var("OXI_S855_DISABLE").is_err() {
             let reset = !style.has_direct_before_after && !style_has_explicit_rule;
             (reset, reset)
