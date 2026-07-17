@@ -16275,6 +16275,21 @@ impl LayoutEngine {
             return 0.0;
         }
         if table.style.border || table.style.has_inside_h {
+            // S911 (2026-07-17, opt-out OXI_S911_DISABLE): a cell-level EXPLICIT
+            // nil (the S482 {style:"none"} sentinel) KILLS the table rule above
+            // this cell — ECMA: cell borders override table borders; Word draws
+            // no rule and pads nothing. legal 0001482d compilation table:
+            // tblBorders insideH sz=8 + EVERY data cell `<w:top w:val="nil"/>`
+            // → Word row boundary 15.0 vs Oxi 15.9 (+1.0/row = the sz8 pad) →
+            // the accelerating wp217-220 +1×40 tail. A cell whose top is a REAL
+            // border (the first row's single sz8 = the table top) keeps the pad.
+            if std::env::var("OXI_S911_DISABLE").is_err() {
+                if let Some(b) = &cell.borders {
+                    if b.top.as_ref().map_or(false, |d| d.style == "none") {
+                        return 0.0;
+                    }
+                }
+            }
             let width = table.style.border_width.unwrap_or(0.5);
             // S865: a thick border does not pad the cell content top in a
             // FIXED-layout table. Full-width ROWBOX2 padding accumulated
@@ -16293,9 +16308,14 @@ impl LayoutEngine {
             return if thick_fixed { 0.0 } else { width };
         }
         if let Some(b) = &cell.borders {
-            if b.top.is_some() || b.bottom.is_some() {
-                let w = b.top.as_ref().map(|d| d.width).unwrap_or(0.0)
-                    .max(b.bottom.as_ref().map(|d| d.width).unwrap_or(0.0));
+            // S911: exclude the S482 explicit-nil sentinel ({style:"none"}) —
+            // it must neither trigger the arm nor fall to the 0.5 default.
+            let real = |d: &Option<BorderDef>| d.as_ref()
+                .filter(|x| x.style != "none" || std::env::var("OXI_S911_DISABLE").is_ok())
+                .map(|x| x.width);
+            let (t, bo) = (real(&b.top), real(&b.bottom));
+            if t.is_some() || bo.is_some() {
+                let w = t.unwrap_or(0.0).max(bo.unwrap_or(0.0));
                 return if w > 0.0 { w } else { 0.5 };
             }
         }
@@ -16361,6 +16381,41 @@ impl LayoutEngine {
             && !table.style.has_inside_h
         {
             return self.s870_row_top_border(table, row_idx);
+        }
+        // S911 v2 (2026-07-17, opt-out OXI_S911_DISABLE): the pad is a
+        // ROW-level quantity (the rule ABOVE the row). Cell-level EXPLICIT
+        // nils (the S482 {style:"none"} sentinel) kill the table insideH
+        // per-column — the row pads iff ANY column still carries a rule.
+        //   legal 0001482d compilation table: insideH sz=8 but EVERY data
+        //   cell nils top+bottom → rule dead → Word row boundary 15.0 vs
+        //   Oxi 15.9 (+1.0/row = the accelerating wp217-220 tail).
+        //   29dc6e (JP order form, word_png): SPORADIC nils (9 of ~250
+        //   edges, vMerge cells) → the rule survives across the other
+        //   columns and Word pads the WHOLE row — the v1 per-cell check
+        //   made the nil cell's content top differ from its siblings
+        //   (p3 −0.0262). Row-alive ⇒ return the uniform table width
+        //   (bypassing the per-cell check = byte-identical to pre-S911).
+        if (table.style.border || table.style.has_inside_h)
+            && std::env::var("OXI_S911_DISABLE").is_err()
+        {
+            let nil = |d: &Option<BorderDef>| d.as_ref().map_or(false, |x| x.style == "none");
+            if let Some(this_row) = table.rows.get(row_idx) {
+                let all_top_nil = !this_row.cells.is_empty()
+                    && this_row.cells.iter().all(|c|
+                        c.borders.as_ref().map_or(false, |b| nil(&b.top)));
+                let prev_dead = row_idx > 0
+                    && table.rows.get(row_idx - 1).map_or(false, |p|
+                        !p.cells.is_empty() && p.cells.iter().all(|c|
+                            c.borders.as_ref().map_or(false, |b| nil(&b.bottom))));
+                if all_top_nil && prev_dead {
+                    return 0.0;
+                }
+            }
+            let width = table.style.border_width.unwrap_or(0.5);
+            let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
+                && width > 1.0
+                && table.style.layout.as_deref() == Some("fixed");
+            return if thick_fixed { 0.0 } else { width };
         }
         self.rowbox2_border_pad(table, cell)
     }
