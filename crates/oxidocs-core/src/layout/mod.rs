@@ -4409,6 +4409,7 @@ impl LayoutEngine {
                             None,
                             false,
                             0.0, None, // S900
+                            None, // S903
                         );
                         elements.extend(frame_els);
                         let has_next = page.blocks.get(block_idx + 1)
@@ -4468,6 +4469,7 @@ impl LayoutEngine {
                             None,
                             false,
                             0.0, None, // S900
+                            None, // S903
                         );
                         elements.extend(frame_els);
                         if std::env::var("OXI_DBG898").is_ok() {
@@ -4547,6 +4549,7 @@ impl LayoutEngine {
                             None, // S758
                             false, // S835
                             0.0, None, // S900
+                            None, // S903
                         );
                         elements.extend(frame_els);
                         // Band height: framePr h (hRule atLeast semantics — the
@@ -5234,6 +5237,11 @@ impl LayoutEngine {
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
                     let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
                     let mut s900_para_deferred: Vec<u32> = Vec::new();
+                    let s903_next_borders_body: Option<&ParagraphBorders> =
+                        page.blocks.get(block_idx + 1).and_then(|b| match b {
+                            Block::Paragraph(p) => p.style.borders.as_ref(),
+                            _ => None,
+                        });
                     // S676: a pending drop-cap indents THIS paragraph's body to the right
                     // of the floated cap (start shifted, available width reduced).
                     let dc_indent = pending_dropcap.take().unwrap_or(0.0);
@@ -5278,6 +5286,7 @@ impl LayoutEngine {
                         (footnote_reserve_current + delta_if_current) > 0.0, // S835
                         footnote_reserve_current, // S900
                         Some(&mut s900_para_deferred), // S900
+                        s903_next_borders_body, // S903
                     );
                     prev_space_after = sa;
                     if std::env::var("OXI_DBG_PARA").is_ok() {
@@ -6304,6 +6313,7 @@ impl LayoutEngine {
                             None, // S758
                             false, // S835
                             0.0, None, // S900
+                            None, // S903
                         );
                         elements.extend(en_elements);
                     }
@@ -6558,6 +6568,7 @@ impl LayoutEngine {
                             None, // S758
                             false, // S835
                             0.0, None, // S900
+                            None, // S903
                         );
                         lp.elements.extend(hdr_elements);
                     } else if let Block::Image(img) = block {
@@ -6614,6 +6625,7 @@ impl LayoutEngine {
                             None, // S758
                             false, // S835
                             0.0, None, // S900
+                            None, // S903
                         );
                         lp.elements.extend(ftr_elements);
                     }
@@ -7042,6 +7054,7 @@ impl LayoutEngine {
                                         None, // S758
                                         false, // S835
                                         0.0, None, // S900
+                                        None, // S903
                                     );
                                     lp.elements.extend(note_elements);
                                 }
@@ -7409,6 +7422,7 @@ impl LayoutEngine {
                         None, // S758
                         false, // S835
                         0.0, None, // S900
+                        None, // S903
                     );
                     // CLNSP: count this paragraph's rendered LINES (text
                     // elements grouped by y) and push one spec per line —
@@ -7979,7 +7993,32 @@ impl LayoutEngine {
                 _ => false,
             });
             if !has_ink {
-                return (page.margin.bottom, false);
+                // S905 (2026-07-17, opt-out OXI_S905_DISABLE): when footer_dist
+                // EXCEEDS the bottom margin, the blank footer still pins the
+                // body ABOVE the footer line's region: reserve = dist − one
+                // footer line (0008ea8f: dist 36, margin 9.35 → bottom
+                // 792−(36−12.65) = 768.65; Word keeps TANF at box-bottom
+                // 764.8 and pushes «B. If you…» at ~775 — the S894 margin-only
+                // value 782.65 kept it = the residual −1). The fE10 probe was
+                // DEGENERATE here (margin 72 > dist 64.65 − line → max() hid
+                // the term; uklocal-class docs are value-identical).
+                let s905_line = if std::env::var("OXI_S905_DISABLE").is_err() {
+                    blocks.iter().find_map(|b| match b {
+                        Block::Paragraph(p) => {
+                            let fs = p.style.ppr_rpr.as_ref()
+                                .and_then(|r| r.font_size)
+                                .or_else(|| p.style.default_run_style.as_ref()
+                                    .and_then(|r| r.font_size))
+                                .unwrap_or(self.default_font_size);
+                            let rpr = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            let m = self.metrics_for_para_mark_g(&rpr, &p.style, true);
+                            Some(m.natural_line_height_hhea(fs))
+                        }
+                        _ => None,
+                    }).unwrap_or(0.0)
+                } else { 0.0 };
+                let dist = page.footer_distance.unwrap_or(36.0);
+                return ((dist - s905_line).max(page.margin.bottom), false);
             }
         }
         let footer_reserved = if !blocks.is_empty() {
@@ -8466,6 +8505,13 @@ impl LayoutEngine {
         // render at the TOP of Word p3's area). Only the body call site
         // passes Some.
         mut fn_deferred_out: Option<&mut Vec<u32>>,
+        // S903 (2026-07-17): the NEXT paragraph's pBdr — the bottom-border
+        // advance (space + bw/2) applies only to the LAST paragraph of a
+        // merged identical-pBdr group (Word's interior boundaries reserve
+        // NOTHING: 0008ea8f form boxes render pure 2×line pitch 20.64 while
+        // Oxi added +0.25/para). The S658 top-side merge gate's bottom
+        // sibling. Only the body call site threads a real value.
+        s903_next_borders: Option<&ParagraphBorders>,
     ) -> (Vec<LayoutElement>, f32, usize) {
         // S673v (2026-06-26): an EMPTY paragraph whose ¶ MARK is hidden
         // (`<w:pPr><w:rPr><w:vanish/></w:rPr>`) COLLAPSES to 0 height — Word does
@@ -13116,7 +13162,16 @@ impl LayoutEngine {
                 // can only ship together with the body line-height fix. Kept gated for
                 // when that lands. Default OFF = byte-identical baseline.
                 let pbdr_full = std::env::var("OXI_S467_PBDR_ENABLE").is_ok();
-                cursor.set(border_y + if pbdr_full { bw } else { bw / 2.0 });
+                // S903: an INTERIOR paragraph of a merged identical-pBdr group
+                // reserves NO bottom overhead (Word: pure line pitch between
+                // merged boxes; the space+bw belongs to the group's LAST para).
+                // Latin scope — the JP 3a4f 6-box stack keeps its calibration.
+                let s903_interior = !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S903_DISABLE").is_err()
+                    && s903_next_borders.map_or(false, |nb| nb == borders);
+                if !s903_interior {
+                    cursor.set(border_y + if pbdr_full { bw } else { bw / 2.0 });
+                }
             }
             if let Some(ref top) = borders.top {
                 let bw = top.width;
@@ -16965,6 +17020,9 @@ impl LayoutEngine {
                     && std::env::var("OXI_S671_DISABLE").is_err()
                 {
                     let factor = line_spacing.unwrap_or(1.0);
+                    if std::env::var("OXI_DBG_LH").is_ok() {
+                        eprintln!("[LH-S671] fired ret={:.3}", hhea_natural_max * factor);
+                    }
                     // hhea_natural_max alone (NOT .max(run_base)): run_base is the
                     // win-based, pixel-rounded (0.75pt) ascent+descent, which can EXCEED
                     // the hhea natural for some fonts (Arial/Times pixel-ceil) and would
@@ -18742,7 +18800,21 @@ impl LayoutEngine {
             let lrpb_row_should_break = row_has_lrpb_at_cell_start
                 && has_content
                 && !row_overflows  // row would fit; LRPB hint says break anyway
-                && consumed_row > lrpb_threshold;
+                && consumed_row > lrpb_threshold
+                // S904 (2026-07-17, opt-out OXI_S904_DISABLE): LATIN docs
+                // respect a row-level SOFT LRPB only when the row's own fit
+                // is MARGINAL (post-row room < 28pt, the S814-v2 family
+                // constant) — a REAL saved break fires where the row barely
+                // fits (ukhealthform E3: room-after-row 2.8pt, load-bearing
+                // PASS), a STALE one replays with the page wide open
+                // (0008ea8f checkbox table: room-after-row 82pt, Word's
+                // current render keeps it → the whole {+1:13}). The blanket
+                // Latin retirement (v1) flipped ukhealthform PASS→FAIL. JP
+                // keeps the unconditional model (de6e/29dc6e load-bearing
+                // per the R7.47/R7.48 derivation).
+                && (self.doc_body_has_real_cjk
+                    || page_bottom - (cursor.cursor_y + row_height) < 28.0
+                    || std::env::var("OXI_S904_DISABLE").is_ok());
             if std::env::var("OXI_DUMP_ROW_LRPB").is_ok() && row_has_lrpb_at_cell_start {
                 let preview: String = row.cells.iter().filter_map(|c| {
                     c.blocks.first().and_then(|b| match b {
