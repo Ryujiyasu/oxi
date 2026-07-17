@@ -10161,7 +10161,28 @@ impl LayoutEngine {
                             }
                         }
                     }
-                    if is_multiple_spacing && no_grid_raw_max > 0.0 {
+                    if is_multiple_spacing
+                        && (first_line.fragments.is_empty() || s902_all_ws)
+                        && s805_hhea_max > 0.0
+                        && std::env::var("OXI_S910").is_ok()
+                    {
+                        // (arm ordered BEFORE the raw-max arm: the EMPTY branch
+                        // above also sets no_grid_raw_max from the mark's win
+                        // metrics, which would shadow this fix at 13.5.)
+                        // S910 (2026-07-17, opt-out OXI_S910_DISABLE): a Latin
+                        // EMPTY (or whitespace-only) paragraph under a LINE
+                        // MULTIPLE takes the hhea basis like its text siblings —
+                        // the S876 arm below is !is_multiple-gated, so an empty
+                        // ×1.15 fell to the win-based run_base (f7115: Default
+                        // style Arial 12, line=276 → Oxi 13.4×1.15→15.5 vs Word
+                        // hhea 13.799×1.15=15.87; text lines are correct via
+                        // s671_fine). ~10 spacer empties/page × −0.43 = the
+                        // −4.5pt/page systematic under-fill → the wp5 knife-edge.
+                        // JP inert by construction: s805_hhea_max is only set
+                        // for empties under the S876 !cjk gate. The factor is
+                        // applied downstream (basis semantics unchanged).
+                        s805_hhea_max
+                    } else if is_multiple_spacing && no_grid_raw_max > 0.0 {
                         run_base.max(no_grid_raw_max)
                     } else if !is_multiple_spacing && s805_hhea_max > 0.0
                         && !self.doc_body_has_real_cjk
