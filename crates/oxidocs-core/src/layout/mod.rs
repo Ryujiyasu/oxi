@@ -4940,8 +4940,44 @@ impl LayoutEngine {
                             // val=0) Word splits even a 3-line follower (1+2), so the heading
                             // STAYS — exactly the old gate. Discriminator = next_para widow_control.
                             let s635 = std::env::var("OXI_S635_DISABLE").is_err();
-                            let follower_moves_wholly =
-                                next_para.style.widow_control && next_lines <= 3;
+                            // S914 (2026-07-17, opt-out OXI_S914_DISABLE): S635's own
+                            // derivation above ("a ≤3-line para can't split without
+                            // leaving <2 lines on a side") has TWO halves; only the
+                            // "can NEVER split" half (n≤3) was implemented. The missing
+                            // half is "cannot fit 2 lines HERE": an n≥4 follower whose
+                            // first TWO lines do not fit in the space left after the
+                            // heading is an ORPHAN, so Oxi's own orphan arm (the
+                            // line_idx==0 "would leave only 1 line → push entire
+                            // paragraph" rule) whole-moves it — and the lookahead, not
+                            // knowing that, leaves the keepNext heading STRANDED at the
+                            // page bottom. The two contradicted each other.
+                            // legal__0001482d pi=1105 (a `<w:keepNext/>` Subsection,
+                            // 5-line follower): rem_after_heading 30.10 vs the first two
+                            // lines' 31.60 → short by 1.50pt → 1 line fits → orphan.
+                            // Word agrees within 0.1pt (its own arithmetic says the
+                            // second line overflows by 1.41pt) and puts heading+follower
+                            // on the next page; Oxi kept the heading. ailitguide's S635
+                            // specimen was a 3-line follower, so this gap never surfaced.
+                            // MEASURED blast radius (KN635 trace, 519 docs): golden-test
+                            // 369 → 0 changed decisions, docx_corpus/ja 50 → 0,
+                            // word_png 238 → 0 (byte-identical by construction); only 4
+                            // EN docs change (10 decisions), of which exactly ONE is
+                            // gated — legal__0001482d, the target. 4 of those 10 are
+                            // k=0 (not a single follower line fits) = unambiguous
+                            // keepNext violations today. Unscoped: no JP doc reacts, so
+                            // no language gate is needed (rule 10 clean).
+                            let s914 = std::env::var("OXI_S914_DISABLE").is_err();
+                            let line_h_next = if next_lines > 1 {
+                                (next_h - one_line_h) / (next_lines - 1) as f32
+                            } else {
+                                one_line_h
+                            };
+                            // An orphan check mirroring the orphan arm that will actually
+                            // run: does the follower get ≥2 lines in what's left?
+                            let follower_orphans =
+                                s914 && (one_line_h + line_h_next) > (remaining - this_h);
+                            let follower_moves_wholly = next_para.style.widow_control
+                                && (next_lines <= 3 || follower_orphans);
                             // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
                             // when the follower is ITSELF keepNext (H1→H2), the keep unit
                             // extends transitively to H2's follower (Word keeps the whole
