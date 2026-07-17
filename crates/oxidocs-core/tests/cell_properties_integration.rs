@@ -15,8 +15,9 @@
 //!   - tcBorders: top/bottom/left/right + `<w:start>`/`<w:end>` ALIAS
 //!     routing to left/right (parser/ooxml.rs:5365-5366). Width = sz/8
 //!     (1/8 pt units), color="auto" materializes to "000000" (NOT the
-//!     literal "auto"), val="none"/"nil" SUPPRESSES the side (returns
-//!     None from parse_border_attrs even though the element is present).
+//!     literal "auto"), val="none"/"nil" SUPPRESSES the side — but on
+//!     the CELL path it is stored as the S482 `{style:"none"}` SENTINEL,
+//!     not as `None` (see `v1_tc_borders_pins_sz_color_and_none_suppression`).
 //!   - tcMar: top/bottom/left/right in twips → pt (val/20). All four
 //!     distinct values catch a mis-route between sides.
 //!   - tcW: cell width in twips → pt (val/20).
@@ -110,14 +111,38 @@ fn v1_tc_borders_pins_sz_color_and_none_suppression() {
     assert_eq!(left.style, "dashed");
     assert_eq!(left.color.as_deref(), Some("FF0000"));
 
-    // right: val="none" → parse_border_attrs returns None at line 2406.
-    // The side stays None despite the `<w:right>` element being present.
-    assert!(
-        b.right.is_none(),
-        "val=\"none\" SUPPRESSES the border (returns None even though element present)"
+    // right: val="none" → SUPPRESSED, but stored as the S482 SENTINEL
+    // `Some(BorderDef { style: "none", width: 0.0 })`, NOT as `None`.
+    //
+    // ★S482 (and S911, which depends on it) REQUIRE the sentinel — do not
+    // "fix" this back to None. `parse_border_attrs` itself does return None
+    // for val="none"/"nil" (parser/ooxml.rs:3297), but `parse_cell_borders`
+    // (parser/ooxml.rs:7340) re-wraps an EXPLICIT nil as the sentinel,
+    // because on the CELL path the two cases are semantically DIFFERENT
+    // (ECMA-376: a cell border overrides the table border):
+    //   - edge ABSENT       → inherit the table-level border (tblBorders)
+    //   - edge EXPLICIT nil → suppress; draw NOTHING, do not inherit
+    // Collapsing both to `None` loses that distinction and makes an
+    // explicit nil fall through to the table border. Consumers that read
+    // the sentinel:
+    //   - S482  layout/mod.rs:22519 `resolve_border` — `style == "none"`
+    //           returns (None, 0.0, None) instead of the table fallback
+    //           (31420af: nil top/left over an all-single tblBorders drew
+    //           spurious rules).
+    //   - S911  layout/mod.rs:16346/16379/16455 `rowbox2_border_pad` — an
+    //           explicitly-dead row boundary contributes NO border-box pad
+    //           (legal 0001482d: +1.0/row → the wp217-220 tail).
+    // The sentinel is opt-out via OXI_S482_DISABLE (which restores the
+    // pre-S482 `None`); this test pins the DEFAULT behavior.
+    let right = b.right.as_ref().expect("explicit nil is kept as the S482 sentinel");
+    assert_eq!(
+        right.style, "none",
+        "val=\"none\" → S482 sentinel style=\"none\" (suppress, do NOT inherit the table border)"
     );
+    assert_eq!(right.width, 0.0, "a suppressed edge has zero width");
 
     // The second cell has no tcBorders → borders stays None.
+    // (This is the ABSENT case the sentinel must stay distinguishable from.)
     let cell1 = &t.rows[0].cells[1];
     assert!(
         cell1.borders.is_none(),

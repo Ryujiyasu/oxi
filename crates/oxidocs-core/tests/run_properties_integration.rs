@@ -46,8 +46,10 @@
 //!     and sets `has_explicit_east_asia=true` (the latter is the
 //!     gate for §4.6.3 Latin-space-adjacent-CJK widening per S136).
 //!   - [parser/ooxml.rs:4445](crates/oxidocs-core/src/parser/ooxml.rs#L4445)
-//!     `<w:webHidden/>` is an ALIAS for `<w:vanish/>` — both map to
-//!     the same `vanish` flag, NOT a separate `web_hidden` field.
+//!     `<w:webHidden/>` is NOT an alias for `<w:vanish/>`: per ISO/IEC
+//!     29500-1 §17.3.2.44 it hides text only in WEB PAGE VIEW and "should
+//!     not affect a normal paginated view", so Oxi (a paginated renderer)
+//!     treats it as a NO-OP. Only `<w:vanish/>` (§17.3.2.45) sets `vanish`.
 //!   - [parser/ooxml.rs:4425-4430](crates/oxidocs-core/src/parser/ooxml.rs#L4425)
 //!     `<w:smallCaps/>` and `<w:caps/>` are INDEPENDENT flags — both
 //!     can be true simultaneously (a regression here would silently
@@ -293,7 +295,9 @@ fn v1_kern_position_spacing_unit_distinctions() {
 }
 
 #[test]
-fn v1_rfonts_cjk_separation_caps_independence_vanish_alias() {
+// Renamed from `..._vanish_alias` (2026-07-17): webHidden is NOT a vanish
+// alias — see the webHidden block below (ISO/IEC 29500-1 §17.3.2.44).
+fn v1_rfonts_cjk_separation_caps_independence_webhidden_not_vanish() {
     let Some(doc) = load("v1_rfonts_caps_vanish.docx") else { return };
 
     // rFonts ascii AND eastAsia → two SEPARATE fields, NOT a single
@@ -324,16 +328,33 @@ fn v1_rfonts_cjk_separation_caps_independence_vanish_alias() {
     assert!(sc.style.small_caps, "<w:smallCaps/> → small_caps=true");
     assert!(sc.style.all_caps, "<w:caps/> → all_caps=true");
 
-    // webHidden is an ALIAS for vanish — both map to the same flag.
-    // This must be the case because the parser at ooxml.rs:4445
-    // matches `"vanish" | "webHidden"` together. A regression that
-    // split them would surface as runs being non-hidden in render.
+    // webHidden is NOT an alias for vanish — it is a NO-OP in a paginated
+    // renderer. ★Do not "fix" this back to `vanish=true`: the parser
+    // deliberately splits them at all three sites (ooxml.rs:6201 run rPr,
+    // ooxml.rs:2596 the ¶-mark pPr/rPr, styles.rs:637 style rPr) —
+    // commit 8166ea9e, "ToC page-number rendering (uk_local_spending)".
+    //
+    // ISO/IEC 29500-1 §17.3.2.44 webHidden (Web Hidden Text), verbatim:
+    //   "This element specifies whether the contents of this run shall be
+    //    hidden from display at display time in a document WHEN THE DOCUMENT
+    //    IS BEING DISPLAYED IN A WEB PAGE VIEW. ... As well, this setting
+    //    SHOULD NOT AFFECT A NORMAL PAGINATED VIEW of the document."
+    // Oxi renders the paginated view (it clones Word's print/PDF layout), so
+    // webHidden must NOT hide. §17.3.2.45 vanish is the all-views flag.
+    //
+    // This is load-bearing, not pedantry: Word marks ToC tab-leaders and
+    // PAGEREF page-number runs webHidden (they are meaningless in Web Layout,
+    // which has no pages). Treating it as vanish dropped EVERY ToC page number
+    // in uk_local_spending. The ¶-mark site matters too: webHidden must not
+    // trigger the S673v hidden-mark empty-paragraph collapse.
     let wh = find_run(&doc, "hidden-webhidden");
     assert!(
-        wh.style.vanish,
-        "<w:webHidden/> is an ALIAS for vanish (same flag, not a separate web_hidden field)"
+        !wh.style.vanish,
+        "<w:webHidden/> is WEB-LAYOUT-ONLY (§17.3.2.44) — it must NOT set vanish, \
+         which would hide it in the paginated render (ToC page numbers)"
     );
 
+    // vanish (§17.3.2.45) IS the all-views hidden flag.
     let v = find_run(&doc, "hidden-vanish");
     assert!(v.style.vanish, "<w:vanish/> → vanish=true");
 

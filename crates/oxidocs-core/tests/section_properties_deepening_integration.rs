@@ -17,9 +17,11 @@
 //!   - pgMar gutter ADDITIVE to margin.left (folded at parse time,
 //!     NOT a separate field).
 //!   - docGrid type="lines" + linePitch → grid_line_pitch populated.
-//!   - docGrid linePitch WITHOUT type → doc_grid_no_type=true,
-//!     grid_line_pitch stays None. Gates CJK 83/64 multiplier per
-//!     CLAUDE.md (no_type=true → multiplier SKIPPED).
+//!   - docGrid linePitch WITHOUT type → doc_grid_no_type=true, which gates
+//!     the CJK 83/64 multiplier per CLAUDE.md (no_type=true → multiplier
+//!     SKIPPED). S571: a CUSTOM (≠360) linePitch ALSO populates
+//!     grid_line_pitch (Word honors it); Word's automatic default 360 does
+//!     not. See `v1_sect_docgrid_no_type_flips_flag_and_honors_custom_pitch`.
 //!   - pgNumType: fmt → page_number_format, start → page_number_start.
 //!
 //! Fixtures live in `tools/fixtures/section_properties_deepening_samples/`
@@ -294,14 +296,36 @@ fn v1_sect_docgrid_lines_and_chars_grid_char_cw_ratio_matches_pitch_div_default_
 }
 
 #[test]
-fn v1_sect_docgrid_no_type_flips_flag_without_setting_pitch() {
-    // NON-OBVIOUS branch at parser/ooxml.rs:5695-5698:
+fn v1_sect_docgrid_no_type_flips_flag_and_honors_custom_pitch() {
+    // NON-OBVIOUS branch at parser/ooxml.rs:7698:
     //   `grid_type.is_empty() && line_pitch > 0` → doc_grid_no_type=true.
-    // Even though linePitch is declared, grid_line_pitch is NOT
-    // populated because the parser only emits it for type=lines or
-    // type=linesAndChars. The doc_grid_no_type flag exists
-    // specifically to gate the CJK 83/64 line-height multiplier
+    // The doc_grid_no_type flag gates the CJK 83/64 line-height multiplier
     // per CLAUDE.md.
+    //
+    // ★S571 (+ the 2026-06-23 REFINE) also populates grid_line_pitch here —
+    // do not "fix" this back to None. This test was written against the
+    // pre-S571 parser, which dropped a no-type linePitch entirely.
+    //
+    // Spec vs Word: ECMA-376 §17.6.5's `w:type` defaults to "default" (=no
+    // grid), so spec-literally a no-type docGrid's linePitch is inert. But
+    // Word RENDER-TRUTH (ikujidetail, docGrid linePitch=286 no type) shows
+    // Word DOES drive line spacing from it: its body line pitch is exactly
+    // 14.3pt (=286tw), not the ~14.5pt font-natural. Per CLAUDE.md's
+    // "No Excuses by Design", fidelity wins for rendering — so the parser
+    // honors the pitch. (Fully disabling S571 flips ikujidetail Phase-1
+    // PASS→FAIL.)
+    //
+    // The REFINE is the load-bearing part: the pitch is honored ONLY when it
+    // is NON-DEFAULT (≠360). linePitch=360 (18pt) is the value Word writes
+    // automatically for "no real grid" and it does NOT honor it (it uses the
+    // natural line height); the original S571 inflated every default-360 doc
+    // to 18pt and regressed all 112 word_png no-type-docGrid docs (the gen2
+    // family) — masked at the time by the broken ssim_ab tool, later pinned
+    // by git-bisect to b589873b. So:
+    //   linePitch=350 (CUSTOM, this fixture) → Some(17.5)
+    //   linePitch=360 (Word's auto default)  → None
+    // Opt-out OXI_S571_DISABLE; force-all OXI_S571_ALL=1. This test pins the
+    // DEFAULT behavior.
     let Some(doc) = load("v1_sect_docgrid_no_type.docx") else { return };
     let page = &doc.pages[0];
 
@@ -309,9 +333,13 @@ fn v1_sect_docgrid_no_type_flips_flag_without_setting_pitch() {
         page.doc_grid_no_type,
         "docGrid with linePitch but NO type → doc_grid_no_type=true"
     );
+    let pitch = page
+        .grid_line_pitch
+        .expect("S571: a CUSTOM (≠360) no-type linePitch IS honored as a line grid");
     assert!(
-        page.grid_line_pitch.is_none(),
-        "linePitch alone (without type=lines/linesAndChars) → grid_line_pitch STAYS None"
+        (pitch - 17.5).abs() < 0.001,
+        "linePitch=350 twips → grid_line_pitch=17.5pt (val/20), got {}",
+        pitch
     );
 }
 
