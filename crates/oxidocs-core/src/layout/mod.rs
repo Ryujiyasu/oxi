@@ -19625,7 +19625,7 @@ impl LayoutEngine {
                     // preserve the docDefaults-inherited before/after in a cell.
                     // Kept in sync with estimate_para_height_inner / cell_para_spacing.
                     let (reset_before, reset_after) =
-                        self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule);
+                        self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule, true);
                     let tbl_has_ls = table.style.para_style.as_ref().and_then(|ps| ps.line_spacing).is_some();
                     // S699 (2026-06-30): the table-style line-spacing override must NOT fire
                     // when the paragraph STYLE itself sets explicit line spacing. ECMA-376
@@ -23215,24 +23215,58 @@ impl LayoutEngine {
                         .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
                         .map(|e| e.y)
                         .fold(f32::NEG_INFINITY, f32::max);
-                    let trailing_empty_count = row.cells.iter()
-                        .map(|cell| {
-                            let te = cell.blocks.iter().rev()
-                                .take_while(|b| matches!(b, Block::Paragraph(p)
+                    let te_of = |cell: &TableCell| {
+                        let te = cell.blocks.iter().rev()
+                            .take_while(|b| matches!(b, Block::Paragraph(p)
+                                if p.runs.iter().all(|r| r.text.is_empty())))
+                            .count();
+                        // S716: the post-nested-table stub para is collapsed
+                        // to ~0 by Word — exclude it from the split-continuation
+                        // formula (the stub is Some only when te == 1 and the
+                        // preceding block is a nested table).
+                        if self.nested_table_stub_pos(cell).is_some() {
+                            te.saturating_sub(1)
+                        } else {
+                            te
+                        }
+                    };
+                    // S908: which cells' trailing empties push the split-
+                    // continuation cursor. Two real-doc pins:
+                    //   uklocal Annex row 5 — sibling = TEXT + trailing empty:
+                    //     the empty is placed right after its text on the first
+                    //     page → contributes NOTHING (max-over-ALL credited it →
+                    //     a +11.5 phantom line; Word close = last line + after +
+                    //     tcMar_b = the S817 B3 model, rt.pdf 123.9 EXACT).
+                    //   d4d126 row 22 — sibling = an ENTIRELY-EMPTY cell (its
+                    //     single empty para IS the cell): Word DOES count it
+                    //     (word_png/rt.pdf p5 (１)提供媒体 110.7 = the te=1
+                    //     cursor; te=0 was −14.6 = the v1/v2 −0.0729 regression).
+                    // Rule: count (a) cells with text in the continuation (their
+                    // trailing empties follow the text below the split) and
+                    // (b) entirely-empty cells (the unplaced ¶ lands in the
+                    // continuation); a sibling's post-text empties do not.
+                    // The d77a/e3c545 derivation was 1×1 tables where all
+                    // variants coincide.
+                    let trailing_empty_count =
+                        if std::env::var("OXI_S908_DISABLE").is_err() {
+                            let mut cols: Vec<usize> = elements.iter()
+                                .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
+                                .filter_map(|e| e.cell_col_index)
+                                .collect();
+                            cols.sort_unstable();
+                            cols.dedup();
+                            let all_empty = |cell: &TableCell| {
+                                cell.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
                                     if p.runs.iter().all(|r| r.text.is_empty())))
-                                .count();
-                            // S716: the post-nested-table stub para is collapsed
-                            // to ~0 by Word — exclude it from the split-continuation
-                            // formula (the stub is Some only when te == 1 and the
-                            // preceding block is a nested table).
-                            if self.nested_table_stub_pos(cell).is_some() {
-                                te.saturating_sub(1)
-                            } else {
-                                te
-                            }
-                        })
-                        .max()
-                        .unwrap_or(0);
+                            };
+                            row.cells.iter().enumerate()
+                                .filter(|(ci, cell)| cols.binary_search(ci).is_ok() || all_empty(cell))
+                                .map(|(_, cell)| te_of(cell))
+                                .max()
+                                .unwrap_or_else(|| row.cells.iter().map(te_of).max().unwrap_or(0))
+                        } else {
+                            row.cells.iter().map(te_of).max().unwrap_or(0)
+                        };
                     if last_cont_top.is_finite() {
                         if let Some(lh) = table_grid_pitch {
                             cursor.set(
@@ -24463,7 +24497,7 @@ impl LayoutEngine {
         // was over-reserved per row and spilled the one-page table). See
         // [[en_..._benchmark]].
         let (reset_before, reset_after) =
-            self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule);
+            self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule, in_cell);
         let tbl_has_ls = table_para_style.and_then(|ps| ps.line_spacing).is_some();
         let (eff_ls, eff_lr): (Option<f32>, Option<&str>) = if tbl_has_ls && !para.style.has_direct_spacing {
             let tbl_ls = table_para_style.and_then(|ps| ps.line_spacing);
@@ -24705,6 +24739,12 @@ impl LayoutEngine {
         &self,
         style: &ParagraphStyle,
         style_has_explicit_rule: bool,
+        // S906b: the keep rule is a CELL rule; estimate_para_height_inner is a
+        // SHARED path (footnote/keepNext/header estimates call it with
+        // in_cell=false) and the S804 fn add-back assumes the estimate DROPS
+        // style spacing — keeping it there double-counts (uklocal fn area +47
+        // = FootnoteText sb/sa 240/240 x2). Gate the keep on in_cell.
+        in_cell: bool,
     ) -> (bool, bool) {
         if std::env::var("OXI_S855_DISABLE").is_err()
             && std::env::var("OXI_S865_DISABLE").is_err()
@@ -24744,11 +24784,21 @@ impl LayoutEngine {
             //   NO edge suppression for regular spacing (even the LAST
             //     para's after counts in the row: row = Σ(line+after)+pads;
             //     the S882 edge rule is AUTOSPACING-only).
-            // Still held opt-in: uklocal/healthform's calibrated stacks
-            // (S815-S819 rowbox etc.) were fitted WITH reset-to-0 — the
-            // probe-true rule exposes their compensations ({+1:40}) and
-            // needs the coupled recalibration session.
-            if !self.doc_body_has_real_cjk && std::env::var("OXI_S906").is_ok() {
+            // ★DEFAULT-ON (2026-07-17, S906b+S908): the "coupled recalibration"
+            // decomposed into (1) the in_cell gate below — the keep rule leaked
+            // into the SHARED estimate path (footnote/keepNext/header estimates)
+            // where the S804 fn add-back assumes the estimate DROPS style
+            // spacing (uklocal fn area +47 = the {+1:40}); (2) S908 — the
+            // Pattern-A split-continuation te over-count (+11.5 phantom line).
+            // With both: frozen 6/6 PASS, bd832 {-1:2}→{-1:1}.
+            // NOTE the v2 docDefaults-half (reset only when the tbl style
+            // declares the side) is NOT implemented — it contradicts S855's
+            // 0009d767 measurement until the tblStyle-declaration discriminator
+            // is derived; the style-sourced keep (this branch) is the probe's
+            // strongest, real-doc-confirmed finding (uklocal Annex row gap 24
+            // = Word keeps Normal sb/sa 12+12).
+            if in_cell && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S906_DISABLE").is_err() {
                 let keep_b = style.space_before.is_some()
                     && !style.space_before_from_doc_defaults
                     && !style.has_direct_before;
@@ -24784,7 +24834,7 @@ impl LayoutEngine {
         let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
         // S855: keep in sync with estimate_para_height_inner's should_reset.
         let (reset_before, reset_after) =
-            self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule);
+            self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule, true);
         let sb = if reset_before {
             0.0
         } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
