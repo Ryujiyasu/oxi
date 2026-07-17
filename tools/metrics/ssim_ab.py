@@ -14,12 +14,18 @@ Usage: python tools/metrics/ssim_ab.py OXI_S609_DISABLE   [base...]
 """
 import os, re, subprocess, sys, tempfile
 from pathlib import Path
-sys.path.insert(0, r"c:\Users\ryuji\oxi-main")
+# Resolve the repo root from this file's own location, not a hardcoded literal,
+# so a git worktree gates against ITS OWN build/pipeline_data instead of silently
+# borrowing the main tree's (the 2026-07-14/15 phantom-+5 footgun). From the main
+# tree parents[2] == the old literal c:\Users\ryuji\oxi-main, so gate numbers are
+# byte-identical there; from a worktree it resolves to the worktree root.
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO))
 from pipeline.config import WORD_PNG_DIR, RENDER_DPI
 from pipeline.ssim_calculator import _load_rgb, _resize_to_match
 from skimage.metrics import structural_similarity as ssim
 sys.stdout.reconfigure(encoding="utf-8")
-REPO=r"c:\Users\ryuji\oxi-main"
+REPO=str(_REPO)
 DW=os.path.join(REPO,"tools","oxi-dwrite-renderer","target","release","oxi-dwrite-renderer.exe")
 DOCS=os.path.join(REPO,"tools","golden-test","documents","docx")
 ARG=sys.argv[1] if len(sys.argv)>1 else "OXI_S609_DISABLE"
