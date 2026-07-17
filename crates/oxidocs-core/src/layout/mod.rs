@@ -6582,16 +6582,9 @@ impl LayoutEngine {
         // pagination untouched (render order only) = Phase-1 safe.
         // Default ON, opt-out OXI_S478_DISABLE.
         //
-        // KNOWN UNTESTED EDGES (zero instances in the current corpus, so not
+        // KNOWN UNTESTED EDGE (zero instances in the current corpus, so not
         // handled here — confirmed by the S478 13-doc structural audit):
-        //   (a) behind_doc=1 text boxes: a true behindDoc object should render
-        //       BEHIND the body-text layer; this sort only orders floats among
-        //       themselves (all text boxes are emitted after body text here).
-        //       If a behindDoc watermark with a high relativeHeight ever appears,
-        //       stratify (emit behind_doc=1 first, then behind_doc=0, each
-        //       relHeight-sorted) — or emit it before the body loop for true
-        //       behind-text. No such object exists in the corpus to verify against.
-        //   (b) standalone text-bearing VML (relativeHeight=0): all corpus VML is
+        //   standalone text-bearing VML (relativeHeight=0): all corpus VML is
         //       an mc:Fallback alternate (never rendered — Oxi takes mc:Choice
         //       DrawingML, which always carries a relativeHeight). A future
         //       standalone VML text box would parse relHeight=0 and be forced to
@@ -6628,7 +6621,18 @@ impl LayoutEngine {
                 (!tb_first, if s478_zorder && tb_first { rh } else { 0 }, i as u32)
             });
         }
+        // S918 (2026-07-18, default ON, opt-out OXI_S918_DISABLE): sorting a
+        // behindDoc float before other floats is not enough. Body elements
+        // were already emitted, so appending still painted an opaque behindDoc
+        // image over body text. Insert behindDoc elements before the existing
+        // body layer while preserving their stable relativeHeight order.
+        let s918_behind_body = s765 && std::env::var("OXI_S918_DISABLE").is_err();
+        let mut behind_insert_counts = vec![0usize; pages.len()];
         for (_, _, kind, fi) in &floats {
+            let behind_doc = match kind {
+                FloatKind::Tb => page.text_boxes[*fi].behind_doc,
+                FloatKind::Img => page.floating_images[*fi].behind_doc,
+            };
             match kind {
                 FloatKind::Tb => {
                     let tbi = *fi;
@@ -6652,7 +6656,14 @@ impl LayoutEngine {
                     }
                     let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
                     if let Some(lp) = pages.get_mut(target_page) {
-                        lp.elements.extend(tb_elements);
+                        if s918_behind_body && behind_doc {
+                            let insert_at = behind_insert_counts[target_page];
+                            let inserted = tb_elements.len();
+                            lp.elements.splice(insert_at..insert_at, tb_elements);
+                            behind_insert_counts[target_page] += inserted;
+                        } else {
+                            lp.elements.extend(tb_elements);
+                        }
                     }
                 }
                 FloatKind::Img => {
@@ -6675,9 +6686,23 @@ impl LayoutEngine {
                             crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                         });
                         if let Some(lp) = pages.get_mut(target_page) {
-                            lp.elements.push(el);
-                        } else if let Some(lp) = pages.last_mut() {
-                            lp.elements.push(el);
+                            if s918_behind_body && behind_doc {
+                                let insert_at = behind_insert_counts[target_page];
+                                lp.elements.insert(insert_at, el);
+                                behind_insert_counts[target_page] += 1;
+                            } else {
+                                lp.elements.push(el);
+                            }
+                        } else if !pages.is_empty() {
+                            let last = pages.len() - 1;
+                            let insert_at = behind_insert_counts[last];
+                            let lp = &mut pages[last];
+                            if s918_behind_body && behind_doc {
+                                lp.elements.insert(insert_at, el);
+                                behind_insert_counts[last] += 1;
+                            } else {
+                                lp.elements.push(el);
+                            }
                         }
                     } else if let Some(lp) = pages.last_mut() {
                         lp.elements.push(LayoutElement::new(start_x, 0.0, img.width, img.height, LayoutContent::Image {
