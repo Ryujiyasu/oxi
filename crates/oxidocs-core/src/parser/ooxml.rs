@@ -6410,6 +6410,24 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
         }
     }
 
+    // Direct tblBorders may override only the outer frame. Unspecified inside
+    // edges still inherit from the table style (for example, a 1.5pt direct
+    // frame over TableGrid's 0.5pt insideH/insideV grid).
+    if std::env::var("OXI_S921_DISABLE").is_err() {
+        if let Some(ref style_id) = style.style_id {
+            if let Some(tbl_style) = styles.table_styles.get(style_id) {
+                if style.inside_horizontal_border.is_none() {
+                    style.has_inside_h = tbl_style.has_inside_h;
+                    style.inside_horizontal_border = tbl_style.inside_horizontal_border.clone();
+                }
+                if style.inside_vertical_border.is_none() {
+                    style.has_inside_v = tbl_style.has_inside_v;
+                    style.inside_vertical_border = tbl_style.inside_vertical_border.clone();
+                }
+            }
+        }
+    }
+
     // S531 (2026-06-09): cell-margin (and table-style paragraph) inheritance is
     // INDEPENDENT of whether the table declares its own borders. It was wrongly
     // nested inside `if !style.border` above, so any bordered table that takes
@@ -6717,8 +6735,11 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                             if local == "insideH" {
                                 style.has_inside_h = true;
                             }
+                            if local == "insideV" {
+                                style.has_inside_v = true;
+                            }
                             if style.border_color.is_none() {
-                                style.border_color = border_color_val;
+                                style.border_color = border_color_val.clone();
                             }
                             if style.border_width.is_none() {
                                 style.border_width = border_sz_val;
@@ -6726,11 +6747,28 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                             // Prefer a non-"single" decorative style if any edge
                             // declares one (uniform-border tables — the common
                             // case + a1d6e4 dashDotStroked); else keep "single".
-                            let v = border_style_val.unwrap_or_else(|| "single".to_string());
+                            let v = border_style_val.clone().unwrap_or_else(|| "single".to_string());
                             if style.border_style.is_none()
                                 || style.border_style.as_deref() == Some("single")
                             {
                                 style.border_style = Some(v);
+                            }
+                        }
+                        if local == "insideH" || local == "insideV" {
+                            let border = BorderDef {
+                                style: if is_none {
+                                    "none".to_string()
+                                } else {
+                                    border_style_val.clone().unwrap_or_else(|| "single".to_string())
+                                },
+                                width: border_sz_val.unwrap_or(0.5),
+                                color: border_color_val.clone(),
+                                space: 0.0,
+                            };
+                            if local == "insideH" {
+                                style.inside_horizontal_border = Some(border);
+                            } else {
+                                style.inside_vertical_border = Some(border);
                             }
                         }
                     }

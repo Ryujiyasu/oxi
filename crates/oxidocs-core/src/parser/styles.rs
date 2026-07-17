@@ -1549,6 +1549,14 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                         if child.border_width.is_none() { child.border_width = parent.border_width; }
                         if child.border_style.is_none() { child.border_style = parent.border_style; }
                     }
+                    if child.inside_horizontal_border.is_none() {
+                        child.has_inside_h = parent.has_inside_h;
+                        child.inside_horizontal_border = parent.inside_horizontal_border;
+                    }
+                    if child.inside_vertical_border.is_none() {
+                        child.has_inside_v = parent.has_inside_v;
+                        child.inside_vertical_border = parent.inside_vertical_border;
+                    }
                     if child.default_cell_margins.is_none() {
                         child.default_cell_margins = parent.default_cell_margins;
                     }
@@ -1738,13 +1746,24 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                         }
                         if !is_none {
                             style.border = true;
-                            let local_border = local_name(e.name().as_ref());
-                            if local_border == "insideH" {
-                                style.has_inside_h = true;
-                            }
-                            if style.border_color.is_none() { style.border_color = border_color; }
+                            if local == "insideH" { style.has_inside_h = true; }
+                            if local == "insideV" { style.has_inside_v = true; }
+                            if style.border_color.is_none() { style.border_color = border_color.clone(); }
                             if style.border_width.is_none() { style.border_width = border_sz; }
                             style.border_style = Some("single".to_string());
+                        }
+                        if local == "insideH" || local == "insideV" {
+                            let border = BorderDef {
+                                style: if is_none { "none" } else { "single" }.to_string(),
+                                width: border_sz.unwrap_or(0.5),
+                                color: border_color.clone(),
+                                space: 0.0,
+                            };
+                            if local == "insideH" {
+                                style.inside_horizontal_border = Some(border);
+                            } else {
+                                style.inside_vertical_border = Some(border);
+                            }
                         }
                     }
                     _ => {}

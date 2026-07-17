@@ -114,6 +114,12 @@ fn v1_tbl_borders_has_inside_h_flag_and_color_auto_suppression() {
     // border_color is set ONCE (the first-write-wins path at line
     // 4895 — `if border_color.is_none() { ... }`). The "000000"
     // hex must survive.
+    let inside_h = s.inside_horizontal_border.as_ref().unwrap();
+    assert_eq!(inside_h.style, "single");
+    assert!((inside_h.width - 1.0).abs() < 0.001);
+    assert!(!s.has_inside_v, "insideV val=none suppresses the inner border");
+    assert_eq!(s.inside_vertical_border.as_ref().unwrap().style, "none");
+
     assert_eq!(
         s.border_color.as_deref(),
         Some("000000"),

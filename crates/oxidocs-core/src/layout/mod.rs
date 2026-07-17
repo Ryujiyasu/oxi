@@ -18762,7 +18762,14 @@ impl LayoutEngine {
                 let _border_overhead = if is_last {
                     if table.style.border { bw } else { 0.0 }
                 } else if table.style.has_inside_h {
-                    bw
+                    if std::env::var("OXI_S921_DISABLE").is_err() {
+                        table.style.inside_horizontal_border.as_ref()
+                            .filter(|b| b.style != "none")
+                            .map(|b| b.width)
+                            .unwrap_or(bw)
+                    } else {
+                        bw
+                    }
                 } else {
                     0.0
                 };
@@ -22705,7 +22712,7 @@ impl LayoutEngine {
 
                     // Resolve border color, width and S480 style from cell borders,
                     // falling back to table style.
-                    let resolve_border = |side: Option<&BorderDef>| -> (Option<String>, f32, Option<String>) {
+                    let resolve_border = |side: Option<&BorderDef>, table_width: f32| -> (Option<String>, f32, Option<String>) {
                         if let Some(b) = side {
                             // S482: explicit w:val="nil"/"none" cell edge SUPPRESSES
                             // the border (do NOT fall through to the table border).
@@ -22721,17 +22728,47 @@ impl LayoutEngine {
                             let c = Some(table.style.border_color.as_ref()
                                 .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
                                 .unwrap_or_else(|| "#000000".to_string()));
-                            (c, table.style.border_width.unwrap_or(0.4), table.style.border_style.clone())
+                            (c, table_width, table.style.border_style.clone())
                         } else {
                             (None, 0.4, None)
                         }
                     };
 
                     let cell_borders = cell.borders.as_ref();
-                    let (top_color, top_width, top_style) = resolve_border(cell_borders.and_then(|b| b.top.as_ref()));
-                    let (bot_color, bot_width, bot_style) = resolve_border(cell_borders.and_then(|b| b.bottom.as_ref()));
-                    let (left_color, left_width, left_style) = resolve_border(cell_borders.and_then(|b| b.left.as_ref()));
-                    let (right_color, right_width, right_style) = resolve_border(cell_borders.and_then(|b| b.right.as_ref()));
+                    // S921: a direct tblBorders frame can coexist with thinner
+                    // insideH/insideV edges inherited from the table style.
+                    let outer_width = table.style.border_width.unwrap_or(0.4);
+                    let s921_inner_widths = std::env::var("OXI_S921_DISABLE").is_err();
+                    let horizontal_width = if row_idx + 1 == num_rows || !s921_inner_widths {
+                        outer_width
+                    } else {
+                        table.style.inside_horizontal_border.as_ref()
+                            .filter(|b| b.style != "none")
+                            .map(|b| b.width)
+                            .unwrap_or(outer_width)
+                    };
+                    let vertical_width = if cell_idx + 1 == row.cells.len() || !s921_inner_widths {
+                        outer_width
+                    } else {
+                        table.style.inside_vertical_border.as_ref()
+                            .filter(|b| b.style != "none")
+                            .map(|b| b.width)
+                            .unwrap_or(outer_width)
+                    };
+                    let (top_color, top_width, top_style) = resolve_border(
+                        cell_borders.and_then(|b| b.top.as_ref()),
+                        if row_idx == 0 { outer_width } else { horizontal_width },
+                    );
+                    let (bot_color, bot_width, bot_style) = resolve_border(
+                        cell_borders.and_then(|b| b.bottom.as_ref()), horizontal_width,
+                    );
+                    let (left_color, left_width, left_style) = resolve_border(
+                        cell_borders.and_then(|b| b.left.as_ref()),
+                        if cell_idx == 0 { outer_width } else { vertical_width },
+                    );
+                    let (right_color, right_width, right_style) = resolve_border(
+                        cell_borders.and_then(|b| b.right.as_ref()), vertical_width,
+                    );
 
                     // When cells have their own borders (tcBorders), draw each side per cell.
                     // When using table-level borders, use collapsed model to avoid double-drawing.

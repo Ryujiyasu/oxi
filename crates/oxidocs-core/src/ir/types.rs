@@ -1479,6 +1479,15 @@ pub struct TableStyle {
     /// Whether the table has inside horizontal borders (insideH)
     #[serde(default)]
     pub has_inside_h: bool,
+    /// Whether the table has inside vertical borders (insideV).
+    #[serde(default)]
+    pub has_inside_v: bool,
+    /// Inside horizontal border, including `style="none"` when suppressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside_horizontal_border: Option<BorderDef>,
+    /// Inside vertical border, including `style="none"` when suppressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside_vertical_border: Option<BorderDef>,
     /// Border color (hex), e.g. "000000"
     #[serde(default)]
     pub border_color: Option<String>,
