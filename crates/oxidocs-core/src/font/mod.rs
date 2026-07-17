@@ -608,6 +608,26 @@ impl FontMetricsRegistry {
                 }
                 result.insert(font_name, ppem_result);
             }
+            // Small independently measured additions can live in a readable
+            // supplement instead of forcing edits to the generated, minified
+            // primary table. Supplement entries intentionally win so a later
+            // measurement can correct an existing generated value as well as
+            // fill a missing font/ppem pair.
+            let supplement_json = include_str!("data/gdi_height_supplement.json");
+            let supplement: HashMap<String, HashMap<String, serde_json::Value>> =
+                serde_json::from_str(supplement_json).unwrap_or_default();
+            for (font, ppem_map) in supplement {
+                let font_name = font.replace('_', " ");
+                let target = result.entry(font_name).or_insert_with(HashMap::new);
+                for (ppem_str, val) in ppem_map {
+                    if let (Ok(ppem), Some(obj)) = (ppem_str.parse::<u32>(), val.as_object()) {
+                        let h = obj.get("h").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let a = obj.get("a").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let d = obj.get("d").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        target.insert(ppem, (h, a, d));
+                    }
+                }
+            }
             result
         };
 
@@ -1352,6 +1372,12 @@ mod tests {
         // Calibri space should be ~0.226em (463/2048)
         let space_w = calibri.char_width_em(' ');
         assert!(space_w > 0.2 && space_w < 0.3, "space width: {}", space_w);
+    }
+
+    #[test]
+    fn test_gdi_height_supplement_loads() {
+        let reg = FontMetricsRegistry::load();
+        assert_eq!(reg.gdi_height("Arial Narrow", 13), Some((16, 13, 3)));
     }
 
     #[test]
