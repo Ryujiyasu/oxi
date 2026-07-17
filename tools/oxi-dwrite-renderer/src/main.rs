@@ -1179,6 +1179,38 @@ unsafe fn render_text(
         }
     }
 
+    // S919 (2026-07-18, default ON, opt-out OXI_S919_DISABLE): DirectWrite
+    // resolves Arial Narrow bold to a normal-width face on this system even
+    // when the family name is explicit (requesting CONDENSED stretch is inert).
+    // Word and Oxi layout agree on the narrow advance, so fit only an
+    // over-wide Narrow-family render to that already-resolved element width.
+    // Shrink-only avoids expanding legitimately tighter native faces.
+    let ww_scale = text_scale_pct / 100.0;
+    let narrow_fit_scale = if !is_vertical
+        && font_family.to_ascii_lowercase().contains("narrow")
+        && std::env::var("OXI_S919_DISABLE").is_err()
+        && w_pt > 0.01
+    {
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        if layout.GetMetrics(&mut metrics).is_ok() {
+            let native_w_pt = metrics.widthIncludingTrailingWhitespace / PT_TO_DIP;
+            let target_unscaled = if ww_scale.abs() > 0.005 {
+                w_pt / ww_scale
+            } else {
+                w_pt
+            };
+            if native_w_pt > target_unscaled + 0.25 {
+                (target_unscaled / native_w_pt).clamp(0.5, 1.0)
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+
     // S494: per-char EXACT positions for --dump-glyphs. HitTestTextPosition gives
     // each char's x (DIP, relative to the layout origin), which includes DWrite's
     // autoSpace + charGrid spacing — the gate-render positions. Horizontal text only.
@@ -1216,7 +1248,8 @@ unsafe fn render_text(
                 if !ch.is_whitespace() {
                     collected.push((
                         ch,
-                        x_pt + px / PT_TO_DIP,  // absolute x in pt (HitTest = DWrite's
+                        x_pt + (px / PT_TO_DIP) * narrow_fit_scale,
+                                                // absolute x in pt (HitTest = DWrite's
                                                 // actual autoSpace/charGrid positions)
                         y_pt - 1.0,             // glyph top = the dwrite RENDER origin.y
                                                 // (the -1.0 glyph-top alignment fix), so the
@@ -1331,15 +1364,15 @@ unsafe fn render_text(
     // each GLYPH horizontally. Apply a horizontal scale = text_scale/100 around
     // the glyph's left edge (origin.x) so the glyph fills exactly its (already
     // scaled) advance. Skips vertical text. Affects 5 corpus docs using <w:w>.
-    let ww_scale = text_scale_pct / 100.0;
-    let ww_applied = !is_vertical && (ww_scale - 1.0).abs() > 0.005;
+    let render_scale = ww_scale * narrow_fit_scale;
+    let ww_applied = !is_vertical && (render_scale - 1.0).abs() > 0.005;
     let ww_saved = if ww_applied {
         let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
         rt.GetTransform(&mut saved);
         let ax = origin.x; // left edge anchor (DIP)
         let m = windows::Foundation::Numerics::Matrix3x2 {
-            M11: ww_scale, M12: 0.0, M21: 0.0, M22: 1.0,
-            M31: ax * (1.0 - ww_scale), M32: 0.0,
+            M11: render_scale, M12: 0.0, M21: 0.0, M22: 1.0,
+            M31: ax * (1.0 - render_scale), M32: 0.0,
         };
         rt.SetTransform(&(m * saved));
         Some(saved)
