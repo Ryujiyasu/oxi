@@ -4933,7 +4933,55 @@ impl LayoutEngine {
                             // (consistent with estimate_para_height; word_line_height_no_grid
                             // gives a different, smaller value → over-counts).
                             let one_line_h = self.estimate_para_height(next_para, 1.0e6, grid_pitch, None, false, None, None);
-                            let next_lines = ((next_h / one_line_h.max(0.01)).round() as usize).max(1);
+                            // S915 (2026-07-18, opt-out OXI_S915_DISABLE):
+                            // estimate_para_height adds the follower's
+                            // space_before to BOTH next_h and one_line_h, so
+                            // round(next_h/one_line_h) UNDER-counts a follower
+                            // whose style carries a non-reset space_before. The
+                            // WA-regulation `Subsection` follower (before 8-10pt +
+                            // lineRule="atLeast" → the reset is suppressed) is the
+                            // case: legal pi=1363 «111G. Berth operator's duties»
+                            // next_h 65.2 / one_line_h 23.8 → round(2.74)=3, so
+                            // S635's n<=3 branch whole-moves a 4-line follower that
+                            // Word SPLITS 2+2, stranding the Heading5 above it
+                            // (wp107-116, +1×~19). Subtracting the sb that the
+                            // estimate itself added gives the exact count:
+                            // (65.2-10)/(23.8-10)=4 → n<=3 false → not pushed
+                            // (Word-correct). The S914 ship-note flagged exactly
+                            // this as "a safe future refinement … strictly LESS
+                            // eager". MONOTONIC (subtracting sb only INCREASES
+                            // next_lines → can only REMOVE pushes, never add).
+                            // MEASURED blast radius (KN635 trace, 519 docs):
+                            // golden-test 0, docx_corpus/ja 0, word_png 0
+                            // (byte-identical by construction); 5 EN decisions in
+                            // 2 legal-style regulation docs (legal 1,
+                            // policies__00148f8d 4), all removing spurious pushes —
+                            // unscoped, rule-10 clean like S914. S914's wp90 orphan
+                            // (pi=1105, nlines 5→6) is PRESERVED (still orphans:
+                            // one_line_h+line_h_next 31.6 > rem-this_h 30.1).
+                            // `follower_sb` mirrors estimate_para_height's own
+                            // in_cell=false / table_para_style=None sb (the S855
+                            // cell_spacing_reset_sides body path).
+                            let follower_sb = if std::env::var("OXI_S915_DISABLE").is_ok() {
+                                0.0
+                            } else {
+                                let raw_lr = next_para.style.line_spacing_rule.as_deref();
+                                let explicit_rule =
+                                    raw_lr == Some("exact") || raw_lr == Some("atLeast");
+                                if !next_para.style.has_direct_before && !explicit_rule {
+                                    0.0
+                                } else if let (Some(bl), Some(pitch)) =
+                                    (next_para.style.before_lines, grid_pitch)
+                                {
+                                    bl / 100.0 * pitch
+                                } else {
+                                    next_para.style.space_before.unwrap_or(0.0)
+                                }
+                            };
+                            let next_lines = (((next_h - follower_sb)
+                                / (one_line_h - follower_sb).max(0.01))
+                                .round() as usize)
+                                .max(1);
                             // ★The follower moves WHOLLY only when WIDOW/ORPHAN control is
                             // ON for it: a ≤3-line para can't split without leaving <2 lines
                             // on a side. With widowControl OFF (0e7af/digitalcontract docDefaults
