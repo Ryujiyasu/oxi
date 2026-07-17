@@ -106,6 +106,22 @@ impl ThemeColors {
         let (r2, g2, b2) = hsl_to_rgb(h, s, l2);
         format!("{:02X}{:02X}{:02X}", r2, g2, b2)
     }
+
+    /// Apply an OOXML `themeTint` byte.
+    ///
+    /// OOXML stores the *retained* luminance fraction: `FF` means no tint
+    /// and `00` means fully white. `apply_tint_shade`, by contrast, accepts
+    /// the fraction moved towards white, so the byte must be inverted.
+    pub fn apply_theme_tint(hex: &str, tint: u8) -> String {
+        // S920: retain an opt-out for corpus A/B verification of the legacy,
+        // inverted interpretation.
+        let amount = if std::env::var("OXI_S920_DISABLE").is_ok() {
+            tint as f64 / 255.0
+        } else {
+            1.0 - tint as f64 / 255.0
+        };
+        Self::apply_tint_shade(hex, amount)
+    }
 }
 
 /// Parse theme1.xml to extract color scheme and fonts
@@ -361,5 +377,19 @@ fn local_name(name: &[u8]) -> String {
     match s.rfind(':') {
         Some(pos) => s[pos + 1..].to_string(),
         None => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThemeColors;
+
+    #[test]
+    fn theme_tint_byte_retains_the_encoded_luminance_fraction() {
+        // Cached Word fallback colors for these theme transformations are
+        // 153D63 and 595959 respectively (one-channel rounding may differ).
+        assert_eq!(ThemeColors::apply_theme_tint("0E2841", 0xE6), "153D64");
+        assert_eq!(ThemeColors::apply_theme_tint("000000", 0xA6), "595959");
+        assert_eq!(ThemeColors::apply_theme_tint("123456", 0xFF), "123456");
     }
 }

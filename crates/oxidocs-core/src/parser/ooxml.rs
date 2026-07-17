@@ -6118,8 +6118,7 @@ fn parse_run_properties(
                                 // Apply tint/shade
                                 if let Some(ref tint) = theme_tint {
                                     if let Ok(t) = u8::from_str_radix(tint, 16) {
-                                        let tint_val = t as f64 / 255.0;
-                                        hex = ThemeColors::apply_tint_shade(&hex, tint_val);
+                                        hex = ThemeColors::apply_theme_tint(&hex, t);
                                     }
                                 }
                                 if let Some(ref shade) = theme_shade {

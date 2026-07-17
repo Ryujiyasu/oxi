@@ -540,8 +540,7 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                     let mut hex = resolved.clone();
                     if let Some(ref tint) = theme_tint {
                         if let Ok(t) = u8::from_str_radix(tint, 16) {
-                            let tint_val = t as f64 / 255.0;
-                            hex = ThemeColors::apply_tint_shade(&hex, tint_val);
+                            hex = ThemeColors::apply_theme_tint(&hex, t);
                         }
                     }
                     if let Some(ref shade) = theme_shade {
@@ -1114,7 +1113,7 @@ fn parse_style_definition(
                                     let mut hex = resolved.clone();
                                     if let Some(ref tint) = tt {
                                         if let Ok(t) = u8::from_str_radix(tint, 16) {
-                                            hex = ThemeColors::apply_tint_shade(&hex, t as f64 / 255.0);
+                                            hex = ThemeColors::apply_theme_tint(&hex, t);
                                         }
                                     }
                                     if let Some(ref shade) = ts {
