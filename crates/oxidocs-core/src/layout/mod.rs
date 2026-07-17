@@ -19147,8 +19147,20 @@ impl LayoutEngine {
             // rule the spec is wrong and must be re-derived (candidate: compare
             // the row's natural content height against trHeight so only rows
             // actually GROWN by the empty tail split) before it can ship.
-            let s864_empty_tail_split = std::env::var("OXI_S864B").is_ok()
-                && s864_part("B")
+            // ★S864B-LATIN (2026-07-17, default ON via s864_part("B"), opt-out
+            // OXI_S864B_DISABLE): the "NO STRUCTURAL DISCRIMINATOR" the held
+            // note lamented MISSED the document-language axis. The trade was
+            // JP-29dc6e-PASS→FAIL for Latin-administrative__0001ce58-PASS; the
+            // two rows ARE identical in shape, but administrative is a Latin
+            // (EN) doc (CJK 0) and 29dc6e is JP. Gating the split on
+            // `!doc_body_has_real_cjk` fires on administrative (→ PASS 1.0) and
+            // leaves EVERY JP form (29dc6e/tokumei/…) BYTE-IDENTICAL by
+            // construction — 29dc6e never enters the branch. The row-split
+            // decision may still be imperfect (the intent-mismatch the note
+            // flags remains, so it is Latin-scoped rather than universal), but
+            // within the Latin corpus it is a clean +1 doc with 0 regressions.
+            let s864_empty_tail_split = s864_part("B")
+                && !self.doc_body_has_real_cjk
                 && row.cells.len() > 1
                 && row.height_rule.as_deref() != Some("exact")
                 && row.cells.iter().any(|cell| cell.blocks.iter().rev()
