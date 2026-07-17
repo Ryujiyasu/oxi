@@ -24735,7 +24735,6 @@ impl LayoutEngine {
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
     ) -> f32 {
-        let _ = (default_pad_l, default_pad_r); // unused; inner_w uses cell_w directly
         let mut row_height: f32 = 0.0;
         let mut grid_idx = row.grid_before as usize;
         for cell in row.cells.iter() {
@@ -24752,6 +24751,8 @@ impl LayoutEngine {
                 continue;
             }
             let cell_w: f32 = col_widths[grid_idx..grid_idx + span].iter().sum();
+            let pad_l = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(default_pad_l);
+            let pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
             let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
             let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
             if self.rowbox2_pad_on() {
@@ -24760,7 +24761,19 @@ impl LayoutEngine {
             } else if pad_t == 0.0 && table.style.border {
                 pad_t = table.style.border_width.unwrap_or(0.4);
             }
-            let inner_w = cell_w.max(0.0);
+            // S923 (2026-07-18): this vMerge look-ahead must wrap text at
+            // the same inner width as the main row pre-pass.  Using the full
+            // cell width made `Side Port` fit on one line in the estimate even
+            // though the emitted cell wraps to two, so a centered vMerge
+            // restart above it used a span 10.5pt too short.  Opt-out retained
+            // for corpus A/B.
+            let inner_w = if !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S923_DISABLE").is_err()
+            {
+                (cell_w - pad_l - pad_r).max(0.0)
+            } else {
+                cell_w.max(0.0)
+            };
             let mut cell_content_h = pad_t;
             // S751: empty hideMark cell contributes zero content height (see pre-pass).
             let s751_hide_empty = cell.hide_mark
