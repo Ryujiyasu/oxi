@@ -2263,34 +2263,21 @@ impl LayoutEngine {
         // p8) matches Word render-truth 56/56 with this rule vs 7/56 without;
         // albaluna2col_3227 (start=3) renders "3" in Word's footer, Oxi "1".
         //
-        // ★HELD OPT-IN (OXI_S912=1; default OFF = byte-identical). The rule is
-        // correct but default-ON is net-NEGATIVE on the SSIM gate: ssim_ab
-        // OXI_S912_DISABLE = 238 checked / 5 changed / TOTAL net -0.0023 /
-        // improved 0 / regressed 2 (6514 -0.0009, de6e32 -0.0009, 87b29ca /
-        // 9a8e / e8caed -0.0002..-0.0001). ROOT = a SEPARATE pre-existing bug
-        // this fix EXPOSES (the S559 compensating pattern): those docs put
-        // their PAGE field in an **even** footer, and ECMA-376 §17.10.2 says an
-        // even reference is inert without `<w:evenAndOddHeaders/>` — Word
-        // renders NO footer on them (verified: word_png 6514 has zero footer
-        // ink on all 7 pages). Oxi renders one anyway because pick_fallback
-        // (parser/ooxml.rs) DELIBERATELY keeps even refs as a last-resort
-        // fallback "to avoid pagination regressions" (its own comment) — the
-        // spurious footer is load-bearing for body-area RESERVATION. S912 only
-        // makes that spurious number more visible ("1" -> "25").
-        //
-        // SHIP PATH: derive Word's real reservation for an even-only-ref
-        // section (does Word reserve the footer band it does not draw?), fix
-        // pick_fallback, re-gate Phase-1 on the tokumei/order family, then flip
-        // S912 default-ON — the two ship together as a pair. Until then the
-        // only docs S912 would change are the spurious-footer ones, so
-        // default-ON buys nothing measurable and costs -0.0023.
+        // Ships as a PAIR with S913 (parser/ooxml.rs pick_fallback). S912 alone
+        // was net-NEGATIVE (ssim_ab OXI_S912_DISABLE = 5 changed / net -0.0023 /
+        // improved 0 / regressed 2) — but ONLY on docs where Oxi drew a footer
+        // Word does not draw at all (their PAGE field sits in an inert `even`
+        // reference; S912 merely made the spurious number more visible,
+        // "1" -> "25"). S913 removes those spurious footers at the source, so
+        // the blocker is gone. Opt-out OXI_S912_DISABLE restores physical-index
+        // numbering.
         //
         // RESIDUAL (independent of the gate): a CONTINUOUS section's pgNumType
         // is dropped at parse (S560 merges the section into the previous IR
         // Page without carrying page_number_start), so probe case cont_s2s7 —
         // Word 1,2,8 — renders 1,2,3 either way. Fixing it needs the start to
         // survive the merge as a per-section run.
-        let s912 = std::env::var("OXI_S912").is_ok();
+        let s912 = std::env::var("OXI_S912_DISABLE").is_err();
         let page_numbers: Vec<u32> = {
             let mut nums = Vec::with_capacity(pages.len());
             let mut num: u32 = 0;

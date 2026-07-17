@@ -111,22 +111,46 @@ impl OoxmlParser {
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
-            // Fall back: if no type-matched reference, try "default"; if none, choose the
-            // fallback carefully. ECMA-376 §17.10.2: `type="first"` is only active when
-            // titlePg is set. Without titlePg, falling back to a `first` reference produces
-            // phantom headers/footers (observed on 34140). `type="even"` is gated by the
-            // global `evenAndOddHeaders` flag, but legacy docs reference it without the flag
-            // and relied on Oxi's prior all-refs fallback for body-area reservation — keep
-            // that fallback for "even" to avoid pagination regressions.
+            // Fall back: if no type-matched reference, try "default"; if none, use
+            // NOTHING. ECMA-376 §17.10.2: `type="first"` is only active when titlePg
+            // is set, and `type="even"` only when the global `evenAndOddHeaders` flag
+            // is set. An inert reference contributes neither ink nor reservation.
+            //
+            // S913 (2026-07-17): the old code kept "even" refs as a last-resort
+            // fallback, its comment reasoning that legacy docs "relied on Oxi's prior
+            // all-refs fallback for body-area reservation". DERIVED — that premise is
+            // FALSE. tools/metrics/_pb_evenftr_gen.py sweeps a 130-line body against a
+            // footer of stack 20/60/120pt (A4, bottom 72pt, footer_dist 64.65 so the
+            // footer binds above 7.35pt) and reads page-1 capacity out of the Word PDF:
+            //   ctrl_none     55 / 55 / 55   (no footer ref at all)
+            //   even_only     55 / 55 / 55   <- IDENTICAL to ctrl_none, and zero ink
+            //   default_only  54 / 51 / 46   <- = max(margin, dist+stack), as predicted
+            //   even_flagged  55 / 54 / 46   <- same even ref + the flag: draws AND
+            //                                   reserves, but only on the EVEN page
+            // even_flagged is the validity control: the nothing in `even_only` is Word's
+            // rule, not a broken probe. Word treats an inert reference as if the part did
+            // not exist — no draw, no reservation. Confirmed against render-truth: the 7
+            // affected word_png docs (tokumei ×5 / 9a8e / e8caed) have ZERO footer ink in
+            // Word, while Oxi drew a spurious page number.
+            // Opt-out OXI_S913_DISABLE restores the legacy even-fallback.
+            //
+            // NOTE the even-fallback was ALSO masking a separate bug (S559 pattern):
+            // header/footer inheritance is all-or-nothing here (`if refs.is_empty() {
+            // prev }`) where Word inherits PER TYPE — ukframework's sec2/3 declare only
+            // an even footer and Word draws the INHERITED DEFAULT. Fixing that needs
+            // style-level framePr parsing first (styles.rs has none, so footer5's frame
+            // paragraphs would count as ~5 real lines) — deliberately NOT bundled here.
             fn pick_fallback(refs: &[HdrFtrRef]) -> Vec<HdrFtrRef> {
                 let defaults: Vec<HdrFtrRef> = refs.iter()
                     .filter(|r| r.ref_type == "default").cloned().collect();
                 if !defaults.is_empty() {
                     return defaults;
                 }
-                // Keep "even" refs as a last-resort fallback (legacy behavior).
-                // Drop "first" refs when titlePg is absent (spec §17.10.2).
-                refs.iter().filter(|r| r.ref_type != "first").cloned().collect()
+                if std::env::var("OXI_S913_DISABLE").is_ok() {
+                    // Legacy: keep "even" as a last resort, drop "first" (§17.10.2).
+                    return refs.iter().filter(|r| r.ref_type != "first").cloned().collect();
+                }
+                Vec::new()
             }
             let header = if !use_headers.is_empty() {
                 self.parse_header_footer_blocks(&use_headers, &ctx, &styles, &mut watermark_found)
