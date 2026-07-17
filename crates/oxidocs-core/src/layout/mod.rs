@@ -16746,7 +16746,26 @@ impl LayoutEngine {
         // Use GDI tmHeight table if available (most accurate).
         // Falls back to formula-based calculation.
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
-        let base = if let Some((h_px, _a_px, _d_px)) = self.registry.gdi_height(&metrics.family, ppem) {
+        // S922 (2026-07-18): Arial Narrow is absent from the historical GDI
+        // table.  A direct GetTextMetricsW probe gives tmHeight=16px at the
+        // 13ppem used by 10pt text (ascent=13, descent=3).  Multiple auto
+        // spacing in table cells multiplies that tmHeight: 16px = 12pt,
+        // 12 * 1.15 = 13.8pt.  Falling through to S815's hhea height instead
+        // produced 11.475 * 1.15 = 13.196pt and shortened every row by
+        // 0.604pt.  Scope the measured fill-in to that missing table entry;
+        // single spacing keeps S815's independently verified hhea behavior.
+        let gdi_height = self.registry.gdi_height(&metrics.family, ppem)
+            .or_else(|| {
+                if in_table_cell && !is_single
+                    && metrics.family == "Arial Narrow" && ppem == 13
+                    && std::env::var("OXI_S922_DISABLE").is_err()
+                {
+                    Some((16, 13, 3))
+                } else {
+                    None
+                }
+            });
+        let base = if let Some((h_px, _a_px, _d_px)) = gdi_height {
             // GDI table stores tmHeight (MulDiv-based ascent + descent).
             // Body paragraphs with COM lookup use that (more accurate).
             // Table cells: tmHeight only (no tmExternalLeading) — COM-confirmed.
@@ -16782,6 +16801,11 @@ impl LayoutEngine {
                 }
             } else if in_table_cell && !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S815_DISABLE").is_err()
+                // S922: S815's hhea basis is specific to Single spacing.
+                // For Multiple spacing Word multiplies the GDI single-line
+                // height (Arial Narrow 10pt: 12.0 * 1.15 = 13.8pt), not hhea
+                // (11.475 * 1.15 = 13.196pt). Keep an opt-out for corpus A/B.
+                && (is_single || std::env::var("OXI_S922_DISABLE").is_ok())
             {
                 // S815 (2026-07-13, default ON, opt-out OXI_S815_DISABLE): a LATIN
                 // document's table-cell LINE is the hhea natural EXACT — the
