@@ -25241,7 +25241,13 @@ impl LayoutEngine {
                 .and_then(|r| r.font_size)
                 .unwrap_or(self.resolve_font_size(&RunStyle::default(), &para.style));
             let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-            let metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
+            // S940: in a LATIN doc the cell ¶ mark is measured in the ASCII
+            // font (the S583/S707 rule) — the eastAsia-preferring resolution
+            // returned a CJK 83/64 family (15.56 = 12 × 83/64) for Calibri
+            // theme marks, bypassing the Latin hhea arm below.
+            let s940_mark_ascii = !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S940").is_ok();
+            let metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             // Session 79c: force_grid_snap=true switches the formula to match
             // the actual cell emit when adjustLineHeightInTable triggers grid
@@ -25257,6 +25263,22 @@ impl LayoutEngine {
                 } else if use_render_lh {
                     // S503: actual GDI render line-height (matches emit), centering-only.
                     self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, para.style.snap_to_grid, grid_pitch, true)
+                } else if !self.doc_body_has_real_cjk
+                    && !metrics.is_cjk_83_64_font()
+                    && std::env::var("OXI_S940").is_ok()
+                {
+                    // S940 (2026-07-19, ★HELD OPT-IN OXI_S940=1 with S935/S936):
+                    // a LATIN cell's single-spacing EMPTY paragraph = the hhea
+                    // natural EXACT, same as its text lines (the S815 rule
+                    // reaching the estimate). _pb_cell_tail_empty probe: Word
+                    // renders trailing cell empties at 13.44 = Calibri-11 hhea
+                    // (single — the table style's declared line=240 replaces
+                    // docDefaults line=259 per S936), identical to the text
+                    // unit. word_line_height_table_cell additionally resolved
+                    // the ¶-mark to a non-Calibri family here (15.5 for fs 12).
+                    // The S499 tombstone ("do NOT change the cell estimate")
+                    // was falsified on the JP corpus — Latin scope only.
+                    metrics.natural_line_height_hhea(empty_fs)
                 } else {
                     metrics.word_line_height_table_cell(empty_fs)
                 }
@@ -25392,6 +25414,16 @@ impl LayoutEngine {
                     } else if use_render_lh {
                         // S503: actual GDI render line-height (matches emit), centering-only.
                         self.line_height_inner(font_size, eff_ls, eff_lr, metrics, para.style.snap_to_grid, grid_pitch, true)
+                    } else if !self.doc_body_has_real_cjk
+                        && !metrics.is_cjk_83_64_font()
+                        && std::env::var("OXI_S940").is_ok()
+                    {
+                        // S940: Latin cell single-spacing text line estimate =
+                        // hhea natural (matches the S815 render path; the
+                        // word_line_height_table_cell tombstone under-counted
+                        // Calibri-12 at 14.25 vs Word's 14.648 — the S499
+                        // falsification was JP-corpus-only).
+                        metrics.natural_line_height_hhea(font_size)
                     } else {
                         metrics.word_line_height_table_cell(font_size)
                     }
