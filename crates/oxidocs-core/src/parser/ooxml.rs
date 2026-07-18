@@ -2061,7 +2061,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // baseline.  Keeping this resolution at the style layer avoids a
             // family-specific layout exception (legal DefinedTerms is TNR, but
             // the rule is independent of the selected typeface).
-            if std::env::var("OXI_S923_DISABLE").is_err()
+            if std::env::var("OXI_S924_DISABLE").is_err()
                 && defined.based_on.is_none()
                 && style.default_run_style.as_ref().and_then(|r| r.font_size).is_none()
                 && styles.doc_default_run_style.as_ref().and_then(|r| r.font_size).is_none()
