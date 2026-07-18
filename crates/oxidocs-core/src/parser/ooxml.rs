@@ -3619,6 +3619,19 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    // S927 (2026-07-18, default ON, opt-out
+                    // OXI_S927_DISABLE): CT_Cr is the legacy carriage-return
+                    // spelling of a text wrapping break.  Word gives `<w:cr/>`
+                    // the same line-building effect as an untyped `<w:br/>`.
+                    // Dropping it collapsed a genuine trailing empty line
+                    // (policies__000f7115 "Status of Policy") and left the
+                    // following body flow one line too high.  Normalize at the
+                    // parser boundary so every layout path sees the existing
+                    // newline representation; this is structural and
+                    // independent of font family.
+                    "cr" if std::env::var("OXI_S927_DISABLE").is_err() => {
+                        text.push('\n');
+                    }
                     "br" => {
                         let mut br_type = None;
                         for attr in e.attributes().flatten() {
@@ -9215,6 +9228,36 @@ mod tests {
         let _ = start;
         let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None).expect("parse_run");
         assert_eq!(run.comment_references, vec!["0".to_string()]);
+    }
+
+    #[test]
+    fn parse_run_normalizes_carriage_return_to_line_break() {
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:t>Status</w:t><w:cr/>
+</w:r>"#;
+        let ctx = ParseContext {
+            _rels: HashMap::new(),
+            media: HashMap::new(),
+            media_types: HashMap::new(),
+            hyperlinks: HashMap::new(),
+            numbering: NumberingDefinitions::default(),
+            list_counters: std::cell::RefCell::new(HashMap::new()),
+            footnotes: HashMap::new(),
+            endnotes: HashMap::new(),
+            comments: HashMap::new(),
+            theme: ThemeColors::default(),
+        };
+        let styles = StyleSheet::default();
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().expect("read") {
+                Event::Start(e) if local_name(e.name().as_ref()) == "r" => break,
+                Event::Eof => panic!("no <w:r> in test fixture"),
+                _ => continue,
+            }
+        }
+        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None).expect("parse_run");
+        assert_eq!(run.text, "Status\n");
     }
 
     #[test]

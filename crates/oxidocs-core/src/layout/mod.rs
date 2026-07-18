@@ -9430,6 +9430,28 @@ impl LayoutEngine {
                 let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
                 nat_metrics.word_line_height_no_grid(marker_font_size).min(marker_break_h)
             } else { marker_break_h };
+            // S928 (2026-07-18, default ON, opt-out OXI_S928_DISABLE): the
+            // no-grid Latin marker must use the SAME page-bottom occupancy
+            // threshold as its body line.  S779/S827 derives that threshold as
+            // the exact hhea line; the marker pre-check still used the AUTO
+            // line-spacing advance and could therefore push the whole list
+            // paragraph even when the body line itself fit.  policies f7115
+            // pi547: cursor 755.09 + full 15.87 > 769.90 (false push), while
+            // cursor + hhea 13.80 = 768.89 fits, as Word does.  This is the
+            // no-grid counterpart of S737's typed-grid marker/body alignment.
+            let marker_break_h = if std::env::var("OXI_S928_DISABLE").is_err()
+                && (page.grid_line_pitch.is_none() || page.doc_grid_no_type)
+                && !self.doc_body_has_real_cjk
+                // Footnote/footer area tops are occupied boundaries, not the
+                // plain page margin for which S779's leading overhang was
+                // derived.  Keep their established full-box marker check
+                // (uklocalspending wp5).
+                && !fn_boundary_active
+                && !footer_tight
+            {
+                let nat_metrics = self.metrics_for_text(&marker_text, marker_style, &para.style);
+                nat_metrics.natural_line_height_hhea(marker_font_size).min(marker_break_h)
+            } else { marker_break_h };
             if cursor.cursor_y + marker_break_h > page_top + content_height {
                 pages.push(LayoutPage {
                     width: page.size.width,
