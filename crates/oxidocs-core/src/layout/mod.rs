@@ -20290,7 +20290,15 @@ impl LayoutEngine {
                     // OXI_SB_NO_SUPPRESS legacy env-var fallbacks (LEGACY var
                     // default false → suppression branch was dead). S151
                     // default ON since 2026-05-21.
-                    let effective_space_before = if reset_before {
+                    // S936: a docDefaults-sourced side takes the table style's
+                    // declared value (cell_para_spacing / estimate mirror).
+                    let (s936_sb, s936_sa) = self.s936_tbl_style_dd_override(
+                        &para.style,
+                        table.style.para_style.as_ref(),
+                    );
+                    let effective_space_before = if let Some(v) = s936_sb {
+                        v
+                    } else if reset_before {
                         // Day 33 part 17 (2026-05-10): Word suppresses spacing.before
                         // for the first paragraph in a cell. COM-confirmed via 8 repros
                         // (row1_attr_isolation): R1A_spacing_lineRule has spacing.before=4.35pt
@@ -20306,7 +20314,9 @@ impl LayoutEngine {
                             .or_else(|| table.style.para_style.as_ref().and_then(|ps| ps.space_before))
                             .unwrap_or(0.0)
                     };
-                    let effective_space_after = if reset_after {
+                    let effective_space_after = if let Some(v) = s936_sa {
+                        Some(v)
+                    } else if reset_after {
                         None
                     } else if let (Some(al), Some(pitch)) = (para.style.after_lines, table_grid_pitch) {
                         // Session 94 (2026-05-18) fix: afterLines was parsed into
@@ -25392,7 +25402,17 @@ impl LayoutEngine {
 
         // Word resets each unspecified side independently in table cells,
         // while preserving style-defined exact/atLeast spacing.
-        if !reset_before {
+        // S936: a docDefaults-sourced side is replaced by the table style's
+        // declared value (cell context only — the shared estimate path for
+        // footnote/keepNext/header keeps the plain machinery, S906b lesson).
+        let (s936_sb, s936_sa) = if in_cell {
+            self.s936_tbl_style_dd_override(&para.style, table_para_style)
+        } else {
+            (None, None)
+        };
+        if let Some(v) = s936_sb {
+            height += v;
+        } else if !reset_before {
             height += if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
                 bl / 100.0 * pitch
             } else {
@@ -25402,12 +25422,44 @@ impl LayoutEngine {
                     .unwrap_or(0.0)
             };
         }
-        if !reset_after {
+        if let Some(v) = s936_sa {
+            height += v;
+        } else if !reset_after {
             height += para.style.space_after
                 .or_else(|| table_para_style.and_then(|ps| ps.space_after))
                 .unwrap_or(0.0);
         }
         height
+    }
+
+    /// S936 (2026-07-18, ★HELD OPT-IN OXI_S936=1 with S935, default OFF):
+    /// the docDefaults half of the S906 _pb_cellsp derivation — a cell
+    /// paragraph side whose spacing came from DOCDEFAULTS is REPLACED by
+    /// the table style's declared pPr value for that side (declared 0
+    /// counts). Sides the table style does not declare keep the existing
+    /// reset machinery. This also resolves the recorded S855-vs-probe
+    /// contradiction: 0009d767's TableGrid DECLARES before/after=0 →
+    /// replaced with 0 (= S855's measured reset), while the probe's
+    /// line-only style declares neither → keep. 0043bfe0629f9391 (NDIS,
+    /// GridTable4-Accent1 declares before/after=40): docDefaults
+    /// before/after=100 + lineRule=atLeast — the atLeast rule blocked the
+    /// S855 reset, leaving 5+5pt where Word renders the style's 2+2
+    /// (row 19.5 → 13.7 = Word 14.0). Latin scope (the JP form-family
+    /// cell calibration untouched). Held with S935 as one set: the NDIS
+    /// fix needs both (sz + spacing), and the pair ships default-ON with
+    /// the 001cf65 page-bottom co-fix.
+    fn s936_tbl_style_dd_override(
+        &self,
+        style: &ParagraphStyle,
+        table_para_style: Option<&ParagraphStyle>,
+    ) -> (Option<f32>, Option<f32>) {
+        if self.doc_body_has_real_cjk || std::env::var("OXI_S936").is_err() {
+            return (None, None);
+        }
+        let Some(tps) = table_para_style else { return (None, None) };
+        let sb = if style.space_before_from_doc_defaults { tps.space_before } else { None };
+        let sa = if style.space_after_from_doc_defaults { tps.space_after } else { None };
+        (sb, sa)
     }
 
     /// Resolve the table-cell reset independently for before/after spacing.
@@ -25512,7 +25564,10 @@ impl LayoutEngine {
         // S855: keep in sync with estimate_para_height_inner's should_reset.
         let (reset_before, reset_after) =
             self.cell_spacing_reset_sides(&para.style, style_has_explicit_rule, true);
-        let sb = if reset_before {
+        let (s936_sb, s936_sa) = self.s936_tbl_style_dd_override(&para.style, table_para_style);
+        let sb = if let Some(v) = s936_sb {
+            v
+        } else if reset_before {
             0.0
         } else if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
             bl / 100.0 * pitch
@@ -25521,7 +25576,9 @@ impl LayoutEngine {
                 .or_else(|| table_para_style.and_then(|ps| ps.space_before))
                 .unwrap_or(0.0)
         };
-        let sa = if reset_after {
+        let sa = if let Some(v) = s936_sa {
+            v
+        } else if reset_after {
             0.0
         } else if let (Some(al), Some(pitch)) = (para.style.after_lines, grid_pitch) {
             al / 100.0 * pitch

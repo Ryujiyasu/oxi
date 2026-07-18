@@ -1560,6 +1560,9 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                     if child.default_cell_margins.is_none() {
                         child.default_cell_margins = parent.default_cell_margins;
                     }
+                    if child.run_font_size.is_none() {
+                        child.run_font_size = parent.run_font_size;
+                    }
                 }
             }
         }
@@ -1663,6 +1666,38 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                         }
                         style.para_style = Some(ps);
                         style.para_alignment = para_jc;
+                        continue;
+                    }
+                    "rPr" if depth == 0 && !in_tbl_pr => {
+                        // S935: table style base run properties. w:sz here
+                        // applies to every run in the table (above
+                        // docDefaults, below the paragraph-style chain).
+                        let mut rpr_depth = 0u32;
+                        loop {
+                            match reader.read_event()? {
+                                Event::Empty(pe) => {
+                                    if rpr_depth == 0
+                                        && local_name(pe.name().as_ref()) == "sz"
+                                    {
+                                        for attr in pe.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "val" {
+                                                style.run_font_size = String::from_utf8_lossy(&attr.value)
+                                                    .parse::<f32>()
+                                                    .ok()
+                                                    .map(|v| v / 2.0);
+                                            }
+                                        }
+                                    }
+                                }
+                                Event::Start(_) => { rpr_depth += 1; }
+                                Event::End(pe) => {
+                                    if local_name(pe.name().as_ref()) == "rPr" && rpr_depth == 0 { break; }
+                                    if rpr_depth > 0 { rpr_depth -= 1; }
+                                }
+                                Event::Eof => break,
+                                _ => {}
+                            }
+                        }
                         continue;
                     }
                     "tblPr" if depth == 0 => { in_tbl_pr = true; }

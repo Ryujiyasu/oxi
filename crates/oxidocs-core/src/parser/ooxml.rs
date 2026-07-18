@@ -2246,7 +2246,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // Apply docDefaults fallback (field-by-field merge per ECMA-376 priority)
     if let Some(ref doc_rs) = styles.doc_default_run_style {
         if let Some(ref mut para_rs) = style.default_run_style {
-            if para_rs.font_size.is_none() { para_rs.font_size = doc_rs.font_size; }
+            if para_rs.font_size.is_none() {
+                para_rs.font_size = doc_rs.font_size;
+                style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
+            }
             if para_rs.font_family.is_none() { para_rs.font_family = doc_rs.font_family.clone(); }
             if para_rs.font_family_east_asia.is_none() { para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone(); }
             if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia { para_rs.has_explicit_east_asia = true; }
@@ -2256,6 +2259,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             if para_rs.kern.is_none() { para_rs.kern = doc_rs.kern; }
         } else {
             style.default_run_style = styles.doc_default_run_style.clone();
+            style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
         }
     }
     if let Some(ref doc_para) = styles.doc_default_para_style {
@@ -6551,6 +6555,72 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
             }
             if style.para_style.is_none() {
                 style.para_style = tbl_style.para_style.clone();
+            }
+        }
+    }
+
+    // S935 (2026-07-18, ★HELD OPT-IN OXI_S935=1, default OFF byte-identical):
+    // a table style's top-level `w:rPr` applies to every run in the table —
+    // above docDefaults, below the paragraph-style chain / character style /
+    // direct rPr. Implemented for `w:sz`: bake the style size into each
+    // cell paragraph's default_run_style (the resolve_font_size slot
+    // BELOW run.font_size) when the existing size is the docDefaults-merged
+    // value (font_size_from_doc_defaults provenance).
+    // 0043bfe0629f9391 (NDIS price tables, GridTable4-Accent1 rPr sz=16):
+    // Word renders the cells at Arial 8pt; without this layer Oxi
+    // resolved 11pt — the item numbers wrapped and every data row
+    // measured 36pt vs Word's 14 → +26 pages over the document.
+    // Word-correctness verified TWICE (NDIS pitch 13.7≈14.0; 001cf65's
+    // Contact table pitch 14.7 = Word 14.6, span census 12.0pt) — but
+    // default-ON flips policies__001cf65 PASS→FAIL {pcd+1}: its correct
+    // +1pt cells expose a pre-existing page-bottom capacity deficit
+    // (Word fits the 4.3 para's lines 3-4 at ink-top 756.9 under a 769.9
+    // margin bottom; Oxi's hhea threshold pushes them — the S827/S835
+    // capacity family). Ships default-ON with that co-fix.
+    if std::env::var("OXI_S935").is_ok() {
+        if let Some(style_sz) = eff_tbl_style_id
+            .as_ref()
+            .and_then(|sid| styles.table_styles.get(sid))
+            .and_then(|ts| ts.run_font_size)
+        {
+            // The docDefaults size was already merged into the paragraph's
+            // default_run_style AND its runs (parse_paragraph) before the
+            // table context existed — the font_size_from_doc_defaults
+            // provenance flag (set only when the size came from docDefaults,
+            // not a named/default paragraph style) marks where the table
+            // style layer may override. Runs are rewritten only when they
+            // carry exactly the docDefaults-merged value.
+            let dd_sz = styles
+                .doc_default_run_style
+                .as_ref()
+                .and_then(|r| r.font_size);
+            for row in rows.iter_mut() {
+                for cell in row.cells.iter_mut() {
+                    for block in cell.blocks.iter_mut() {
+                        if let Block::Paragraph(p) = block {
+                            if p.style.heading_level.is_some()
+                                || !p.style.font_size_from_doc_defaults
+                            {
+                                continue;
+                            }
+                            if let Some(drs) = p.style.default_run_style.as_mut() {
+                                if drs.font_size == dd_sz {
+                                    drs.font_size = Some(style_sz);
+                                }
+                            }
+                            for run in p.runs.iter_mut() {
+                                if run.style.font_size == dd_sz {
+                                    run.style.font_size = Some(style_sz);
+                                }
+                            }
+                            if let Some(mark) = p.style.ppr_rpr.as_mut() {
+                                if mark.font_size == dd_sz {
+                                    mark.font_size = Some(style_sz);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

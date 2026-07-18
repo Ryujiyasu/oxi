@@ -1229,6 +1229,12 @@ pub struct ParagraphStyle {
     pub space_before_from_doc_defaults: bool,
     #[serde(default)]
     pub space_after_from_doc_defaults: bool,
+    /// S935: default_run_style.font_size was merged from docDefaults (not a
+    /// named/default paragraph style). The table-style rPr sz layer
+    /// overrides docDefaults-sourced size but NOT style-sourced size
+    /// (ECMA: docDefaults < table style rPr < paragraph style < direct).
+    #[serde(default)]
+    pub font_size_from_doc_defaults: bool,
     /// w:spacing beforeLines — in 1/100 of a line (raw value from OOXML)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_lines: Option<f32>,
@@ -1424,6 +1430,7 @@ impl Default for ParagraphStyle {
             has_direct_after: false,
             line_spacing_from_doc_defaults: false,
             space_before_from_doc_defaults: false,
+            font_size_from_doc_defaults: false,
             space_after_from_doc_defaults: false,
             before_lines: None,
             after_lines: None,
@@ -1546,6 +1553,12 @@ pub struct TableStyle {
     /// Paragraph alignment from table style pPr (jc) — applied as fallback
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub para_alignment: Option<Alignment>,
+    /// Run font size (pt) from the table style chain's top-level `w:rPr`
+    /// (S935): a table style's run properties apply to every run in the
+    /// table — above docDefaults, below the paragraph-style chain /
+    /// character style / direct rPr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_font_size: Option<f32>,
     /// Table floating position (w:tblpPr)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<TablePosition>,
