@@ -15350,6 +15350,27 @@ impl LayoutEngine {
                                     let em_part = char_width - cs;
                                     latin_space_credit_tw +=
                                         pt_to_tw(em_part * 0.25 + cs.max(0.0) * 0.24);
+                                } else if std::env::var("OXI_S933_DISABLE").is_err() {
+                                    // S933 (2026-07-18, default ON, opt-out
+                                    // OXI_S933_DISABLE): the NON-explicit-compat15
+                                    // class's per-LINE justify-shrink allowance is
+                                    // the FLAT fs/4 the S825 booster hunt measured
+                                    // (no-settings Calibri-11 probes: allow
+                                    // 2.74-2.75 = fs/4, cs-independent) — the 0.10
+                                    // per-space cap is a pre-derivation
+                                    // approximation that OVER-credits space-rich
+                                    // lines (grows ~0.3pt/space without bound).
+                                    // legal__000ad039 (compat ABSENT, justified
+                                    // TNR-12 judgment): its 14-space line granted
+                                    // 84tw and fit 'The' with 0tw to spare where
+                                    // Word wraps (needs 4.24 > fs/4 = 3.0) — one
+                                    // wrap per ~page = the doc-wide −1 cascade.
+                                    // Keep the per-space growth for space-poor
+                                    // lines (unprobed; they rarely reach the
+                                    // boundary) but clamp the line total at fs/4.
+                                    let cap_tw = pt_to_tw(font_size * 0.25);
+                                    latin_space_credit_tw = (latin_space_credit_tw
+                                        + pt_to_tw(char_width * s799_cap)).min(cap_tw);
                                 } else {
                                     latin_space_credit_tw += pt_to_tw(char_width * s799_cap);
                                 }
