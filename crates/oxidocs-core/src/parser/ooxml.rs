@@ -6437,7 +6437,21 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
 
     // ECMA-376: Apply table style borders if table doesn't have explicit tblBorders.
     // Priority: tcBorders > tblStylePr > tblStyle tblBorders > direct tblBorders
-    if !style.border {
+    //
+    // S930 (2026-07-18, default ON, opt-out OXI_S930_DISABLE): a direct
+    // `<w:tblBorders>` whose sides are ALL explicitly none/nil REPLACES the
+    // style's borders (it left border=false but nothing recorded the explicit
+    // suppression, so a TableGrid-styled table with every side `w:val="none"`
+    // still inherited single-sz4 borders → a spurious render + the rowbox
+    // insideH pad (+0.5/row) + the footer border-box term (+1.0). DERIVED on
+    // 002c1ffa65f3a566's footer table (TableGrid + all-none direct): the
+    // faithful-footer exact-spacer ladder pins the stack at 65.40 = rows
+    // 13.0+19.0 with NO border terms; with the phantom inheritance Oxi
+    // computed 67.4. Partial direct borders (some sides set) already skip the
+    // merge via border=true — only the all-none case changes.
+    if !style.border
+        && !(style.explicit_borders && std::env::var("OXI_S930_DISABLE").is_err())
+    {
         if let Some(ref style_id) = style.style_id {
             if let Some(tbl_style) = styles.table_styles.get(style_id) {
                 if tbl_style.border {

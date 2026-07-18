@@ -8407,6 +8407,28 @@ impl LayoutEngine {
                             && p.style.line_spacing.unwrap_or(0.0) > 0.0
                         {
                             p.style.line_spacing.unwrap_or(0.0)
+                        } else if s806_latin
+                            && p.style.line_spacing_rule.as_deref() == Some("atLeast")
+                            && p.style.line_spacing.unwrap_or(0.0)
+                                > metrics.natural_line_height_hhea(empty_fs)
+                            && std::env::var("OXI_S930_DISABLE").is_err()
+                        {
+                            // S930 (2026-07-18, default ON, opt-out
+                            // OXI_S930_DISABLE): an ATLEAST rule FLOORS the empty
+                            // footer line. DERIVED on 002c1ffa65f3a566 (footer =
+                            // [empty 8pt P, 2-row table, Footer-style P], Normal
+                            // line=260 atLeast): the faithful-footer exact-spacer
+                            // ladder pins cbot ∈ [606.02, 606.52) = stack 65.40 —
+                            // component ladders give the leading empty para
+                            // 20.5..21.0 = sb 6 + pBdr-top 1.75 + line 13.0
+                            // (atLeast) EXACT; its 8pt natural (9.2) is floored
+                            // to 13.0. The trailing Footer-style para measures
+                            // 12.5..13.0 = hhea 12.649 UN-floored — the Footer
+                            // style has NO basedOn, so Normal's atLeast never
+                            // reaches it (the no-basedOn rule, S924 family) and
+                            // its resolved rule here is None → this arm is
+                            // naturally scoped by the para's own resolved rule.
+                            p.style.line_spacing.unwrap_or(0.0)
                         } else if s806_latin && !metrics.is_cjk_83_64_font() {
                             // S806 (b): Latin empty footer line = hhea natural
                             // (12.649 @Arial 11), not the 10tw-floored win sum.
@@ -8491,6 +8513,17 @@ impl LayoutEngine {
                     if s806_latin && s806_first_before {
                         s806_first_before = false;
                         if !p.style.has_direct_spacing {
+                            footer_h += p.style.space_before.unwrap_or(0.0).max(0.0);
+                        } else if (p.runs.is_empty()
+                            || p.runs.iter().all(|r| r.text.is_empty()))
+                            && std::env::var("OXI_S930_DISABLE").is_err()
+                        {
+                            // S930: an EMPTY first paragraph's estimate is the
+                            // LINE only (the empty arm above never adds spacing),
+                            // so its DIRECT before-spacing is not inside `h` the
+                            // way a text para's is — add it here. The 002c1ffa
+                            // noP1sb component ladder measures the delta at
+                            // EXACTLY 6.0pt (= its direct before=120).
                             footer_h += p.style.space_before.unwrap_or(0.0).max(0.0);
                         }
                     }
@@ -8590,6 +8623,9 @@ impl LayoutEngine {
                                 // ROWBOX2: binding atLeast = trH + bw (border-box)
                                 _ => (th + self.rowbox2_trh_bw(t, row)).max(nat),
                             }).unwrap_or(nat);
+                            if std::env::var("OXI_DBG_FTR").is_ok() {
+                                eprintln!("[FTR-T] row nat={:.3} h={:.3} trh={:?}", nat, h, row.height);
+                            }
                             footer_h += h;
                         }
                         footer_h += tbl_border_term;
