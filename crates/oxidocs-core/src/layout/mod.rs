@@ -25278,6 +25278,12 @@ impl LayoutEngine {
                     // the ¶-mark to a non-Calibri family here (15.5 for fs 12).
                     // The S499 tombstone ("do NOT change the cell estimate")
                     // was falsified on the JP corpus — Latin scope only.
+                    if std::env::var("OXI_DBG940").is_ok() {
+                        eprintln!("[S940E] fam={} fs={} hhea={:.3} vs tbl={:.3}",
+                            metrics.family, empty_fs,
+                            metrics.natural_line_height_hhea(empty_fs),
+                            metrics.word_line_height_table_cell(empty_fs));
+                    }
                     metrics.natural_line_height_hhea(empty_fs)
                 } else {
                     metrics.word_line_height_table_cell(empty_fs)
@@ -25423,6 +25429,12 @@ impl LayoutEngine {
                         // word_line_height_table_cell tombstone under-counted
                         // Calibri-12 at 14.25 vs Word's 14.648 — the S499
                         // falsification was JP-corpus-only).
+                        if std::env::var("OXI_DBG940").is_ok() {
+                            eprintln!("[S940T] fam={} fs={} hhea={:.3} vs tbl={:.3}",
+                                metrics.family, font_size,
+                                metrics.natural_line_height_hhea(font_size),
+                                metrics.word_line_height_table_cell(font_size));
+                        }
                         metrics.natural_line_height_hhea(font_size)
                     } else {
                         metrics.word_line_height_table_cell(font_size)
