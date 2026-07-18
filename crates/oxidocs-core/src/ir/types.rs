@@ -44,6 +44,13 @@ pub struct Document {
     /// legacy-vs-2013 split must check `compat_mode <= 14 || !compat_mode_explicit`.
     #[serde(default)]
     pub compat_mode_explicit: bool,
+    /// S933b (2026-07-18): whether word/settings.xml EXISTS as a part. The
+    /// justify-shrink allowance classes measured so far differ on it:
+    /// settings present + compatibilityMode ABSENT -> ~0 (legal__000ad039
+    /// in-doc: Word wraps 'Plan'/'The' at needs ~<2/4.2pt); settings part
+    /// MISSING entirely -> flat fs/4 (the S825 booster-hunt cs3 probes).
+    #[serde(default)]
+    pub settings_part_exists: bool,
     /// S833 (2026-07-13): settings.xml `<w:footnotePr>` declares CUSTOM special
     /// footnotes (`<w:footnote w:id="-1"/>` etc.). Word then reserves/renders
     /// the custom separator paragraph at its FULL styled height (style-chain

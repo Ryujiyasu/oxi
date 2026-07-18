@@ -66,6 +66,7 @@ impl OoxmlParser {
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
         let default_tab_stop = self.parse_default_tab_stop();
         let (compat_mode, compat_mode_explicit) = self.parse_compat_mode();
+        let settings_part_exists = self.read_part("word/settings.xml").is_ok();
         let fn_special_declared = self.parse_fn_special_declared();
         let compress_punctuation = self.parse_compress_punctuation();
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
@@ -483,6 +484,7 @@ impl OoxmlParser {
             default_tab_stop,
             compat_mode,
             compat_mode_explicit,
+            settings_part_exists,
             fn_special_declared,
             compress_punctuation,
             do_not_expand_shift_return,

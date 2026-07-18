@@ -1762,6 +1762,8 @@ pub struct LayoutEngine {
     /// Absent = legacy (Word ≤2010) document — Word applies ≤14 layout
     /// behaviors (jc=left demand oikomi) even though compat_mode reports 15.
     compat_mode_explicit: bool,
+    /// S933b: whether word/settings.xml exists (justify-shrink class split).
+    settings_part_exists: bool,
     /// S833: settings.xml footnotePr declares custom special footnotes ->
     /// the declared-separator reservation model (see footnote_sep_alloc).
     fn_special_declared: bool,
@@ -2013,6 +2015,7 @@ impl LayoutEngine {
             default_tab_stop: 36.0,
             compat_mode: 15,
             compat_mode_explicit: true,
+            settings_part_exists: true,
             fn_special_declared: false,
             compress_punctuation: false,
             cellpair_neg_charspace: false,
@@ -2100,6 +2103,7 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compat_mode_explicit: doc.compat_mode_explicit,
+            settings_part_exists: doc.settings_part_exists,
             fn_special_declared: doc.fn_special_declared,
             compress_punctuation: doc.compress_punctuation,
             cellpair_neg_charspace: doc.pages.iter().any(|pg| {
@@ -15368,6 +15372,25 @@ impl LayoutEngine {
                                     let em_part = char_width - cs;
                                     latin_space_credit_tw +=
                                         pt_to_tw(em_part * 0.25 + cs.max(0.0) * 0.24);
+                                } else if self.settings_part_exists
+                                    && !self.compat_mode_explicit
+                                    && std::env::var("OXI_S933_DISABLE").is_err()
+                                {
+                                    // S933b (2026-07-18): a doc whose settings.xml
+                                    // EXISTS but declares NO compatibilityMode gets
+                                    // ~ZERO justify-shrink allowance. In-doc derived
+                                    // on legal__000ad039 (Supreme Court judgment,
+                                    // settings w/o compatSetting, justified TNR-12):
+                                    // Word wraps 'Plan' (needs <2pt) and 'The'
+                                    // (needs 4.24pt) at natural width — the
+                                    // OXI_S799_CAP=0 sweep lands the whole doc at
+                                    // 0.9481/pcd 0 vs 0.5849 with fs/4, while
+                                    // uklocalspending (compat14-EXPLICIT) stays
+                                    // PASS 1.0 at either value. The fs/4 flat
+                                    // allowance below is the NO-SETTINGS-part class
+                                    // (the S825 booster-hunt cs3 hosts had no
+                                    // settings.xml at all).
+                                    // credit: none.
                                 } else if std::env::var("OXI_S933_DISABLE").is_err() {
                                     // S933 (2026-07-18, default ON, opt-out
                                     // OXI_S933_DISABLE): the NON-explicit-compat15
