@@ -11429,7 +11429,19 @@ impl LayoutEngine {
                     // widow/orphan fit test too — framework wp26 «shall obtain»
                     // (2-line, ref 14) was whole-moved HERE at a 0.17pt overflow
                     // that Word's soft boundary absorbs.
-                    cursor.cursor_y + line_height + next_h - s835_fn_relief > page_top + content_height
+                    // S926: compare the orphan look-ahead at OOXML's twip
+                    // precision. Raw font-metric floats can exceed an exact
+                    // page-bottom tie by a few thousandths of a point and
+                    // whole-move an otherwise splittable paragraph (legal
+                    // wp102: +0.012pt). Half a twip is the round-to-nearest
+                    // tolerance; larger physical overflows still push.
+                    let orphan_rounding_tolerance = if std::env::var("OXI_S926_DISABLE").is_err() {
+                        0.025
+                    } else {
+                        0.0
+                    };
+                    cursor.cursor_y + line_height + next_h - s835_fn_relief
+                        > page_top + content_height + orphan_rounding_tolerance
                         && !current_elements.is_empty()
                 } else if line_idx == lines.len() - 2 && !needs_page_break {
                     // Widow: if the last line would overflow to the next page alone,
