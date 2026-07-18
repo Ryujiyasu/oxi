@@ -19669,8 +19669,31 @@ impl LayoutEngine {
                         if p.runs.iter().all(|r| r.text.is_empty())))
                     .count() >= 2)
                 && (page_bottom - cursor.cursor_y) >= table_grid_pitch.unwrap_or(14.0);
+            // S941 (2026-07-19, ★BUNDLE MEMBER — fires only with OXI_S940;
+            // opt-out OXI_S941_DISABLE): a NON-BINDING atLeast trHeight row
+            // splits when the free space clears the single-column widow
+            // threshold. Word truth (uklocal rt.pdf, landscape template):
+            // rows 15/20/24 (trH 51-63.75, content-driven) PUSH with 57/40/38
+            // free; row 27 (trH 39, content ~116) SPLITS with ~110 free —
+            // the discriminator is the FREE SPACE (K ∈ (57, 110], = the
+            // no-grid single-column 58.0 / pitch×2.2 tier), NOT trH-vs-auto
+            // alone. The rule presupposes Word-correct row heights (the free
+            // space must be measured in the S940 geometry — at the default
+            // short-line heights Oxi reaches row 15 with 86 free and would
+            // mis-split), so it ships with the S935/S936/S940 set. Binding
+            // rows (row_height == trh) keep the S754 whole-push (tokyoshugyo
+            // trH 474 free 296 pushes — JP is excluded by scope anyway).
+            let s941_nonbinding_trh = std::env::var("OXI_S941_DISABLE").is_err()
+                && std::env::var("OXI_S940").is_ok()
+                && !self.doc_body_has_real_cjk
+                && row.height_rule.as_deref() != Some("exact")
+                && row.height.map_or(false, |trh| {
+                    row_height > trh + table_grid_pitch.unwrap_or(14.0)
+                })
+                && (page_bottom - cursor.cursor_y)
+                    >= table_grid_pitch.map(|p| p * 2.2).unwrap_or(58.0);
             let s754_split = (std::env::var("OXI_S754_DISABLE").is_err()
-                && row.height.is_none()
+                && (row.height.is_none() || s941_nonbinding_trh)
                 && !s814_lrpb_veto
                 && (page_bottom - cursor.cursor_y) >= s754_min_fit)
                 || s864_empty_tail_split;
@@ -19694,6 +19717,18 @@ impl LayoutEngine {
                 && !image_atomic_push;
 
             if (row_overflows || lrpb_row_should_break || widow_break_needed) && has_content && !needs_row_split {
+                if std::env::var("OXI_DBG_ROWPUSH").is_ok() {
+                    let txt: String = row.cells.iter().flat_map(|c| c.blocks.iter()).find_map(|b| match b {
+                        Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.is_empty()) =>
+                            Some(p.runs.iter().flat_map(|r| r.text.chars()).take(14).collect::<String>()),
+                        _ => None,
+                    }).unwrap_or_default();
+                    eprintln!("[ROWPUSH] row={} cur={:.1} pbot={:.1} row_h={:.1} ovf={} lrpb_brk={} widow={} single={} midlrpb={} s754={} veto={} trH={:?} txt={:?}",
+                        row_idx, cursor.cursor_y, page_bottom, row_height,
+                        row_overflows, lrpb_row_should_break, widow_break_needed,
+                        is_single_cell_row, has_lrpb_mid_row, s754_split, s814_lrpb_veto,
+                        row.height, txt);
+                }
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 pages.push(LayoutPage {
