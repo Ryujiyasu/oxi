@@ -19092,6 +19092,9 @@ impl LayoutEngine {
                 // paragraph's space_after; the credit min(prev_sa, cur_sb) is removed.
                 let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
                 let mut prev_sa: Option<f32> = None;
+                // S939: prev paragraph's (contextual_spacing, style_id) for the
+                // in-cell layered collapse.
+                let mut s939_prev: Option<(bool, Option<&str>)> = None;
                 // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
                 // container-edge suppression. See cell_autospace_effective.
                 let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
@@ -19182,11 +19185,22 @@ impl LayoutEngine {
                                     cell_content_h_visual -= credit;
                                 }
                             }
+                            let s939 = self.s939_cell_ctx_credit(
+                                prev_sa,
+                                s939_prev.map_or(false, |p| p.0),
+                                s939_prev.and_then(|p| p.1),
+                                &para.style,
+                                cur_sb,
+                            );
+                            cell_content_h -= s939;
+                            cell_content_h_visual -= s939;
                             prev_sa = Some(cur_sa);
+                            s939_prev = Some((para.style.contextual_spacing, para.style.style_id.as_deref()));
                             }
                         }
                         Block::Table(nested) => {
                             prev_sa = None;
+                            s939_prev = None;
                             // Estimate nested table height from rows
                             // COM-confirmed: nested table width = cell width - 2 × padding
                             let nested_w = (inner_w).max(0.0);
@@ -19970,6 +19984,8 @@ impl LayoutEngine {
                 // for adjacent-paragraph spacing collapse (see pre-pass comment).
                 let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
                 let mut prev_cell_sa: Option<f32> = None;
+                // S939: prev paragraph's (contextual_spacing, style_id).
+                let mut s939_prev_r: Option<(bool, Option<&str>)> = None;
                 if !is_vmerge_continue {
                 // S428 (2026-05-29): index of the last cell block that carries
                 // real content (a non-empty paragraph or a nested table). Used to
@@ -20063,6 +20079,7 @@ impl LayoutEngine {
                         nested_y.cursor_y
                     };
                     prev_cell_sa = None; // S427: nested table breaks paragraph adjacency
+                    s939_prev_r = None;
                 }
                 Block::Paragraph(para) => {
                 let para = para;
@@ -20352,6 +20369,15 @@ impl LayoutEngine {
                             content_h -= psa.min(effective_space_before);
                         }
                     }
+                    // S939: layered contextualSpacing collapse inside the cell.
+                    content_h -= self.s939_cell_ctx_credit(
+                        prev_cell_sa,
+                        s939_prev_r.map_or(false, |p| p.0),
+                        s939_prev_r.and_then(|p| p.1),
+                        &para.style,
+                        effective_space_before,
+                    );
+                    s939_prev_r = Some((para.style.contextual_spacing, para.style.style_id.as_deref()));
                     content_h += effective_space_before;
                     let para_content_start_h = content_h;
                     {
@@ -22692,6 +22718,7 @@ impl LayoutEngine {
                     } else { img.height };
                     content_h += img_h_eff;
                     prev_cell_sa = None;
+                    s939_prev_r = None;
                 }
                 _ => {}
                 } // match block
@@ -24996,6 +25023,8 @@ impl LayoutEngine {
             // consistent with the row-height pre-pass and content placement.
             let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
             let mut prev_sa: Option<f32> = None;
+            // S939: prev paragraph's (contextual_spacing, style_id).
+            let mut s939_prev_e: Option<(bool, Option<&str>)> = None;
             // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
             // container-edge suppression. See cell_autospace_effective.
             let first_para_pos = cell.blocks.iter().position(|b| matches!(b, Block::Paragraph(_)));
@@ -25051,10 +25080,19 @@ impl LayoutEngine {
                                 cell_content_h -= psa.min(cur_sb);
                             }
                         }
+                        cell_content_h -= self.s939_cell_ctx_credit(
+                            prev_sa,
+                            s939_prev_e.map_or(false, |p| p.0),
+                            s939_prev_e.and_then(|p| p.1),
+                            &para.style,
+                            cur_sb,
+                        );
                         prev_sa = Some(cur_sa);
+                        s939_prev_e = Some((para.style.contextual_spacing, para.style.style_id.as_deref()));
                     }
                     Block::Table(nested) => {
                         prev_sa = None;
+                        s939_prev_e = None;
                         let nested_w = inner_w.max(0.0);
                         for nr in &nested.rows {
                             let mut nr_h = 0.0_f32;
@@ -25430,6 +25468,42 @@ impl LayoutEngine {
                 .unwrap_or(0.0);
         }
         height
+    }
+
+    /// S939 (2026-07-19, default ON, opt-out OXI_S939_DISABLE): the S874
+    /// contextualSpacing LAYER model applied INSIDE table cells (the body
+    /// site already has it; the cell paths had only the S427 max-collapse).
+    /// After S427 the gap is max(a, b); the layered model's gap is
+    ///   (prev_ctx ? 0 : a) + (cur_ctx ? 0 : max(0, b - a))
+    /// for same-pStyle neighbors (None == None matches, S657/S861).
+    /// Returns the EXTRA credit to subtract beyond S427.
+    /// reports__00196a2279416de0 Appendix A: adjacent ListParagraph
+    /// bullets (style ctx ON, direct after=160) render gap 0 in Word
+    /// (pitch 26.8 = 2 bare lines); Oxi kept ~8pt per bullet — the table
+    /// split and the whole 16-page landscape appendix shifted +1.
+    /// Latin scope (the JP cell collapse calibration untouched).
+    fn s939_cell_ctx_credit(
+        &self,
+        prev_sa: Option<f32>,
+        prev_ctx: bool,
+        prev_sid: Option<&str>,
+        cur: &ParagraphStyle,
+        cur_sb: f32,
+    ) -> f32 {
+        if self.doc_body_has_real_cjk || std::env::var("OXI_S939_DISABLE").is_ok() {
+            return 0.0;
+        }
+        let Some(a) = prev_sa else { return 0.0 };
+        if cur.style_id.as_deref() != prev_sid {
+            return 0.0;
+        }
+        if !prev_ctx && !cur.contextual_spacing {
+            return 0.0;
+        }
+        let b = cur_sb;
+        let gap_target = (if prev_ctx { 0.0 } else { a })
+            + (if cur.contextual_spacing { 0.0 } else { (b - a).max(0.0) });
+        (a.max(b) - gap_target).max(0.0)
     }
 
     /// S936 (2026-07-18, ★HELD OPT-IN OXI_S936=1 with S935, default OFF):
