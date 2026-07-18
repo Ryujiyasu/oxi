@@ -3727,6 +3727,8 @@ impl LayoutEngine {
         let mut lm2_cells: usize = 0;
         let mut prev_para_style_id: Option<String> = None;
         let mut prev_contextual_spacing: bool = false;
+        // S931: previous paragraph's numId when it carried afterAutospacing.
+        let mut prev_autospacing_numid: Option<String> = None;
         // S658: the previous body paragraph's pBdr, for the border-merge gate.
         let mut prev_borders: Option<ParagraphBorders> = None;
         // S739: the previous body paragraph has keepNext (the follower of a
@@ -4452,7 +4454,7 @@ impl LayoutEngine {
                             para, fx, &mut fcy, fw,
                             page.size.height, fy, page,
                             &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None, false,
+                            grid_pitch, None, false, None,
                             None, false, false, 0.0, Some(block_idx), None, None,
                             false, false, None,
                             0.0,
@@ -4513,7 +4515,7 @@ impl LayoutEngine {
                             para, fx, &mut fcy, fw,
                             page.size.height, fy, page,
                             &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None, false,
+                            grid_pitch, None, false, None,
                             None, false, false, 0.0, Some(block_idx), None, None,
                             false, false, None,
                             0.0,
@@ -4594,7 +4596,7 @@ impl LayoutEngine {
                             para, fx + 1.5, &mut fcy, (fw - 3.0).max(10.0),
                             page.size.height, fy, page,
                             &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None, false,
+                            grid_pitch, None, false, None,
                             None, false, false, 0.0, Some(block_idx), None, None,
                             false, false, None,
                             0.0,
@@ -5484,6 +5486,7 @@ impl LayoutEngine {
                         &mut elements,
                         grid_pitch,
                         prev_para_style_id.as_deref(), prev_contextual_spacing,
+                        prev_autospacing_numid.as_deref(),
                         prev_borders.as_ref(), prev_keep_next, false,
                         prev_space_after,
                         Some(block_idx),
@@ -5736,6 +5739,11 @@ impl LayoutEngine {
 
                     prev_para_style_id = para.style.style_id.clone();
                     prev_contextual_spacing = para.style.contextual_spacing;
+                    prev_autospacing_numid = if para.style.after_autospacing {
+                        para.style.num_id.clone()
+                    } else {
+                        None
+                    };
                     prev_borders = para.style.borders.clone();
                     prev_keep_next = para.style.keep_next; // S739
                 }
@@ -6289,6 +6297,7 @@ impl LayoutEngine {
                     }
                     prev_para_style_id = None;
                     prev_borders = None; // S658: a table breaks border-merge adjacency
+                    prev_autospacing_numid = None; // S931: and list adjacency
                     prev_keep_next = false; // S739
                     prev_space_after = 0.0;
                 }
@@ -6338,6 +6347,7 @@ impl LayoutEngine {
                     cursor.advance(img_adv);
                     prev_para_style_id = None;
                     prev_borders = None; // S658: an image breaks border-merge adjacency
+                    prev_autospacing_numid = None; // S931: and list adjacency
                     prev_keep_next = false; // S739
                 }
                 Block::UnsupportedElement(_) => {
@@ -6527,7 +6537,7 @@ impl LayoutEngine {
                             &para_to_render, start_x, &mut cursor, content_width, content_height,
                             start_y, page,
                             &mut pages, &mut elements,
-                            grid_pitch, None, false,
+                            grid_pitch, None, false, None,
                             None, false, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
@@ -6808,7 +6818,7 @@ impl LayoutEngine {
                         let (hdr_elements, _, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             header_y, page, &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None, false,
+                            grid_pitch, None, false, None,
                             None, false, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
@@ -6866,7 +6876,7 @@ impl LayoutEngine {
                         let (ftr_elements, _, _) = self.layout_paragraph(
                             para, hdr_x, &mut cy, hdr_width, page.size.height,
                             footer_top, page, &mut Vec::new(), &mut Vec::new(),
-                            grid_pitch, None, false,
+                            grid_pitch, None, false, None,
                             None, false, false, 0.0, None, None, None,
                             false, false, None,
                             0.0,
@@ -7296,7 +7306,7 @@ impl LayoutEngine {
                                         &mut Vec::new(), &mut Vec::new(),
                                         // S828: no-type grids render footnote lines at
                                         // natural hhea, not the pitch (est==place==render).
-                                        fn_gp, None, false,
+                                        fn_gp, None, false, None,
                                         None, false, false, 0.0, None, None, None,
                                         false, false, None,
                                         0.0,
@@ -7662,7 +7672,7 @@ impl LayoutEngine {
                         &mut dummy_elements,
                         // TextBox grid snap: enabled for "lines" grid, disabled for "linesAndChars"
                         if page.grid_char_pitch.is_some() { None } else { page.grid_line_pitch },
-                        None, false, // no prev style/contextual tracking
+                        None, false, None, // no prev style/contextual/autospacing tracking
                         None, // S658: no border-merge tracking in textboxes
                         false, // S739: no keepNext-follower tracking in textboxes
                         true, // in_textbox: suppress CJK compression
@@ -8738,6 +8748,11 @@ impl LayoutEngine {
         grid_pitch: Option<f32>,
         prev_style_id: Option<&str>,
         prev_contextual_spacing: bool,
+        // S931 (2026-07-18): the previous paragraph's numId IF it carried
+        // afterAutospacing — the same-list HTML-autospacing suppression gate.
+        // Some(numId) only when (prev.after_autospacing && prev.num_id);
+        // only the body call site threads a real value.
+        prev_autospacing_numid: Option<&str>,
         // S658 (2026-06-24): the immediately-previous paragraph's pBdr (border-merge
         // gate). Word merges consecutive paragraphs with an IDENTICAL pBdr into one
         // box — the top border (and its reserved gap) is drawn only above the FIRST
@@ -9072,6 +9087,28 @@ impl LayoutEngine {
                     }
                 }
             }
+        }
+
+        // S931 (2026-07-18, default ON, opt-out OXI_S931_DISABLE): HTML
+        // autospacing is suppressed between adjacent list items of the SAME
+        // list — the boundary gap is ZERO (line pitch only). DERIVED via a
+        // faithful-host probe (educational__000c2f182dad8bdd styles/settings/
+        // numbering/theme transplanted, Calibri 10.5, 7 renders): same-numId
+        // item pair gap = 12.86 = the bare line (spacing 0); DIFFERENT-numId
+        // pair, text->item, and item->text all get the full 14.0 (26.9); the
+        // explicit w:before value is irrelevant (tt0 == tt100 == tt480 —
+        // auto OVERRIDES explicit, re-confirming S675). Matches the real
+        // doc: its bullet runs render at 12.8-13.0 pitch in Word while Oxi
+        // applied +14/item -> a 1-page course description blew up to 3.
+        // Corpus scan: adjacent same-numId autospacing items exist in 4
+        // docx_corpus/en docs ONLY (golden 0 / ja 0 / real_en 0) -> the
+        // gated JP + frozen surface is byte-identical by construction.
+        if para.style.before_autospacing
+            && para.style.num_id.is_some()
+            && para.style.num_id.as_deref() == prev_autospacing_numid
+            && std::env::var("OXI_S931_DISABLE").is_err()
+        {
+            effective_spacing = 0.0;
         }
 
         // Suppress space_before at the top of a page (page 2+).
