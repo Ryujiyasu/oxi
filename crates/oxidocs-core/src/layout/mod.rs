@@ -4889,6 +4889,31 @@ impl LayoutEngine {
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
                             let this_h0 = self.estimate_para_height(para, content_width, grid_pitch, None, false, None, None);
                             let next_h = self.estimate_para_height(next_para, content_width, grid_pitch, None, false, None, None);
+                            // S925: estimate_para_height drops a body follower's
+                            // style-defined space_before under the same reset rule
+                            // handled for `this_h` below.  The keepNext pair still
+                            // consumes the collapsed inter-paragraph gap, so omitting
+                            // it can claim the pair fits and then let the real layout
+                            // push the follower, violating keepNext (legal Schedule 4:
+                            // ySubsection + yIndenta at the wp196 bottom).  Add only
+                            // the gap the estimate dropped; direct/atLeast/exact
+                            // spacing remains accounted for by the estimate itself.
+                            let next_h_with_gap = if std::env::var("OXI_S925_DISABLE").is_err()
+                                && !next_para.style.has_direct_spacing
+                                && next_para.style.line_spacing_rule.as_deref() != Some("exact")
+                                && next_para.style.line_spacing_rule.as_deref() != Some("atLeast")
+                            {
+                                let next_sb = if let (Some(bl), Some(pitch)) =
+                                    (next_para.style.before_lines, grid_pitch)
+                                {
+                                    bl / 100.0 * pitch
+                                } else {
+                                    next_para.style.space_before.unwrap_or(0.0)
+                                };
+                                next_h + para.style.space_after.unwrap_or(0.0).max(next_sb)
+                            } else {
+                                next_h
+                            };
                             // S709 (2026-06-30): estimate_para_height drops a paragraph's
                             // STYLE-defined space_before for body paras (its `should_reset`
                             // is a table-cell rule that mis-fires when has_direct_spacing=false
@@ -5092,7 +5117,7 @@ impl LayoutEngine {
                                     (next_h, follower_moves_wholly)
                                 }
                             } else {
-                                (next_h, follower_moves_wholly)
+                                (next_h_with_gap, follower_moves_wholly)
                             };
                             let pair_overflows = this_h + unit_next_h > remaining
                                 && this_h + unit_next_h <= effective_content_h;
