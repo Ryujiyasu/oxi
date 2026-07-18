@@ -1219,10 +1219,31 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     if p.runs.iter().all(|r| r.text.trim().is_empty()));
                                 if s_empty && n >= 2 {
                                     if let Some(Block::Paragraph(x)) = current_blocks.get_mut(n - 2) {
-                                        if let Some(run) = x.runs.iter_mut().rev().find(|r| !r.text.trim().is_empty()) {
-                                            let t = run.text.trim_end();
-                                            if t.ends_with('\x0C') {
-                                                run.text = t[..t.len() - 1].to_string();
+                                        // S794b (2026-07-18): the trailing \x0C often
+                                        // sits in its OWN run after the text runs
+                                        // (reports__000e8acd caption: [Table ][SEQ 1]
+                                        // [ EqIA weighting…][<w:r><w:br type=page/>]) —
+                                        // and \x0C is whitespace to trim(), so the old
+                                        // "last non-trim-empty run" search skipped the
+                                        // br run, landed on the caption text, found no
+                                        // trailing \x0C and left the phantom page (Oxi
+                                        // p11 = footer-only, '4. Assessment' one page
+                                        // late, +1×94). Walk runs in reverse, stripping
+                                        // the LAST \x0C wherever it lives as long as
+                                        // only whitespace follows it; stop at the first
+                                        // run carrying real text. Probe (sect_probe:
+                                        // tpb/epb collapse at 2 pages, epb2/dbl/tpbtxt
+                                        // keep 3) re-confirms the strict adjacency the
+                                        // S794 derivation established.
+                                        for run in x.runs.iter_mut().rev() {
+                                            if let Some(pos) = run.text.rfind('\x0C') {
+                                                if run.text[pos + 1..].trim().is_empty() {
+                                                    run.text.remove(pos);
+                                                }
+                                                break;
+                                            }
+                                            if !run.text.trim().is_empty() {
+                                                break;
                                             }
                                         }
                                         // the br-only-para conversion (page_break_after)
