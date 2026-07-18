@@ -5056,8 +5056,26 @@ impl LayoutEngine {
                             };
                             // An orphan check mirroring the orphan arm that will actually
                             // run: does the follower get ≥2 lines in what's left?
+                            //
+                            // S934 (2026-07-18, default ON, opt-out OXI_S934_DISABLE):
+                            // the space left for follower lines must also pay the
+                            // heading→follower COLLAPSED GAP the S925 term already
+                            // derived (max(heading style after, follower style before)
+                            // when the estimate dropped both). legal__000ad039's
+                            // TitleTitre headings carry after=720tw (36pt!): the 'D.'
+                            // decision has rem 97.7 − this_h 36.8 = 60.9 ≥ 2 lines
+                            // (55.2) WITHOUT the gap → Oxi kept the heading and split
+                            // the follower 2+5; WITH the gap 24.9 < 55.2 → orphan →
+                            // whole push = Word (render truth: p26 ends at [33],
+                            // heading+follower on p27; the in-doc 'C.' heading gap
+                            // measures 49.6 = line 13.8 + after 36 exactly).
+                            let s934_gap = if std::env::var("OXI_S934_DISABLE").is_err() {
+                                (next_h_with_gap - next_h).max(0.0)
+                            } else {
+                                0.0
+                            };
                             let follower_orphans =
-                                s914 && (one_line_h + line_h_next) > (remaining - this_h);
+                                s914 && (one_line_h + line_h_next) > (remaining - this_h - s934_gap);
                             let follower_moves_wholly = next_para.style.widow_control
                                 && (next_lines <= 3 || follower_orphans);
                             // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
