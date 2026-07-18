@@ -13719,8 +13719,25 @@ impl LayoutEngine {
         // of the S568/S572 legacy CJK oikomi discriminator. Tracks the
         // width of the word's trailing hangable punct; the flush fit tests
         // credit it. Latin-doc scope (JP keeps its own CJK burasage).
+        // S929 (2026-07-18, default ON, opt-out OXI_S929_DISABLE): an
+        // effective pBdr RIGHT border suppresses the legacy trailing-punct
+        // hang — the border fences the text edge, so the full word+punct
+        // must fit inside it. DERIVED via a faithful transplant probe of
+        // 002c1ffa65f3a566's BoxPara ((b) …for the day.) + variant matrix
+        // (96 Word renders, right-margin flip sweep): faith (pBdr all
+        // sides) flips at the word+punct width = NO hang, reproducing the
+        // real doc's wrap; nobdr / bare / pBdr-minus-RIGHT all flip at the
+        // word-sans-punct width = FULL hang (the S809 rule). The RIGHT
+        // side alone discriminates; tabs / hanging indent / right-tab
+        // marker are irrelevant (notab ≡ faith). An explicit
+        // w:val="none"/"nil" right border (the S482 sentinel) is no fence.
+        let s929_right_fence = para_style.borders.as_ref()
+            .and_then(|b| b.right.as_ref())
+            .map_or(false, |d| d.style != "none")
+            && std::env::var("OXI_S929_DISABLE").is_err();
         let s809_hang = !self.doc_body_has_real_cjk
             && self.compat_mode < 15
+            && !s929_right_fence
             && std::env::var("OXI_S809_DISABLE").is_err();
         let mut word_trail_hang_w: f32 = 0.0;
         // S245 (2026-05-24): removed dead variable `word_grid_extra`
