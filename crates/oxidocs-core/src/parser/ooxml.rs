@@ -6577,7 +6577,7 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
     // (Word fits the 4.3 para's lines 3-4 at ink-top 756.9 under a 769.9
     // margin bottom; Oxi's hhea threshold pushes them — the S827/S835
     // capacity family). Ships default-ON with that co-fix.
-    if std::env::var("OXI_S935").is_ok() {
+    if std::env::var("OXI_S935_DISABLE").is_err() {
         if let Some(style_sz) = eff_tbl_style_id
             .as_ref()
             .and_then(|sid| styles.table_styles.get(sid))

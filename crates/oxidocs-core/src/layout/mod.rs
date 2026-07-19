@@ -19684,7 +19684,7 @@ impl LayoutEngine {
             // rows (row_height == trh) keep the S754 whole-push (tokyoshugyo
             // trH 474 free 296 pushes — JP is excluded by scope anyway).
             let s941_nonbinding_trh = std::env::var("OXI_S941_DISABLE").is_err()
-                && std::env::var("OXI_S940").is_ok()
+                && std::env::var("OXI_S940T").is_ok()
                 && !self.doc_body_has_real_cjk
                 && row.height_rule.as_deref() != Some("exact")
                 && row.height.map_or(false, |trh| {
@@ -23507,7 +23507,7 @@ impl LayoutEngine {
                     // S942: the continuation band honors the atLeast trHeight
                     // (band = max(content, trH + bw); see the cursor branch).
                     let s817_close = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && std::env::var("OXI_S940").is_ok()
+                        && std::env::var("OXI_S940T").is_ok()
                         && !self.doc_body_has_real_cjk
                         && row.height_rule.as_deref() != Some("exact")
                     {
@@ -24098,7 +24098,7 @@ impl LayoutEngine {
                     // content-anchored band (27.2) started the next row 37pt
                     // early and cascaded the whole template (+the S941 flip).
                     let s942_floor = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && std::env::var("OXI_S940").is_ok()
+                        && std::env::var("OXI_S940T").is_ok()
                         && !self.doc_body_has_real_cjk
                         && row.height_rule.as_deref() != Some("exact")
                     {
@@ -24150,7 +24150,7 @@ impl LayoutEngine {
                 // non-painting empty tail to the page top (administrative__
                 // 0001ce58 — clamping it to trH broke its PASS).
                 if std::env::var("OXI_S942_DISABLE").is_err()
-                    && std::env::var("OXI_S940").is_ok()
+                    && std::env::var("OXI_S940T").is_ok()
                     && !self.doc_body_has_real_cjk
                     && !s864_empty_tail_split
                     && row.height_rule.as_deref() != Some("exact")
@@ -25345,14 +25345,14 @@ impl LayoutEngine {
             // returned a CJK 83/64 family (15.56 = 12 × 83/64) for Calibri
             // theme marks, bypassing the Latin hhea arm below.
             let s940_mark_ascii = !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S940").is_ok();
+                && std::env::var("OXI_S940_DISABLE").is_err();
             let metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
             // S943 (bundle member with S940): an auto-rule MULTIPLE (line=276)
             // Latin empty takes hhea × factor — the bare rule test routed
             // auto+1.15 empties into the single arm (default routing kept
             // byte-identical; only the S940-gated path forks).
-            let s943_mult = std::env::var("OXI_S940").is_ok()
+            let s943_mult = std::env::var("OXI_S940_DISABLE").is_err()
                 && std::env::var("OXI_S943_DISABLE").is_err()
                 && !self.doc_body_has_real_cjk
                 && !metrics.is_cjk_83_64_font()
@@ -25376,7 +25376,7 @@ impl LayoutEngine {
                     self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, para.style.snap_to_grid, grid_pitch, true)
                 } else if !self.doc_body_has_real_cjk
                     && !metrics.is_cjk_83_64_font()
-                    && std::env::var("OXI_S940").is_ok()
+                    && std::env::var("OXI_S940_DISABLE").is_err()
                 {
                     // S940 (2026-07-19, ★HELD OPT-IN OXI_S940=1 with S935/S936):
                     // a LATIN cell's single-spacing EMPTY paragraph = the hhea
@@ -25533,7 +25533,7 @@ impl LayoutEngine {
                         self.line_height_inner(font_size, eff_ls, eff_lr, metrics, para.style.snap_to_grid, grid_pitch, true)
                     } else if !self.doc_body_has_real_cjk
                         && !metrics.is_cjk_83_64_font()
-                        && std::env::var("OXI_S940").is_ok()
+                        && std::env::var("OXI_S940T").is_ok()
                     {
                         // S940: Latin cell single-spacing text line estimate =
                         // hhea natural (matches the S815 render path; the
@@ -25682,7 +25682,7 @@ impl LayoutEngine {
         style: &ParagraphStyle,
         table_para_style: Option<&ParagraphStyle>,
     ) -> (Option<f32>, Option<f32>) {
-        if self.doc_body_has_real_cjk || std::env::var("OXI_S936").is_err() {
+        if self.doc_body_has_real_cjk || std::env::var("OXI_S936_DISABLE").is_ok() {
             return (None, None);
         }
         let Some(tps) = table_para_style else { return (None, None) };
