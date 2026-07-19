@@ -241,6 +241,11 @@ pub struct DocxEditor {
     pending_images: Vec<PendingImage>,
     /// Comments to write into the document on save (web-editor annotations)
     pending_comments: Vec<NewComment>,
+    /// Document w:id values of existing comments to delete on save (markers,
+    /// comments.xml entry, and extended-part entries are all removed)
+    pending_comment_removals: Vec<String>,
+    /// (w14:paraId, done) pairs: resolved-state changes for existing comments
+    pending_resolves: Vec<(String, bool)>,
 }
 
 /// A comment annotation to be written into the document on save: an entry in
@@ -263,6 +268,14 @@ pub struct NewComment {
     /// boundary rather than dropped.
     pub char_start: usize,
     pub char_end: usize,
+    /// Written as w15:done in commentsExtended.xml (Word 2013+ resolved state).
+    pub resolved: bool,
+    /// Threading: this comment is a reply to another comment IN THE SAME BATCH,
+    /// given as an index into the `add_comments` vector…
+    pub parent_index: Option<usize>,
+    /// …or a reply to a comment already in the file, given as that comment's
+    /// w14:paraId (the join key commentsExtended.xml uses).
+    pub parent_para_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -283,12 +296,24 @@ impl DocxEditor {
             edits: Vec::new(),
             pending_images: Vec::new(),
             pending_comments: Vec::new(),
+            pending_comment_removals: Vec::new(),
+            pending_resolves: Vec::new(),
         })
     }
 
     /// Queue comments to be written into the document on save.
     pub fn add_comments(&mut self, comments: Vec<NewComment>) {
         self.pending_comments.extend(comments);
+    }
+
+    /// Queue existing comments (by their document w:id) for deletion on save.
+    pub fn remove_comments(&mut self, ids: Vec<String>) {
+        self.pending_comment_removals.extend(ids);
+    }
+
+    /// Queue resolved-state changes for existing comments, keyed by w14:paraId.
+    pub fn set_comments_resolved(&mut self, changes: Vec<(String, bool)>) {
+        self.pending_resolves.extend(changes);
     }
 
     /// Get a reference to the parsed document IR (read-only).
@@ -495,20 +520,23 @@ impl DocxEditor {
 
     /// Save the edited document as new .docx bytes.
     pub fn save(&self) -> Result<Vec<u8>, ParseError> {
-        if self.edits.is_empty() && self.pending_images.is_empty() && self.pending_comments.is_empty() {
+        let has_comment_work = !self.pending_comments.is_empty()
+            || !self.pending_comment_removals.is_empty()
+            || !self.pending_resolves.is_empty();
+        if self.edits.is_empty() && self.pending_images.is_empty() && !has_comment_work {
             return self.copy_archive();
         }
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive = ZipArchive::new(cursor)?;
 
-        // Comment ids continue after any ids already present in comments.xml.
-        let comment_id_base = if self.pending_comments.is_empty() {
-            0
+        let plan = if has_comment_work {
+            Some(self.comment_plan()?)
         } else {
-            self.next_comment_id()?
+            None
         };
         let mut saw_comments_part = false;
+        let mut saw_ext_part = false;
 
         let mut output = Vec::new();
         {
@@ -523,18 +551,35 @@ impl DocxEditor {
                 if name == "word/document.xml" {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
-                    let patched = self.apply_all_edits(&xml, comment_id_base)?;
+                    let patched = self.apply_all_edits(&xml, plan.as_ref())?;
                     writer.start_file(&name, opts)?;
                     writer.write_all(patched.as_bytes())?;
-                } else if name == "word/comments.xml" && !self.pending_comments.is_empty() {
+                } else if name == "word/comments.xml" && plan.is_some() {
                     saw_comments_part = true;
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
-                    let patched = merge_comments_xml(&xml, &self.pending_comments, comment_id_base);
+                    let patched =
+                        patch_comments_xml(&xml, &self.pending_comments, plan.as_ref().unwrap());
+                    writer.start_file(&name, opts)?;
+                    writer.write_all(patched.as_bytes())?;
+                } else if name == "word/commentsExtended.xml" && plan.is_some() {
+                    saw_ext_part = true;
+                    let mut xml = String::new();
+                    entry.read_to_string(&mut xml)?;
+                    let patched =
+                        patch_comments_ext_xml(&xml, &self.pending_comments, plan.as_ref().unwrap());
+                    writer.start_file(&name, opts)?;
+                    writer.write_all(patched.as_bytes())?;
+                } else if name == "word/commentsIds.xml"
+                    && plan.as_ref().is_some_and(|p| !p.removed_para_ids.is_empty())
+                {
+                    let mut xml = String::new();
+                    entry.read_to_string(&mut xml)?;
+                    let patched = patch_comments_ids_xml(&xml, plan.as_ref().unwrap());
                     writer.start_file(&name, opts)?;
                     writer.write_all(patched.as_bytes())?;
                 } else if name == "word/_rels/document.xml.rels"
-                    && (!self.pending_images.is_empty() || !self.pending_comments.is_empty())
+                    && (!self.pending_images.is_empty() || has_comment_work)
                 {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
@@ -542,7 +587,7 @@ impl DocxEditor {
                     writer.start_file(&name, opts)?;
                     writer.write_all(patched.as_bytes())?;
                 } else if name == "[Content_Types].xml"
-                    && (!self.pending_images.is_empty() || !self.pending_comments.is_empty())
+                    && (!self.pending_images.is_empty() || has_comment_work)
                 {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
@@ -559,12 +604,23 @@ impl DocxEditor {
                 }
             }
 
-            // The document had no comments part yet: create it.
-            if !self.pending_comments.is_empty() && !saw_comments_part {
-                writer.start_file("word/comments.xml", opts)?;
-                writer.write_all(
-                    build_comments_xml(&self.pending_comments, comment_id_base).as_bytes(),
-                )?;
+            if let Some(plan) = &plan {
+                // The document had no comments part yet: create it.
+                if !self.pending_comments.is_empty() && !saw_comments_part {
+                    writer.start_file("word/comments.xml", opts)?;
+                    writer.write_all(
+                        build_comments_xml(&self.pending_comments, plan).as_bytes(),
+                    )?;
+                }
+                // Threading + resolved state live in commentsExtended.xml.
+                if (!self.pending_comments.is_empty() || !self.pending_resolves.is_empty())
+                    && !saw_ext_part
+                {
+                    writer.start_file("word/commentsExtended.xml", opts)?;
+                    writer.write_all(
+                        build_comments_ext_xml(&self.pending_comments, plan).as_bytes(),
+                    )?;
+                }
             }
 
             // Add image files to ZIP
@@ -580,28 +636,108 @@ impl DocxEditor {
         Ok(output)
     }
 
-    /// Smallest unused numeric w:id for a new comment (existing comments.xml
-    /// ids are scanned; a missing part starts at 0).
-    fn next_comment_id(&self) -> Result<u64, ParseError> {
-        let cursor = Cursor::new(&self.original_data);
-        let mut archive = ZipArchive::new(cursor)?;
+    /// Everything the comment work needs, computed against the ORIGINAL parts:
+    /// the next free w:id, fresh unique w14:paraId values for each new comment
+    /// paragraph, and the paraIds of the comments queued for removal.
+    fn comment_plan(&self) -> Result<CommentPlan, ParseError> {
+        let comments_xml = self.read_original_part("word/comments.xml")?;
+        let ext_xml = self.read_original_part("word/commentsExtended.xml")?;
+        let document_xml = self.read_original_part("word/document.xml")?;
+
+        // Next free numeric w:id
         let mut max_id: i64 = -1;
-        if let Ok(mut entry) = archive.by_name("word/comments.xml") {
-            let mut xml = String::new();
-            entry.read_to_string(&mut xml)?;
+        if let Some(xml) = &comments_xml {
             let mut rest = xml.as_str();
             while let Some(p) = rest.find("w:id=\"") {
                 rest = &rest[p + 6..];
                 if let Some(q) = rest.find('"') {
                     if let Ok(v) = rest[..q].parse::<i64>() {
-                        if v > max_id {
-                            max_id = v;
-                        }
+                        max_id = max_id.max(v);
                     }
                 }
             }
         }
-        Ok((max_id + 1) as u64)
+
+        // Existing paraIds anywhere (body paragraphs + comment parts)
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for xml in [&comments_xml, &ext_xml, &document_xml] {
+            if let Some(xml) = xml {
+                let mut rest = xml.as_str();
+                while let Some(p) = rest.find("paraId=\"") {
+                    rest = &rest[p + 8..];
+                    if let Some(q) = rest.find('"') {
+                        used.insert(rest[..q].to_ascii_uppercase());
+                        rest = &rest[q..];
+                    }
+                }
+            }
+        }
+        let mut counter: u32 = 0x60A0_0001;
+        let mut fresh = || {
+            loop {
+                let cand = format!("{:08X}", counter);
+                counter += 1;
+                if !used.contains(&cand) {
+                    used.insert(cand.clone());
+                    return cand;
+                }
+            }
+        };
+        let para_ids: Vec<Vec<String>> = self
+            .pending_comments
+            .iter()
+            .map(|c| c.text.split('\n').map(|_| fresh()).collect())
+            .collect();
+
+        // paraIds of the comments being removed (for the extended/ids parts)
+        let mut removed_para_ids = Vec::new();
+        if let (Some(xml), false) = (&comments_xml, self.pending_comment_removals.is_empty()) {
+            let mut i = 0usize;
+            while let Some(p) = xml[i..].find("<w:comment ") {
+                let s = i + p;
+                let Some(gt_rel) = xml[s..].find('>') else { break };
+                let tag = &xml[s..s + gt_rel + 1];
+                let end = xml[s..]
+                    .find("</w:comment>")
+                    .map(|e| s + e + "</w:comment>".len())
+                    .unwrap_or(s + gt_rel + 1);
+                let id = attr_value(tag, "w:id");
+                if let Some(id) = id {
+                    if self.pending_comment_removals.iter().any(|r| r == &id) {
+                        let body = &xml[s..end];
+                        let mut rest = body;
+                        while let Some(p2) = rest.find("paraId=\"") {
+                            rest = &rest[p2 + 8..];
+                            if let Some(q) = rest.find('"') {
+                                removed_para_ids.push(rest[..q].to_string());
+                                rest = &rest[q..];
+                            }
+                        }
+                    }
+                }
+                i = end;
+            }
+        }
+
+        Ok(CommentPlan {
+            id_base: (max_id + 1) as u64,
+            para_ids,
+            removed_ids: self.pending_comment_removals.clone(),
+            removed_para_ids,
+            resolves: self.pending_resolves.clone(),
+        })
+    }
+
+    fn read_original_part(&self, name: &str) -> Result<Option<String>, ParseError> {
+        let cursor = Cursor::new(&self.original_data);
+        let mut archive = ZipArchive::new(cursor)?;
+        let mut result = None;
+        if let Ok(mut entry) = archive.by_name(name) {
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            result = Some(xml);
+        }
+        Ok(result)
     }
 
     /// Copy archive unchanged (no edits).
@@ -630,7 +766,7 @@ impl DocxEditor {
     // Core: apply all edits to document.xml
     // -----------------------------------------------------------------------
 
-    fn apply_all_edits(&self, xml: &str, comment_id_base: u64) -> Result<String, ParseError> {
+    fn apply_all_edits(&self, xml: &str, plan: Option<&CommentPlan>) -> Result<String, ParseError> {
         // 1. Split XML into: preamble, body segments, postamble
         let (preamble, mut segments, postamble) = split_body(xml)?;
 
@@ -901,30 +1037,42 @@ impl DocxEditor {
             }
         }
 
-        // 5.5 Comment range markers (applied AFTER structural edits, so the
-        // paragraph indexes refer to the final document the user sees)
-        if !self.pending_comments.is_empty() {
-            let mut final_para_indices: Vec<usize> = Vec::new();
-            for (i, seg) in segments.iter().enumerate() {
-                if matches!(seg, BodySegment::Paragraph(_)) {
-                    final_para_indices.push(i);
+        // 5.5 Comment work (applied AFTER structural edits, so the paragraph
+        // indexes refer to the final document the user sees)
+        if let Some(plan) = plan {
+            // Deletions: strip range markers + reference runs everywhere
+            if !plan.removed_ids.is_empty() {
+                for seg in segments.iter_mut() {
+                    if let BodySegment::Paragraph(x) | BodySegment::Table(x) = seg {
+                        for id in &plan.removed_ids {
+                            *x = strip_comment_markers(x, id);
+                        }
+                    }
                 }
             }
-            let mut by_para: HashMap<usize, Vec<(usize, &NewComment)>> = HashMap::new();
-            for (ci, c) in self.pending_comments.iter().enumerate() {
-                by_para.entry(c.paragraph_index).or_default().push((ci, c));
-            }
-            for (pidx, mut list) in by_para {
-                let Some(&seg_idx) = final_para_indices.get(pidx) else { continue };
-                if let BodySegment::Paragraph(para_xml) = &segments[seg_idx] {
-                    let mut patched = para_xml.clone();
-                    // later ranges first so earlier byte positions stay valid
-                    list.sort_by(|a, b| b.1.char_start.cmp(&a.1.char_start));
-                    for (ci, c) in list {
-                        let id = comment_id_base + ci as u64;
-                        patched = insert_comment_markers(&patched, id, c.char_start, c.char_end);
+            if !self.pending_comments.is_empty() {
+                let mut final_para_indices: Vec<usize> = Vec::new();
+                for (i, seg) in segments.iter().enumerate() {
+                    if matches!(seg, BodySegment::Paragraph(_)) {
+                        final_para_indices.push(i);
                     }
-                    segments[seg_idx] = BodySegment::Paragraph(patched);
+                }
+                let mut by_para: HashMap<usize, Vec<(usize, &NewComment)>> = HashMap::new();
+                for (ci, c) in self.pending_comments.iter().enumerate() {
+                    by_para.entry(c.paragraph_index).or_default().push((ci, c));
+                }
+                for (pidx, mut list) in by_para {
+                    let Some(&seg_idx) = final_para_indices.get(pidx) else { continue };
+                    if let BodySegment::Paragraph(para_xml) = &segments[seg_idx] {
+                        let mut patched = para_xml.clone();
+                        // later ranges first so earlier byte positions stay valid
+                        list.sort_by(|a, b| b.1.char_start.cmp(&a.1.char_start));
+                        for (ci, c) in list {
+                            let id = plan.id_base + ci as u64;
+                            patched = insert_comment_markers(&patched, id, c.char_start, c.char_end);
+                        }
+                        segments[seg_idx] = BodySegment::Paragraph(patched);
+                    }
                 }
             }
         }
@@ -952,11 +1100,16 @@ impl DocxEditor {
                 img.rel_id, img.filename
             ));
         }
-        if !self.pending_comments.is_empty()
-            && !xml.contains("officeDocument/2006/relationships/comments")
-        {
+        let comment_work =
+            !self.pending_comments.is_empty() || !self.pending_resolves.is_empty();
+        if comment_work && !xml.contains("officeDocument/2006/relationships/comments") {
             additions.push_str(
                 r#"<Relationship Id="rIdOxiComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+            );
+        }
+        if comment_work && !xml.contains("2011/relationships/commentsExtended") {
+            additions.push_str(
+                r#"<Relationship Id="rIdOxiCommentsEx" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>"#,
             );
         }
         xml.replace(insert_before, &format!("{}{}", additions, insert_before))
@@ -995,10 +1148,18 @@ impl DocxEditor {
                 );
             }
         }
-        if !self.pending_comments.is_empty() && !result.contains("/word/comments.xml") {
+        let comment_work =
+            !self.pending_comments.is_empty() || !self.pending_resolves.is_empty();
+        if comment_work && !result.contains("/word/comments.xml") {
             result = result.replace(
                 "</Types>",
                 r#"<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>"#,
+            );
+        }
+        if comment_work && !result.contains("/word/commentsExtended.xml") {
+            result = result.replace(
+                "</Types>",
+                r#"<Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/></Types>"#,
             );
         }
         result
@@ -2471,14 +2632,34 @@ fn local_name(name: &[u8]) -> String {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// Comment writing (word/comments.xml + range markers in document.xml)
+// Comment writing (comments.xml + commentsExtended.xml + document.xml markers)
 // ---------------------------------------------------------------------------
 
-/// The `<w:comment>` entries for a batch of new comments.
-fn comments_entries_xml(comments: &[NewComment], id_base: u64) -> String {
+/// Precomputed comment work for one save: fresh ids, fresh w14:paraId values
+/// (one per body paragraph of each new comment), and the removal targets.
+struct CommentPlan {
+    id_base: u64,
+    para_ids: Vec<Vec<String>>,
+    removed_ids: Vec<String>,
+    removed_para_ids: Vec<String>,
+    resolves: Vec<(String, bool)>,
+}
+
+fn attr_value(tag: &str, name: &str) -> Option<String> {
+    let needle = format!("{}=\"", name);
+    let p = tag.find(&needle)?;
+    let rest = &tag[p + needle.len()..];
+    let q = rest.find('"')?;
+    Some(rest[..q].to_string())
+}
+
+/// The `<w:comment>` entries for a batch of new comments. Every body paragraph
+/// carries a fresh w14:paraId; the LAST one is the commentsExtended join key
+/// (MS-DOCX w15 keys threads by the comment's last paragraph).
+fn comments_entries_xml(comments: &[NewComment], plan: &CommentPlan) -> String {
     let mut out = String::new();
     for (i, c) in comments.iter().enumerate() {
-        let id = id_base + i as u64;
+        let id = plan.id_base + i as u64;
         out.push_str(&format!(
             "<w:comment w:id=\"{}\" w:author=\"{}\" w:date=\"{}\" w:initials=\"{}\">",
             id,
@@ -2486,8 +2667,11 @@ fn comments_entries_xml(comments: &[NewComment], id_base: u64) -> String {
             escape_xml(&c.date),
             escape_xml(&c.initials)
         ));
-        for para in c.text.split('\n') {
-            out.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+        for (pi, para) in c.text.split('\n').enumerate() {
+            out.push_str(&format!(
+                "<w:p w14:paraId=\"{}\"><w:r><w:t xml:space=\"preserve\">",
+                plan.para_ids[i][pi]
+            ));
             out.push_str(&escape_xml(para));
             out.push_str("</w:t></w:r></w:p>");
         }
@@ -2496,21 +2680,205 @@ fn comments_entries_xml(comments: &[NewComment], id_base: u64) -> String {
     out
 }
 
-fn build_comments_xml(comments: &[NewComment], id_base: u64) -> String {
+fn build_comments_xml(comments: &[NewComment], plan: &CommentPlan) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w:comments xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{}</w:comments>",
-        comments_entries_xml(comments, id_base)
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w:comments xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\">{}</w:comments>",
+        comments_entries_xml(comments, plan)
     )
 }
 
-fn merge_comments_xml(existing: &str, comments: &[NewComment], id_base: u64) -> String {
-    if let Some(p) = existing.rfind("</w:comments>") {
-        let mut s = existing.to_string();
-        s.insert_str(p, &comments_entries_xml(comments, id_base));
-        s
+fn patch_comments_xml(existing: &str, comments: &[NewComment], plan: &CommentPlan) -> String {
+    let mut xml = if plan.removed_ids.is_empty() {
+        existing.to_string()
     } else {
-        build_comments_xml(comments, id_base)
+        remove_comment_blocks(existing, &plan.removed_ids)
+    };
+    if comments.is_empty() {
+        return xml;
     }
+    // the added entries use w14:paraId — the root must declare the prefix
+    if !xml.contains("xmlns:w14") {
+        if let Some(p) = xml.find("<w:comments") {
+            if let Some(gt) = xml[p..].find('>') {
+                xml.insert_str(
+                    p + gt,
+                    " xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"",
+                );
+            }
+        }
+    }
+    if let Some(p) = xml.rfind("</w:comments>") {
+        xml.insert_str(p, &comments_entries_xml(comments, plan));
+        xml
+    } else {
+        build_comments_xml(comments, plan)
+    }
+}
+
+fn remove_comment_blocks(xml: &str, ids: &[String]) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut i = 0usize;
+    while let Some(p) = xml[i..].find("<w:comment ") {
+        let s = i + p;
+        let Some(gt_rel) = xml[s..].find('>') else { break };
+        let tag_end = s + gt_rel + 1;
+        let end = xml[s..]
+            .find("</w:comment>")
+            .map(|e| s + e + "</w:comment>".len())
+            .unwrap_or(tag_end);
+        let tag = &xml[s..tag_end];
+        let remove = attr_value(tag, "w:id").is_some_and(|id| ids.iter().any(|r| r == &id));
+        out.push_str(&xml[i..s]);
+        if !remove {
+            out.push_str(&xml[s..end]);
+        }
+        i = end;
+    }
+    out.push_str(&xml[i..]);
+    out
+}
+
+/// commentsExtended entries for the new comments (thread parents + done flag).
+fn comment_ext_entries_xml(comments: &[NewComment], plan: &CommentPlan) -> String {
+    let mut out = String::new();
+    for (i, c) in comments.iter().enumerate() {
+        let Some(pid) = plan.para_ids[i].last() else { continue };
+        let parent = c
+            .parent_index
+            .and_then(|pi| plan.para_ids.get(pi))
+            .and_then(|v| v.last())
+            .cloned()
+            .or_else(|| c.parent_para_id.clone());
+        out.push_str(&format!("<w15:commentEx w15:paraId=\"{}\"", pid));
+        if let Some(pp) = parent {
+            out.push_str(&format!(" w15:paraIdParent=\"{}\"", escape_xml(&pp)));
+        }
+        out.push_str(&format!(" w15:done=\"{}\"/>", if c.resolved { 1 } else { 0 }));
+    }
+    out
+}
+
+fn build_comments_ext_xml(comments: &[NewComment], plan: &CommentPlan) -> String {
+    let mut body = comment_ext_entries_xml(comments, plan);
+    for (pid, done) in &plan.resolves {
+        body.push_str(&format!(
+            "<w15:commentEx w15:paraId=\"{}\" w15:done=\"{}\"/>",
+            escape_xml(pid),
+            if *done { 1 } else { 0 }
+        ));
+    }
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w15:commentsEx xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\">{}</w15:commentsEx>",
+        body
+    )
+}
+
+fn patch_comments_ext_xml(existing: &str, comments: &[NewComment], plan: &CommentPlan) -> String {
+    let mut xml = existing.to_string();
+    for pid in &plan.removed_para_ids {
+        xml = remove_selfclosing_entries(&xml, "<w15:commentEx", "w15:paraId", pid);
+    }
+    let mut to_append = String::new();
+    for (pid, done) in &plan.resolves {
+        if let Some((s, e)) = find_entry(&xml, "<w15:commentEx", "w15:paraId", pid) {
+            let updated = set_attr(&xml[s..e], "w15:done", if *done { "1" } else { "0" });
+            xml.replace_range(s..e, &updated);
+        } else {
+            to_append.push_str(&format!(
+                "<w15:commentEx w15:paraId=\"{}\" w15:done=\"{}\"/>",
+                escape_xml(pid),
+                if *done { 1 } else { 0 }
+            ));
+        }
+    }
+    to_append.push_str(&comment_ext_entries_xml(comments, plan));
+    if let Some(p) = xml.rfind("</w15:commentsEx>") {
+        xml.insert_str(p, &to_append);
+        xml
+    } else {
+        build_comments_ext_xml(comments, plan)
+    }
+}
+
+fn patch_comments_ids_xml(xml: &str, plan: &CommentPlan) -> String {
+    let mut out = xml.to_string();
+    for pid in &plan.removed_para_ids {
+        out = remove_selfclosing_entries(&out, "<w16cid:commentId", "w16cid:paraId", pid);
+    }
+    out
+}
+
+/// Byte range of the OPEN TAG of the first `tag` element carrying attr="value".
+fn find_entry(xml: &str, tag: &str, attr: &str, value: &str) -> Option<(usize, usize)> {
+    let needle = format!("{}=\"{}\"", attr, value);
+    let mut i = 0usize;
+    while let Some(p) = xml[i..].find(tag) {
+        let s = i + p;
+        let gt = s + xml[s..].find('>')?;
+        if xml[s..=gt].contains(&needle) {
+            return Some((s, gt + 1));
+        }
+        i = gt + 1;
+    }
+    None
+}
+
+fn remove_selfclosing_entries(xml: &str, tag: &str, attr: &str, value: &str) -> String {
+    let mut out = xml.to_string();
+    while let Some((s, e)) = find_entry(&out, tag, attr, value) {
+        out.replace_range(s..e, "");
+    }
+    out
+}
+
+fn set_attr(entry: &str, attr: &str, value: &str) -> String {
+    let needle = format!("{}=\"", attr);
+    if let Some(p) = entry.find(&needle) {
+        let vs = p + needle.len();
+        if let Some(q) = entry[vs..].find('"') {
+            let mut s = entry.to_string();
+            s.replace_range(vs..vs + q, value);
+            return s;
+        }
+    }
+    let insert_at = entry.rfind("/>").unwrap_or(entry.len().saturating_sub(1));
+    let mut s = entry.to_string();
+    s.insert_str(insert_at, &format!(" {}=\"{}\"", attr, value));
+    s
+}
+
+/// Remove one comment's range markers and reference run from a body fragment.
+fn strip_comment_markers(xml: &str, id: &str) -> String {
+    let mut out = xml.to_string();
+    for tag in ["<w:commentRangeStart", "<w:commentRangeEnd"] {
+        while let Some((s, e)) = find_entry(&out, tag, "w:id", id) {
+            out.replace_range(s..e, "");
+        }
+    }
+    while let Some((ts, te)) = find_entry(&out, "<w:commentReference", "w:id", id) {
+        let run_start = valid_run_start_before(&out, ts);
+        let run_end = out[te..].find("</w:r>").map(|p| te + p + "</w:r>".len());
+        if let (Some(rs), Some(re)) = (run_start, run_end) {
+            out.replace_range(rs..re, "");
+        } else {
+            out.replace_range(ts..te, "");
+        }
+    }
+    out
+}
+
+fn valid_run_start_before(xml: &str, pos: usize) -> Option<usize> {
+    let mut best = None;
+    let mut i = 0usize;
+    while let Some(p) = xml[i..pos].find("<w:r") {
+        let s = i + p;
+        let next = xml[s + 4..].chars().next();
+        if next == Some('>') || next == Some(' ') {
+            best = Some(s);
+        }
+        i = s + 4;
+    }
+    best
 }
 
 /// A `<w:r>…</w:r>` span inside one paragraph's XML.
@@ -2685,7 +3053,17 @@ fn byte_pos_for(xml: &str, runs: &[RunSpan], k: usize, prefer_end: bool) -> usiz
     let mut last_end: Option<usize> = None;
     for r in runs {
         if k <= cum {
-            return if prefer_end { last_end.unwrap_or(r.start) } else { r.start };
+            if prefer_end {
+                // Walk past zero-length runs (commentReference runs of earlier
+                // comments etc.): Word's reply convention closes a reply's
+                // range AFTER the parent's reference run.
+                if r.text_len == 0 {
+                    last_end = Some(r.end);
+                    continue;
+                }
+                return last_end.unwrap_or(r.start);
+            }
+            return r.start;
         }
         if k < cum + r.text_len {
             // mid-run and unsplittable: widen outward
@@ -2735,15 +3113,33 @@ mod tests {
                 paragraph_index: 0,
                 char_start: 3,
                 char_end: 8,
+                resolved: true,
+                parent_index: None,
+                parent_para_id: None,
             },
             NewComment {
                 author: "Bob".into(),
                 initials: "B".into(),
                 date: "2026-07-19T03:01:00Z".into(),
+                text: "Reply from Bob".into(),
+                paragraph_index: 0,
+                char_start: 3,
+                char_end: 8,
+                resolved: false,
+                parent_index: Some(0),
+                parent_para_id: None,
+            },
+            NewComment {
+                author: "Carol".into(),
+                initials: "C".into(),
+                date: "2026-07-19T03:02:00Z".into(),
                 text: "Second comment\nwith two paragraphs".into(),
                 paragraph_index: 1,
                 char_start: 0,
                 char_end: 5,
+                resolved: false,
+                parent_index: None,
+                parent_para_id: None,
             },
         ]);
         let saved = editor.save().expect("should save");
@@ -2764,6 +3160,9 @@ mod tests {
             paragraph_index: 0,
             char_start: 3,
             char_end: 8,
+            resolved: false,
+            parent_index: None,
+            parent_para_id: None,
         }]);
 
         let saved = editor.save().expect("should save");
@@ -2782,6 +3181,70 @@ mod tests {
             assert_eq!(ends, 1, "one range end in the paragraph");
             let full: String = p.runs.iter().map(|r| r.text.as_str()).collect();
             assert_eq!(full, "Oxidocs Test Document", "run split must not alter text");
+        } else {
+            panic!("expected paragraph");
+        }
+    }
+
+    #[test]
+    fn test_comment_thread_resolve_and_removal() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.docx");
+        let mut editor = DocxEditor::new(data).expect("open");
+        editor.add_comments(vec![
+            NewComment {
+                author: "Alice".into(),
+                initials: "A".into(),
+                date: "2026-07-19T00:00:00Z".into(),
+                text: "parent".into(),
+                paragraph_index: 0,
+                char_start: 0,
+                char_end: 7,
+                resolved: true,
+                parent_index: None,
+                parent_para_id: None,
+            },
+            NewComment {
+                author: "Bob".into(),
+                initials: "B".into(),
+                date: "2026-07-19T00:01:00Z".into(),
+                text: "reply".into(),
+                paragraph_index: 0,
+                char_start: 0,
+                char_end: 7,
+                resolved: false,
+                parent_index: Some(0),
+                parent_para_id: None,
+            },
+        ]);
+        let saved = editor.save().expect("save");
+        let doc = parse_docx(&saved).expect("parse");
+        assert_eq!(doc.comments.len(), 2);
+        let parent = doc.comments.iter().find(|c| c.author.as_deref() == Some("Alice")).unwrap();
+        let reply = doc.comments.iter().find(|c| c.author.as_deref() == Some("Bob")).unwrap();
+        assert!(parent.resolved, "w15:done round-trips");
+        assert!(parent.para_id.is_some(), "paraId assigned");
+        assert_eq!(reply.parent_para_id, parent.para_id, "thread link via paraId");
+
+        // Flip the resolved state of an existing comment in place.
+        let mut editor3 = DocxEditor::new(&saved).expect("open for resolve");
+        editor3.set_comments_resolved(vec![(parent.para_id.clone().unwrap(), false)]);
+        let saved3 = editor3.save().expect("save resolve");
+        let doc3 = parse_docx(&saved3).expect("parse resolve");
+        let p3 = doc3.comments.iter().find(|c| c.author.as_deref() == Some("Alice")).unwrap();
+        assert!(!p3.resolved, "w15:done updated in place");
+
+        // Remove the whole thread from the saved file.
+        let mut editor2 = DocxEditor::new(&saved).expect("open for removal");
+        editor2.remove_comments(vec![parent.id.clone(), reply.id.clone()]);
+        let saved2 = editor2.save().expect("save removal");
+        let doc2 = parse_docx(&saved2).expect("parse removal");
+        assert_eq!(doc2.comments.len(), 0, "comments.xml entries removed");
+        if let crate::ir::Block::Paragraph(p) = &doc2.pages[0].blocks[0] {
+            let starts: usize = p.runs.iter().map(|r| r.comment_range_start.len()).sum();
+            let ends: usize = p.runs.iter().map(|r| r.comment_range_end.len()).sum();
+            assert_eq!(starts + ends, 0, "markers removed from document.xml");
+            let full: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            assert_eq!(full, "Oxidocs Test Document");
         } else {
             panic!("expected paragraph");
         }

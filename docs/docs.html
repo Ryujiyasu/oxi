@@ -566,7 +566,7 @@ function applyI18n() {
   });
 }
 
-import init, { create_blank_docx, parse_document, layout_document, docx_to_pdf, build_docx, build_docx_with_template, edit_docx_advanced, set_docx_comments } from './oxidocs_wasm.js';
+import init, { create_blank_docx, parse_document, layout_document, docx_to_pdf, build_docx, build_docx_with_template, edit_docx_advanced, update_docx_comments } from './oxidocs_wasm.js';
 await init();
 
 const editor = document.getElementById('editor');
@@ -1215,7 +1215,7 @@ $('btnDropdown').addEventListener('click', () => {
 });
 
 // ---- Comments: Word-style markup rail on the right of the page ----
-const CMT = { list: [], seq: 0 };
+const CMT = { list: [], seq: 0, removedFileIds: [] };
 const cmtPage = document.getElementById('page1');
 let cmtRail = null;
 function ensureRail() {
@@ -1345,6 +1345,11 @@ function buildCard(c, activeId) {
 }
 
 function deleteComment(id) {
+  const gone = cmtData(id);
+  if (gone && gone.fromFile) {
+    CMT.removedFileIds.push(gone.id.slice(1));
+    for (const rp of gone.replies) if (rp._cid) CMT.removedFileIds.push(rp._cid.slice(1));
+  }
   for (const a of editor.querySelectorAll('mark.oxi-cmt[data-cid="' + id + '"]')) unwrapAnchor(a);
   const i = CMT.list.findIndex(c => c.id === id);
   if (i >= 0) CMT.list.splice(i, 1);
@@ -1461,31 +1466,81 @@ function paraCharOffsets(block, markEl) {
   return [start, start + markEl.textContent.length];
 }
 
-// Write the session's comments into the docx produced by syncDocxCore.
-// Replies become further comments on the same range (Word shows them stacked).
+// Body paragraph index of a block (docx convention: paragraphs only).
+function bodyParaIndexOf(block) {
+  let pIdx = 0;
+  for (const sib of editor.children) {
+    if (sib === block) return pIdx;
+    if (sib.tagName !== 'TABLE') pIdx++;
+  }
+  return -1;
+}
+
+// The character range a comment's anchor marks cover within their block.
+function anchorRangeOf(c) {
+  const marks = editor.querySelectorAll('mark.oxi-cmt[data-cid="' + c.id + '"]');
+  if (!marks.length) return null;
+  const first = marks[0];
+  const last = marks[marks.length - 1];
+  const block = first.closest('#editor > *');
+  if (!block || block.tagName === 'TABLE') return null;
+  const [cs] = paraCharOffsets(block, first);
+  if (last === first || last.closest('#editor > *') !== block) {
+    return { block, cs, ce: cs + first.textContent.length };
+  }
+  const [ls] = paraCharOffsets(block, last);
+  return { block, cs, ce: ls + last.textContent.length };
+}
+
+// Write the session's comment work into the docx produced by syncDocxCore:
+// new comments (threads via parent_index / parent_para_id), replies to file
+// comments, deletions of file comments, and resolved-state changes.
 function applyNewCommentsToDocx() {
   try {
-    if (!currentDocx || !CMT.list.length) return;
-    const specs = [];
+    if (!currentDocx) return;
+    const ops = { add: [], remove_ids: CMT.removedFileIds.slice(), set_resolved: [] };
+    const date = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
     for (const c of CMT.list) {
-      if (c.fromFile || c.draft || !c.text) continue;
-      const a = anchorOf(c.id);
-      if (!a) continue;
-      const block = a.closest('#editor > *');
-      if (!block || block.tagName === 'TABLE') continue;
-      let pIdx = 0;
-      for (const sib of editor.children) {
-        if (sib === block) break;
-        if (sib.tagName !== 'TABLE') pIdx++;
+      if (c.draft) continue;
+      if (c.fromFile) {
+        if (c._paraId && c.resolved !== c._origResolved) {
+          ops.set_resolved.push({ para_id: c._paraId, done: c.resolved });
+        }
+        const range = anchorRangeOf(c);
+        for (const rp of c.replies) {
+          if (rp._cid || !range) continue; // only replies added this session
+          const pIdx = bodyParaIndexOf(range.block);
+          if (pIdx < 0) continue;
+          ops.add.push({
+            author: rp.author || t('cmtYou'), text: rp.text, date,
+            paragraph_index: pIdx, char_start: range.cs, char_end: range.ce,
+            resolved: false, parent_para_id: c._paraId || null,
+          });
+        }
+        continue;
       }
-      const [cs, ce] = paraCharOffsets(block, a);
-      const date = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-      specs.push({ author: c.author || t('cmtYou'), text: c.text, date, paragraph_index: pIdx, char_start: cs, char_end: ce });
+      if (!c.text) continue;
+      const range = anchorRangeOf(c);
+      if (!range) continue;
+      const pIdx = bodyParaIndexOf(range.block);
+      if (pIdx < 0) continue;
+      const parentIdx = ops.add.length;
+      ops.add.push({
+        author: c.author || t('cmtYou'), text: c.text, date,
+        paragraph_index: pIdx, char_start: range.cs, char_end: range.ce,
+        resolved: !!c.resolved,
+      });
       for (const rp of c.replies) {
-        specs.push({ author: rp.author || t('cmtYou'), text: rp.text, date, paragraph_index: pIdx, char_start: cs, char_end: ce });
+        ops.add.push({
+          author: rp.author || t('cmtYou'), text: rp.text, date,
+          paragraph_index: pIdx, char_start: range.cs, char_end: range.ce,
+          resolved: false, parent_index: parentIdx,
+        });
       }
     }
-    if (specs.length) currentDocx = new Uint8Array(set_docx_comments(currentDocx, specs));
+    if (ops.add.length || ops.remove_ids.length || ops.set_resolved.length) {
+      currentDocx = new Uint8Array(update_docx_comments(currentDocx, ops));
+    }
   } catch (e) { console.error('comment save failed:', e); }
 }
 
@@ -1493,6 +1548,7 @@ function applyNewCommentsToDocx() {
 function seedCommentsFromDoc(doc) {
   CMT.list = [];
   CMT.seq = 0;
+  CMT.removedFileIds = [];
   const byParaId = {};
   const entries = [];
   for (const c of (doc.comments || [])) {
@@ -1503,6 +1559,7 @@ function seedCommentsFromDoc(doc) {
       time: (c.date || '').replace('T', ' ').slice(0, 16),
       text,
       resolved: !!c.resolved,
+      _origResolved: !!c.resolved,
       replies: [],
       draft: false,
       fromFile: true,

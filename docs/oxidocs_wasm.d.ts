@@ -85,12 +85,22 @@ export function layout_document(data: Uint8Array): any;
 export function parse_document(data: Uint8Array): any;
 
 /**
- * Write comments into a .docx: entries in word/comments.xml plus
- * commentRangeStart/End + commentReference markers in document.xml.
- * `comments` is an array of { author, initials?, date?, text,
- * paragraph_index, char_start, char_end }.
+ * Write comments into a .docx (adds only). See `update_docx_comments` for
+ * the full operation set (add + remove + resolve).
  */
 export function set_docx_comments(data: Uint8Array, comments: any): Uint8Array;
+
+/**
+ * Apply a batch of comment operations to a .docx:
+ * { add: [ { author, initials?, date?, text, paragraph_index, char_start,
+ *            char_end, resolved?, parent_index?, parent_para_id? } ],
+ *   remove_ids: [ "w:id", … ],
+ *   set_resolved: [ { para_id, done } ] }
+ * Adds write word/comments.xml + commentsExtended.xml (threads via
+ * paraIdParent, resolved via w15:done) and range markers in document.xml;
+ * removals strip all three.
+ */
+export function update_docx_comments(data: Uint8Array, ops: any): Uint8Array;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -106,6 +116,7 @@ export interface InitOutput {
     readonly layout_document: (a: number, b: number) => [number, number, number];
     readonly parse_document: (a: number, b: number) => [number, number, number];
     readonly set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
+    readonly update_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
     readonly init: () => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

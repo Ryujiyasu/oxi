@@ -257,22 +257,48 @@ pub fn edit_docx_advanced(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsErro
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Write comments into a .docx: entries in word/comments.xml plus
-/// commentRangeStart/End + commentReference markers in document.xml.
-/// `comments` is an array of { author, initials?, date?, text,
-/// paragraph_index, char_start, char_end }.
+/// Write comments into a .docx (adds only). See `update_docx_comments` for
+/// the full operation set (add + remove + resolve).
 #[wasm_bindgen]
 pub fn set_docx_comments(data: &[u8], comments: JsValue) -> Result<Vec<u8>, JsError> {
     let specs: Vec<JsNewComment> = serde_wasm_bindgen::from_value(comments)
         .map_err(|e| JsError::new(&e.to_string()))?;
-    if specs.is_empty() {
+    apply_comment_ops(data, specs, Vec::new(), Vec::new())
+}
+
+/// Apply a batch of comment operations to a .docx:
+/// { add: [ { author, initials?, date?, text, paragraph_index, char_start,
+///            char_end, resolved?, parent_index?, parent_para_id? } ],
+///   remove_ids: [ "w:id", … ],
+///   set_resolved: [ { para_id, done } ] }
+/// Adds write word/comments.xml + commentsExtended.xml (threads via
+/// paraIdParent, resolved via w15:done) and range markers in document.xml;
+/// removals strip all three.
+#[wasm_bindgen]
+pub fn update_docx_comments(data: &[u8], ops: JsValue) -> Result<Vec<u8>, JsError> {
+    let ops: JsCommentOps = serde_wasm_bindgen::from_value(ops)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    apply_comment_ops(
+        data,
+        ops.add.unwrap_or_default(),
+        ops.remove_ids.unwrap_or_default(),
+        ops.set_resolved.unwrap_or_default(),
+    )
+}
+
+fn apply_comment_ops(
+    data: &[u8],
+    add: Vec<JsNewComment>,
+    remove_ids: Vec<String>,
+    set_resolved: Vec<JsResolveOp>,
+) -> Result<Vec<u8>, JsError> {
+    if add.is_empty() && remove_ids.is_empty() && set_resolved.is_empty() {
         return Ok(data.to_vec());
     }
     let mut editor = oxidocs_core::DocxEditor::new(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
     editor.add_comments(
-        specs
-            .into_iter()
+        add.into_iter()
             .map(|s| {
                 let initials = s.initials.unwrap_or_else(|| {
                     s.author.chars().take(2).collect::<String>().to_uppercase()
@@ -285,10 +311,15 @@ pub fn set_docx_comments(data: &[u8], comments: JsValue) -> Result<Vec<u8>, JsEr
                     paragraph_index: s.paragraph_index,
                     char_start: s.char_start,
                     char_end: s.char_end,
+                    resolved: s.resolved.unwrap_or(false),
+                    parent_index: s.parent_index,
+                    parent_para_id: s.parent_para_id,
                 }
             })
             .collect(),
     );
+    editor.remove_comments(remove_ids);
+    editor.set_comments_resolved(set_resolved.into_iter().map(|r| (r.para_id, r.done)).collect());
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -301,6 +332,22 @@ struct JsNewComment {
     paragraph_index: usize,
     char_start: usize,
     char_end: usize,
+    resolved: Option<bool>,
+    parent_index: Option<usize>,
+    parent_para_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct JsCommentOps {
+    add: Option<Vec<JsNewComment>>,
+    remove_ids: Option<Vec<String>>,
+    set_resolved: Option<Vec<JsResolveOp>>,
+}
+
+#[derive(Deserialize)]
+struct JsResolveOp {
+    para_id: String,
+    done: bool,
 }
 
 #[derive(Deserialize)]
