@@ -1494,6 +1494,16 @@ const PAGE_GAP = 24;
 function paginateEditView() {
   const page1 = document.getElementById('page1');
   if (!page1) return;
+  // Clearing the injected margins shrinks the document for an instant and
+  // the scroll container clamps scrollTop, nudging the view upward when
+  // typing near the bottom. Preserve the scroll across the reflow, then
+  // keep the caret in view if its block hopped to another page.
+  const st = editArea.scrollTop;
+  paginateInner(page1);
+  editArea.scrollTop = st;
+  keepCaretVisible();
+}
+function paginateInner(page1) {
   for (const s of page1.querySelectorAll(':scope > .pg-seam')) s.remove();
   for (const b of editor.querySelectorAll(':scope > .pg-brk')) {
     b.classList.remove('pg-brk');
@@ -1538,6 +1548,22 @@ function paginateEditView() {
     }
   }
   updatePageInfo();
+}
+function keepCaretVisible() {
+  if (document.activeElement !== editor && !editor.contains(document.activeElement)) return;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !editor.contains(sel.anchorNode)) return;
+  let rect = sel.getRangeAt(0).cloneRange().getBoundingClientRect();
+  if (!rect || (rect.top === 0 && rect.bottom === 0)) {
+    const n = sel.anchorNode;
+    const el = n.nodeType === 1 ? n : n.parentElement;
+    if (!el || !el.getBoundingClientRect) return;
+    rect = el.getBoundingClientRect();
+  }
+  const area = editArea.getBoundingClientRect();
+  const pad = 28;
+  if (rect.bottom > area.bottom - pad) editArea.scrollTop += rect.bottom - (area.bottom - pad);
+  else if (rect.top < area.top + pad) editArea.scrollTop -= (area.top + pad) - rect.top;
 }
 function pushBlockTo(b, target) {
   b.classList.add('pg-brk');
