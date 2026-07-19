@@ -4354,6 +4354,19 @@ impl LayoutEngine {
             block_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
+                    // S945 (2026-07-19): an EMPTY section-ending paragraph (in-body
+                    // sectPr carrier) contributes NOTHING — including its style's
+                    // pageBreakBefore/keepNext pre-pushes (NDIS 0043bfe0: an empty
+                    // Heading1+sectPr para's style pageBreakBefore manufactured a
+                    // phantom page before every chapter section). It is the last
+                    // block of its IR page by construction, so skipping the arm's
+                    // trackers is safe.
+                    if std::env::var("OXI_S945_DISABLE").is_err()
+                        && para.style.page_section_break
+                        && para.runs.iter().all(|r| r.text.is_empty())
+                    {
+                        continue;
+                    }
                     // S676 (2026-06-27): drop-cap float. A paragraph whose framePr is
                     // dropCap="drop" is a floating drop cap — Word renders its glyph at
                     // the left, anchored to the FOLLOWING paragraph's top, WITHOUT
@@ -8934,6 +8947,19 @@ impl LayoutEngine {
         // Same skip shape as S673v. Opt-out OXI_S730_DISABLE.
         if std::env::var("OXI_S730_DISABLE").is_err()
             && para.style.continuous_section_break
+            && para.runs.iter().all(|r| r.text.is_empty())
+        {
+            return (Vec::new(), prev_space_after, start_column);
+        }
+        // S945 (2026-07-19, opt-out OXI_S945_DISABLE): an EMPTY paragraph that
+        // ENDS a section (in-body sectPr, any type) renders at zero height —
+        // the section page break follows immediately, so Word never gives it a
+        // page of its own (NDIS technical__0043bfe0 wp41/42: a 16pt empty
+        // section-final para overflowed p41's bottom and manufactured a
+        // phantom page before the nextPage section). Continuous breaks are
+        // already handled by S730 above; this is the non-continuous sibling.
+        if std::env::var("OXI_S945_DISABLE").is_err()
+            && para.style.page_section_break
             && para.runs.iter().all(|r| r.text.is_empty())
         {
             return (Vec::new(), prev_space_after, start_column);
@@ -25313,10 +25339,38 @@ impl LayoutEngine {
         let _snap = para.style.snap_to_grid;
         // COM-confirmed (2026-03-31): table cells inherit Normal style's lineSpacing.
         // Only override with table style if it explicitly defines lineSpacing.
-        let raw_ls = para.style.line_spacing
-            .or_else(|| table_para_style.and_then(|ps| ps.line_spacing));
-        let raw_lr = para.style.line_spacing_rule.as_deref()
-            .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()));
+        // S944 (2026-07-19): mirror the RENDER path's docDefaults-line reset
+        // (mod.rs ~20301 "Word resets docDefaults-only lineSpacing to Single in
+        // table cells") in the ESTIMATE. Without it, a cell para with DIRECT
+        // before/after (has_direct_spacing=true) fell to the raw docDefaults
+        // multiple (line=259/276) here while the render drew it Single — the
+        // estimate became the row floor at the multiple height (NDIS
+        // technical__0043bfe0 RegGroups tables: rows 19.5 vs Word 13.7 =
+        // direct before/after 40/40 + dd line 259; +5.8/row x 41 rows).
+        // The reset applies ONLY when the table style DECLARES a line value
+        // (the _pb_cellsp derivation: dd_decl0 -> reset, dd_nostyle/dd_none ->
+        // docDefaults KEPT — the same declared-side rule as S936; a blanket
+        // reset flipped policies__0008ea8f, whose income table has no
+        // declaration and renders the dd multiple).
+        // in_cell scope (the S906b lesson): this shared estimate also serves
+        // BODY callers (keepNext lookahead, footnote reserves) with
+        // table_para_style=None — the cell reset must not leak there.
+        let s944 = std::env::var("OXI_S944_DISABLE").is_err()
+            && in_cell
+            && para.style.line_spacing_from_doc_defaults
+            && table_para_style.and_then(|ps| ps.line_spacing).is_some();
+        let raw_ls = if s944 {
+            table_para_style.and_then(|ps| ps.line_spacing)
+        } else {
+            para.style.line_spacing
+                .or_else(|| table_para_style.and_then(|ps| ps.line_spacing))
+        };
+        let raw_lr = if s944 {
+            table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref())
+        } else {
+            para.style.line_spacing_rule.as_deref()
+                .or_else(|| table_para_style.and_then(|ps| ps.line_spacing_rule.as_deref()))
+        };
         let style_has_explicit_rule = raw_lr == Some("exact") || raw_lr == Some("atLeast");
         // S855 (2026-07-15): the before/after RESET keys on whether the DIRECT
         // pPr set before/after, NOT on has_direct_spacing. A direct line-only

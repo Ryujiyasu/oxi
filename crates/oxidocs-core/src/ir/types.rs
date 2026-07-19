@@ -1176,6 +1176,13 @@ pub struct ParagraphStyle {
     /// (+18pt drift for everything below the break). Layout skips it.
     #[serde(default)]
     pub continuous_section_break: bool,
+    /// S945 (2026-07-19): this paragraph carries an in-body sectPr (it ENDS a
+    /// section). An EMPTY section-ending paragraph never opens a new page by
+    /// natural overflow in Word — the next section's page break follows
+    /// immediately, so its height on a fresh page is unobservable and Oxi's
+    /// normal empty-line overflow manufactured a phantom page (NDIS wp41/42).
+    #[serde(default)]
+    pub page_section_break: bool,
     pub heading_level: Option<u8>,
     /// Outline level from w:outlineLvl (0-8, for TOC generation, NOT for layout)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1417,6 +1424,7 @@ impl Default for ParagraphStyle {
     fn default() -> Self {
         Self {
             continuous_section_break: false,
+            page_section_break: false,
             heading_level: None,
             outline_level: None,
             line_spacing: None,

@@ -1257,6 +1257,12 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     }
                                 }
                             }
+                            // S945: mark the section-ending paragraph (it
+                            // carries the in-body sectPr) — an EMPTY one never
+                            // opens a new page by natural overflow.
+                            if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut() {
+                                bp.style.page_section_break = true;
+                            }
                             sections.push(ParsedSection {
                                 blocks: std::mem::take(&mut current_blocks),
                                 properties: sp,
@@ -1300,6 +1306,9 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                                     current_text_boxes.push(tb);
                                                 }
                                                 if let Some(sp) = pr.sect_pr {
+                                                    if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut() {
+                                                        bp.style.page_section_break = true;
+                                                    }
                                                     sections.push(ParsedSection {
                                                         blocks: std::mem::take(&mut current_blocks),
                                                         properties: sp,
