@@ -68,6 +68,10 @@ struct RawFontMetrics {
     typo_descender: i16,
     #[serde(default)]
     typo_line_gap: i16,
+    /// OS/2 fsSelection USE_TYPO_METRICS (bit 7): the font asks renderers to
+    /// use the typo metrics for line layout instead of the GDI win box.
+    #[serde(default)]
+    use_typo_metrics: bool,
     widths: HashMap<u32, u16>,
 }
 
@@ -95,6 +99,11 @@ pub struct FontMetrics {
     pub typo_descent: f32,
     /// OS/2 sTypoLineGap normalized to 1em
     pub typo_line_gap: f32,
+    /// OS/2 fsSelection USE_TYPO_METRICS (bit 7). S950: fonts that set it
+    /// (Aptos family) take the typo box as the Latin line base instead of
+    /// the GDI line (max(hhea, win)).
+    #[serde(default)]
+    pub use_typo_metrics: bool,
     /// Per-character advance widths, normalized to 1em.
     pub char_widths: HashMap<char, f32>,
 }
@@ -302,7 +311,32 @@ impl FontMetrics {
     pub fn natural_line_height_hhea(&self, font_size: f32) -> f32 {
         // ascent / descent / line_gap are stored already-normalized (em fractions),
         // descent stored positive. So natural ratio = ascent + descent + line_gap.
-        (self.ascent + self.descent + self.line_gap) * font_size
+        let hhea = self.ascent + self.descent + self.line_gap;
+        // S950 (2026-07-20, opt-out OXI_S950_DISABLE): the true Word rule is the
+        // GDI line = tmHeight + tmExternalLeading = win_sum + max(0, hhea_sum −
+        // win_sum) = max(hhea_sum, win_sum) — UNLESS the font sets fsSelection
+        // USE_TYPO_METRICS, in which case the typo box governs (Aptos). DERIVED
+        // via the lb_probe 5-font discriminating sweep (single-spacing intra-para
+        // baseline pitch @12pt): TNR 13.800 = hhea 13.799 (hhea > win, gap 87);
+        // Georgia 13.600 ≈ 13.635 (equal); ★Book Antiqua 14.920 = WIN 14.912
+        // (hhea 14.467 rejected — the first corpus font with win > hhea);
+        // Bookman 14.070 = hhea 14.086 (win 13.500 rejected); Aptos 14.680 =
+        // typo 14.648 (win 15.416 rejected → USE_TYPO). Every previously-derived
+        // font has hhea_sum >= win_sum, so S671/S805's "hhea-exact" doctrine was
+        // numerically identical to this rule — Book Antiqua (reference__0029c1c,
+        // reports__0013bcb8) is the discriminating specimen. Noto Sans JP (the
+        // only other win>hhea entry) has 0 corpus references (censused).
+        if self.use_typo_metrics {
+            let typo = self.typo_ascent + self.typo_descent + self.typo_line_gap;
+            if typo > 0.0 {
+                return typo * font_size;
+            }
+        }
+        if std::env::var("OXI_S950_DISABLE").is_err() {
+            let win = self.win_ascent + self.win_descent;
+            return hhea.max(win) * font_size;
+        }
+        hhea * font_size
     }
 
     /// Standard line height WITHOUT CJK 83/64 multiplier.
@@ -508,6 +542,7 @@ impl FontMetricsRegistry {
                 typo_ascent,
                 typo_descent,
                 typo_line_gap,
+                use_typo_metrics: raw.use_typo_metrics,
                 char_widths,
             };
 
