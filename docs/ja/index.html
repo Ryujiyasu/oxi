@@ -196,7 +196,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
     <div class="stats" aria-label="主要な実測値">
       <div class="stat"><div class="num">0.94</div><div class="lbl">Word との SSIM — 日本語<br>コーパス（235 文書 / 410 ページ）</div></div>
-      <div class="stat"><div class="num">0.85</div><div class="lbl">Word との SSIM — 英語<br>コーパス（LibreOffice は 0.79）</div></div>
+      <div class="stat"><div class="num">0.85</div><div class="lbl">Word との SSIM — 英語・調整済み<br>コーパス（初見 50 文書は 0.80）</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実文書（.docx）での<br>パース成功率</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">アップロードは 0 バイト<br>処理はすべて手元のブラウザで</div></div>
     </div>
@@ -298,11 +298,11 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>英語コーパス — 別枠で測って、そのまま公開</h3>
-      <p>英米の政府様式・契約書 6 件では文書平均で <strong>Oxi 0.853 / LibreOffice 0.789</strong> と Oxi が先行し、6 件すべてで Word との<strong>段落単位の改ページが 100% 一致</strong>しています。一方、公開コーパスから抽出した 50 文書の「野良」ベンチマークでは LibreOffice がまだ優位（<strong>0.853 vs Oxi 0.824</strong>）。ここが現在の英語側の作業キューで、差は週ごとに縮まっています。</p>
+      <p>測定ループを回し終えた英米の政府様式・契約書 6 件では、文書平均で <strong>Oxi 0.853 / LibreOffice 0.789</strong> と Oxi が先行し、6 件すべてで Word との<strong>段落単位の改ページが 100% 一致</strong>しています。さらに汎化性能をごまかさないために、<strong>凍結ブラインドセット</strong>も維持しています — 公開 docx-corpus から選んだ、修正対象に一度も使っていない 50 文書です。その初回測定（2026-07-19）では Oxi は文書平均 <strong>0.800</strong> で、ONLYOFFICE（<strong>0.902</strong>）と LibreOffice（<strong>0.876</strong>）に及びません。初見の英語文書ではまだ 3 番手 — ここが英語側の作業キューです。</p>
 
       <figure class="chart-card">
         <h4>英語文書 — Word との文書平均 SSIM</h4>
-        <p class="fnote" style="margin:0 0 8px">政府様式・契約書コーパス（6 文書）:</p>
+        <p class="fnote" style="margin:0 0 8px">政府様式・契約書コーパス（6 文書）— 測定ループ適用後:</p>
         <div class="barchart">
           <div class="brow">
             <div class="blabel"><strong>Oxi</strong><span>改ページ 100% 一致</span></div>
@@ -315,20 +315,25 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
             <div class="bval">0.789</div>
           </div>
         </div>
-        <p class="fnote" style="margin:10px 0 8px">野良 50 文書ベンチマーク（公開 docx-corpus から抽出）:</p>
+        <p class="fnote" style="margin:10px 0 8px">凍結ブラインドセット — 修正対象に一度も使っていない公開 docx-corpus の 50 文書、初回測定（2026-07-19）:</p>
         <div class="barchart">
           <div class="brow">
-            <div class="blabel"><strong>Oxi</strong><span>50 件中 41 件で改ページが Word と一致</span></div>
-            <div class="btrack"><div class="bfill oxi" style="width:82.4%"></div></div>
-            <div class="bval"><strong>0.824</strong></div>
+            <div class="blabel">ONLYOFFICE<span>50 件中 41 件で頁数が Word と一致</span></div>
+            <div class="btrack"><div class="bfill" style="width:90.2%"></div></div>
+            <div class="bval">0.902</div>
           </div>
           <div class="brow">
-            <div class="blabel">LibreOffice<span>ここではまだ優位</span></div>
-            <div class="btrack"><div class="bfill" style="width:85.3%"></div></div>
-            <div class="bval">0.853</div>
+            <div class="blabel">LibreOffice<span>50 件中 43 件で頁数が Word と一致</span></div>
+            <div class="btrack"><div class="bfill" style="width:87.6%"></div></div>
+            <div class="bval">0.876</div>
+          </div>
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>50 件中 38 件で頁数が Word と一致</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:80.0%"></div></div>
+            <div class="bval"><strong>0.800</strong></div>
           </div>
         </div>
-        <figcaption class="fnote">右端の破線が Microsoft Word 自身（1.00）。整備済みの政府文書コーパスでは Oxi が先行、野良ベンチマークでは LibreOffice がまだ優位 — 負けている数字もそのまま公開しています。</figcaption>
+        <figcaption class="fnote">右端の破線が Microsoft Word 自身（1.00）。ブラインドセットは「測定はするが修正対象にはしない」文書群なので、初見での実力がそのまま出ます — Oxi はここではまだ 3 番手。上の調整済みコーパスが、測定ループを回し終えた後に届く水準です。この差が、これから消化していくキューです。</figcaption>
       </figure>
 
       <h3>なぜこの精度が出せるのか</h3>

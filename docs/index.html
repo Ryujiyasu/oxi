@@ -194,7 +194,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
     <div class="stats" aria-label="Key measurements">
       <div class="stat"><div class="num">0.94</div><div class="lbl">SSIM vs Word — Japanese<br>corpus (235 docs / 410 pages)</div></div>
-      <div class="stat"><div class="num">0.85</div><div class="lbl">SSIM vs Word — English<br>corpus (LibreOffice: 0.79)</div></div>
+      <div class="stat"><div class="num">0.85</div><div class="lbl">SSIM vs Word — tuned English<br>corpus (blind 50-doc set: 0.80)</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">parse success on real<br>government .docx files</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">bytes uploaded —<br>everything runs client-side</div></div>
     </div>
@@ -296,11 +296,11 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>English corpus — measured separately, reported honestly</h3>
-      <p>On the 6-document English corpus (UK/US government forms and contracts) Oxi leads LibreOffice <strong>0.853 vs 0.789</strong> per document, and all 6 documents reach <strong>100% paragraph-level pagination match</strong> with Word. On a broader 50-document wild benchmark sampled from the public docx-corpus, LibreOffice is still ahead (<strong>0.853 vs Oxi 0.824</strong>) — that gap is the current English work queue, and it is closing week by week.</p>
+      <p>On the 6-document English corpus (UK/US government forms and contracts) that the measurement loop has worked through, Oxi leads LibreOffice <strong>0.853 vs 0.789</strong> per document, and all 6 documents reach <strong>100% paragraph-level pagination match</strong> with Word. To keep ourselves honest about generalization, we also maintain a <strong>frozen blind set</strong>: 50 documents from the public docx-corpus that have never been used as fix targets. On its first measurement (2026-07-19) Oxi scores <strong>0.800</strong> per document — behind ONLYOFFICE (<strong>0.902</strong>) and LibreOffice (<strong>0.876</strong>). On never-seen English documents Oxi is still third; that gap is the English work queue.</p>
 
       <figure class="chart-card">
         <h4>English documents — per-document mean SSIM vs Word</h4>
-        <p class="fnote" style="margin:0 0 8px">Government forms &amp; contracts corpus (6 documents):</p>
+        <p class="fnote" style="margin:0 0 8px">Government forms &amp; contracts corpus (6 documents) — after the measurement loop:</p>
         <div class="barchart">
           <div class="brow">
             <div class="blabel"><strong>Oxi</strong><span>100% pagination match</span></div>
@@ -313,20 +313,25 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
             <div class="bval">0.789</div>
           </div>
         </div>
-        <p class="fnote" style="margin:10px 0 8px">Wild 50-document benchmark (sampled from the public docx-corpus):</p>
+        <p class="fnote" style="margin:10px 0 8px">Frozen blind set — 50 never-touched documents from the public docx-corpus, first measurement (2026-07-19):</p>
         <div class="barchart">
           <div class="brow">
-            <div class="blabel"><strong>Oxi</strong><span>41/50 match Word's pagination</span></div>
-            <div class="btrack"><div class="bfill oxi" style="width:82.4%"></div></div>
-            <div class="bval"><strong>0.824</strong></div>
+            <div class="blabel">ONLYOFFICE<span>page count matches Word on 41/50</span></div>
+            <div class="btrack"><div class="bfill" style="width:90.2%"></div></div>
+            <div class="bval">0.902</div>
           </div>
           <div class="brow">
-            <div class="blabel">LibreOffice<span>still ahead here</span></div>
-            <div class="btrack"><div class="bfill" style="width:85.3%"></div></div>
-            <div class="bval">0.853</div>
+            <div class="blabel">LibreOffice<span>page count matches Word on 43/50</span></div>
+            <div class="btrack"><div class="bfill" style="width:87.6%"></div></div>
+            <div class="bval">0.876</div>
+          </div>
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 38/50</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:80.0%"></div></div>
+            <div class="bval"><strong>0.800</strong></div>
           </div>
         </div>
-        <figcaption class="fnote">The dashed edge marks Microsoft Word itself (1.00). Oxi leads on the curated government corpus; LibreOffice still leads on the wild benchmark — that gap is the current work queue, published as-is.</figcaption>
+        <figcaption class="fnote">The dashed edge marks Microsoft Word itself (1.00). The blind set is measured but never fixed against, so it shows first-sight generalization: Oxi is still third there, published as-is. The tuned corpus above shows what the measurement loop achieves once it runs on a document family — the blind gap is the queue it works through next.</figcaption>
       </figure>
       <h3>How the fidelity is earned</h3>
       <ul>
