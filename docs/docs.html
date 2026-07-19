@@ -20,31 +20,36 @@
   --accent: #185ABD;
   --accent-h: #1048A0;
   --accent-l: #E6EEF9;
-  --rib: #F3F3F3;
-  --rib-b: #D6D6D6;
+  --rib: #FFFFFF;
+  --rib-b: #E1E1E1;
   --txt: #333;
   --bg: #E8E8E8;
   --shad: 0 1px 4px rgba(0,0,0,.18);
-  --hover: #E0E0E0;
-  --grp: #D0D0D0;
+  --hover: #F0F0F0;
+  --grp: #E6E6E6;
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
 body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);display:flex;flex-direction:column}
 
 /* Title bar */
-.tb{display:flex;align-items:center;height:32px;background:var(--accent);color:#fff;padding:0 12px;font-size:12px;user-select:none;flex-shrink:0}
-.tb .logo{font-weight:700;margin-right:10px;letter-spacing:.5px}
-.tb .qat{display:flex;gap:2px;margin-right:14px}
-.tb .qat button svg,.tb .ra button svg{width:16px;height:16px;vertical-align:middle}
-.tb .qat button,.tb .ra button{background:none;border:none;color:rgba(255,255,255,.9);cursor:pointer;padding:3px 7px;border-radius:3px;font-size:13px}
-.tb .qat button:hover,.tb .ra button:hover{background:rgba(255,255,255,.18)}
-.tb .dn{flex:1;text-align:center;opacity:.95}
-.tb .ra{display:flex;gap:4px}
+.tb{display:flex;align-items:center;height:44px;background:#fff;color:var(--txt);padding:0 14px;font-size:13px;user-select:none;flex-shrink:0}
+.tb .logo{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#333;margin-right:16px;letter-spacing:.2px}
+.logo-mark{width:22px;height:22px;border-radius:5px;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+.tb .dn{font-size:13px;color:#333;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#saveState{margin-left:6px;font-size:12px;line-height:1}
+.tb-center{flex:1;display:flex;justify-content:center;padding:0 16px;min-width:0}
+.searchpill{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:min(480px,100%);height:30px;background:#F5F5F5;border:1px solid #E1E1E1;border-radius:6px;color:#616161;font:inherit;font-size:12.5px;cursor:pointer;padding:0 14px}
+.searchpill:hover{background:#EFEFEF}
+.searchpill svg{width:14px;height:14px;flex-shrink:0}
+.tb .ra button svg{width:16px;height:16px;vertical-align:middle}
+.tb .ra button{background:none;border:none;color:#444;cursor:pointer;padding:5px 9px;border-radius:4px;font-size:12.5px}
+.tb .ra button:hover{background:#F0F0F0}
+.tb .ra{display:flex;gap:2px;align-items:center}
 /* Mode toggle */
-.mode-toggle{display:flex;background:rgba(255,255,255,.15);border-radius:12px;overflow:hidden;margin:0 8px}
-.mode-toggle button{background:none;border:none;color:rgba(255,255,255,.7);font:inherit;font-size:11px;padding:3px 12px;cursor:pointer}
-.mode-toggle button.active{background:rgba(255,255,255,.25);color:#fff;font-weight:600}
+.mode-toggle{display:flex;border:1px solid #D1D1D1;background:#fff;border-radius:5px;overflow:hidden}
+.mode-toggle button{background:none;border:none;color:#444;font:inherit;font-size:12px;padding:4px 13px;cursor:pointer}
+.mode-toggle button.active{background:var(--accent-l);color:var(--accent);font-weight:600}
 /* Word-style comments (markup rail) */
 #cmtRail{position:absolute;left:100%;top:0;width:250px;margin-left:16px;display:none}
 .cmt-card{position:absolute;left:0;width:100%;background:#fff;border:1px solid #e0dcd4;border-left:3px solid #E8B93E;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:8px 10px;font-size:12px;transition:top .15s;box-sizing:border-box}
@@ -86,25 +91,31 @@ mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
 #oxiToast.show{opacity:1;transform:translateX(-50%)}
 
 /* Ribbon tabs (desktop only) */
-.rtabs{display:flex;align-items:flex-end;background:var(--accent);padding:0 8px;flex-shrink:0;height:26px}
-.rtabs button{background:none;border:none;color:#fff;font:inherit;font-size:13px;padding:5px 14px;cursor:pointer;border-radius:4px 4px 0 0}
-.rtabs button:hover{color:#fff;background:rgba(255,255,255,.1)}
-.rtabs button.active{background:var(--rib);color:var(--txt);font-weight:500}
+.rtabs{display:flex;align-items:center;background:#fff;padding:0 8px;flex-shrink:0;height:36px}
+.rtabs>button{background:none;border:none;color:#444;font:inherit;font-size:13.5px;padding:8px 13px;cursor:pointer;border-radius:4px;position:relative}
+.rtabs>button:hover{background:#F0F0F0;color:#333}
+.rtabs>button.active{color:#333;font-weight:600}
+.rtabs>button.active::after{content:'';position:absolute;left:11px;right:11px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:var(--accent)}
+.tr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.primary-btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent);border:1px solid var(--accent);color:#fff;font:inherit;font-size:12.5px;font-weight:600;padding:0 14px;border-radius:5px;cursor:pointer;height:28px}
+.primary-btn:hover{background:var(--accent-h)}
+.primary-btn svg{width:14px;height:14px}
 
 /* Ribbon panel (desktop only) */
-.rib{background:var(--rib);border-bottom:1px solid var(--rib-b);padding:4px 10px 5px;display:flex;gap:2px;align-items:stretch;flex-shrink:0;min-height:82px}
-.rg{display:flex;flex-direction:column;border-right:1px solid var(--grp);padding:0 8px}
+.rib{background:#fff;border-bottom:1px solid var(--rib-b);padding:5px 8px 4px;display:flex;gap:2px;align-items:stretch;flex-shrink:0;min-height:88px;overflow-x:auto}
+.rg{display:flex;flex-direction:column;border-right:1px solid var(--grp);padding:0 10px}
 .rg:last-child{border-right:none}
-.rg-l{font-size:9px;color:#888;text-align:center;margin-top:auto;padding-top:2px;user-select:none}
+.rg-l{font-size:10px;color:#616161;text-align:center;margin-top:auto;padding-top:3px;user-select:none}
 .rr{display:flex;gap:1px;align-items:center}
 .rc{display:flex;flex-direction:column;gap:1px}
 
 /* Buttons */
 .rb{background:none;border:1px solid transparent;cursor:pointer;padding:3px 5px;border-radius:3px;color:var(--txt);display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;font:inherit;font-size:13px;line-height:1}
-.rb:hover{background:var(--hover);border-color:#C0C0C0}
-.rb.active{background:#D0D8E8;border-color:#9DB2D6}
+.rb:hover{background:var(--hover);border-color:transparent}
+.rb.active{background:var(--accent-l);border-color:transparent;color:var(--accent)}
 .rb svg{width:16px;height:16px;pointer-events:none}
-.rb.lg{padding:4px 10px;font-size:12px;gap:4px}
+.rb.lg{flex-direction:column;justify-content:flex-start;gap:4px;padding:7px 9px 5px;min-width:54px;font-size:11px;line-height:1.25;text-align:center}
+.rb.lg svg{width:20px;height:20px}
 .font-sel,.size-sel{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #C0C0C0;border-radius:2px;height:24px;background:#fff;cursor:pointer;color:#333}
 .font-sel{width:130px}
 .size-sel{width:46px;text-align:center}
@@ -148,7 +159,7 @@ mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
 .preview-area canvas{display:block;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.3);background:#fff}
 
 /* Status bar */
-.sb{display:flex;align-items:center;height:22px;background:var(--accent);color:#fff;padding:0 14px;font-size:11px;flex-shrink:0;gap:16px}
+.sb{display:flex;align-items:center;height:24px;background:#fff;color:#555;border-top:1px solid #E1E1E1;padding:0 14px;font-size:11px;flex-shrink:0;gap:16px}
 .sb .sep{opacity:.3}
 .sb .zg{margin-left:auto;display:flex;align-items:center;gap:6px}
 .sb input[type="range"]{width:90px;accent-color:#fff;height:4px}
@@ -186,7 +197,10 @@ input[type="file"]{display:none}
 
 /* ---- Responsive ---- */
 @media(max-width:768px){
-  .rtabs,.rib,.ruler{display:none!important}
+  .rib,.ruler{display:none!important}
+  .rtabs{height:40px;border-bottom:1px solid #E1E1E1}
+  .rtabs>button{display:none!important}
+  .tb-center{display:none}
   .mbar{display:block}
   .tb{height:44px;padding:0 8px}
   .tb .qat button,.tb .ra button{padding:6px 8px;font-size:14px}
@@ -240,23 +254,21 @@ input[type="file"]{display:none}
 
 <!-- Title bar -->
 <div class="tb">
-  <span class="logo">Oxidocs</span>
-  <div class="qat">
-    <button id="btnSave" data-i18n-title="save"><svg><use href="#i-save"/></svg></button>
-    <button id="btnUndo" data-i18n-title="undo"><svg><use href="#i-undo"/></svg></button>
-    <button id="btnRedo" data-i18n-title="redo"><svg><use href="#i-redo"/></svg></button>
-  </div>
-  <div class="mode-toggle">
-    <button class="active" id="modeEdit" data-i18n="edit">Edit</button>
-    <button id="modePreview" data-i18n="preview">Preview</button>
-  </div>
+  <span class="logo"><span class="logo-mark">O</span><span>Oxidocs</span></span>
   <span class="dn" id="docName" data-i18n="newDoc">New Document</span>
+  <span id="saveState"></span>
+  <div class="tb-center">
+    <button class="searchpill" id="searchPill" type="button">
+      <svg viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 10.4L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <span data-i18n="searchHint">Search (Ctrl+F)</span>
+    </button>
+  </div>
   <div class="ra">
     <button id="btnNew" data-i18n="new">New</button>
     <button id="btnOpen" data-i18n="open">Open</button>
     <button id="btnPdf">PDF</button>
-    <select id="langSel" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:3px;font-size:11px;padding:1px 4px;cursor:pointer">
-      <option value="en" style="color:#333;background:#fff">EN</option><option value="ja" style="color:#333;background:#fff">JA</option>
+    <select id="langSel" style="background:#fff;color:#444;border:1px solid #D1D1D1;border-radius:4px;font-size:11px;padding:2px 4px;cursor:pointer;margin-left:4px">
+      <option value="en">EN</option><option value="ja">JA</option>
     </select>
   </div>
 </div>
@@ -266,10 +278,21 @@ input[type="file"]{display:none}
   <button class="active" data-tab="home" data-i18n="home">Home</button>
   <button data-tab="insert" data-i18n="insert">Insert</button>
   <button data-tab="layout" data-i18n="layout">Layout</button>
+  <div class="tr-right">
+    <div class="mode-toggle">
+      <button class="active" id="modeEdit" data-i18n="edit">Edit</button>
+      <button id="modePreview" data-i18n="preview">Preview</button>
+    </div>
+    <button id="btnSave" class="primary-btn" data-i18n-title="save"><svg><use href="#i-save"/></svg><span data-i18n="save">Save</span></button>
+  </div>
 </div>
 
 <!-- Desktop: Home ribbon -->
 <div class="rib" id="ribHome">
+  <div class="rg"><div class="rc" style="gap:2px;justify-content:center">
+      <button class="rb" id="btnUndo" data-i18n-title="undo"><svg><use href="#i-undo"/></svg></button>
+      <button class="rb" id="btnRedo" data-i18n-title="redo"><svg><use href="#i-redo"/></svg></button>
+    </div><span class="rg-l" data-i18n="undo">Undo</span></div>
   <div class="rg">
     <div class="rc" style="gap:3px">
       <div class="rr">
@@ -447,10 +470,10 @@ input[type="file"]{display:none}
   <span id="pgInfo"></span><span class="sep">|</span>
   <span id="wc"></span>
   <div class="zg">
-    <button class="rb" style="color:#fff;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zOut">−</button>
+    <button class="rb" style="color:#555;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zOut">−</button>
     <span id="zLvl">100%</span>
     <input type="range" id="zSlider" min="50" max="200" value="100">
-    <button class="rb" style="color:#fff;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zIn">+</button>
+    <button class="rb" style="color:#555;min-width:auto;min-height:auto;padding:0 4px;font-size:10px" id="zIn">+</button>
   </div>
 </div>
 
@@ -490,6 +513,7 @@ const I18N = {
   en: {
     new: 'New', newDoc: 'New Document', edit: 'Edit', preview: 'Preview',
     open: 'Open', save: 'Save', undo: 'Undo', redo: 'Redo',
+    searchHint: 'Search (Ctrl+F)',
     home: 'Home', insert: 'Insert', layout: 'Layout',
     bold: 'Bold', italic: 'Italic', underline: 'Underline', strikethrough: 'Strikethrough',
     fontColor: 'Font Color', highlight: 'Highlight',
@@ -518,6 +542,7 @@ const I18N = {
   ja: {
     new: '新規', newDoc: '新しいドキュメント', edit: '編集', preview: 'プレビュー',
     open: '開く', save: '保存', undo: '元に戻す', redo: 'やり直し',
+    searchHint: '検索 (Ctrl+F)',
     home: 'ホーム', insert: '挿入', layout: 'レイアウト',
     bold: '太字', italic: '斜体', underline: '下線', strikethrough: '取り消し線',
     fontColor: 'フォントの色', highlight: '蛍光ペン',
@@ -619,12 +644,13 @@ function switchMode(m) {
   editArea.style.display = m === 'edit' ? 'flex' : 'none';
   previewArea.style.display = m === 'preview' ? 'flex' : 'none';
   // Hide ribbon in preview
-  document.querySelectorAll('.rtabs,.mbar').forEach(el => el.style.display = m === 'edit' ? '' : 'none');
+  document.querySelectorAll('.mbar').forEach(el => el.style.display = m === 'edit' ? '' : 'none');
+  document.querySelectorAll('.rtabs > button').forEach(el => el.style.visibility = m === 'edit' ? '' : 'hidden');
   if (m === 'edit') {
     // Restore only the active tab's panel (clearing every .rib's inline
     // display would fall back to the stylesheet's display:flex and show
     // all three panels at once)
-    const activeTab = document.querySelector('.rtabs button.active');
+    const activeTab = document.querySelector('.rtabs > button.active');
     const tab = activeTab ? activeTab.dataset.tab : 'home';
     for (const [k, id] of Object.entries(ribs)) $(id).style.display = k === tab ? 'flex' : 'none';
     schedulePaginate();
@@ -1839,7 +1865,14 @@ const redoStack = [];
 let undoTimer = null;
 // ---- Unsaved changes warning ----
 function isDirty() { return editor.innerHTML !== savedHtml; }
-function markClean() { savedHtml = editor.innerHTML; }
+function markClean() { savedHtml = editor.innerHTML; updateSaveState(); }
+function updateSaveState() {
+  const ss = document.getElementById('saveState');
+  if (!ss) return;
+  const dirty = savedHtml !== editor.innerHTML;
+  ss.textContent = dirty ? '\u25CF' : '\u2713';
+  ss.style.color = dirty ? '#B8B8B8' : '#107C10';
+}
 window.addEventListener('beforeunload', e => {
   if (isDirty()) { e.preventDefault(); e.returnValue = ''; }
 });
@@ -1891,14 +1924,15 @@ function updateStatus() {
   const txt = editor.innerText || '';
   const w = txt.trim() ? txt.trim().split(/\s+/).length : 0;
   $('wc').textContent = w + ' ' + t('words');
+  updateSaveState();
 }
 updateStatus();
 
 // ---- Ribbon tabs ----
 const ribs = { home:'ribHome', insert:'ribInsert', layout:'ribLayout' };
-document.querySelectorAll('.rtabs button').forEach(b => {
+document.querySelectorAll('.rtabs > button[data-tab]').forEach(b => {
   b.addEventListener('click', () => {
-    document.querySelectorAll('.rtabs button').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.rtabs > button[data-tab]').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     for (const [k, id] of Object.entries(ribs)) $(id).style.display = k === b.dataset.tab ? 'flex' : 'none';
   });
@@ -2384,6 +2418,10 @@ $('findNext').addEventListener('click', () => findInEditor('next'));
 $('findPrev').addEventListener('click', () => findInEditor('prev'));
 $('findInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) findInEditor(e.shiftKey ? 'prev' : 'next'); });
 $('findClose').addEventListener('click', () => { $('findBar').style.display = 'none'; });
+$('searchPill').addEventListener('click', () => {
+  $('findBar').style.display = 'block';
+  setTimeout(() => { $('findInput').focus(); $('findInput').select(); }, 0);
+});
 $('replaceOne').addEventListener('click', () => {
   const sel = window.getSelection();
   if (sel.rangeCount && !sel.isCollapsed) {
