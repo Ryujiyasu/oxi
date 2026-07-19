@@ -19299,7 +19299,13 @@ impl LayoutEngine {
                 // 15.0); Word wants 15.375 => remaining deficit ~0.19/row =
                 // 0.375*border_width (block-calibrated on tbl_b4_sz22: OFF 91.31,
                 // Word 92.25 => +0.94 over 5 rows). Scoped to all-Latin tables.
+                // S940T regime (2026-07-19): the 0.375*bw was a CALIBRATED
+                // proxy for the tombstone estimate's under-count (Word row =
+                // hhea + border only — _pb_cellline_gen 42-config sweep).
+                // Under the hhea estimate it double-counts (+0.188/row on
+                // gen2_054), so it applies only in the tombstone regime.
                 if std::env::var("OXI_S463_DISABLE").is_err()
+                    && std::env::var("OXI_S940T").is_err()
                     && table.style.has_inside_h && table_is_latin
                     && !self.doc_body_has_cjk {
                     cell_content_h += _border_overhead * 0.375;
