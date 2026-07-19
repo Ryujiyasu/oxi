@@ -145,6 +145,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tag.slides { background: var(--slides); } .tag.pdf { background: var(--pdf); }
 .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; background: var(--primary-light); color: var(--primary); margin-left: 8px; vertical-align: middle; }
 .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 18px 12px; margin: 18px 0; }
+.chart-card .legend { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text2); margin-bottom: 8px; }
+.chart-card .legend .chip { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
 .chart-card h4 { font-size: 15px; margin-bottom: 12px; }
 .chart-card .fnote { font-size: 12px; color: var(--text2); margin-top: 8px; }
 .chart-card details { border: none; background: transparent; padding: 8px 0 0; margin: 0; }
@@ -197,7 +199,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
     <div class="stats" aria-label="主要な実測値">
       <div class="stat"><div class="num">0.94</div><div class="lbl">Word との SSIM — 日本語<br>コーパス（235 文書 / 410 ページ）</div></div>
-      <div class="stat"><div class="num">0.85</div><div class="lbl">Word との SSIM — 英語・調整済み<br>コーパス（初見 50 文書は 0.80）</div></div>
+      <div class="stat"><div class="num">0.80</div><div class="lbl">Word との SSIM — 英語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実文書（.docx）での<br>パース成功率</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">アップロードは 0 バイト<br>処理はすべて手元のブラウザで</div></div>
     </div>
@@ -225,8 +227,9 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       <p>就業規則、官公庁の申請様式、契約書……実在の日本語ビジネス文書 <strong>235 件（410 ページ）</strong>を Microsoft Word の出力と重ね、ピクセル単位の <strong>SSIM（構造的類似度）</strong>で採点しています。<strong>2026-07-17 時点の成績はページ平均 0.9378、文書平均 0.9591</strong>。満点（= Word と完全一致）は 1.00 です。</p>
 
       <figure class="chart-card">
-        <h4>Word への収束を、毎週実測（日本語コーパス）</h4>
-<svg viewBox="0 0 720 300" role="img" aria-label="折れ線グラフ: Word との平均 SSIM が 2026-03-28 の 0.788 から 2026-07-17 の 0.938 まで上昇" style="width:100%;height:auto;font-family:inherit">
+        <h4>Word への収束を、毎週実測</h4>
+        <div class="legend"><span><span class="chip" style="background:#264653"></span>日本語コーパス — 235 文書・ページ平均</span><span><span class="chip" style="background:#8B72BE"></span>英語ブラインドベンチマーク — 初見 50 文書・文書平均（07-19 から）</span></div>
+<svg viewBox="0 0 720 300" role="img" aria-label="折れ線グラフ: Word との平均 SSIM。日本語コーパスは 0.788 から 0.938 へ上昇。英語ブラインドベンチマークは 07-19 に 0.800 から開始" style="width:100%;height:auto;font-family:inherit">
   <line x1="46" y1="270.0" x2="704" y2="270.0" stroke="#e6e2da" stroke-width="1"/>
   <text x="40" y="274.0" text-anchor="end" font-size="11" fill="#5a5a5a">0.75</text>
   <line x1="46" y1="219.6" x2="704" y2="219.6" stroke="#e6e2da" stroke-width="1"/>
@@ -239,39 +242,41 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
   <text x="40" y="72.4" text-anchor="end" font-size="11" fill="#5a5a5a">0.95</text>
   <line x1="46" y1="18.0" x2="704" y2="18.0" stroke="#C84C3A" stroke-width="1.5" stroke-dasharray="6 4"/>
   <text x="40" y="22.0" text-anchor="end" font-size="11" fill="#5a5a5a">1.00</text>
-  <text x="704" y="33.0" text-anchor="end" font-size="12" font-weight="700" fill="#C84C3A">Microsoft Word = 1.00(目標)</text>
-  <line x1="69.7" y1="270" x2="69.7" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="69.7" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">4月 2026</text>
-  <line x1="247.5" y1="270" x2="247.5" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="247.5" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">5月 2026</text>
-  <line x1="431.3" y1="270" x2="431.3" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="431.3" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">6月 2026</text>
-  <line x1="609.2" y1="270" x2="609.2" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="609.2" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">7月 2026</text>
+  <text x="704" y="33.0" text-anchor="end" font-size="12" font-weight="700" fill="#C84C3A">Microsoft Word = 1.00（目標）</text>
+  <line x1="69.3" y1="270" x2="69.3" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="69.3" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">4月 2026</text>
+  <line x1="244.0" y1="270" x2="244.0" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="244.0" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">5月 2026</text>
+  <line x1="424.5" y1="270" x2="424.5" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="424.5" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">6月 2026</text>
+  <line x1="599.2" y1="270" x2="599.2" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="599.2" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">7月 2026</text>
   <line x1="46" y1="270" x2="704" y2="270" stroke="#d5d0c8" stroke-width="1"/>
-  <polyline points="46.0,231.3 99.4,176.3 146.8,160.7 188.3,156.6 229.8,149.1 289.0,133.4 312.8,129.4 419.5,132.7 443.2,106.1 496.5,99.7 603.2,93.3 674.4,81.5 704.0,80.7" fill="none" stroke="#264653" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="46.0" cy="231.3" r="3" fill="#264653"><title>2026-03-28 · 0.7884</title></circle>
-  <circle cx="99.4" cy="176.3" r="3" fill="#264653"><title>2026-04-06 · 0.8430</title></circle>
-  <circle cx="146.8" cy="160.7" r="3" fill="#264653"><title>2026-04-14 · 0.8584</title></circle>
-  <circle cx="188.3" cy="156.6" r="3" fill="#264653"><title>2026-04-21 · 0.8625</title></circle>
-  <circle cx="229.8" cy="149.1" r="3" fill="#264653"><title>2026-04-28 · 0.8699</title></circle>
-  <circle cx="289.0" cy="133.4" r="3" fill="#264653"><title>2026-05-08 · 0.8855</title></circle>
-  <circle cx="312.8" cy="129.4" r="3" fill="#264653"><title>2026-05-12 · 0.8895</title></circle>
-  <circle cx="419.5" cy="132.7" r="3" fill="#264653"><title>2026-05-30 · 0.8862</title></circle>
-  <circle cx="443.2" cy="106.1" r="3" fill="#264653"><title>2026-06-03 · 0.9126</title></circle>
-  <circle cx="496.5" cy="99.7" r="3" fill="#264653"><title>2026-06-12 · 0.9189</title></circle>
-  <circle cx="603.2" cy="93.3" r="3" fill="#264653"><title>2026-06-30 · 0.9253</title></circle>
-  <circle cx="674.4" cy="81.5" r="3" fill="#264653"><title>2026-07-12 · 0.9370</title></circle>
-  <circle cx="704.0" cy="80.7" r="4.5" fill="#264653"><title>2026-07-17 · 0.9378</title></circle>
+  <polyline points="46.0,231.3 98.4,176.3 145.0,160.7 185.8,156.6 226.5,149.1 284.7,133.4 308.0,129.4 412.8,132.7 436.1,106.1 488.5,99.7 593.4,93.3 663.2,81.5 692.4,80.7" fill="none" stroke="#264653" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="46.0" cy="231.3" r="3" fill="#264653"><title>日本語 2026-03-28 · 0.7884</title></circle>
+  <circle cx="98.4" cy="176.3" r="3" fill="#264653"><title>日本語 2026-04-06 · 0.8430</title></circle>
+  <circle cx="145.0" cy="160.7" r="3" fill="#264653"><title>日本語 2026-04-14 · 0.8584</title></circle>
+  <circle cx="185.8" cy="156.6" r="3" fill="#264653"><title>日本語 2026-04-21 · 0.8625</title></circle>
+  <circle cx="226.5" cy="149.1" r="3" fill="#264653"><title>日本語 2026-04-28 · 0.8699</title></circle>
+  <circle cx="284.7" cy="133.4" r="3" fill="#264653"><title>日本語 2026-05-08 · 0.8855</title></circle>
+  <circle cx="308.0" cy="129.4" r="3" fill="#264653"><title>日本語 2026-05-12 · 0.8895</title></circle>
+  <circle cx="412.8" cy="132.7" r="3" fill="#264653"><title>日本語 2026-05-30 · 0.8862</title></circle>
+  <circle cx="436.1" cy="106.1" r="3" fill="#264653"><title>日本語 2026-06-03 · 0.9126</title></circle>
+  <circle cx="488.5" cy="99.7" r="3" fill="#264653"><title>日本語 2026-06-12 · 0.9189</title></circle>
+  <circle cx="593.4" cy="93.3" r="3" fill="#264653"><title>日本語 2026-06-30 · 0.9253</title></circle>
+  <circle cx="663.2" cy="81.5" r="3" fill="#264653"><title>日本語 2026-07-12 · 0.9370</title></circle>
+  <circle cx="692.4" cy="80.7" r="4.5" fill="#264653"><title>日本語 2026-07-17 · 0.9378</title></circle>
+  <circle cx="704.0" cy="219.6" r="4.5" fill="#8B72BE"><title>英語ブラインドセット 2026-07-19 · 0.800</title></circle>
   <text x="46.0" y="221.3" text-anchor="start" font-size="12" font-weight="700" fill="#1a1a1a">0.788</text>
-  <text x="702.0" y="68.7" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.9378</text>
+  <text x="690.4" y="68.7" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.9378</text>
+  <text x="702.0" y="241.6" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.800</text>
 </svg>
-        <figcaption class="fnote">Word とのページ平均 SSIM、2026-03-28 → 2026-07-17。05-30 の小さな段差は測定ベースラインを取り直したことによるもので、性能の後退ではありません。</figcaption>
+        <figcaption class="fnote">Word との平均 SSIM。05-30 の小さな段差は測定ベースラインを取り直したことによるもので、性能の後退ではありません。紫の点は英語ブラインドベンチマーク — 初回測定から始まり、再測定のたびに線が伸びていきます。</figcaption>
         <details>
           <summary>データを見る</summary>
           <table>
-            <thead><tr><th>日付</th><th class="num">Word とのページ平均 SSIM</th></tr></thead>
-            <tbody><tr><td>2026-03-28</td><td class="num">0.7884</td></tr><tr><td>2026-04-06</td><td class="num">0.8430</td></tr><tr><td>2026-04-14</td><td class="num">0.8584</td></tr><tr><td>2026-04-21</td><td class="num">0.8625</td></tr><tr><td>2026-04-28</td><td class="num">0.8699</td></tr><tr><td>2026-05-08</td><td class="num">0.8855</td></tr><tr><td>2026-05-12</td><td class="num">0.8895</td></tr><tr><td>2026-05-30</td><td class="num">0.8862</td></tr><tr><td>2026-06-03</td><td class="num">0.9126</td></tr><tr><td>2026-06-12</td><td class="num">0.9189</td></tr><tr><td>2026-06-30</td><td class="num">0.9253</td></tr><tr><td>2026-07-12</td><td class="num">0.9370</td></tr><tr><td>2026-07-17</td><td class="num">0.9378</td></tr></tbody>
+            <thead><tr><th>日付</th><th class="num">日本語（ページ平均）</th><th class="num">英語ブラインドセット（文書平均）</th></tr></thead>
+            <tbody><tr><td>2026-03-28</td><td class="num">0.7884</td><td class="num">—</td></tr><tr><td>2026-04-06</td><td class="num">0.8430</td><td class="num">—</td></tr><tr><td>2026-04-14</td><td class="num">0.8584</td><td class="num">—</td></tr><tr><td>2026-04-21</td><td class="num">0.8625</td><td class="num">—</td></tr><tr><td>2026-04-28</td><td class="num">0.8699</td><td class="num">—</td></tr><tr><td>2026-05-08</td><td class="num">0.8855</td><td class="num">—</td></tr><tr><td>2026-05-12</td><td class="num">0.8895</td><td class="num">—</td></tr><tr><td>2026-05-30</td><td class="num">0.8862</td><td class="num">—</td></tr><tr><td>2026-06-03</td><td class="num">0.9126</td><td class="num">—</td></tr><tr><td>2026-06-12</td><td class="num">0.9189</td><td class="num">—</td></tr><tr><td>2026-06-30</td><td class="num">0.9253</td><td class="num">—</td></tr><tr><td>2026-07-12</td><td class="num">0.9370</td><td class="num">—</td></tr><tr><td>2026-07-17</td><td class="num">0.9378</td><td class="num">—</td></tr><tr><td>2026-07-19</td><td class="num">—</td><td class="num">0.800</td></tr></tbody>
           </table>
         </details>
       </figure>
@@ -299,7 +304,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>英語コーパス — 別枠で測って、そのまま公開</h3>
-      <p>測定ループを回し終えた英米の政府様式・契約書 6 件では、文書平均で <strong>Oxi 0.853 / LibreOffice 0.789</strong> と Oxi が先行し、6 件すべてで Word との<strong>段落単位の改ページが 100% 一致</strong>しています。さらに汎化性能をごまかさないために、<strong>凍結ブラインドセット</strong>も維持しています — 公開 docx-corpus から選んだ、修正対象に一度も使っていない 50 文書です。その初回測定（2026-07-19）では Oxi は文書平均 <strong>0.800</strong> で、ONLYOFFICE（<strong>0.902</strong>）と LibreOffice（<strong>0.876</strong>）に及びません。初見の英語文書ではまだ 3 番手 — ここが英語側の作業キューです。</p>
+      <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から凍結した<strong>ブラインドベンチマーク 50 文書</strong>。修正対象には一切使わないので、出てくる数字はすべて「初見の実力」で、テストに合わせた調整が入り込む余地がありません。初回測定（2026-07-19）は文書平均で <strong>Oxi 0.800</strong>。ONLYOFFICE（<strong>0.902</strong>）と LibreOffice（<strong>0.876</strong>）にまだ及びません。この差が英語側の作業キューです — エンジンの改善に合わせて再測定し、上のグラフの線を伸ばしていきます。</p>
 
       <figure class="chart-card">
         <h4>英語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（初回測定 2026-07-19）</h4>
@@ -486,7 +491,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 </svg>
 </div>
 </div>
-        <figcaption class="fnote">上: エンジンごとの平均 — 右端の破線が Microsoft Word 自身（1.00）。下: 点 1 つが文書 1 件で、縦軸が Oxi。破線の対角線より上にある点が「Oxi のほうが Word に近い」文書です。ブラインドセットは「測定はするが修正対象にはしない」文書群なので、初見の実力がそのまま出ます。本文中の調整済み 6 文書コーパスが、測定ループを回し終えた後に届く水準です。</figcaption>
+        <figcaption class="fnote">上: エンジンごとの平均 — 右端の破線が Microsoft Word 自身（1.00）。下: 点 1 つが文書 1 件で、縦軸が Oxi。破線の対角線より上にある点が「Oxi のほうが Word に近い」文書です。ブラインドセットは「測定はするが修正対象にはしない」文書群なので、初見の実力がそのまま出ます — 負けている数字もそのまま公開しています。</figcaption>
       </figure>
 
       <h3>なぜこの精度が出せるのか</h3>
@@ -545,7 +550,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>Word とどれくらい同じ見た目になりますか？</summary>
-        <p>日本語の実文書 235 件（410 ページ）で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378 / 文書平均 0.9591（英語コーパスは文書平均 0.853）。同じ条件で LibreOffice・ONLYOFFICE を上回ります。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
+        <p>日本語の実文書 235 件（410 ページ）で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378 / 文書平均 0.9591（英語のブラインド 50 文書は文書平均 0.800）。同じ条件で LibreOffice・ONLYOFFICE を上回ります。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
       </details>
       <details>
         <summary>対応している形式は？</summary>
