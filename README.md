@@ -5,7 +5,7 @@
 A browser-native .docx rendering engine — Rust + WebAssembly, no server.
 Its layout is measured against Microsoft Word, page by page, with pixel-level SSIM.
 
-[Live Demo](https://ryujiyasu.gitlab.io/oxi/) · [Cross-Renderer Comparison](#cross-renderer-comparison) · [Contributing](#contributing)
+[Live Demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Cross-Renderer Comparison](#cross-renderer-comparison) · [Contributing](#contributing)
 
 ![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
 
