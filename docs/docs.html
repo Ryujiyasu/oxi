@@ -128,6 +128,8 @@ mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
 /* Document area */
 .doc-area{flex:1;overflow-y:auto;overflow-x:auto;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px}
 .page{width:794px;min-height:1123px;background:#fff;box-shadow:var(--shad);margin-bottom:20px;padding:96px;position:relative}
+.pg-seam{position:absolute;left:0;right:0;background:var(--bg);pointer-events:none;z-index:1;box-shadow:inset 0 5px 5px -5px rgba(0,0,0,.35),inset 0 -5px 5px -5px rgba(0,0,0,.35)}
+.doc-area.reflow .pg-seam{display:none!important}
 .hf-area{padding:8px 0;font-family:'Calibri','Yu Gothic UI',sans-serif;font-size:9pt;color:#666;outline:none;min-height:1.5em;border-bottom:1px dashed #ccc;margin-bottom:8px;text-align:center}
 .hf-area.hf-footer{border-bottom:none;border-top:1px dashed #ccc;margin-bottom:0;margin-top:8px}
 .hf-area:empty::before{content:attr(data-placeholder);color:#bbb;pointer-events:none}
@@ -625,6 +627,7 @@ function switchMode(m) {
     const activeTab = document.querySelector('.rtabs button.active');
     const tab = activeTab ? activeTab.dataset.tab : 'home';
     for (const [k, id] of Object.entries(ribs)) $(id).style.display = k === tab ? 'flex' : 'none';
+    schedulePaginate();
   } else {
     document.querySelectorAll('.rib').forEach(el => el.style.display = 'none');
   }
@@ -1318,10 +1321,21 @@ function buildCard(c, activeId) {
       rin.className = 'cmt-input';
       rin.placeholder = t('cmtReply');
       rin.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && rin.value.trim()) {
-          e.preventDefault();
-          c.replies.push({ author: cmtAuthor() || t('cmtYou'), time: cmtNow(), text: rin.value.trim() });
+        // Ignore the Enter that confirms an IME composition (Japanese input)
+        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        const txt = rin.value.trim();
+        if (!txt) return;
+        c.replies.push({ author: cmtAuthor() || t('cmtYou'), time: cmtNow(), text: txt });
+        rin.value = '';
+        if (document.getElementById('cmtPopover')) {
+          showPopoverCard(c.id);
+          const pi = document.querySelector('#cmtPopover input.cmt-input');
+          if (pi) pi.focus();
+        } else {
           renderComments(c.id);
+          const ni = cmtRail && cmtRail.querySelector('.cmt-card.active input.cmt-input');
+          if (ni) ni.focus();
         }
       });
       card.appendChild(rin);
@@ -1431,6 +1445,113 @@ editor.addEventListener('click', e => {
   }
 });
 
+// A comment's range is fixed (Word semantics): typing at the edge of a
+// highlight must not extend it. Before text is inserted at the very start
+// or end of a mark, hop the caret just outside it.
+function caretEscapeMark() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const n = sel.anchorNode;
+  if (!n || !editor.contains(n)) return;
+  const host = n.nodeType === 1 ? n : n.parentNode;
+  const mark = host && host.closest ? host.closest('mark.oxi-cmt') : null;
+  if (!mark) return;
+  const tail = document.createRange();
+  tail.setStart(sel.anchorNode, sel.anchorOffset);
+  tail.setEnd(mark, mark.childNodes.length);
+  if (tail.toString() === '') {            // caret at the end edge
+    const r = document.createRange();
+    r.setStartAfter(mark); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+    return;
+  }
+  const head = document.createRange();
+  head.setStart(mark, 0);
+  head.setEnd(sel.anchorNode, sel.anchorOffset);
+  if (head.toString() === '') {            // caret at the start edge
+    const r = document.createRange();
+    r.setStartBefore(mark); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+  }
+}
+editor.addEventListener('beforeinput', e => {
+  if (/^insert(Text|Paragraph|LineBreak|FromPaste)/.test(e.inputType)) caretEscapeMark();
+});
+editor.addEventListener('compositionstart', caretEscapeMark);
+
+// Paragraph splits can leave empty cloned highlights behind; unwrap them.
+function cleanEmptyMarks() {
+  for (const m of editor.querySelectorAll('mark.oxi-cmt')) {
+    if (!m.textContent) unwrapAnchor(m);
+  }
+}
+
+// ---- Visual pagination of the edit view (block granularity).
+// One contenteditable surface; blocks that would cross a page boundary get
+// pushed below it and a gray seam is drawn in the gap, so the document
+// reads as A4/Letter pages while staying a single caret flow. ----
+const PAGE_GAP = 24;
+function paginateEditView() {
+  const page1 = document.getElementById('page1');
+  if (!page1) return;
+  for (const s of page1.querySelectorAll(':scope > .pg-seam')) s.remove();
+  for (const b of editor.querySelectorAll(':scope > .pg-brk')) {
+    b.classList.remove('pg-brk');
+    b.style.marginTop = '';
+  }
+  if (editArea.classList.contains('reflow') || mode !== 'edit') {
+    page1.style.minHeight = '';
+    return;
+  }
+  const baseH = parseFloat(page1.dataset.baseH || '1123');
+  const M = parseFloat(getComputedStyle(page1).paddingTop) || 96;
+  const stride = baseH + PAGE_GAP;
+  const contentH = baseH - 2 * M;
+  page1.style.minHeight = baseH + 'px';
+  let k = 0;
+  for (const b of editor.children) {
+    const h = b.offsetHeight;
+    const contentStart = k * stride + M;
+    if (k > 0 && b.offsetTop < contentStart - 0.5) pushBlockTo(b, contentStart);
+    const top = b.offsetTop;
+    if (top + h > k * stride + baseH - M + 0.5 && top > contentStart + 0.5 && h <= contentH) {
+      k += 1;
+      pushBlockTo(b, k * stride + M);
+    }
+    while (b.offsetTop + b.offsetHeight > k * stride + baseH - M + 0.5) k += 1;
+  }
+  if (k > 0) {
+    page1.style.minHeight = (k * stride + baseH) + 'px';
+    const spans = [];
+    for (const b of editor.children) {
+      if (b.offsetHeight > contentH) spans.push([b.offsetTop, b.offsetTop + b.offsetHeight]);
+    }
+    for (let i = 1; i <= k; i++) {
+      const sTop = i * stride - PAGE_GAP;
+      // Do not paint a seam through a block taller than a page
+      if (spans.some(([a, z]) => a < sTop - 1 && z > sTop + PAGE_GAP + 1)) continue;
+      const seam = document.createElement('div');
+      seam.className = 'pg-seam';
+      seam.style.top = sTop + 'px';
+      seam.style.height = PAGE_GAP + 'px';
+      page1.appendChild(seam);
+    }
+  }
+  updatePageInfo();
+}
+function pushBlockTo(b, target) {
+  b.classList.add('pg-brk');
+  b.style.marginTop = ((parseFloat(b.style.marginTop) || 0) + (target - b.offsetTop)) + 'px';
+  const off = target - b.offsetTop;   // margin-collapse correction
+  if (Math.abs(off) > 0.5) b.style.marginTop = ((parseFloat(b.style.marginTop) || 0) + off) + 'px';
+}
+let pgLayoutTimer = null;
+function schedulePaginate() {
+  clearTimeout(pgLayoutTimer);
+  pgLayoutTimer = setTimeout(() => { paginateEditView(); cmtRelayout(); }, 60);
+}
+editor.addEventListener('load', schedulePaginate, true);  // images finishing load
+
 // Keep cards aligned with their anchors while the document is edited
 let cmtLayoutTimer = null;
 function cmtRelayout() {
@@ -1441,9 +1562,9 @@ function cmtRelayout() {
 }
 editor.addEventListener('input', () => {
   clearTimeout(cmtLayoutTimer);
-  cmtLayoutTimer = setTimeout(cmtRelayout, 250);
+  cmtLayoutTimer = setTimeout(() => { cleanEmptyMarks(); paginateEditView(); cmtRelayout(); }, 250);
 });
-window.addEventListener('resize', cmtRelayout);
+window.addEventListener('resize', schedulePaginate);
 
 // A reply anchor resolves to its thread's top-level comment
 function resolveCid(id) {
@@ -1650,6 +1771,7 @@ $('btnMailMerge').addEventListener('click', () => {
       dl(currentDocx, `${fileName}_${i + 1}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     }
     editor.innerHTML = template; // Restore
+    schedulePaginate();
     alert(`Generated ${mergeData.length} documents`);
   }
 });
@@ -1716,12 +1838,14 @@ function doUndo() {
   const state = undoStack.length > 1 ? (undoStack.pop(), undoStack[undoStack.length-1]) : undoStack[0];
   redoStack.push(current);
   editor.innerHTML = state;
+  schedulePaginate();
 }
 function doRedo() {
   if (!redoStack.length) return;
   const state = redoStack.pop();
   undoStack.push(editor.innerHTML);
   editor.innerHTML = state;
+  schedulePaginate();
 }
 // Save initial state
 saveUndoState();
@@ -1769,6 +1893,7 @@ $('btnNew').addEventListener('click', () => {
   redoStack.length = 0;
   saveUndoState();
   updateStatus();
+  paginateEditView();
   if (mode === 'preview') switchMode('edit');
 });
 $('btnOpen').addEventListener('click', () => $('openOv').classList.add('show'));
@@ -1792,6 +1917,7 @@ function loadDocx(data) {
     if (doc.pages) for (const pg of doc.pages) for (const b of pg.blocks) { const el = renderBlock(b); if (el) editor.appendChild(el); }
     if (!editor.innerHTML.trim()) editor.innerHTML = '<p><br></p>';
     seedCommentsFromDoc(doc);
+    paginateEditView();
     renderComments();
 
     // Store snapshot for diff-based saving
@@ -2194,10 +2320,10 @@ $('zOut').addEventListener('click', () => setZ(+zs.value-10));
 $('zIn').addEventListener('click', () => setZ(+zs.value+10));
 
 // ---- Layout ----
-$('pgA4').addEventListener('click', () => { $('page1').style.width='794px'; $('page1').style.minHeight='1123px'; $('pgA4').classList.add('active'); $('pgLetter').classList.remove('active'); });
-$('pgLetter').addEventListener('click', () => { $('page1').style.width='816px'; $('page1').style.minHeight='1056px'; $('pgLetter').classList.add('active'); $('pgA4').classList.remove('active'); });
-$('mgNorm').addEventListener('click', () => { $('page1').style.padding='96px'; $('mgNorm').classList.add('active'); $('mgNarrow').classList.remove('active'); });
-$('mgNarrow').addEventListener('click', () => { $('page1').style.padding='48px'; $('mgNarrow').classList.add('active'); $('mgNorm').classList.remove('active'); });
+$('pgA4').addEventListener('click', () => { const p=$('page1'); p.style.width='794px'; p.dataset.baseH='1123'; p.style.minHeight='1123px'; $('pgA4').classList.add('active'); $('pgLetter').classList.remove('active'); paginateEditView(); });
+$('pgLetter').addEventListener('click', () => { const p=$('page1'); p.style.width='816px'; p.dataset.baseH='1056'; p.style.minHeight='1056px'; $('pgLetter').classList.add('active'); $('pgA4').classList.remove('active'); paginateEditView(); });
+$('mgNorm').addEventListener('click', () => { $('page1').style.padding='96px'; $('mgNorm').classList.add('active'); $('mgNarrow').classList.remove('active'); paginateEditView(); });
+$('mgNarrow').addEventListener('click', () => { $('page1').style.padding='48px'; $('mgNarrow').classList.add('active'); $('mgNorm').classList.remove('active'); paginateEditView(); });
 
 // ---- Keyboard ----
 document.addEventListener('keydown', e => {
@@ -2230,7 +2356,7 @@ function findInEditor(dir) {
 }
 $('findNext').addEventListener('click', () => findInEditor('next'));
 $('findPrev').addEventListener('click', () => findInEditor('prev'));
-$('findInput').addEventListener('keydown', e => { if (e.key === 'Enter') findInEditor(e.shiftKey ? 'prev' : 'next'); });
+$('findInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) findInEditor(e.shiftKey ? 'prev' : 'next'); });
 $('findClose').addEventListener('click', () => { $('findBar').style.display = 'none'; });
 $('replaceOne').addEventListener('click', () => {
   const sel = window.getSelection();
@@ -2271,6 +2397,7 @@ function printDoc() {
     body{font-family:Calibri,'Yu Gothic UI',sans-serif;font-size:10.5pt;margin:72pt;color:#000}
     table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:4px 6px}
     h1{font-size:16pt}h2{font-size:13pt}p{margin-bottom:8pt}
+    .pg-brk{margin-top:0!important}
     @page{size:A4;margin:1in}
   </style></head><body>${editor.innerHTML}</body></html>`);
   doc.close();
@@ -2293,12 +2420,13 @@ function updatePageInfo() {
     const currentPage = Math.min(pages, Math.floor(scrollTop / (linesPerPage * lineH)) + 1);
     $('pgInfo').textContent = `~${t('page')} ${currentPage} / ~${pages}`;
   } else {
-    // Page mode: estimate from editor page layout
-    const pageH = 1123; // A4 px
-    const contentH = editor.scrollHeight;
-    const pages = Math.max(1, Math.ceil(contentH / (pageH - 192)));
+    // Page mode: real page count from the paginated edit view
+    const pg1 = $('page1');
+    const baseH = parseFloat((pg1 && pg1.dataset.baseH) || '1123');
+    const stride = baseH + 24;
+    const pages = 1 + (pg1 ? pg1.querySelectorAll(':scope > .pg-seam').length : 0);
     const scrollTop = $('editArea').scrollTop;
-    const currentPage = Math.min(pages, Math.floor(scrollTop / pageH) + 1);
+    const currentPage = Math.min(pages, Math.floor(scrollTop / stride) + 1);
     $('pgInfo').textContent = `${t('page')} ${currentPage} / ${pages}`;
   }
 }
@@ -2347,6 +2475,7 @@ document.addEventListener('keydown', e => {
 function checkReflow() {
   const mobile = window.innerWidth < 769;
   editArea.classList.toggle('reflow', mobile);
+  paginateEditView();
 }
 window.addEventListener('resize', checkReflow);
 checkReflow();
