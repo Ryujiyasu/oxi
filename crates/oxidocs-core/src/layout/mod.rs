@@ -10167,8 +10167,22 @@ impl LayoutEngine {
             };
             if all_latin && body_nat > 0.0 && marker_nat > body_nat {
                 let scale = marker_nat / body_nat;
+                // S947 (2026-07-19, opt-out OXI_S947_DISABLE): the scale model
+                // applies only to body-proportional lines (rule None/auto,
+                // line = nat x factor — the gen2 derivation domain). An
+                // atLeast FLOOR line (NDIS bullets: line=300 = 15.0 >
+                // marker component 14.01) absorbs the marker — multiplying
+                // the floor by the component ratio grew every bullet +0.88
+                // (Word inter-item 20.04 = plain, measured). atLeast compares
+                // the raw component against the floor; exact never grows.
+                let s947 = std::env::var("OXI_S947_DISABLE").is_err();
+                let s689_target = match para.style.line_spacing_rule.as_deref() {
+                    Some("exact") if s947 => line_heights[0],
+                    Some("atLeast") if s947 => line_heights[0].max(marker_nat),
+                    _ => line_heights[0] * scale,
+                };
                 if s821_entry_attribution {
-                    s821_growth_target = s821_growth_target.max(line_heights[0] * scale);
+                    s821_growth_target = s821_growth_target.max(s689_target);
                 } else {
                     line_heights[0] *= scale;
                     natural_line_heights[0] *= scale;
