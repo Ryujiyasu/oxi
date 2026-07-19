@@ -20,27 +20,9 @@
     <xhtml:link rel="alternate" hreflang="x-default" href="https://ryujiyasu.gitlab.io/oxi/"/>
   </url>
   <url>
-    <loc>https://ryujiyasu.gitlab.io/oxi/app.html</loc>
-    <lastmod>2026-07-19</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
     <loc>https://ryujiyasu.gitlab.io/oxi/docs.html</loc>
     <lastmod>2026-07-19</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://ryujiyasu.gitlab.io/oxi/cells.html</loc>
-    <lastmod>2026-07-19</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.3</priority>
-  </url>
-  <url>
-    <loc>https://ryujiyasu.gitlab.io/oxi/slides.html</loc>
-    <lastmod>2026-07-19</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.3</priority>
   </url>
 </urlset>

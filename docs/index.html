@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word</title>
-<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — pixel-level SSIM 0.94 vs Microsoft Word across 235 real documents. 100% client-side: your files never leave your device.">
+<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — pixel-level SSIM 0.94 vs Microsoft Word on a 235-document Japanese corpus, 0.85 on English forms. 100% client-side: your files never leave your device.">
 <meta name="keywords" content="docx viewer, docx editor, browser, Word compatible, rendering engine, Rust, WebAssembly, wasm, open source, OOXML, layout engine, Japanese typography, kinsoku, vertical writing, LibreOffice alternative, docx online, no upload">
 <!-- Google Search Console: HTML-file verification is deployed at ./googlebdcd49fe8490af38.html
      (alternative: paste the <meta name="google-site-verification"> tag here) -->
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word">
-<meta property="og:description" content="Open .docx files in the browser with Word-faithful layout. Pixel-measured against Microsoft Word (SSIM 0.94, 235 docs). Open source, Rust + WebAssembly, 100% client-side.">
+<meta property="og:description" content="Open .docx files in the browser with Word-faithful layout. Pixel-measured against Microsoft Word (SSIM 0.94 on 235 Japanese docs). Open source, Rust + WebAssembly, 100% client-side.">
 <meta property="og:image" content="https://ryujiyasu.gitlab.io/oxi/oxi-logo.png">
 <meta property="og:url" content="https://ryujiyasu.gitlab.io/oxi/">
 <meta property="og:site_name" content="Oxi">
@@ -72,7 +72,7 @@
     {
       "@type": "Question",
       "name": "Which file formats does Oxi support?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Word .docx is the core focus, with full layout and round-trip editing. Excel .xlsx and PowerPoint .pptx are parsed and editable (viewers in progress), and PDF parsing, text extraction, generation and signature verification are included." }
+      "acceptedAnswer": { "@type": "Answer", "text": "Oxi focuses on Word .docx: full page layout and round-trip editing. Reproducing Word's .docx rendering faithfully is the mission — everything else comes after." }
     },
     {
       "@type": "Question",
@@ -142,6 +142,19 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tag.docs { background: var(--docs); } .tag.cells { background: var(--cells); }
 .tag.slides { background: var(--slides); } .tag.pdf { background: var(--pdf); }
 .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; background: var(--primary-light); color: var(--primary); margin-left: 8px; vertical-align: middle; }
+.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 18px 12px; margin: 18px 0; }
+.chart-card h4 { font-size: 15px; margin-bottom: 12px; }
+.chart-card .fnote { font-size: 12px; color: var(--text2); margin-top: 8px; }
+.chart-card details { border: none; background: transparent; padding: 8px 0 0; margin: 0; }
+.chart-card details summary { font-size: 13px; color: var(--primary); }
+.barchart .brow { display: grid; grid-template-columns: 150px 1fr 64px; gap: 10px; align-items: center; margin-bottom: 8px; }
+.barchart .blabel { font-size: 14px; line-height: 1.3; }
+.barchart .blabel span { display: block; font-size: 12px; color: var(--text2); }
+.barchart .btrack { background: #f0ece4; border-right: 2px dashed #C84C3A; border-radius: 0 4px 4px 0; }
+.barchart .bfill { height: 22px; border-radius: 0 4px 4px 0; background: #8a8378; }
+.barchart .bfill.oxi { background: #264653; }
+.barchart .bval { font-size: 14px; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .barchart .brow { grid-template-columns: 96px 1fr 56px; } }
 details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
 details summary { font-weight: 700; cursor: pointer; }
 details p { margin: 10px 0 0; color: var(--text2); }
@@ -174,43 +187,28 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <h1>A browser-native .docx rendering engine,<br>measured against Microsoft Word — pixel by pixel.</h1>
     <p class="lead">Oxi opens Word documents in the browser with Word-faithful layout. Built from scratch in Rust + WebAssembly, verified page-by-page against Microsoft Word with SSIM. Open source, no server, and your files never leave your device.</p>
     <div class="cta">
-      <a class="btn primary" href="./app.html">Try the live demo</a>
+      <a class="btn primary" href="./docs.html">Try the live demo</a>
       <a class="btn ghost" href="https://gitlab.com/Ryujiyasu/oxi">View source on GitLab</a>
     </div>
     <p class="note">Free · No account · Runs entirely in your browser</p>
 
     <div class="stats" aria-label="Key measurements">
-      <div class="stat"><div class="num">0.94</div><div class="lbl">mean SSIM vs Word<br>(per page, 235 docs)</div></div>
-      <div class="stat"><div class="num">410</div><div class="lbl">pages measured against<br>Microsoft Word, continuously</div></div>
-      <div class="stat"><div class="num">100%</div><div class="lbl">parse success on 504<br>real government files</div></div>
+      <div class="stat"><div class="num">0.94</div><div class="lbl">SSIM vs Word — Japanese<br>corpus (235 docs / 410 pages)</div></div>
+      <div class="stat"><div class="num">0.85</div><div class="lbl">SSIM vs Word — English<br>corpus (LibreOffice: 0.79)</div></div>
+      <div class="stat"><div class="num">100%</div><div class="lbl">parse success on real<br>government .docx files</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">bytes uploaded —<br>everything runs client-side</div></div>
     </div>
   </div>
 
   <section id="demo">
     <div class="wrap">
-      <h2>Open a document right now</h2>
-      <p class="sub">Drop a file into the web app — parsing, layout, rendering and editing all happen locally via WebAssembly.</p>
-      <div class="cards">
+      <h2>Open a Word document right now</h2>
+      <p class="sub">Everything happens locally in your browser via WebAssembly — parsing, layout, rendering and editing. No upload, no account.</p>
+      <div class="cards" style="grid-template-columns: minmax(260px, 620px); justify-content: center;">
         <a class="card" href="./docs.html">
           <span class="tag docs">W</span>
-          <h3>Oxidocs — .docx</h3>
-          <p>Word-compatible viewer &amp; editor with the measured layout engine. Round-trip editing preserves the original file structure.</p>
-        </a>
-        <a class="card" href="./app.html">
-          <span class="tag cells">X</span>
-          <h3>Oxicells — .xlsx</h3>
-          <p>Spreadsheet parsing and editing. 100% parse success on the government-file corpus; viewer in progress.</p>
-        </a>
-        <a class="card" href="./app.html">
-          <span class="tag slides">P</span>
-          <h3>Oxislides — .pptx</h3>
-          <p>Presentation parsing and editing, sharing the same intermediate representation and font engines.</p>
-        </a>
-        <a class="card" href="./app.html">
-          <span class="tag pdf">P</span>
-          <h3>PDF</h3>
-          <p>PDF 1.7 parsing, text extraction, generation, and signature verification (including PAdES).</p>
+          <h3>Oxidocs — Word (.docx) viewer &amp; editor</h3>
+          <p>Open a .docx and see it laid out the way Word renders it — powered by the same layout engine that is measured against Microsoft Word below. Edit and save: the original file structure is preserved, and only your changes are patched in.</p>
         </a>
       </div>
     </div>
@@ -220,19 +218,85 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div class="wrap">
       <h2>Layout accuracy is measured, not asserted</h2>
       <p class="sub">Every claim below comes from a reproducible measurement pipeline, published in the repository.</p>
-      <p>Oxi's layout engine is compared with Microsoft Word using pixel-level <strong>SSIM (structural similarity)</strong> across a corpus of <strong>235 real-world Japanese business documents (410 pages)</strong> — regulations, government forms, and contracts. As of <strong>2026-07-17</strong> the per-page mean is <strong>0.9378</strong> and the per-document mean is <strong>0.9591</strong>.</p>
-      <table>
-        <caption class="small" style="caption-side:bottom; text-align:left; padding-top:6px;">Same corpus, same Microsoft Word ground truth. Higher SSIM = closer to Word's rendering.</caption>
-        <thead>
-          <tr><th>Engine</th><th class="num">Mean SSIM vs Word (per page)</th><th class="num">Pages where best</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><strong>Oxi</strong> (2026-07-17 build)</td><td class="num"><strong>0.9377</strong></td><td class="num"><strong>188</strong> / 406</td></tr>
-          <tr><td>ONLYOFFICE (x2t headless → PDF)</td><td class="num">0.8913</td><td class="num">134 / 406</td></tr>
-          <tr><td>LibreOffice (soffice headless → PDF)</td><td class="num">0.8872</td><td class="num">84 / 406</td></tr>
-        </tbody>
-      </table>
-      <p>On a 6-document English corpus (UK/US government forms and contracts) Oxi leads LibreOffice <strong>0.853 vs 0.789</strong> per document, and all 6 documents reach <strong>100% paragraph-level pagination match</strong> with Word.</p>
+      <h3>Japanese corpus — 235 documents, 410 pages</h3>
+      <p>Oxi's layout engine is compared with Microsoft Word using pixel-level <strong>SSIM (structural similarity)</strong> across <strong>235 real-world Japanese business documents (410 pages)</strong> — regulations, government forms, and contracts. As of <strong>2026-07-17</strong> the per-page mean is <strong>0.9378</strong> and the per-document mean is <strong>0.9591</strong>.</p>
+
+      <figure class="chart-card">
+        <h4>Convergence toward Word, measured week by week (Japanese corpus)</h4>
+<svg viewBox="0 0 720 300" role="img" aria-label="Line chart: mean SSIM vs Microsoft Word rising from 0.788 on 2026-03-28 to 0.938 on 2026-07-17" style="width:100%;height:auto;font-family:inherit">
+  <line x1="46" y1="270.0" x2="704" y2="270.0" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="274.0" text-anchor="end" font-size="11" fill="#5a5a5a">0.75</text>
+  <line x1="46" y1="219.6" x2="704" y2="219.6" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="223.6" text-anchor="end" font-size="11" fill="#5a5a5a">0.80</text>
+  <line x1="46" y1="169.2" x2="704" y2="169.2" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="173.2" text-anchor="end" font-size="11" fill="#5a5a5a">0.85</text>
+  <line x1="46" y1="118.8" x2="704" y2="118.8" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="122.8" text-anchor="end" font-size="11" fill="#5a5a5a">0.90</text>
+  <line x1="46" y1="68.4" x2="704" y2="68.4" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="72.4" text-anchor="end" font-size="11" fill="#5a5a5a">0.95</text>
+  <line x1="46" y1="18.0" x2="704" y2="18.0" stroke="#C84C3A" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="40" y="22.0" text-anchor="end" font-size="11" fill="#5a5a5a">1.00</text>
+  <text x="704" y="33.0" text-anchor="end" font-size="12" font-weight="700" fill="#C84C3A">Microsoft Word = 1.00 (target)</text>
+  <line x1="69.7" y1="270" x2="69.7" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="69.7" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">Apr 2026</text>
+  <line x1="247.5" y1="270" x2="247.5" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="247.5" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">May 2026</text>
+  <line x1="431.3" y1="270" x2="431.3" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="431.3" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">Jun 2026</text>
+  <line x1="609.2" y1="270" x2="609.2" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="609.2" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">Jul 2026</text>
+  <line x1="46" y1="270" x2="704" y2="270" stroke="#d5d0c8" stroke-width="1"/>
+  <polyline points="46.0,231.3 99.4,176.3 146.8,160.7 188.3,156.6 229.8,149.1 289.0,133.4 312.8,129.4 419.5,132.7 443.2,106.1 496.5,99.7 603.2,93.3 674.4,81.5 704.0,80.7" fill="none" stroke="#264653" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="46.0" cy="231.3" r="3" fill="#264653"><title>2026-03-28 · 0.7884</title></circle>
+  <circle cx="99.4" cy="176.3" r="3" fill="#264653"><title>2026-04-06 · 0.8430</title></circle>
+  <circle cx="146.8" cy="160.7" r="3" fill="#264653"><title>2026-04-14 · 0.8584</title></circle>
+  <circle cx="188.3" cy="156.6" r="3" fill="#264653"><title>2026-04-21 · 0.8625</title></circle>
+  <circle cx="229.8" cy="149.1" r="3" fill="#264653"><title>2026-04-28 · 0.8699</title></circle>
+  <circle cx="289.0" cy="133.4" r="3" fill="#264653"><title>2026-05-08 · 0.8855</title></circle>
+  <circle cx="312.8" cy="129.4" r="3" fill="#264653"><title>2026-05-12 · 0.8895</title></circle>
+  <circle cx="419.5" cy="132.7" r="3" fill="#264653"><title>2026-05-30 · 0.8862</title></circle>
+  <circle cx="443.2" cy="106.1" r="3" fill="#264653"><title>2026-06-03 · 0.9126</title></circle>
+  <circle cx="496.5" cy="99.7" r="3" fill="#264653"><title>2026-06-12 · 0.9189</title></circle>
+  <circle cx="603.2" cy="93.3" r="3" fill="#264653"><title>2026-06-30 · 0.9253</title></circle>
+  <circle cx="674.4" cy="81.5" r="3" fill="#264653"><title>2026-07-12 · 0.9370</title></circle>
+  <circle cx="704.0" cy="80.7" r="4.5" fill="#264653"><title>2026-07-17 · 0.9378</title></circle>
+  <text x="46.0" y="221.3" text-anchor="start" font-size="12" font-weight="700" fill="#1a1a1a">0.788</text>
+  <text x="702.0" y="68.7" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.9378</text>
+</svg>
+        <figcaption class="fnote">Mean SSIM per page vs Microsoft Word, 2026-03-28 → 2026-07-17. The small step at 05-30 is a from-scratch recomputation of the measurement baseline, not a regression.</figcaption>
+        <details>
+          <summary>View the data</summary>
+          <table>
+            <thead><tr><th>Date</th><th class="num">Mean SSIM per page vs Word</th></tr></thead>
+            <tbody><tr><td>2026-03-28</td><td class="num">0.7884</td></tr><tr><td>2026-04-06</td><td class="num">0.8430</td></tr><tr><td>2026-04-14</td><td class="num">0.8584</td></tr><tr><td>2026-04-21</td><td class="num">0.8625</td></tr><tr><td>2026-04-28</td><td class="num">0.8699</td></tr><tr><td>2026-05-08</td><td class="num">0.8855</td></tr><tr><td>2026-05-12</td><td class="num">0.8895</td></tr><tr><td>2026-05-30</td><td class="num">0.8862</td></tr><tr><td>2026-06-03</td><td class="num">0.9126</td></tr><tr><td>2026-06-12</td><td class="num">0.9189</td></tr><tr><td>2026-06-30</td><td class="num">0.9253</td></tr><tr><td>2026-07-12</td><td class="num">0.9370</td></tr><tr><td>2026-07-17</td><td class="num">0.9378</td></tr></tbody>
+          </table>
+        </details>
+      </figure>
+
+      <figure class="chart-card">
+        <h4>Same documents, same Word ground truth — how other engines compare</h4>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>best on 188 / 406 pages</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:93.77%"></div></div>
+            <div class="bval"><strong>0.9377</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">ONLYOFFICE<span>best on 134 / 406 pages</span></div>
+            <div class="btrack"><div class="bfill" style="width:89.13%"></div></div>
+            <div class="bval">0.8913</div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice<span>best on 84 / 406 pages</span></div>
+            <div class="btrack"><div class="bfill" style="width:88.72%"></div></div>
+            <div class="bval">0.8872</div>
+          </div>
+        </div>
+        <figcaption class="fnote">Mean SSIM per page on the Japanese corpus; the dashed edge marks Microsoft Word itself (1.00). ONLYOFFICE and LibreOffice were rendered headlessly to PDF on the same documents; "best on" counts the pages where each engine comes closest to Word.</figcaption>
+      </figure>
+
+      <h3>English corpus — measured separately, reported honestly</h3>
+      <p>On the 6-document English corpus (UK/US government forms and contracts) Oxi leads LibreOffice <strong>0.853 vs 0.789</strong> per document, and all 6 documents reach <strong>100% paragraph-level pagination match</strong> with Word. On a broader 50-document wild benchmark sampled from the public docx-corpus, LibreOffice is still ahead (<strong>0.853 vs Oxi 0.824</strong>) — that gap is the current English work queue, and it is closing week by week.</p>
       <h3>How the fidelity is earned</h3>
       <ul>
         <li><strong>100% clean-room:</strong> no disassembly or binary analysis. Specifications come only from published standards (OOXML — ISO/IEC 29500 / ECMA-376) and black-box observation of Word's output via the COM API.</li>
@@ -270,7 +334,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
         <li><strong>Format-agnostic IR:</strong> <code>Document → Page → Block (Paragraph | Table | Image) → Run</code>. Neither OOXML nor ODF "owns" the model, so round-trips don't degrade.</li>
         <li><strong>Round-trip editing:</strong> the original ZIP is preserved and only changed XML text nodes are patched — never rebuilt from scratch.</li>
         <li><strong>Open fonts only:</strong> no proprietary fonts are bundled; open-licensed fonts are metric-matched to their Microsoft counterparts.</li>
-        <li><strong>Embeddable:</strong> a wasm-bindgen JavaScript API (<code>parse_document</code>, <code>layout_document</code>, <code>edit_docx</code>, <code>create_pdf</code>, …) callable from any web app.</li>
+        <li><strong>Embeddable:</strong> a wasm-bindgen JavaScript API (<code>parse_document</code>, <code>layout_document</code>, <code>edit_docx</code>, …) callable from any web app.</li>
       </ul>
       <h3>License</h3>
       <p>Core engine crates are <strong>MPL-2.0</strong> (file-level copyleft — embeddable in proprietary products, unlike AGPL). WebAssembly and Python bindings are <strong>MIT OR Apache-2.0</strong>. Contributions are DCO-only, no CLA.</p>
@@ -290,11 +354,11 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>How accurate is Oxi compared with Microsoft Word?</summary>
-        <p>Measured continuously with pixel-level SSIM against Word: per-page mean 0.9378 / per-document 0.9591 over 235 documents (410 pages) as of 2026-07-17 — ahead of LibreOffice and ONLYOFFICE on the same corpus. See the <a href="#accuracy">accuracy section</a> for the comparison table and methodology.</p>
+        <p>Measured continuously with pixel-level SSIM against Word: per-page mean 0.9378 / per-document 0.9591 over the 235-document Japanese corpus (410 pages) as of 2026-07-17, and 0.853 per document on the English corpus — ahead of LibreOffice and ONLYOFFICE on the same corpus. See the <a href="#accuracy">accuracy section</a> for the comparison table and methodology.</p>
       </details>
       <details>
         <summary>Which file formats does Oxi support?</summary>
-        <p>.docx (full layout + editing, the core mission), .xlsx and .pptx (parsing + editing, viewers in progress), and PDF (parsing, text extraction, generation, signature verification).</p>
+        <p>Oxi focuses on Word .docx: full page layout and round-trip editing. Reproducing Word's .docx rendering faithfully is the mission — everything else comes after.</p>
       </details>
       <details>
         <summary>Can I embed Oxi in my own product?</summary>
@@ -317,7 +381,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div>
       <a href="https://gitlab.com/Ryujiyasu/oxi">GitLab (canonical)</a> ·
       <a href="https://github.com/Ryujiyasu/oxi">GitHub mirror</a> ·
-      <a href="./app.html">Web app</a> ·
+      <a href="./docs.html">Open the editor</a> ·
       <a href="./ja/" lang="ja">日本語</a>
     </div>
   </div>

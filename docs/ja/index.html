@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Oxi — ブラウザで動く Word 互換 .docx レンダリングエンジン(オープンソース)</title>
-<meta name="description" content="Oxi は Rust + WebAssembly 製のオープンソース .docx レンダリングエンジン。Microsoft Word とページ単位・ピクセル単位で照合し、SSIM 0.94(235文書)を実測。禁則処理・縦書き・ルビなど日本語組版に対応。完全クライアントサイドでファイルはどこにも送信されません。">
+<title>Oxi — ブラウザだけで Word と同じ見た目を実現する .docx レンダリングエンジン（オープンソース）</title>
+<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。日本語の実文書 235 件で Microsoft Word とピクセル単位に照合し SSIM 0.94 を実測。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
 <meta name="keywords" content="docx ビューア, docx ブラウザ 表示, Word 互換, レイアウトエンジン, オープンソース, Rust, WebAssembly, wasm, 禁則処理, 縦書き, ルビ, 割注, 圏点, docx 編集 オンライン, アップロード不要, LibreOffice 代替">
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="Oxi — ブラウザで動く Word 互換 .docx レンダリングエンジン">
-<meta property="og:description" content="Microsoft Word とピクセル単位で照合された .docx レンダリング。オープンソース、Rust + WebAssembly、完全クライアントサイド。禁則処理・縦書き・ルビ対応。">
+<meta property="og:title" content="Oxi — ブラウザだけで Word と同じ見た目を実現する .docx エンジン">
+<meta property="og:description" content="Word とピクセル単位で照合した .docx レンダリング。オープンソース、Rust + WebAssembly、完全クライアントサイド。禁則処理・縦書き・ルビ対応。">
 <meta property="og:image" content="https://ryujiyasu.gitlab.io/oxi/oxi-logo.png">
 <meta property="og:url" content="https://ryujiyasu.gitlab.io/oxi/ja/">
 <meta property="og:site_name" content="Oxi">
@@ -17,8 +17,8 @@
 <meta property="og:locale:alternate" content="en_US">
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Oxi — ブラウザで動く Word 互換 .docx レンダリングエンジン">
-<meta name="twitter:description" content="Word とピクセル単位で照合された .docx レンダリング。オープンソース・完全クライアントサイド・日本語組版対応。">
+<meta name="twitter:title" content="Oxi — ブラウザだけで Word と同じ見た目を実現する .docx エンジン">
+<meta name="twitter:description" content="Word とピクセル単位で照合した .docx レンダリング。オープンソース・完全クライアントサイド・日本語組版対応。">
 <meta name="twitter:image" content="https://ryujiyasu.gitlab.io/oxi/oxi-logo.png">
 <link rel="canonical" href="https://ryujiyasu.gitlab.io/oxi/ja/">
 <link rel="alternate" hreflang="en" href="https://ryujiyasu.gitlab.io/oxi/">
@@ -39,7 +39,7 @@
   "operatingSystem": "Web browser (WebAssembly)",
   "applicationCategory": "BusinessApplication",
   "inLanguage": "ja",
-  "description": "Rust + WebAssembly 製のオープンソース .docx レンダリング/編集エンジン。Microsoft Word とピクセル単位 SSIM で継続的に照合。",
+  "description": "Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。Microsoft Word とピクセル単位の SSIM で継続的に照合。",
   "url": "https://ryujiyasu.gitlab.io/oxi/ja/",
   "image": "https://ryujiyasu.gitlab.io/oxi/oxi-logo.png",
   "license": "https://www.mozilla.org/en-US/MPL/2.0/",
@@ -58,33 +58,33 @@
   "mainEntity": [
     {
       "@type": "Question",
-      "name": "Oxi は無料で使えますか?",
-      "acceptedAnswer": { "@type": "Answer", "text": "はい。Oxi はオープンソースです。コアエンジンは MPL-2.0、WebAssembly/Python バインディングは MIT OR Apache-2.0 のデュアルライセンスで、Web デモはアカウント不要・無料で利用できます。" }
+      "name": "Oxi は無料で使えますか？",
+      "acceptedAnswer": { "@type": "Answer", "text": "はい。オープンソース（コア MPL-2.0、バインディング MIT OR Apache-2.0）で、Web デモは登録不要・無料です。" }
     },
     {
       "@type": "Question",
-      "name": "ファイルはサーバーにアップロードされますか?",
-      "acceptedAnswer": { "@type": "Answer", "text": "いいえ。解析・レイアウト・描画・編集はすべてブラウザ内の WebAssembly で実行され、ファイルは一切送信されません。機密文書や個人情報を含む文書でも安心して利用できます。" }
+      "name": "ファイルはサーバーに送信されますか？",
+      "acceptedAnswer": { "@type": "Answer", "text": "されません。処理はすべてブラウザ内の WebAssembly で完結し、ファイルが外部に送られることはありません。機密文書でも安心して使えます。" }
     },
     {
       "@type": "Question",
-      "name": "Microsoft Word とどれくらい同じ見た目になりますか?",
-      "acceptedAnswer": { "@type": "Answer", "text": "実在する日本語ビジネス文書 235 件(410 ページ)を Word とページ単位・ピクセル単位の SSIM で照合しており、2026-07-17 時点でページ平均 0.9378、文書平均 0.9591 です。同一コーパスで LibreOffice(0.8872)や ONLYOFFICE(0.8913)を上回っています。" }
+      "name": "Microsoft Word とどれくらい同じ見た目になりますか？",
+      "acceptedAnswer": { "@type": "Answer", "text": "日本語の実文書 235 件（410 ページ）で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378、文書平均 0.9591 です。同じ条件で LibreOffice（0.8872）や ONLYOFFICE（0.8913）を上回ります。" }
     },
     {
       "@type": "Question",
-      "name": "対応しているファイル形式は?",
-      "acceptedAnswer": { "@type": "Answer", "text": "中核は Word の .docx(レイアウト+ラウンドトリップ編集)。Excel の .xlsx と PowerPoint の .pptx は解析・編集に対応(ビューアは開発中)、PDF は解析・テキスト抽出・生成・署名検証に対応しています。" }
+      "name": "対応しているファイル形式は？",
+      "acceptedAnswer": { "@type": "Answer", "text": "まずは Word の .docx です。ページレイアウトの完全再現とラウンドトリップ編集に集中しています。Word の .docx 描画を忠実に再現することが Oxi のミッションです。" }
     },
     {
       "@type": "Question",
-      "name": "自社製品に組み込めますか?",
-      "acceptedAnswer": { "@type": "Answer", "text": "組み込めます。コアはファイル単位コピーレフトの MPL-2.0、バインディングは MIT OR Apache-2.0 なので、AGPL 系と異なり商用・プロプライエタリ製品にも組み込み可能です。" }
+      "name": "自社製品に組み込めますか？",
+      "acceptedAnswer": { "@type": "Answer", "text": "組み込めます。コアはファイル単位コピーレフトの MPL-2.0、バインディングは MIT OR Apache-2.0 なので、AGPL 系と違い商用・プロプライエタリ製品にも組み込めます。" }
     },
     {
       "@type": "Question",
-      "name": "日本語文書の組版には対応していますか?",
-      "acceptedAnswer": { "@type": "Answer", "text": "日本語組版は最優先の目標です。禁則処理(JIS X 4051)、縦書き、縦中横、ルビ、割注、圏点に対応し、判子(丸印・角印・小判)の生成と PAdES PDF 署名も備えています。" }
+      "name": "日本語文書の組版には対応していますか？",
+      "acceptedAnswer": { "@type": "Answer", "text": "対応しています。禁則処理（JIS X 4051）、縦書き、縦中横、ルビ、割注、圏点に対応し、判子（丸印・角印・小判）の生成と PAdES PDF 署名も備えています。" }
     }
   ]
 }
@@ -98,7 +98,7 @@
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { font-family: 'Noto Sans JP', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); line-height: 1.75; }
+body { font-family: 'Noto Sans JP', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); line-height: 1.65; }
 a { color: var(--primary); }
 .wrap { max-width: 980px; margin: 0 auto; padding: 0 20px; }
 header.site { background: var(--primary); color: #fff; }
@@ -110,8 +110,8 @@ header.site nav a { color: rgba(255,255,255,.9); text-decoration: none; font-siz
 header.site nav a:hover { color: #fff; text-decoration: underline; }
 .lang { border: 1px solid rgba(255,255,255,.5); border-radius: 14px; padding: 2px 12px !important; }
 .hero { padding: 64px 0 40px; text-align: center; }
-.hero h1 { font-size: clamp(24px, 4.2vw, 38px); line-height: 1.4; max-width: 860px; margin: 0 auto 16px; }
-.hero p.lead { font-size: 17px; color: var(--text2); max-width: 780px; margin: 0 auto 28px; }
+.hero h1 { font-size: clamp(26px, 4.5vw, 40px); line-height: 1.3; max-width: 840px; margin: 0 auto 16px; }
+.hero p.lead { font-size: 18px; color: var(--text2); max-width: 760px; margin: 0 auto 28px; }
 .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
 .btn { display: inline-block; padding: 13px 28px; border-radius: 8px; font-weight: 700; text-decoration: none; font-size: 16px; }
 .btn.primary { background: var(--accent); color: #fff; }
@@ -125,7 +125,7 @@ header.site nav a:hover { color: #fff; text-decoration: underline; }
 .stat .lbl { font-size: 13px; color: var(--text2); margin-top: 4px; }
 section { padding: 44px 0; }
 section:nth-of-type(even) { background: var(--surface); }
-h2 { font-size: 25px; margin-bottom: 6px; color: var(--primary-dark); }
+h2 { font-size: 26px; margin-bottom: 6px; color: var(--primary-dark); }
 .sub { color: var(--text2); margin-bottom: 22px; }
 h3 { font-size: 18px; margin: 22px 0 8px; }
 p { margin-bottom: 12px; }
@@ -143,6 +143,20 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .card p { font-size: 14px; color: var(--text2); margin: 0; }
 .tag.docs { background: var(--docs); } .tag.cells { background: var(--cells); }
 .tag.slides { background: var(--slides); } .tag.pdf { background: var(--pdf); }
+.badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; background: var(--primary-light); color: var(--primary); margin-left: 8px; vertical-align: middle; }
+.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 18px 12px; margin: 18px 0; }
+.chart-card h4 { font-size: 15px; margin-bottom: 12px; }
+.chart-card .fnote { font-size: 12px; color: var(--text2); margin-top: 8px; }
+.chart-card details { border: none; background: transparent; padding: 8px 0 0; margin: 0; }
+.chart-card details summary { font-size: 13px; color: var(--primary); }
+.barchart .brow { display: grid; grid-template-columns: 150px 1fr 64px; gap: 10px; align-items: center; margin-bottom: 8px; }
+.barchart .blabel { font-size: 14px; line-height: 1.3; }
+.barchart .blabel span { display: block; font-size: 12px; color: var(--text2); }
+.barchart .btrack { background: #f0ece4; border-right: 2px dashed #C84C3A; border-radius: 0 4px 4px 0; }
+.barchart .bfill { height: 22px; border-radius: 0 4px 4px 0; background: #8a8378; }
+.barchart .bfill.oxi { background: #264653; }
+.barchart .bval { font-size: 14px; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .barchart .brow { grid-template-columns: 96px 1fr 56px; } }
 details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
 details summary { font-weight: 700; cursor: pointer; }
 details p { margin: 10px 0 0; color: var(--text2); }
@@ -160,7 +174,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <span class="brand">Oxi</span>
     <nav>
       <a href="#demo">デモ</a>
-      <a href="#accuracy">再現精度</a>
+      <a href="#accuracy">再現度</a>
       <a href="#japanese">日本語組版</a>
       <a href="#tech">技術</a>
       <a href="#faq">FAQ</a>
@@ -172,46 +186,31 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
 <main>
   <div class="hero wrap">
-    <h1>Microsoft Word とピクセル単位で照合された、<br>ブラウザネイティブの .docx レンダリングエンジン</h1>
-    <p class="lead">Oxi は Word 文書をブラウザだけで「Word と同じ見た目」に開くための、Rust + WebAssembly 製オープンソースエンジンです。レイアウトは実文書のコーパスで Word とページ単位に照合。サーバー不要、ファイルは 1 バイトも外部に送信されません。</p>
+    <h1>ブラウザだけで、Word と同じ見た目を。</h1>
+    <p class="lead">Oxi は、Word 文書（.docx）をブラウザ上で Word そのままのレイアウトで表示・編集するためのオープンソースエンジンです。Rust + WebAssembly でゼロから実装し、再現度は実在の文書で Microsoft Word とページごとに照合。サーバーは使わず、ファイルは 1 バイトも外に出ません。</p>
     <div class="cta">
-      <a class="btn primary" href="../app.html">デモを試す</a>
+      <a class="btn primary" href="../docs.html">デモを試す</a>
       <a class="btn ghost" href="https://gitlab.com/Ryujiyasu/oxi">GitLab でソースを見る</a>
     </div>
-    <p class="note">無料 · アカウント不要 · すべてブラウザ内で完結</p>
+    <p class="note">無料 · 登録不要 · 処理はすべてブラウザ内で完結</p>
 
     <div class="stats" aria-label="主要な実測値">
-      <div class="stat"><div class="num">0.94</div><div class="lbl">Word との平均 SSIM<br>(ページ単位・235 文書)</div></div>
-      <div class="stat"><div class="num">410</div><div class="lbl">Word と継続照合している<br>実文書ページ数</div></div>
-      <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実ファイル 504 件<br>のパース成功率</div></div>
-      <div class="stat"><div class="num">0</div><div class="lbl">アップロード容量 —<br>完全クライアントサイド</div></div>
+      <div class="stat"><div class="num">0.94</div><div class="lbl">Word との SSIM — 日本語<br>コーパス（235 文書 / 410 ページ）</div></div>
+      <div class="stat"><div class="num">0.85</div><div class="lbl">Word との SSIM — 英語<br>コーパス（LibreOffice は 0.79）</div></div>
+      <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実文書（.docx）での<br>パース成功率</div></div>
+      <div class="stat"><div class="num">0</div><div class="lbl">アップロードは 0 バイト<br>処理はすべて手元のブラウザで</div></div>
     </div>
   </div>
 
   <section id="demo">
     <div class="wrap">
-      <h2>いますぐ文書を開く</h2>
-      <p class="sub">Web アプリにファイルをドロップするだけ。解析・レイアウト・描画・編集はすべて WebAssembly でローカル実行されます。</p>
-      <div class="cards">
+      <h2>いますぐ Word 文書を開く</h2>
+      <p class="sub">ファイルを選ぶだけ。解析からレイアウト、描画、編集まで、すべてブラウザの中だけで動きます。アップロードも登録もありません。</p>
+      <div class="cards" style="grid-template-columns: minmax(260px, 620px); justify-content: center;">
         <a class="card" href="../docs.html">
           <span class="tag docs">W</span>
-          <h3>Oxidocs — .docx</h3>
-          <p>実測ベースのレイアウトエンジンを備えた Word 互換ビューア/エディタ。編集しても元ファイルの構造を保持します。</p>
-        </a>
-        <a class="card" href="../app.html">
-          <span class="tag cells">X</span>
-          <h3>Oxicells — .xlsx</h3>
-          <p>表計算ファイルの解析・編集。官公庁コーパスでパース成功率 100%。ビューアは開発中。</p>
-        </a>
-        <a class="card" href="../app.html">
-          <span class="tag slides">P</span>
-          <h3>Oxislides — .pptx</h3>
-          <p>プレゼンテーションの解析・編集。同じ中間表現とフォントエンジンを共有します。</p>
-        </a>
-        <a class="card" href="../app.html">
-          <span class="tag pdf">P</span>
-          <h3>PDF</h3>
-          <p>PDF 1.7 の解析、テキスト抽出、生成、署名検証(PAdES 対応)。</p>
+          <h3>Oxidocs — Word (.docx) ビューア / エディタ</h3>
+          <p>.docx を開くと、下のグラフで実測しているのと同じレイアウトエンジンがその場で描画します。編集して保存しても元のファイル構造はそのまま。変更した箇所だけを書き換えます。</p>
         </a>
       </div>
     </div>
@@ -219,26 +218,93 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
   <section id="accuracy">
     <div class="wrap">
-      <h2>再現精度は「主張」ではなく「実測」</h2>
-      <p class="sub">以下の数値はすべて、リポジトリで公開されている再現可能な測定パイプラインによるものです。</p>
-      <p>Oxi のレイアウトエンジンは、実在する日本語ビジネス文書 <strong>235 件(410 ページ)</strong> — 就業規則・官公庁様式・契約書 — を対象に、Microsoft Word の出力とピクセル単位の <strong>SSIM(構造的類似度)</strong>で比較されています。<strong>2026-07-17 時点でページ平均 0.9378、文書平均 0.9591</strong> です。</p>
-      <table>
-        <caption class="small" style="caption-side:bottom; text-align:left; padding-top:6px;">同一コーパス・同一の Word 出力を正解とした比較。SSIM が高いほど Word の描画に近い。</caption>
-        <thead>
-          <tr><th>エンジン</th><th class="num">Word との平均 SSIM(ページ単位)</th><th class="num">最良だったページ数</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><strong>Oxi</strong>(2026-07-17 ビルド)</td><td class="num"><strong>0.9377</strong></td><td class="num"><strong>188</strong> / 406</td></tr>
-          <tr><td>ONLYOFFICE(x2t ヘッドレス → PDF)</td><td class="num">0.8913</td><td class="num">134 / 406</td></tr>
-          <tr><td>LibreOffice(soffice ヘッドレス → PDF)</td><td class="num">0.8872</td><td class="num">84 / 406</td></tr>
-        </tbody>
-      </table>
-      <p>英語文書(英米の政府様式・契約書 6 件)でも文書平均 <strong>Oxi 0.853 vs LibreOffice 0.789</strong>、6 件すべてで Word と<strong>段落単位の改ページが 100% 一致</strong>しています。</p>
-      <h3>精度の根拠</h3>
+      <h2>再現度は「主張」ではなく「実測」</h2>
+      <p class="sub">ここに並ぶ数値はすべて、リポジトリで公開している測定パイプラインで誰でも再現できます。</p>
+      <h3>日本語コーパス — 235 文書・410 ページ</h3>
+      <p>就業規則、官公庁の申請様式、契約書……実在の日本語ビジネス文書 <strong>235 件（410 ページ）</strong>を Microsoft Word の出力と重ね、ピクセル単位の <strong>SSIM（構造的類似度）</strong>で採点しています。<strong>2026-07-17 時点の成績はページ平均 0.9378、文書平均 0.9591</strong>。満点（= Word と完全一致）は 1.00 です。</p>
+
+      <figure class="chart-card">
+        <h4>Word への収束を、毎週実測（日本語コーパス）</h4>
+<svg viewBox="0 0 720 300" role="img" aria-label="折れ線グラフ: Word との平均 SSIM が 2026-03-28 の 0.788 から 2026-07-17 の 0.938 まで上昇" style="width:100%;height:auto;font-family:inherit">
+  <line x1="46" y1="270.0" x2="704" y2="270.0" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="274.0" text-anchor="end" font-size="11" fill="#5a5a5a">0.75</text>
+  <line x1="46" y1="219.6" x2="704" y2="219.6" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="223.6" text-anchor="end" font-size="11" fill="#5a5a5a">0.80</text>
+  <line x1="46" y1="169.2" x2="704" y2="169.2" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="173.2" text-anchor="end" font-size="11" fill="#5a5a5a">0.85</text>
+  <line x1="46" y1="118.8" x2="704" y2="118.8" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="122.8" text-anchor="end" font-size="11" fill="#5a5a5a">0.90</text>
+  <line x1="46" y1="68.4" x2="704" y2="68.4" stroke="#e6e2da" stroke-width="1"/>
+  <text x="40" y="72.4" text-anchor="end" font-size="11" fill="#5a5a5a">0.95</text>
+  <line x1="46" y1="18.0" x2="704" y2="18.0" stroke="#C84C3A" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="40" y="22.0" text-anchor="end" font-size="11" fill="#5a5a5a">1.00</text>
+  <text x="704" y="33.0" text-anchor="end" font-size="12" font-weight="700" fill="#C84C3A">Microsoft Word = 1.00(目標)</text>
+  <line x1="69.7" y1="270" x2="69.7" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="69.7" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">4月 2026</text>
+  <line x1="247.5" y1="270" x2="247.5" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="247.5" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">5月 2026</text>
+  <line x1="431.3" y1="270" x2="431.3" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="431.3" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">6月 2026</text>
+  <line x1="609.2" y1="270" x2="609.2" y2="274" stroke="#d5d0c8" stroke-width="1"/>
+  <text x="609.2" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">7月 2026</text>
+  <line x1="46" y1="270" x2="704" y2="270" stroke="#d5d0c8" stroke-width="1"/>
+  <polyline points="46.0,231.3 99.4,176.3 146.8,160.7 188.3,156.6 229.8,149.1 289.0,133.4 312.8,129.4 419.5,132.7 443.2,106.1 496.5,99.7 603.2,93.3 674.4,81.5 704.0,80.7" fill="none" stroke="#264653" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="46.0" cy="231.3" r="3" fill="#264653"><title>2026-03-28 · 0.7884</title></circle>
+  <circle cx="99.4" cy="176.3" r="3" fill="#264653"><title>2026-04-06 · 0.8430</title></circle>
+  <circle cx="146.8" cy="160.7" r="3" fill="#264653"><title>2026-04-14 · 0.8584</title></circle>
+  <circle cx="188.3" cy="156.6" r="3" fill="#264653"><title>2026-04-21 · 0.8625</title></circle>
+  <circle cx="229.8" cy="149.1" r="3" fill="#264653"><title>2026-04-28 · 0.8699</title></circle>
+  <circle cx="289.0" cy="133.4" r="3" fill="#264653"><title>2026-05-08 · 0.8855</title></circle>
+  <circle cx="312.8" cy="129.4" r="3" fill="#264653"><title>2026-05-12 · 0.8895</title></circle>
+  <circle cx="419.5" cy="132.7" r="3" fill="#264653"><title>2026-05-30 · 0.8862</title></circle>
+  <circle cx="443.2" cy="106.1" r="3" fill="#264653"><title>2026-06-03 · 0.9126</title></circle>
+  <circle cx="496.5" cy="99.7" r="3" fill="#264653"><title>2026-06-12 · 0.9189</title></circle>
+  <circle cx="603.2" cy="93.3" r="3" fill="#264653"><title>2026-06-30 · 0.9253</title></circle>
+  <circle cx="674.4" cy="81.5" r="3" fill="#264653"><title>2026-07-12 · 0.9370</title></circle>
+  <circle cx="704.0" cy="80.7" r="4.5" fill="#264653"><title>2026-07-17 · 0.9378</title></circle>
+  <text x="46.0" y="221.3" text-anchor="start" font-size="12" font-weight="700" fill="#1a1a1a">0.788</text>
+  <text x="702.0" y="68.7" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.9378</text>
+</svg>
+        <figcaption class="fnote">Word とのページ平均 SSIM、2026-03-28 → 2026-07-17。05-30 の小さな段差は測定ベースラインを取り直したことによるもので、性能の後退ではありません。</figcaption>
+        <details>
+          <summary>データを見る</summary>
+          <table>
+            <thead><tr><th>日付</th><th class="num">Word とのページ平均 SSIM</th></tr></thead>
+            <tbody><tr><td>2026-03-28</td><td class="num">0.7884</td></tr><tr><td>2026-04-06</td><td class="num">0.8430</td></tr><tr><td>2026-04-14</td><td class="num">0.8584</td></tr><tr><td>2026-04-21</td><td class="num">0.8625</td></tr><tr><td>2026-04-28</td><td class="num">0.8699</td></tr><tr><td>2026-05-08</td><td class="num">0.8855</td></tr><tr><td>2026-05-12</td><td class="num">0.8895</td></tr><tr><td>2026-05-30</td><td class="num">0.8862</td></tr><tr><td>2026-06-03</td><td class="num">0.9126</td></tr><tr><td>2026-06-12</td><td class="num">0.9189</td></tr><tr><td>2026-06-30</td><td class="num">0.9253</td></tr><tr><td>2026-07-12</td><td class="num">0.9370</td></tr><tr><td>2026-07-17</td><td class="num">0.9378</td></tr></tbody>
+          </table>
+        </details>
+      </figure>
+
+      <figure class="chart-card">
+        <h4>同じ文書・同じ Word 正解データで、他エンジンと比較すると</h4>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>406 ページ中 188 で最良</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:93.77%"></div></div>
+            <div class="bval"><strong>0.9377</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">ONLYOFFICE<span>406 ページ中 134 で最良</span></div>
+            <div class="btrack"><div class="bfill" style="width:89.13%"></div></div>
+            <div class="bval">0.8913</div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice<span>406 ページ中 84 で最良</span></div>
+            <div class="btrack"><div class="bfill" style="width:88.72%"></div></div>
+            <div class="bval">0.8872</div>
+          </div>
+        </div>
+        <figcaption class="fnote">日本語コーパスでのページ平均 SSIM。右端の破線が Microsoft Word 自身（1.00）。ONLYOFFICE と LibreOffice は同じ文書をヘッドレスで PDF 出力して比較。「最良」はそのエンジンが Word に一番近かったページ数です。</figcaption>
+      </figure>
+
+      <h3>英語コーパス — 別枠で測って、そのまま公開</h3>
+      <p>英米の政府様式・契約書 6 件では文書平均 <strong>Oxi 0.853 vs LibreOffice 0.789</strong> と先行して6 件すべてで Word と<strong>段落単位の改ページが 100% 一致</strong>。一方、公開コーパスから抽出した 50 文書のベンチマークでは LibreOffice がまだ優位（<strong>0.853 vs Oxi 0.824</strong>）です。ここが現在の英語側の作業キューで、差は週ごとに縮まっています。</p>
+
+      <h3>なぜこの精度が出せるのか</h3>
       <ul>
-        <li><strong>100% クリーンルーム実装:</strong> 逆アセンブルやバイナリ解析は一切なし。公開標準(OOXML — ISO/IEC 29500 / ECMA-376)と、COM API 経由で Word の出力値を観測するブラックボックス測定のみから仕様を導出。</li>
-        <li><strong>デュアルフォントエンジン:</strong> Word のレイアウトは GDI の整数ピクセル丸めを引き継いでいるため、.docx では GDI を正確に再現。GDI のしがらみがない形式には DirectWrite の浮動小数メトリクスを使用。</li>
-        <li><strong>継続的な回帰ゲート:</strong> すべての変更を全コーパスで検証 — 改ページ一致・要素位置・ピクセル SSIM。</li>
+        <li><strong>100% クリーンルーム実装：</strong>逆アセンブルやバイナリ解析は一切行いません。仕様の根拠は公開標準（OOXML — ISO/IEC 29500 / ECMA-376）と、COM API 経由で Word の出力値を観測するブラックボックス測定の 2 つだけです。</li>
+        <li><strong>デュアルフォントエンジン：</strong>Word のレイアウトは GDI の整数ピクセル丸めを前提に組まれているため、.docx では GDI の振る舞いをそのまま再現。そのしがらみがない形式には DirectWrite の浮動小数メトリクスを使います。</li>
+        <li><strong>回帰ゲート：</strong>すべての変更を全コーパスで検証。改ページの一致、要素の位置、ピクセル SSIM を毎回確認してから取り込みます。</li>
       </ul>
       <p class="small">詳細と再現スクリプト: <a href="https://gitlab.com/Ryujiyasu/oxi#layout-accuracy-vs-microsoft-word">README — Layout Accuracy</a> · <a href="https://gitlab.com/Ryujiyasu/oxi/-/blob/main/docs/layout_accuracy.md">docs/layout_accuracy.md</a></p>
     </div>
@@ -246,35 +312,34 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
   <section id="japanese">
     <div class="wrap">
-      <h2>日本語組版をファーストクラスで</h2>
-      <p class="sub">多くの Word 互換レンダラーで後回しにされてきた日本語レイアウトを、Oxi は実測対象の中心に据えています。</p>
+      <h2>日本語組版を、中心に</h2>
+      <p class="sub">多くの Word 互換レンダラーで後回しにされてきた日本語レイアウトこそ、Oxi の実測の中心です。測定コーパス自体が、日本語レイアウトが最も難しい文書群——省庁の規程、行政の申請様式、雇用契約書——でできています。</p>
       <ul>
-        <li><strong>禁則処理</strong> — JIS X 4051 準拠の行分割: 行頭・行末禁則、約物の詰め、ぶら下げ組み。</li>
-        <li><strong>縦書き</strong> — 右から左へ流れる縦組みセクション、<strong>縦中横</strong>にも対応。</li>
-        <li><strong>ルビ(ふりがな)</strong>、<strong>割注</strong>(行中 2 行の注)、<strong>圏点</strong>(傍点)。</li>
-        <li><strong>文字グリッド(docGrid)</strong> — Word の行グリッド・字送りモデルを忠実に再現。</li>
-        <li><strong>判子</strong> — 丸印・角印・小判型のデジタル印鑑生成と PAdES PDF 署名。</li>
+        <li><strong>禁則処理</strong> — JIS X 4051 に沿った行分割。行頭・行末禁則、約物の詰め、ぶら下がり組み。</li>
+        <li><strong>縦書き</strong> — 右から左に流れる縦組み。<strong>縦中横</strong>にも対応。</li>
+        <li><strong>ルビ（ふりがな）</strong>、<strong>割注</strong>、<strong>圏点（傍点）</strong>。</li>
+        <li><strong>文字グリッド（docGrid）</strong> — Word の行グリッド・字送りモデルを忠実に再現。</li>
+        <li><strong>判子</strong> — 丸印・角印・小判型の電子印鑑生成と PAdES PDF 署名。</li>
       </ul>
-      <p>測定コーパス自体が日本語中心です: 省庁の規程、行政の申請様式、雇用契約書 — 日本語レイアウトが最も難しい文書群で鍛えています。</p>
     </div>
   </section>
 
   <section id="tech">
     <div class="wrap">
       <h2>技術</h2>
-      <p class="sub">Rust + WebAssembly、形式非依存の中間表現、そしてサーバーゼロ。</p>
-      <h3>なぜ今か</h3>
-      <p>2026 年、フランス(DINUM 指令)・スイス(連邦事務局)・ドイツ(OpenDesk)など、欧州の公共部門は Microsoft Office 依存の解消を本格化させています。どの移行プロジェクトも同じ壁に当たります — 既存の .docx が「Word と同じ見た目」で開けること。Oxi は Word 再現度を約束ではなく継続測定で示すことで、この問題自体を解消することを目指しています。</p>
+      <p class="sub">Rust + WebAssembly、形式に依存しない中間表現、そしてサーバーゼロ。</p>
+      <h3>なぜ今なのか</h3>
+      <p>2026 年、フランス（DINUM 指令）、スイス（連邦事務局）、ドイツ（OpenDesk）など、欧州の公共部門は Microsoft Office 離れを本格化させています。そしてどの移行でも、最後に残るのは同じ問題です — 手元にある大量の .docx が、Word と同じ見た目で開けるかどうか。Oxi は Word 再現度を「約束」ではなく「継続的な実測」で示すことで、この問題そのものをなくすことを目指しています。</p>
       <h3>アーキテクチャ</h3>
       <ul>
-        <li><strong>完全クライアントサイド:</strong> 解析・レイアウト・描画・編集はブラウザ内 WebAssembly で実行。サーバー基盤もアップロードも不要。</li>
-        <li><strong>形式非依存の IR:</strong> <code>Document → Page → Block (Paragraph | Table | Image) → Run</code>。OOXML にも ODF にも依存しないため、往復変換で劣化しません。</li>
-        <li><strong>ラウンドトリップ編集:</strong> 元の ZIP を保持し、変更された XML テキストノードだけをパッチ。ゼロから再構築しません。</li>
-        <li><strong>オープンフォントのみ同梱:</strong> プロプライエタリフォントは同梱せず、メトリクス互換のオープンフォントを使用。</li>
-        <li><strong>組み込み可能:</strong> wasm-bindgen の JavaScript API(<code>parse_document</code>、<code>layout_document</code>、<code>edit_docx</code>、<code>create_pdf</code> など)を任意の Web アプリから呼び出せます。</li>
+        <li><strong>完全クライアントサイド：</strong>解析・レイアウト・描画・編集はブラウザ内の WebAssembly で実行。サーバー基盤もアップロードも不要です。</li>
+        <li><strong>形式に依存しない中間表現：</strong><code>Document → Page → Block (Paragraph | Table | Image) → Run</code>。OOXML にも ODF にも寄せていないので、往復変換で劣化しません。</li>
+        <li><strong>ラウンドトリップ編集：</strong>元の ZIP を保持し、変更した XML テキストノードだけをパッチ。ファイルをゼロから作り直すことはしません。</li>
+        <li><strong>同梱フォントはオープンライセンスのみ：</strong>メトリクス互換のオープンフォントを使用し、プロプライエタリフォントは同梱しません。</li>
+        <li><strong>組み込み可能：</strong>wasm-bindgen の JavaScript API（<code>parse_document</code>、<code>layout_document</code>、<code>edit_docx</code> など）を任意の Web アプリから呼び出せます。</li>
       </ul>
       <h3>ライセンス</h3>
-      <p>コアエンジンは <strong>MPL-2.0</strong>(ファイル単位コピーレフト — AGPL と異なり商用製品へ組み込み可能)。WebAssembly / Python バインディングは <strong>MIT OR Apache-2.0</strong>。コントリビューションは DCO のみ、CLA 不要です。</p>
+      <p>コアエンジンは <strong>MPL-2.0</strong>（ファイル単位コピーレフト。AGPL と違い、商用製品への組み込みも可能です）。WebAssembly / Python バインディングは <strong>MIT OR Apache-2.0</strong>。コントリビューションは DCO のみで CLA はありません。</p>
     </div>
   </section>
 
@@ -282,28 +347,28 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div class="wrap">
       <h2>よくある質問</h2>
       <details open>
-        <summary>Oxi は無料で使えますか?</summary>
-        <p>はい。オープンソース(コア MPL-2.0、バインディング MIT OR Apache-2.0)で、Web デモはアカウント不要・無料です。</p>
+        <summary>無料で使えますか？</summary>
+        <p>はい。オープンソース（コア MPL-2.0、バインディング MIT OR Apache-2.0）で、Web デモは登録不要・無料です。</p>
       </details>
       <details>
-        <summary>ファイルはサーバーにアップロードされますか?</summary>
-        <p>いいえ。すべてブラウザ内の WebAssembly で処理され、ファイルは一切送信されません。機密文書でも安心して使えます。</p>
+        <summary>ファイルはサーバーに送信されますか？</summary>
+        <p>されません。処理はすべてブラウザ内の WebAssembly で完結し、ファイルが外部に送られることはありません。機密文書でも安心して使えます。</p>
       </details>
       <details>
-        <summary>Word とどれくらい同じ見た目になりますか?</summary>
-        <p>実文書 235 件(410 ページ)で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378 / 文書平均 0.9591。同一コーパスで LibreOffice・ONLYOFFICE を上回ります。<a href="#accuracy">再現精度セクション</a>に比較表と測定手法があります。</p>
+        <summary>Word とどれくらい同じ見た目になりますか？</summary>
+        <p>日本語の実文書 235 件（410 ページ）で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378 / 文書平均 0.9591（英語コーパスは文書平均 0.853）。同じ条件で LibreOffice・ONLYOFFICE を上回ります。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
       </details>
       <details>
-        <summary>対応形式は?</summary>
-        <p>.docx(レイアウト+編集、中核ミッション)、.xlsx / .pptx(解析+編集、ビューア開発中)、PDF(解析・テキスト抽出・生成・署名検証)。</p>
+        <summary>対応している形式は？</summary>
+        <p>まずは Word の .docx です。ページレイアウトの完全再現とラウンドトリップ編集に集中しています。「Word の .docx 描画を忠実に再現する」ことが Oxi のミッションで、対応形式を広げるのはその先です。</p>
       </details>
       <details>
-        <summary>自社製品に組み込めますか?</summary>
-        <p>組み込めます。MPL-2.0 のファイル単位コピーレフト+寛容ライセンスのバインディングにより、商用・プロプライエタリ製品への組み込みが可能です。</p>
+        <summary>自社製品に組み込めますか？</summary>
+        <p>組み込めます。コアはファイル単位コピーレフトの MPL-2.0、バインディングは MIT OR Apache-2.0 なので、AGPL 系と違い商用・プロプライエタリ製品にも組み込めます。</p>
       </details>
       <details>
-        <summary>オフラインでも動きますか?</summary>
-        <p>ページと WebAssembly モジュールの読み込み後は、文書処理はすべてローカルで完結します。ファイルを開く・描画する・編集するのにネットワーク接続は不要です。</p>
+        <summary>オフラインでも動きますか？</summary>
+        <p>ページと WebAssembly モジュールを読み込んだあとは、文書の表示も編集もネットワークなしで動きます。</p>
       </details>
     </div>
   </section>
@@ -316,9 +381,9 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       MPL-2.0 コア · MIT/Apache-2.0 バインディング
     </div>
     <div>
-      <a href="https://gitlab.com/Ryujiyasu/oxi">GitLab(正規リポジトリ)</a> ·
+      <a href="https://gitlab.com/Ryujiyasu/oxi">GitLab（正規リポジトリ）</a> ·
       <a href="https://github.com/Ryujiyasu/oxi">GitHub ミラー</a> ·
-      <a href="../app.html">Web アプリ</a> ·
+      <a href="../docs.html">エディタを開く</a> ·
       <a href="../" lang="en">English</a>
     </div>
   </div>
