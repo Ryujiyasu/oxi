@@ -297,6 +297,37 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
       <h3>English corpus — measured separately, reported honestly</h3>
       <p>On the 6-document English corpus (UK/US government forms and contracts) Oxi leads LibreOffice <strong>0.853 vs 0.789</strong> per document, and all 6 documents reach <strong>100% paragraph-level pagination match</strong> with Word. On a broader 50-document wild benchmark sampled from the public docx-corpus, LibreOffice is still ahead (<strong>0.853 vs Oxi 0.824</strong>) — that gap is the current English work queue, and it is closing week by week.</p>
+
+      <figure class="chart-card">
+        <h4>English documents — per-document mean SSIM vs Word</h4>
+        <p class="fnote" style="margin:0 0 8px">Government forms &amp; contracts corpus (6 documents):</p>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>100% pagination match</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:85.3%"></div></div>
+            <div class="bval"><strong>0.853</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice</div>
+            <div class="btrack"><div class="bfill" style="width:78.9%"></div></div>
+            <div class="bval">0.789</div>
+          </div>
+        </div>
+        <p class="fnote" style="margin:10px 0 8px">Wild 50-document benchmark (sampled from the public docx-corpus):</p>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>41/50 match Word's pagination</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:82.4%"></div></div>
+            <div class="bval"><strong>0.824</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice<span>still ahead here</span></div>
+            <div class="btrack"><div class="bfill" style="width:85.3%"></div></div>
+            <div class="bval">0.853</div>
+          </div>
+        </div>
+        <figcaption class="fnote">The dashed edge marks Microsoft Word itself (1.00). Oxi leads on the curated government corpus; LibreOffice still leads on the wild benchmark — that gap is the current work queue, published as-is.</figcaption>
+      </figure>
       <h3>How the fidelity is earned</h3>
       <ul>
         <li><strong>100% clean-room:</strong> no disassembly or binary analysis. Specifications come only from published standards (OOXML — ISO/IEC 29500 / ECMA-376) and black-box observation of Word's output via the COM API.</li>
