@@ -1608,6 +1608,18 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                                                     "lineRule" => line_rule = Some(val.to_string()),
                                                     "before" => before = val.parse::<f32>().ok().map(|v| v / 20.0),
                                                     "after" => after = val.parse::<f32>().ok().map(|v| v / 20.0),
+                                                    // S952 (2026-07-20): a TABLE style's pPr autospacing
+                                                    // applies to cell paragraphs with the S882 model
+                                                    // (AUTO overrides explicit, edge-suppressed) — the
+                                                    // tsas_probe derivation (001b0c6e EDU-Basic).
+                                                    "beforeAutospacing" => {
+                                                        ps.before_autospacing =
+                                                            val == "1" || val == "true" || val == "on";
+                                                    }
+                                                    "afterAutospacing" => {
+                                                        ps.after_autospacing =
+                                                            val == "1" || val == "true" || val == "on";
+                                                    }
                                                     _ => {}
                                                 }
                                             }

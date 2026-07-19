@@ -19284,9 +19284,12 @@ impl LayoutEngine {
                             // Cell-autospace override: estimate_para_height added the
                             // explicit (cur_sb, cur_sa) to para_h above; replace it with
                             // the autospace-effective values (13.75 / edge-suppressed 0).
-                            let (cur_sb, cur_sa) = if para.style.before_autospacing || para.style.after_autospacing {
+                            let s952_tbl = table.style.para_style.as_ref()
+                                .map_or(false, |ts| ts.before_autospacing || ts.after_autospacing);
+                            let (cur_sb, cur_sa) = if para.style.before_autospacing || para.style.after_autospacing || s952_tbl {
                                 let (eff_sb, eff_sa) = self.cell_autospace_effective(
-                                    para, Some(block_pos) == first_para_pos, Some(block_pos) == last_para_pos, cur_sb, cur_sa);
+                                    para, table.style.para_style.as_ref(),
+                                    Some(block_pos) == first_para_pos, Some(block_pos) == last_para_pos, cur_sb, cur_sa);
                                 cell_content_h += (eff_sb - cur_sb) + (eff_sa - cur_sa);
                                 cell_content_h_visual += (eff_sb - cur_sb) + (eff_sa - cur_sa);
                                 (eff_sb, eff_sa)
@@ -20505,10 +20508,13 @@ impl LayoutEngine {
                     };
                     // Cell autospace override (before/afterAutospacing → 13.75,
                     // overriding explicit, edge-suppressed). See cell_autospace_effective.
+                    let s952_tbl = table.style.para_style.as_ref()
+                        .map_or(false, |ts| ts.before_autospacing || ts.after_autospacing);
                     let (effective_space_before, effective_space_after) =
-                        if para.style.before_autospacing || para.style.after_autospacing {
+                        if para.style.before_autospacing || para.style.after_autospacing || s952_tbl {
                             let (sb, sa) = self.cell_autospace_effective(
                                 para,
+                                table.style.para_style.as_ref(),
                                 Some(block_pos) == first_para_pos,
                                 Some(block_pos) == last_para_pos,
                                 effective_space_before,
@@ -25300,9 +25306,12 @@ impl LayoutEngine {
                         // Cell-autospace override: estimate_para_height_emit added the
                         // explicit (cur_sb, cur_sa) to para_h; replace with the
                         // autospace-effective (13.75 / edge-suppressed 0).
-                        let (cur_sb, cur_sa) = if para.style.before_autospacing || para.style.after_autospacing {
+                        let s952_tbl = table.style.para_style.as_ref()
+                            .map_or(false, |ts| ts.before_autospacing || ts.after_autospacing);
+                        let (cur_sb, cur_sa) = if para.style.before_autospacing || para.style.after_autospacing || s952_tbl {
                             let (eff_sb, eff_sa) = self.cell_autospace_effective(
-                                para, Some(block_pos) == first_para_pos, Some(block_pos) == last_para_pos, cur_sb, cur_sa);
+                                para, table.style.para_style.as_ref(),
+                                Some(block_pos) == first_para_pos, Some(block_pos) == last_para_pos, cur_sb, cur_sa);
                             cell_content_h += (eff_sb - cur_sb) + (eff_sa - cur_sa);
                             (eff_sb, eff_sa)
                         } else {
@@ -26007,11 +26016,33 @@ impl LayoutEngine {
     fn cell_autospace_effective(
         &self,
         para: &Paragraph,
+        tbl_ps: Option<&ParagraphStyle>,
         is_first: bool,
         is_last: bool,
         est_sb: f32,
         est_sa: f32,
     ) -> (f32, f32) {
+        // S952 (2026-07-20, opt-out OXI_S952_DISABLE): a TABLE STYLE's pPr
+        // before/afterAutospacing applies to the cell paragraphs with the S882
+        // model — it OVERRIDES the paragraph's DIRECT before/after (AUTO
+        // overrides explicit), sole-para edges suppressed to 0, interior
+        // boundaries = AUTO. DERIVED via tsas_probe (EDU-Basic shape ×5):
+        // style-auto + direct 120/120 → row 13.92 (spacing 0); the
+        // no-autospacing control keeps the direct 25.92; 2-para interior =
+        // line + 13.44 (AUTO). 001b0c6e's repayment table: Word row =
+        // trHeight 19.85 + bw = 20.85 once the content collapses (Oxi kept
+        // 6+6 → content 26.0 beat the trHeight → +5.2 × 13 rows = +68 → the
+        // wi103 +1). Corpus census: a LIVE table style with pPr autospacing
+        // = 001b0c6e ONLY (golden/ja/real_en 0) → single-doc by construction.
+        let s952_b;
+        let s952_a;
+        if std::env::var("OXI_S952_DISABLE").is_err() {
+            s952_b = tbl_ps.map_or(false, |ts| ts.before_autospacing);
+            s952_a = tbl_ps.map_or(false, |ts| ts.after_autospacing);
+        } else {
+            s952_b = false;
+            s952_a = false;
+        }
         let cellas_enabled = std::env::var("OXI_CELLAS_DISABLE").is_err()
             // S864 enables only the style-derived cell case. Direct-pPr
             // autospacing rides the main default-ON gate above.
@@ -26020,19 +26051,24 @@ impl LayoutEngine {
         // S895: the general style→para autospacing inheritance is a BODY
         // rule; CELL paragraphs keep the S864-F/S882 calibrations (S864-F
         // sets its own flags without from_style for the ≥10-break case).
-        if !cellas_enabled || para.style.autospacing_from_style {
+        // The S952 table-style layer is a distinct, measured source and
+        // bypasses that neutralization.
+        let para_active = cellas_enabled && !para.style.autospacing_from_style;
+        let b_flag = (para_active && para.style.before_autospacing) || s952_b;
+        let a_flag = (para_active && para.style.after_autospacing) || s952_a;
+        if !b_flag && !a_flag {
             return (est_sb, est_sa);
         }
         // S907: 14.0 (the PDF-true value; 13.75 was COM-quantized).
         let auto_v: f32 = if std::env::var("OXI_S907_DISABLE").is_err() { 14.0 } else { 13.75 };
         #[allow(non_snake_case)]
         let AUTO: f32 = auto_v;
-        let sb = if para.style.before_autospacing {
+        let sb = if b_flag {
             if is_first { 0.0 } else { AUTO }
         } else {
             est_sb
         };
-        let sa = if para.style.after_autospacing {
+        let sa = if a_flag {
             if is_last { 0.0 } else { AUTO }
         } else {
             est_sa
