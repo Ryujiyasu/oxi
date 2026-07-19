@@ -257,6 +257,52 @@ pub fn edit_docx_advanced(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsErro
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Write comments into a .docx: entries in word/comments.xml plus
+/// commentRangeStart/End + commentReference markers in document.xml.
+/// `comments` is an array of { author, initials?, date?, text,
+/// paragraph_index, char_start, char_end }.
+#[wasm_bindgen]
+pub fn set_docx_comments(data: &[u8], comments: JsValue) -> Result<Vec<u8>, JsError> {
+    let specs: Vec<JsNewComment> = serde_wasm_bindgen::from_value(comments)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    if specs.is_empty() {
+        return Ok(data.to_vec());
+    }
+    let mut editor = oxidocs_core::DocxEditor::new(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    editor.add_comments(
+        specs
+            .into_iter()
+            .map(|s| {
+                let initials = s.initials.unwrap_or_else(|| {
+                    s.author.chars().take(2).collect::<String>().to_uppercase()
+                });
+                oxidocs_core::editor::NewComment {
+                    author: s.author,
+                    initials,
+                    date: s.date.unwrap_or_default(),
+                    text: s.text,
+                    paragraph_index: s.paragraph_index,
+                    char_start: s.char_start,
+                    char_end: s.char_end,
+                }
+            })
+            .collect(),
+    );
+    editor.save().map_err(|e| JsError::new(&e.to_string()))
+}
+
+#[derive(Deserialize)]
+struct JsNewComment {
+    author: String,
+    initials: Option<String>,
+    date: Option<String>,
+    text: String,
+    paragraph_index: usize,
+    char_start: usize,
+    char_end: usize,
+}
+
 #[derive(Deserialize)]
 struct JsDocxEdit {
     r#type: String,

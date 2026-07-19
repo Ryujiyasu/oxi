@@ -566,7 +566,7 @@ function applyI18n() {
   });
 }
 
-import init, { create_blank_docx, parse_document, layout_document, docx_to_pdf, build_docx, build_docx_with_template, edit_docx_advanced } from './oxidocs_wasm.js';
+import init, { create_blank_docx, parse_document, layout_document, docx_to_pdf, build_docx, build_docx_with_template, edit_docx_advanced, set_docx_comments } from './oxidocs_wasm.js';
 await init();
 
 const editor = document.getElementById('editor');
@@ -1242,7 +1242,7 @@ $('btnComment').addEventListener('click', () => {
   const range = sel.getRangeAt(0);
   const mark = document.createElement('mark');
   mark.className = 'oxi-cmt';
-  const cid = ++CMT.seq;
+  const cid = 's' + (++CMT.seq);
   mark.dataset.cid = cid;
   try { range.surroundContents(mark); }
   catch (_) { mark.appendChild(range.extractContents()); range.insertNode(mark); }
@@ -1345,8 +1345,7 @@ function buildCard(c, activeId) {
 }
 
 function deleteComment(id) {
-  const a = anchorOf(id);
-  if (a) unwrapAnchor(a);
+  for (const a of editor.querySelectorAll('mark.oxi-cmt[data-cid="' + id + '"]')) unwrapAnchor(a);
   const i = CMT.list.findIndex(c => c.id === id);
   if (i >= 0) CMT.list.splice(i, 1);
   saveUndoState();
@@ -1360,11 +1359,13 @@ function renderComments(activeId) {
   const pageRect = cmtPage.getBoundingClientRect();
   const rows = [];
   for (const c of CMT.list) {
-    const a = anchorOf(c.id);
-    if (!a) continue; // anchor edited away (undo can bring it back)
-    a.classList.toggle('resolved', c.resolved);
-    a.classList.toggle('active', c.id === activeId);
-    rows.push({ c, y: a.getBoundingClientRect().top - pageRect.top });
+    const marks = editor.querySelectorAll('mark.oxi-cmt[data-cid="' + c.id + '"]');
+    if (!marks.length) continue; // anchor edited away (undo can bring it back)
+    for (const m of marks) {
+      m.classList.toggle('resolved', c.resolved);
+      m.classList.toggle('active', c.id === activeId);
+    }
+    rows.push({ c, y: marks[0].getBoundingClientRect().top - pageRect.top });
   }
   rows.sort((p, q) => p.y - q.y);
   rail.style.display = rows.length ? 'block' : 'none';
@@ -1419,7 +1420,7 @@ editor.addEventListener('click', e => {
   if (dd) { openDdMenu(dd); return; }
   const anchor = e.target.closest ? e.target.closest('mark.oxi-cmt') : null;
   if (anchor) {
-    const id = parseInt(anchor.dataset.cid, 10);
+    const id = resolveCid(anchor.dataset.cid);
     if (editArea.classList.contains('reflow')) showPopoverCard(id);
     else activateComment(id, true);
   }
@@ -1438,6 +1439,85 @@ editor.addEventListener('input', () => {
   cmtLayoutTimer = setTimeout(cmtRelayout, 250);
 });
 window.addEventListener('resize', cmtRelayout);
+
+// A reply anchor resolves to its thread's top-level comment
+function resolveCid(id) {
+  if (cmtData(id)) return id;
+  for (const c of CMT.list) if (c.replies.some(r => r._cid === id)) return c.id;
+  return id;
+}
+
+// Character offsets of an anchor within its block, over the text the docx
+// paragraph actually contains (list markers are DOM-only decorations).
+function paraCharOffsets(block, markEl) {
+  const pre = document.createRange();
+  pre.selectNodeContents(block);
+  pre.setEndBefore(markEl);
+  let start = pre.toString().length;
+  for (const m of block.querySelectorAll('span.oxi-marker')) {
+    if (markEl.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_PRECEDING) start -= m.textContent.length;
+  }
+  start = Math.max(0, start);
+  return [start, start + markEl.textContent.length];
+}
+
+// Write the session's comments into the docx produced by syncDocxCore.
+// Replies become further comments on the same range (Word shows them stacked).
+function applyNewCommentsToDocx() {
+  try {
+    if (!currentDocx || !CMT.list.length) return;
+    const specs = [];
+    for (const c of CMT.list) {
+      if (c.fromFile || c.draft || !c.text) continue;
+      const a = anchorOf(c.id);
+      if (!a) continue;
+      const block = a.closest('#editor > *');
+      if (!block || block.tagName === 'TABLE') continue;
+      let pIdx = 0;
+      for (const sib of editor.children) {
+        if (sib === block) break;
+        if (sib.tagName !== 'TABLE') pIdx++;
+      }
+      const [cs, ce] = paraCharOffsets(block, a);
+      const date = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+      specs.push({ author: c.author || t('cmtYou'), text: c.text, date, paragraph_index: pIdx, char_start: cs, char_end: ce });
+      for (const rp of c.replies) {
+        specs.push({ author: rp.author || t('cmtYou'), text: rp.text, date, paragraph_index: pIdx, char_start: cs, char_end: ce });
+      }
+    }
+    if (specs.length) currentDocx = new Uint8Array(set_docx_comments(currentDocx, specs));
+  } catch (e) { console.error('comment save failed:', e); }
+}
+
+// Seed the rail from a parsed document's comments (threads via para_id links).
+function seedCommentsFromDoc(doc) {
+  CMT.list = [];
+  CMT.seq = 0;
+  const byParaId = {};
+  const entries = [];
+  for (const c of (doc.comments || [])) {
+    const text = (c.blocks || []).map(b => b.Paragraph ? (b.Paragraph.runs || []).map(r => r.text || '').join('') : '').join('\n');
+    const e = {
+      id: 'f' + c.id,
+      author: c.author || '',
+      time: (c.date || '').replace('T', ' ').slice(0, 16),
+      text,
+      resolved: !!c.resolved,
+      replies: [],
+      draft: false,
+      fromFile: true,
+      _paraId: c.para_id,
+      _parentParaId: c.parent_para_id,
+    };
+    entries.push(e);
+    if (c.para_id) byParaId[c.para_id] = e;
+  }
+  for (const e of entries) {
+    const parent = e._parentParaId && byParaId[e._parentParaId];
+    if (parent && parent !== e) parent.replies.push({ author: e.author, time: e.time, text: e.text, _cid: e.id });
+    else CMT.list.push(e);
+  }
+}
 
 // ---- Columns ----
 $('col1').addEventListener('click', () => { editor.style.columnCount = ''; editor.style.columnGap = ''; $('col1').classList.add('active'); $('col2').classList.remove('active'); $('col3').classList.remove('active'); });
@@ -1654,6 +1734,8 @@ function loadDocx(data) {
     editor.innerHTML = '';
     if (doc.pages) for (const pg of doc.pages) for (const b of pg.blocks) { const el = renderBlock(b); if (el) editor.appendChild(el); }
     if (!editor.innerHTML.trim()) editor.innerHTML = '<p><br></p>';
+    seedCommentsFromDoc(doc);
+    renderComments();
 
     // Store snapshot for diff-based saving
     originalDocx = new Uint8Array(data);
@@ -1704,8 +1786,25 @@ function renderPara(p) {
   if (p.alignment) el.style.textAlign = p.alignment === 'Justify' ? 'justify' : p.alignment.toLowerCase();
   if (p.style?.indent_left) el.style.marginLeft = p.style.indent_left + 'pt';
   if (p.style?.indent_first_line) el.style.textIndent = p.style.indent_first_line + 'pt';
-  if (p.style?.list_marker) { const m = document.createElement('span'); m.textContent = p.style.list_marker + ' '; el.appendChild(m); }
-  if (p.runs?.length) for (const r of p.runs) el.appendChild(renderRun(r));
+  if (p.style?.list_marker) { const m = document.createElement('span'); m.className = 'oxi-marker'; m.contentEditable = 'false'; m.textContent = p.style.list_marker + ' '; el.appendChild(m); }
+  if (p.runs?.length) {
+    const open = [];
+    for (const r of p.runs) {
+      let node = renderRun(r);
+      if (open.length && (r.text || '').length) {
+        for (const id of open) {
+          const mk = document.createElement('mark');
+          mk.className = 'oxi-cmt';
+          mk.dataset.cid = 'f' + id;
+          mk.appendChild(node);
+          node = mk;
+        }
+      }
+      el.appendChild(node);
+      for (const id of (r.comment_range_start || [])) if (!open.includes(id)) open.push(id);
+      for (const id of (r.comment_range_end || [])) { const ix = open.indexOf(id); if (ix >= 0) open.splice(ix, 1); }
+    }
+  }
   else el.appendChild(document.createElement('br'));
   return el;
 }
@@ -1878,6 +1977,11 @@ function serializeTable(tbl) {
  * Tier 3: New document → build_docx (from scratch)
  */
 function syncDocx() {
+  syncDocxCore();
+  applyNewCommentsToDocx();
+}
+
+function syncDocxCore() {
   try {
     if (!originalDocx || !originalSnapshot) {
       // Tier 3: New document — build from scratch

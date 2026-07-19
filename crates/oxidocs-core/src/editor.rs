@@ -239,6 +239,30 @@ pub struct DocxEditor {
     edits: Vec<DocxEdit>,
     /// Images to add to the ZIP (rel_id, data, content_type, filename)
     pending_images: Vec<PendingImage>,
+    /// Comments to write into the document on save (web-editor annotations)
+    pending_comments: Vec<NewComment>,
+}
+
+/// A comment annotation to be written into the document on save: an entry in
+/// word/comments.xml plus commentRangeStart/End + commentReference markers in
+/// document.xml. Replies are expressed as further comments on the same range.
+#[derive(Debug, Clone)]
+pub struct NewComment {
+    pub author: String,
+    /// 1–6 glyphs (ECMA-376 §17.13.4.2 w:initials)
+    pub initials: String,
+    /// ISO-8601 date, e.g. "2026-07-19T12:00:00Z"
+    pub date: String,
+    /// Comment body; '\n' separates paragraphs.
+    pub text: String,
+    /// Body paragraph index (paragraphs only, tables excluded) in the FINAL
+    /// (post-edit) document — the same convention as `SetRunText`.
+    pub paragraph_index: usize,
+    /// Character offsets over the paragraph's concatenated w:t text. A range
+    /// that cannot be split at the exact offset is widened to the nearest run
+    /// boundary rather than dropped.
+    pub char_start: usize,
+    pub char_end: usize,
 }
 
 #[allow(dead_code)]
@@ -258,7 +282,13 @@ impl DocxEditor {
             document,
             edits: Vec::new(),
             pending_images: Vec::new(),
+            pending_comments: Vec::new(),
         })
+    }
+
+    /// Queue comments to be written into the document on save.
+    pub fn add_comments(&mut self, comments: Vec<NewComment>) {
+        self.pending_comments.extend(comments);
     }
 
     /// Get a reference to the parsed document IR (read-only).
@@ -465,12 +495,20 @@ impl DocxEditor {
 
     /// Save the edited document as new .docx bytes.
     pub fn save(&self) -> Result<Vec<u8>, ParseError> {
-        if self.edits.is_empty() && self.pending_images.is_empty() {
+        if self.edits.is_empty() && self.pending_images.is_empty() && self.pending_comments.is_empty() {
             return self.copy_archive();
         }
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive = ZipArchive::new(cursor)?;
+
+        // Comment ids continue after any ids already present in comments.xml.
+        let comment_id_base = if self.pending_comments.is_empty() {
+            0
+        } else {
+            self.next_comment_id()?
+        };
+        let mut saw_comments_part = false;
 
         let mut output = Vec::new();
         {
@@ -485,16 +523,27 @@ impl DocxEditor {
                 if name == "word/document.xml" {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
-                    let patched = self.apply_all_edits(&xml)?;
+                    let patched = self.apply_all_edits(&xml, comment_id_base)?;
                     writer.start_file(&name, opts)?;
                     writer.write_all(patched.as_bytes())?;
-                } else if name == "word/_rels/document.xml.rels" && !self.pending_images.is_empty() {
+                } else if name == "word/comments.xml" && !self.pending_comments.is_empty() {
+                    saw_comments_part = true;
+                    let mut xml = String::new();
+                    entry.read_to_string(&mut xml)?;
+                    let patched = merge_comments_xml(&xml, &self.pending_comments, comment_id_base);
+                    writer.start_file(&name, opts)?;
+                    writer.write_all(patched.as_bytes())?;
+                } else if name == "word/_rels/document.xml.rels"
+                    && (!self.pending_images.is_empty() || !self.pending_comments.is_empty())
+                {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
                     let patched = self.patch_rels(&xml);
                     writer.start_file(&name, opts)?;
                     writer.write_all(patched.as_bytes())?;
-                } else if name == "[Content_Types].xml" && !self.pending_images.is_empty() {
+                } else if name == "[Content_Types].xml"
+                    && (!self.pending_images.is_empty() || !self.pending_comments.is_empty())
+                {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)?;
                     let patched = self.patch_content_types(&xml);
@@ -510,6 +559,14 @@ impl DocxEditor {
                 }
             }
 
+            // The document had no comments part yet: create it.
+            if !self.pending_comments.is_empty() && !saw_comments_part {
+                writer.start_file("word/comments.xml", opts)?;
+                writer.write_all(
+                    build_comments_xml(&self.pending_comments, comment_id_base).as_bytes(),
+                )?;
+            }
+
             // Add image files to ZIP
             for img in &self.pending_images {
                 let path = format!("word/media/{}", img.filename);
@@ -521,6 +578,30 @@ impl DocxEditor {
         }
 
         Ok(output)
+    }
+
+    /// Smallest unused numeric w:id for a new comment (existing comments.xml
+    /// ids are scanned; a missing part starts at 0).
+    fn next_comment_id(&self) -> Result<u64, ParseError> {
+        let cursor = Cursor::new(&self.original_data);
+        let mut archive = ZipArchive::new(cursor)?;
+        let mut max_id: i64 = -1;
+        if let Ok(mut entry) = archive.by_name("word/comments.xml") {
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            let mut rest = xml.as_str();
+            while let Some(p) = rest.find("w:id=\"") {
+                rest = &rest[p + 6..];
+                if let Some(q) = rest.find('"') {
+                    if let Ok(v) = rest[..q].parse::<i64>() {
+                        if v > max_id {
+                            max_id = v;
+                        }
+                    }
+                }
+            }
+        }
+        Ok((max_id + 1) as u64)
     }
 
     /// Copy archive unchanged (no edits).
@@ -549,7 +630,7 @@ impl DocxEditor {
     // Core: apply all edits to document.xml
     // -----------------------------------------------------------------------
 
-    fn apply_all_edits(&self, xml: &str) -> Result<String, ParseError> {
+    fn apply_all_edits(&self, xml: &str, comment_id_base: u64) -> Result<String, ParseError> {
         // 1. Split XML into: preamble, body segments, postamble
         let (preamble, mut segments, postamble) = split_body(xml)?;
 
@@ -820,6 +901,34 @@ impl DocxEditor {
             }
         }
 
+        // 5.5 Comment range markers (applied AFTER structural edits, so the
+        // paragraph indexes refer to the final document the user sees)
+        if !self.pending_comments.is_empty() {
+            let mut final_para_indices: Vec<usize> = Vec::new();
+            for (i, seg) in segments.iter().enumerate() {
+                if matches!(seg, BodySegment::Paragraph(_)) {
+                    final_para_indices.push(i);
+                }
+            }
+            let mut by_para: HashMap<usize, Vec<(usize, &NewComment)>> = HashMap::new();
+            for (ci, c) in self.pending_comments.iter().enumerate() {
+                by_para.entry(c.paragraph_index).or_default().push((ci, c));
+            }
+            for (pidx, mut list) in by_para {
+                let Some(&seg_idx) = final_para_indices.get(pidx) else { continue };
+                if let BodySegment::Paragraph(para_xml) = &segments[seg_idx] {
+                    let mut patched = para_xml.clone();
+                    // later ranges first so earlier byte positions stay valid
+                    list.sort_by(|a, b| b.1.char_start.cmp(&a.1.char_start));
+                    for (ci, c) in list {
+                        let id = comment_id_base + ci as u64;
+                        patched = insert_comment_markers(&patched, id, c.char_start, c.char_end);
+                    }
+                    segments[seg_idx] = BodySegment::Paragraph(patched);
+                }
+            }
+        }
+
         // 6. Reassemble
         let mut result = preamble;
         for seg in &segments {
@@ -842,6 +951,13 @@ impl DocxEditor {
                 r#"<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{}"/>"#,
                 img.rel_id, img.filename
             ));
+        }
+        if !self.pending_comments.is_empty()
+            && !xml.contains("officeDocument/2006/relationships/comments")
+        {
+            additions.push_str(
+                r#"<Relationship Id="rIdOxiComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+            );
         }
         xml.replace(insert_before, &format!("{}{}", additions, insert_before))
     }
@@ -878,6 +994,12 @@ impl DocxEditor {
                     &format!("{}</Types>", entry),
                 );
             }
+        }
+        if !self.pending_comments.is_empty() && !result.contains("/word/comments.xml") {
+            result = result.replace(
+                "</Types>",
+                r#"<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>"#,
+            );
         }
         result
     }
@@ -2348,9 +2470,322 @@ fn local_name(name: &[u8]) -> String {
 // Tests
 // ===========================================================================
 
+// ---------------------------------------------------------------------------
+// Comment writing (word/comments.xml + range markers in document.xml)
+// ---------------------------------------------------------------------------
+
+/// The `<w:comment>` entries for a batch of new comments.
+fn comments_entries_xml(comments: &[NewComment], id_base: u64) -> String {
+    let mut out = String::new();
+    for (i, c) in comments.iter().enumerate() {
+        let id = id_base + i as u64;
+        out.push_str(&format!(
+            "<w:comment w:id=\"{}\" w:author=\"{}\" w:date=\"{}\" w:initials=\"{}\">",
+            id,
+            escape_xml(&c.author),
+            escape_xml(&c.date),
+            escape_xml(&c.initials)
+        ));
+        for para in c.text.split('\n') {
+            out.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+            out.push_str(&escape_xml(para));
+            out.push_str("</w:t></w:r></w:p>");
+        }
+        out.push_str("</w:comment>");
+    }
+    out
+}
+
+fn build_comments_xml(comments: &[NewComment], id_base: u64) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w:comments xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{}</w:comments>",
+        comments_entries_xml(comments, id_base)
+    )
+}
+
+fn merge_comments_xml(existing: &str, comments: &[NewComment], id_base: u64) -> String {
+    if let Some(p) = existing.rfind("</w:comments>") {
+        let mut s = existing.to_string();
+        s.insert_str(p, &comments_entries_xml(comments, id_base));
+        s
+    } else {
+        build_comments_xml(comments, id_base)
+    }
+}
+
+/// A `<w:r>…</w:r>` span inside one paragraph's XML.
+struct RunSpan {
+    start: usize,
+    end: usize,
+    text_len: usize,
+    /// Byte range of the content of the run's single `<w:t>` — present only
+    /// when the run has exactly one, which is the case a mid-run split supports.
+    single_t: Option<(usize, usize)>,
+}
+
+fn scan_runs(xml: &str) -> Vec<RunSpan> {
+    let mut runs = Vec::new();
+    let mut i = 0usize;
+    while let Some(p) = xml[i..].find("<w:r") {
+        let s = i + p;
+        let next = xml[s + 4..].chars().next();
+        if !(next == Some('>') || next == Some(' ')) {
+            i = s + 4; // <w:rPr>, <w:rFonts …> etc.
+            continue;
+        }
+        let Some(e_rel) = xml[s..].find("</w:r>") else { break };
+        let e = s + e_rel + "</w:r>".len();
+        let inner = &xml[s..e];
+        let mut text_len = 0usize;
+        let mut t_spans: Vec<(usize, usize)> = Vec::new();
+        let mut j = 0usize;
+        while let Some(tp) = inner[j..].find("<w:t") {
+            let ts = j + tp;
+            let tc = inner[ts + 4..].chars().next();
+            if !(tc == Some('>') || tc == Some(' ') || tc == Some('/')) {
+                j = ts + 4; // <w:tab/>, <w:tbl…> …
+                continue;
+            }
+            let Some(gt_rel) = inner[ts..].find('>') else { break };
+            let gt = ts + gt_rel;
+            if inner.as_bytes()[gt - 1] == b'/' {
+                j = gt + 1; // self-closing <w:t/>
+                continue;
+            }
+            let Some(te_rel) = inner[gt + 1..].find("</w:t>") else { break };
+            let content_start = gt + 1;
+            let content_end = gt + 1 + te_rel;
+            text_len += decoded_len(&inner[content_start..content_end]);
+            t_spans.push((s + content_start, s + content_end));
+            j = content_end + "</w:t>".len();
+        }
+        let single_t = if t_spans.len() == 1 { Some(t_spans[0]) } else { None };
+        runs.push(RunSpan { start: s, end: e, text_len, single_t });
+        i = e;
+    }
+    runs
+}
+
+/// Character count of XML text content, counting each entity as one char.
+fn decoded_len(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if let Some(semi) = s[i..].find(';') {
+                if semi <= 10 {
+                    i += semi + 1;
+                    n += 1;
+                    continue;
+                }
+            }
+        }
+        i += s[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        n += 1;
+    }
+    n
+}
+
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if let Some(semi) = s[i..].find(';') {
+                if semi <= 10 {
+                    let ent = &s[i + 1..i + semi];
+                    let decoded = match ent {
+                        "amp" => Some('&'),
+                        "lt" => Some('<'),
+                        "gt" => Some('>'),
+                        "quot" => Some('"'),
+                        "apos" => Some('\''),
+                        _ if ent.starts_with("#x") || ent.starts_with("#X") => {
+                            u32::from_str_radix(&ent[2..], 16).ok().and_then(char::from_u32)
+                        }
+                        _ if ent.starts_with('#') => {
+                            ent[1..].parse::<u32>().ok().and_then(char::from_u32)
+                        }
+                        _ => None,
+                    };
+                    if let Some(ch) = decoded {
+                        out.push(ch);
+                        i += semi + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = s[i..].chars().next().unwrap_or('\u{FFFD}');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Make the `<w:t>` open tag inside `pre` (which ends with that tag) carry
+/// xml:space="preserve", so a split that creates lead/trail spaces is safe.
+fn ensure_preserve(pre: &str) -> String {
+    if let Some(tp) = pre.rfind("<w:t") {
+        let tag = &pre[tp..];
+        if !tag.contains("xml:space") {
+            let mut s = pre.to_string();
+            s.insert_str(pre.len() - 1, " xml:space=\"preserve\"");
+            return s;
+        }
+    }
+    pre.to_string()
+}
+
+/// Split a run at character offset `k` (if it falls mid-run and the run has a
+/// single `<w:t>`), so a comment marker can sit at a run boundary. A run that
+/// cannot be split is left alone — the marker then widens to its boundary.
+fn ensure_boundary(xml: &str, k: usize) -> String {
+    let runs = scan_runs(xml);
+    let mut cum = 0usize;
+    for r in &runs {
+        if k <= cum {
+            return xml.to_string();
+        }
+        if k < cum + r.text_len {
+            let k_in = k - cum;
+            if let Some((cs, ce)) = r.single_t {
+                let decoded = decode_entities(&xml[cs..ce]);
+                let chars: Vec<char> = decoded.chars().collect();
+                if k_in >= chars.len() {
+                    return xml.to_string();
+                }
+                let left: String = chars[..k_in].iter().collect();
+                let right: String = chars[k_in..].iter().collect();
+                let pre = ensure_preserve(&xml[r.start..cs]);
+                let post = &xml[ce..r.end];
+                let left_run = format!("{}{}{}", pre, escape_xml(&left), post);
+                let right_run = format!("{}{}{}", pre, escape_xml(&right), post);
+                let mut out = String::with_capacity(xml.len() + left_run.len());
+                out.push_str(&xml[..r.start]);
+                out.push_str(&left_run);
+                out.push_str(&right_run);
+                out.push_str(&xml[r.end..]);
+                return out;
+            }
+            return xml.to_string();
+        }
+        cum += r.text_len;
+    }
+    xml.to_string()
+}
+
+/// Byte position for character offset `k`. `prefer_end` chooses the end of the
+/// previous run when `k` sits exactly between two runs, and widens outward for
+/// offsets inside an unsplittable run.
+fn byte_pos_for(xml: &str, runs: &[RunSpan], k: usize, prefer_end: bool) -> usize {
+    let mut cum = 0usize;
+    let mut last_end: Option<usize> = None;
+    for r in runs {
+        if k <= cum {
+            return if prefer_end { last_end.unwrap_or(r.start) } else { r.start };
+        }
+        if k < cum + r.text_len {
+            // mid-run and unsplittable: widen outward
+            return if prefer_end { r.end } else { r.start };
+        }
+        cum += r.text_len;
+        last_end = Some(r.end);
+    }
+    last_end.unwrap_or_else(|| xml.rfind("</w:p>").unwrap_or(xml.len()))
+}
+
+/// Insert commentRangeStart/End + the commentReference run for one comment.
+fn insert_comment_markers(xml: &str, id: u64, char_start: usize, char_end: usize) -> String {
+    let (s, e) = if char_start <= char_end { (char_start, char_end) } else { (char_end, char_start) };
+    let mut out = ensure_boundary(xml, e);
+    out = ensure_boundary(&out, s);
+    let runs = scan_runs(&out);
+    if runs.is_empty() {
+        return out;
+    }
+    let pos_end = byte_pos_for(&out, &runs, e, true);
+    let pos_start = byte_pos_for(&out, &runs, s, false).min(pos_end);
+    let end_marker = format!(
+        "<w:commentRangeEnd w:id=\"{id}\"/><w:r><w:commentReference w:id=\"{id}\"/></w:r>"
+    );
+    let start_marker = format!("<w:commentRangeStart w:id=\"{id}\"/>");
+    out.insert_str(pos_end, &end_marker);
+    out.insert_str(pos_start, &start_marker);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "writes an artifact under the OS temp dir for Word-side verification"]
+    fn write_comment_artifact() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.docx");
+        let mut editor = DocxEditor::new(data).expect("should open");
+        editor.add_comments(vec![
+            NewComment {
+                author: "Alice".into(),
+                initials: "AL".into(),
+                date: "2026-07-19T03:00:00Z".into(),
+                text: "コメント本文テスト".into(),
+                paragraph_index: 0,
+                char_start: 3,
+                char_end: 8,
+            },
+            NewComment {
+                author: "Bob".into(),
+                initials: "B".into(),
+                date: "2026-07-19T03:01:00Z".into(),
+                text: "Second comment\nwith two paragraphs".into(),
+                paragraph_index: 1,
+                char_start: 0,
+                char_end: 5,
+            },
+        ]);
+        let saved = editor.save().expect("should save");
+        let path = std::env::temp_dir().join("oxi_comment_artifact.docx");
+        std::fs::write(&path, &saved).expect("write artifact");
+        eprintln!("wrote {}", path.display());
+    }
+
+    #[test]
+    fn test_add_comment_round_trip() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.docx");
+        let mut editor = DocxEditor::new(data).expect("should open");
+        editor.add_comments(vec![NewComment {
+            author: "Alice".into(),
+            initials: "A".into(),
+            date: "2026-07-19T00:00:00Z".into(),
+            text: "First note\nSecond line".into(),
+            paragraph_index: 0,
+            char_start: 3,
+            char_end: 8,
+        }]);
+
+        let saved = editor.save().expect("should save");
+        let doc = parse_docx(&saved).expect("saved docx should parse");
+
+        assert_eq!(doc.comments.len(), 1);
+        let c = &doc.comments[0];
+        assert_eq!(c.author.as_deref(), Some("Alice"));
+        assert_eq!(c.initials.as_deref(), Some("A"));
+        assert_eq!(c.blocks.len(), 2, "two body paragraphs from the newline");
+
+        if let crate::ir::Block::Paragraph(p) = &doc.pages[0].blocks[0] {
+            let starts: usize = p.runs.iter().map(|r| r.comment_range_start.len()).sum();
+            let ends: usize = p.runs.iter().map(|r| r.comment_range_end.len()).sum();
+            assert_eq!(starts, 1, "one range start in the paragraph");
+            assert_eq!(ends, 1, "one range end in the paragraph");
+            let full: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            assert_eq!(full, "Oxidocs Test Document", "run split must not alter text");
+        } else {
+            panic!("expected paragraph");
+        }
+    }
 
     #[test]
     fn test_editor_round_trip_no_edits() {

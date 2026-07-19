@@ -84,6 +84,14 @@ export function layout_document(data: Uint8Array): any;
 
 export function parse_document(data: Uint8Array): any;
 
+/**
+ * Write comments into a .docx: entries in word/comments.xml plus
+ * commentRangeStart/End + commentReference markers in document.xml.
+ * `comments` is an array of { author, initials?, date?, text,
+ * paragraph_index, char_start, char_end }.
+ */
+export function set_docx_comments(data: Uint8Array, comments: any): Uint8Array;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -97,6 +105,7 @@ export interface InitOutput {
     readonly edit_text_and_relayout: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly layout_document: (a: number, b: number) => [number, number, number];
     readonly parse_document: (a: number, b: number) => [number, number, number];
+    readonly set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
     readonly init: () => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

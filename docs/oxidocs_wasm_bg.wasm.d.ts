@@ -10,6 +10,7 @@ export const edit_docx_advanced: (a: number, b: number, c: any) => [number, numb
 export const edit_text_and_relayout: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const layout_document: (a: number, b: number) => [number, number, number];
 export const parse_document: (a: number, b: number) => [number, number, number];
+export const set_docx_comments: (a: number, b: number, c: any) => [number, number, number, number];
 export const init: () => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

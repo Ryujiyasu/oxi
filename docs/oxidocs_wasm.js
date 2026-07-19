@@ -186,6 +186,27 @@ export function parse_document(data) {
     return takeFromExternrefTable0(ret[0]);
 }
 
+/**
+ * Write comments into a .docx: entries in word/comments.xml plus
+ * commentRangeStart/End + commentReference markers in document.xml.
+ * `comments` is an array of { author, initials?, date?, text,
+ * paragraph_index, char_start, char_end }.
+ * @param {Uint8Array} data
+ * @param {any} comments
+ * @returns {Uint8Array}
+ */
+export function set_docx_comments(data, comments) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.set_docx_comments(ptr0, len0, comments);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
