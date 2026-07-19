@@ -625,6 +625,15 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                 height: page.height,
                 elements: page.elements.into_iter().map(|elem| {
                     match elem.content {
+                    oxidocs_core::layout::LayoutContent::WatermarkText { text, color, font_family, .. } => LayoutElementJs {
+                            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+                            kind: "watermark".into(),
+                            text: Some(text), font_size: None, font_family, bold: None, italic: None,
+                            underline: None, underline_style: None, strikethrough: None,
+                            color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }), highlight: None,
+                            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+                        },
                         oxidocs_core::layout::LayoutContent::Text {
                             text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, ..
                         } => LayoutElementJs {
@@ -646,7 +655,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             x1: None, y1: None, x2: None, y2: None,
                             paragraph_index: elem.paragraph_index, run_index: elem.run_index, char_offset: elem.char_offset,
                         },
-                        oxidocs_core::layout::LayoutContent::Image { data, content_type } => {
+                        oxidocs_core::layout::LayoutContent::Image { data, content_type, .. } => {
                             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
                             LayoutElementJs {
                                 x: elem.x, y: elem.y, width: elem.width, height: elem.height,
@@ -794,6 +803,15 @@ pub fn edit_text_and_relayout(paragraph_index: usize, run_index: usize, new_text
 
 fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
     match elem.content {
+        oxidocs_core::layout::LayoutContent::WatermarkText { text, color, font_family, .. } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+            kind: "watermark".into(),
+            text: Some(text), font_size: None, font_family, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None,
+            color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }), highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
         oxidocs_core::layout::LayoutContent::Text {
             text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, ..
         } => LayoutElementJs {
@@ -809,7 +827,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             x1: None, y1: None, x2: None, y2: None,
             paragraph_index: elem.paragraph_index, run_index: elem.run_index, char_offset: elem.char_offset,
         },
-        oxidocs_core::layout::LayoutContent::Image { data, content_type } => {
+        oxidocs_core::layout::LayoutContent::Image { data, content_type, .. } => {
             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
             LayoutElementJs {
                 x: elem.x, y: elem.y, width: elem.width, height: elem.height,
@@ -965,6 +983,8 @@ fn layout_to_pdf(
                         pixel_height: elem.height as u32,
                     }));
                 }
+                // WordArt watermark: not drawn in the wasm PDF export yet
+                oxidocs_core::layout::LayoutContent::WatermarkText { .. } => {}
                 oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, ref color, width, .. } => {
                     let stroke_color = color.as_ref()
                         .and_then(|c| parse_hex_color(c))
