@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ryujiyasu.gitlab.io/oxi/sitemap.xml
