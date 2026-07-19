@@ -10465,7 +10465,13 @@ impl LayoutEngine {
                         .unwrap_or(para_font_size);
                     let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                     // S707: no-grid empty-para line height is governed by the ASCII font.
-                    let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, grid_pitch.is_none());
+                    // S949: Latin custom-pitch no-type grids included (see the
+                    // line_height_for_line_inner empty branch).
+                    let s949_ascii = grid_pitch.is_none()
+                        || (page.doc_grid_no_type
+                            && !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S949_DISABLE").is_err());
+                    let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s949_ascii);
                     ma = m.word_ascent_pt(font_size); md = m.word_descent_pt(font_size);
                 } else {
                     for frag in &first_line.fragments {
@@ -17416,7 +17422,21 @@ impl LayoutEngine {
                 .unwrap_or(para_font_size);
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
             // S707: no-grid empty-para line height is governed by the ASCII font.
-            let metrics = self.metrics_for_para_mark_g(&rpr_ref, para_style, grid_pitch.is_none());
+            // S949 (2026-07-20, opt-out OXI_S949_DISABLE): a Latin doc's CUSTOM-pitch
+            // no-type docGrid (linePitch≠360 → S571-refine sets grid_pitch=Some) is
+            // still a NON-SNAPPING grid — the ¶-mark ascii rule applies exactly as in
+            // the no-grid/360 case. educational__00158a7d (linePitch=299, docDefaults
+            // literal eastAsia="Calibri", Normal=TNR-12 line=480): 21 copyright-page
+            // empties rendered 29.30 (= Calibri hhea 14.648×2, the eastAsia chain)
+            // vs Word 27.60 (= TNR hhea 13.799×2, the ascii font) → +35.5 → +1 page.
+            // The estimate (S940E) already prefers ascii for Latin docs — this closes
+            // the render half of that split. JP no-type (ikujidetail 286) untouched
+            // via the doc_body_has_real_cjk gate; typed grids keep S583's eastAsia.
+            let s949_ascii = grid_pitch.is_none()
+                || (grid_no_type
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S949_DISABLE").is_err());
+            let metrics = self.metrics_for_para_mark_g(&rpr_ref, para_style, s949_ascii);
             dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
             hhea_natural_max = metrics.natural_line_height_hhea(font_size);
             hhea_natural_family = metrics.family.clone();
@@ -17617,10 +17637,13 @@ impl LayoutEngine {
         let line_spacing_rule = para_style.line_spacing_rule.as_deref();
         if std::env::var("OXI_DBG_LH").is_ok() {
             let t: String = line.fragments.iter().flat_map(|f| f.text.chars()).take(18).collect();
-            eprintln!("[LH] rule={:?} ls={:?} base={:.2} run_base={:.2} hhea={:.2} fam={} gp={:?} gnt={} snap={} cjk={} t={:?}",
+            eprintln!("[LH] rule={:?} ls={:?} base={:.2} run_base={:.2} hhea={:.2} fam={} gp={:?} gnt={} snap={} cjk={} drs={:?} mark={:?} t={:?}",
                 line_spacing_rule, line_spacing, base, run_base, hhea_natural_max,
                 hhea_natural_family, grid_pitch, grid_no_type, para_style.snap_to_grid,
-                dominant_cjk_83_64, t);
+                dominant_cjk_83_64,
+                para_style.default_run_style.as_ref().map(|r| (r.font_family.clone(), r.font_size)),
+                para_style.ppr_rpr.as_ref().map(|r| (r.font_family.clone(), r.font_size)),
+                t);
         }
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
