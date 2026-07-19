@@ -25348,6 +25348,16 @@ impl LayoutEngine {
                 && std::env::var("OXI_S940").is_ok();
             let metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
+            // S943 (bundle member with S940): an auto-rule MULTIPLE (line=276)
+            // Latin empty takes hhea × factor — the bare rule test routed
+            // auto+1.15 empties into the single arm (default routing kept
+            // byte-identical; only the S940-gated path forks).
+            let s943_mult = std::env::var("OXI_S940").is_ok()
+                && std::env::var("OXI_S943_DISABLE").is_err()
+                && !self.doc_body_has_real_cjk
+                && !metrics.is_cjk_83_64_font()
+                && (eff_lr.is_none() || eff_lr == Some("auto"))
+                && eff_ls.map_or(false, |f| (f - 1.0).abs() > 0.01);
             // Session 79c: force_grid_snap=true switches the formula to match
             // the actual cell emit when adjustLineHeightInTable triggers grid
             // snap (line_height_inner cell_snap_allowed path). Used only for
@@ -25356,7 +25366,9 @@ impl LayoutEngine {
                 && self.adjust_line_height_in_table
                 && para.style.snap_to_grid
                 && grid_pitch.is_some();
-            let h_added = if is_single_empty {
+            let h_added = if s943_mult {
+                metrics.natural_line_height_hhea(empty_fs) * eff_ls.unwrap_or(1.0)
+            } else if is_single_empty {
                 if snap_in_cell {
                     self.line_height_inner(empty_fs, eff_ls, eff_lr, metrics, true, grid_pitch, true)
                 } else if use_render_lh {
