@@ -23504,6 +23504,21 @@ impl LayoutEngine {
                     } else {
                         max_cont_text_bottom
                     };
+                    // S942: the continuation band honors the atLeast trHeight
+                    // (band = max(content, trH + bw); see the cursor branch).
+                    let s817_close = if std::env::var("OXI_S942_DISABLE").is_err()
+                        && std::env::var("OXI_S940").is_ok()
+                        && !self.doc_body_has_real_cjk
+                        && row.height_rule.as_deref() != Some("exact")
+                    {
+                        match row.height {
+                            Some(trh) => s817_close
+                                .max(page_top + trh + self.rowbox2_trh_bw(table, row)),
+                            None => s817_close,
+                        }
+                    } else {
+                        s817_close
+                    };
 
                     // Find a horizontal bottom border in next_page_elems (the
                     // shifted row_bottom from the split row).
@@ -24072,6 +24087,30 @@ impl LayoutEngine {
                         LayoutContent::PresetShape { .. } => e.y,
                         _ => e.y + e.height,
                     }).fold(f32::NEG_INFINITY, f32::max);
+                    // S942 (2026-07-19, bundle member with OXI_S940; opt-out
+                    // OXI_S942_DISABLE): a split atLeast-trHeight row's
+                    // CONTINUATION still honors the declared minimum — the
+                    // continuation band = max(content, trH + bw). uklocal
+                    // rt.pdf wp47: row 11 (trH 63.75) continues with only 2
+                    // text lines (~23pt) yet Word's band runs page_top 72.1 →
+                    // border 136.6 = trH 63.75 + bw 0.75 (the ROWBOX2
+                    // "atLeast = trH + bw" rule applied per FRAGMENT). Oxi's
+                    // content-anchored band (27.2) started the next row 37pt
+                    // early and cascaded the whole template (+the S941 flip).
+                    let s942_floor = if std::env::var("OXI_S942_DISABLE").is_err()
+                        && std::env::var("OXI_S940").is_ok()
+                        && !self.doc_body_has_real_cjk
+                        && row.height_rule.as_deref() != Some("exact")
+                    {
+                        row.height.map(|trh| page_top + trh + self.rowbox2_trh_bw(table, row))
+                    } else {
+                        None
+                    };
+                    let cont_max_y = if let Some(fl) = s942_floor {
+                        cont_max_y.max(fl)
+                    } else {
+                        cont_max_y
+                    };
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         eprintln!("[SPLIT-CURSOR] branch=s754 cont_max_y={:.2}", cont_max_y);
                     }
@@ -24099,6 +24138,31 @@ impl LayoutEngine {
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         eprintln!("[SPLIT-CURSOR] branch=geom cursor={:.2} (row_bottom={:.2} split_y={:.2})",
                             cursor.cursor_y, row_bottom, split_y);
+                    }
+                }
+                // S942 post-clamp (all split cursor branches): the continuation
+                // band of a split atLeast-trHeight row honors the declared
+                // minimum — cursor ≥ page_top + trH + bw (uklocal row 11:
+                // Word band 72.1→136.6 = trH 63.75 + bw with only 2 content
+                // lines; the mid-LRPB/geometric branches bypassed the s754
+                // in-branch floor). The S864B empty-tail split is EXCLUDED:
+                // Word collapses a continuation that carries only the
+                // non-painting empty tail to the page top (administrative__
+                // 0001ce58 — clamping it to trH broke its PASS).
+                if std::env::var("OXI_S942_DISABLE").is_err()
+                    && std::env::var("OXI_S940").is_ok()
+                    && !self.doc_body_has_real_cjk
+                    && !s864_empty_tail_split
+                    && row.height_rule.as_deref() != Some("exact")
+                {
+                    if let Some(trh) = row.height {
+                        let fl = page_top + trh + self.rowbox2_trh_bw(table, row);
+                        if cursor.cursor_y < fl {
+                            if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                                eprintln!("[SPLIT-CURSOR] s942 clamp {:.2} -> {:.2}", cursor.cursor_y, fl);
+                            }
+                            cursor.set(fl);
+                        }
                     }
                 }
             } else {
