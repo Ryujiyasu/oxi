@@ -45,6 +45,45 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .mode-toggle{display:flex;background:rgba(255,255,255,.15);border-radius:12px;overflow:hidden;margin:0 8px}
 .mode-toggle button{background:none;border:none;color:rgba(255,255,255,.7);font:inherit;font-size:11px;padding:3px 12px;cursor:pointer}
 .mode-toggle button.active{background:rgba(255,255,255,.25);color:#fff;font-weight:600}
+/* Word-style comments (markup rail) */
+#cmtRail{position:absolute;left:100%;top:0;width:250px;margin-left:16px;display:none}
+.cmt-card{position:absolute;left:0;width:100%;background:#fff;border:1px solid #e0dcd4;border-left:3px solid #E8B93E;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:8px 10px;font-size:12px;transition:top .15s;box-sizing:border-box}
+.cmt-card.active{border-left-color:#C84C3A;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+.cmt-card.resolved{opacity:.55}
+.cmt-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.cmt-ava{width:22px;height:22px;border-radius:50%;background:#264653;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.cmt-name{font-weight:600}
+.cmt-time{color:#888;font-size:10.5px;margin-left:auto}
+.cmt-body{white-space:pre-wrap;line-height:1.45;margin:2px 0 6px;word-break:break-word}
+.cmt-reply{border-top:1px solid #eee;padding-top:5px;margin-top:5px}
+.cmt-input{width:100%;border:1px solid #ccc;border-radius:4px;font:inherit;font-size:12px;padding:4px 6px;box-sizing:border-box;resize:vertical}
+textarea.cmt-input{min-height:44px}
+.cmt-actions{display:flex;gap:8px;margin-top:5px}
+.cmt-actions button{background:none;border:none;color:#264653;font-size:11.5px;cursor:pointer;padding:2px 4px;border-radius:3px}
+.cmt-actions button:hover{background:#eee}
+mark.oxi-cmt{background:#FFE9A8;border-bottom:2px solid #E8B93E;cursor:pointer}
+mark.oxi-cmt.active{background:#FFD666}
+mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
+#cmtPopover{position:fixed;left:12px;right:12px;bottom:12px;z-index:400;background:#fff;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.3);padding:12px}
+#cmtPopover .cmt-card{position:static;box-shadow:none;border-radius:0;border:none;border-left:3px solid #E8B93E;width:auto}
+#cmtPopClose{position:absolute;top:4px;right:8px;background:none;border:none;font-size:18px;cursor:pointer;color:#666}
+.doc-area.reflow #cmtRail{display:none!important}
+/* Checkbox content control */
+.oxi-check{display:inline-block;cursor:pointer;user-select:none;padding:0 1px;border-radius:2px;line-height:1}
+.oxi-check:hover{background:#e8f0f2;outline:1px solid #9db6bf}
+/* Dropdown content control */
+.oxi-dd{display:inline-block;cursor:pointer;user-select:none;border:1px solid transparent;border-radius:3px;padding:0 16px 0 4px;position:relative;background:#f2f6f7}
+.oxi-dd:hover{border-color:#9db6bf;background:#e8f0f2}
+.oxi-dd::after{content:'\25BE';position:absolute;right:3px;color:#557;font-size:.8em}
+.oxi-dd.dd-empty{color:#888}
+.dd-menu{position:fixed;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.18);z-index:300;min-width:160px;max-width:260px;padding:4px;font-size:12px}
+.dd-menu .dd-item{padding:5px 10px;border-radius:4px;cursor:pointer}
+.dd-menu .dd-item:hover{background:#e8f0f2}
+.dd-menu .dd-sep{border-top:1px solid #eee;margin:4px 0}
+.dd-menu textarea{width:100%;min-height:70px;font:inherit;font-size:12px;border:1px solid #ccc;border-radius:4px;padding:4px;box-sizing:border-box}
+/* Toast */
+#oxiToast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%) translateY(8px);background:#333;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:500}
+#oxiToast.show{opacity:1;transform:translateX(-50%)}
 
 /* Ribbon tabs (desktop only) */
 .rtabs{display:flex;align-items:flex-end;background:var(--accent);padding:0 8px;flex-shrink:0;height:26px}
@@ -465,6 +504,9 @@ const I18N = {
     pageNumber: 'Page number', fnText: 'Footnote text',
     toc: 'Table of Contents', equation: 'Equation', shape: 'Shape', checkbox: 'Checkbox', dropdown: 'Dropdown',
     comment: 'Comment', forms: 'Forms', columns: 'Columns', oneCol: '1 Col', twoCols: '2 Cols', threeCols: '3 Cols',
+    cmtYou: 'You', cmtSelect: 'Select text to comment on', cmtPlaceholder: 'Add a comment\u2026', cmtPost: 'Post',
+    cmtCancel: 'Cancel', cmtReply: 'Reply\u2026 (Enter)', cmtResolve: 'Resolve', cmtReopen: 'Reopen',
+    cmtDelete: 'Delete', cmtName: 'Your name', ddChoose: 'Choose an item', ddItem: 'Item', ddEdit: 'Edit items\u2026', ddApply: 'Apply',
     pageBreak: 'Page Break', sectionBreak: 'Section', breaks: 'Breaks',
     mailMerge: 'Mail Merge', mailings: 'Mailings',
     tocTitle: 'Table of Contents', commentText: 'Comment text', eqPlaceholder: 'LaTeX (e.g. x^2 + y^2 = r^2)',
@@ -490,6 +532,9 @@ const I18N = {
     pageNumber: 'ページ番号', fnText: '脚注テキスト',
     toc: '目次', equation: '数式', shape: '図形', checkbox: 'チェックボックス', dropdown: 'ドロップダウン',
     comment: 'コメント', forms: 'フォーム', columns: '段組み', oneCol: '1段', twoCols: '2段', threeCols: '3段',
+    cmtYou: '自分', cmtSelect: 'コメントする範囲を選択してください', cmtPlaceholder: 'コメントを追加\u2026', cmtPost: '投稿',
+    cmtCancel: 'キャンセル', cmtReply: '返信\u2026 (Enter)', cmtResolve: '解決', cmtReopen: '再開',
+    cmtDelete: '削除', cmtName: '名前', ddChoose: '項目を選択', ddItem: '項目', ddEdit: '項目を編集\u2026', ddApply: '適用',
     pageBreak: '改ページ', sectionBreak: 'セクション', breaks: '区切り',
     mailMerge: '差し込み印刷', mailings: '差し込み',
     tocTitle: '目次', commentText: 'コメント内容', eqPlaceholder: 'LaTeX (例: x^2 + y^2 = r^2)',
@@ -1068,61 +1113,331 @@ $('btnShape').addEventListener('click', () => {
   else editor.appendChild(svg);
 });
 
-// ---- Checkbox ----
-$('btnCheck').addEventListener('click', () => {
-  const label = prompt(t('linkText'), 'Item');
-  if (label === null) return;
-  const wrap = document.createElement('label');
-  wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin:2px 4px;cursor:pointer;font-size:10.5pt';
-  const cb = document.createElement('input');
-  cb.type = 'checkbox'; cb.style.cssText = 'width:16px;height:16px;cursor:pointer';
-  wrap.appendChild(cb);
-  wrap.appendChild(document.createTextNode(label));
+// ---- Content controls & comments (Word-referenced UX) ----
+function insertAtCaret(node) {
   const sel = window.getSelection();
-  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(wrap); r.setStartAfter(wrap); sel.removeAllRanges(); sel.addRange(r); }
-  else editor.appendChild(wrap);
-});
-
-// ---- Dropdown ----
-$('btnDropdown').addEventListener('click', () => {
-  const opts = prompt('Options (comma-separated)', 'Option 1,Option 2,Option 3');
-  if (!opts) return;
-  const sel2 = document.createElement('select');
-  sel2.style.cssText = 'font:inherit;font-size:10.5pt;padding:2px 4px;border:1px solid #999;border-radius:3px;margin:2px 4px';
-  for (const o of opts.split(',')) {
-    const opt = document.createElement('option');
-    opt.textContent = o.trim(); sel2.appendChild(opt);
+  if (sel.rangeCount && editor.contains(sel.anchorNode)) {
+    const r = sel.getRangeAt(0);
+    r.collapse(false);
+    r.insertNode(node);
+    r.setStartAfter(node); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+  } else {
+    editor.appendChild(node);
   }
-  const sel = window.getSelection();
-  if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(sel2); r.setStartAfter(sel2); sel.removeAllRanges(); sel.addRange(r); }
-  else editor.appendChild(sel2);
+  saveUndoState();
+}
+
+function showToast(msg) {
+  let el = document.getElementById('oxiToast');
+  if (!el) { el = document.createElement('div'); el.id = 'oxiToast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ---- Checkbox: a content control — click toggles, the label is normal text ----
+$('btnCheck').addEventListener('click', () => {
+  const box = document.createElement('span');
+  box.className = 'oxi-check';
+  box.contentEditable = 'false';
+  box.dataset.checked = '0';
+  box.textContent = '\u2610';
+  insertAtCaret(box);
+  insertAtCaret(document.createTextNode('\u00A0'));
 });
 
-// ---- Comment ----
-let commentCounter = 0;
+// ---- Dropdown: a content control — click opens the choices, items editable in place ----
+let ddMenuEl = null;
+function closeDdMenu() {
+  if (ddMenuEl) { ddMenuEl.remove(); ddMenuEl = null; document.removeEventListener('mousedown', ddOutside, true); }
+}
+function ddOutside(e) { if (ddMenuEl && !ddMenuEl.contains(e.target)) closeDdMenu(); }
+function openDdMenu(ctrl) {
+  closeDdMenu();
+  let items = [];
+  try { items = JSON.parse(ctrl.dataset.items || '[]'); } catch (_) {}
+  const menu = document.createElement('div');
+  menu.className = 'dd-menu';
+  const listView = () => {
+    menu.innerHTML = '';
+    for (const it of items) {
+      const d = document.createElement('div');
+      d.className = 'dd-item'; d.textContent = it;
+      d.addEventListener('click', () => {
+        ctrl.textContent = it;
+        ctrl.classList.remove('dd-empty');
+        saveUndoState();
+        closeDdMenu();
+      });
+      menu.appendChild(d);
+    }
+    const sep = document.createElement('div'); sep.className = 'dd-sep'; menu.appendChild(sep);
+    const ed = document.createElement('div'); ed.className = 'dd-item'; ed.textContent = t('ddEdit');
+    ed.addEventListener('click', editView);
+    menu.appendChild(ed);
+  };
+  const editView = () => {
+    menu.innerHTML = '';
+    const ta = document.createElement('textarea');
+    ta.value = items.join('\n');
+    menu.appendChild(ta);
+    const row = document.createElement('div'); row.className = 'cmt-actions';
+    const ok = document.createElement('button'); ok.textContent = t('ddApply'); ok.style.fontWeight = '700';
+    ok.addEventListener('click', () => {
+      const next = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+      if (next.length) ctrl.dataset.items = JSON.stringify(next);
+      closeDdMenu();
+    });
+    const ng = document.createElement('button'); ng.textContent = t('cmtCancel');
+    ng.addEventListener('click', closeDdMenu);
+    row.appendChild(ok); row.appendChild(ng);
+    menu.appendChild(row);
+    setTimeout(() => ta.focus(), 0);
+  };
+  listView();
+  document.body.appendChild(menu);
+  const r = ctrl.getBoundingClientRect();
+  menu.style.left = Math.min(r.left, window.innerWidth - 180) + 'px';
+  menu.style.top = Math.min(r.bottom + 3, window.innerHeight - 120) + 'px';
+  ddMenuEl = menu;
+  setTimeout(() => document.addEventListener('mousedown', ddOutside, true), 0);
+}
+$('btnDropdown').addEventListener('click', () => {
+  const ctrl = document.createElement('span');
+  ctrl.className = 'oxi-dd dd-empty';
+  ctrl.contentEditable = 'false';
+  ctrl.dataset.items = JSON.stringify([t('ddItem') + ' 1', t('ddItem') + ' 2', t('ddItem') + ' 3']);
+  ctrl.textContent = t('ddChoose');
+  insertAtCaret(ctrl);
+  insertAtCaret(document.createTextNode('\u00A0'));
+});
+
+// ---- Comments: Word-style markup rail on the right of the page ----
+const CMT = { list: [], seq: 0 };
+const cmtPage = document.getElementById('page1');
+let cmtRail = null;
+function ensureRail() {
+  if (!cmtRail) { cmtRail = document.createElement('div'); cmtRail.id = 'cmtRail'; cmtPage.appendChild(cmtRail); }
+  return cmtRail;
+}
+function cmtAuthor() { return localStorage.getItem('oxi-author') || ''; }
+function cmtNow() {
+  return new Date().toLocaleString(curLang === 'ja' ? 'ja-JP' : 'en-US',
+    { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function anchorOf(id) { return editor.querySelector('mark.oxi-cmt[data-cid="' + id + '"]'); }
+function cmtData(id) { return CMT.list.find(c => c.id === id); }
+function unwrapAnchor(el) {
+  const parent = el.parentNode;
+  while (el.firstChild) parent.insertBefore(el.firstChild, el);
+  parent.removeChild(el);
+  parent.normalize();
+}
+
 $('btnComment').addEventListener('click', () => {
   const sel = window.getSelection();
-  if (!sel.rangeCount || sel.isCollapsed) { alert('Select text to comment on'); return; }
-  const text = prompt(t('commentText'));
-  if (!text) return;
-  commentCounter++;
+  if (!sel.rangeCount || sel.isCollapsed || !editor.contains(sel.anchorNode)) { showToast(t('cmtSelect')); return; }
   const range = sel.getRangeAt(0);
   const mark = document.createElement('mark');
-  mark.style.cssText = 'background:#FFF3A8;cursor:pointer;position:relative';
-  mark.dataset.comment = text;
-  mark.dataset.commentId = commentCounter;
-  mark.title = text;
-  range.surroundContents(mark);
-  // Comment indicator
-  const badge = document.createElement('sup');
-  badge.textContent = '💬';
-  badge.style.cssText = 'font-size:8px;cursor:pointer;user-select:none';
-  badge.addEventListener('click', e => {
-    e.stopPropagation();
-    alert(`Comment #${mark.dataset.commentId}:\n${mark.dataset.comment}`);
-  });
-  mark.appendChild(badge);
+  mark.className = 'oxi-cmt';
+  const cid = ++CMT.seq;
+  mark.dataset.cid = cid;
+  try { range.surroundContents(mark); }
+  catch (_) { mark.appendChild(range.extractContents()); range.insertNode(mark); }
+  sel.removeAllRanges();
+  CMT.list.push({ id: cid, author: cmtAuthor(), time: cmtNow(), text: '', resolved: false, replies: [], draft: true });
+  saveUndoState();
+  renderComments(cid);
 });
+
+function buildCard(c, activeId) {
+  const card = document.createElement('div');
+  card.className = 'cmt-card' + (c.resolved ? ' resolved' : '') + (c.id === activeId ? ' active' : '');
+  card.dataset.cid = c.id;
+  const name = c.author || t('cmtYou');
+  const head = document.createElement('div');
+  head.className = 'cmt-head';
+  head.innerHTML = '<span class="cmt-ava"></span><span class="cmt-name"></span><span class="cmt-time"></span>';
+  head.querySelector('.cmt-ava').textContent = (name.trim().charAt(0) || '?').toUpperCase();
+  head.querySelector('.cmt-name').textContent = name;
+  head.querySelector('.cmt-time').textContent = c.time;
+  card.appendChild(head);
+
+  if (c.draft) {
+    if (!localStorage.getItem('oxi-author')) {
+      const nameIn = document.createElement('input');
+      nameIn.className = 'cmt-input';
+      nameIn.placeholder = t('cmtName');
+      nameIn.style.marginBottom = '4px';
+      nameIn.addEventListener('input', () => { head.querySelector('.cmt-name').textContent = nameIn.value || t('cmtYou'); });
+      card.appendChild(nameIn);
+      card._nameIn = nameIn;
+    }
+    const ta = document.createElement('textarea');
+    ta.className = 'cmt-input';
+    ta.placeholder = t('cmtPlaceholder');
+    card.appendChild(ta);
+    const row = document.createElement('div'); row.className = 'cmt-actions';
+    const post = document.createElement('button'); post.textContent = t('cmtPost'); post.style.fontWeight = '700';
+    post.addEventListener('click', () => {
+      const txt = ta.value.trim();
+      if (!txt) return;
+      if (card._nameIn && card._nameIn.value.trim()) localStorage.setItem('oxi-author', card._nameIn.value.trim());
+      c.author = cmtAuthor() || t('cmtYou');
+      c.text = txt;
+      c.draft = false;
+      c.time = cmtNow();
+      renderComments(c.id);
+    });
+    const cancel = document.createElement('button'); cancel.textContent = t('cmtCancel');
+    cancel.addEventListener('click', () => deleteComment(c.id));
+    row.appendChild(post); row.appendChild(cancel);
+    card.appendChild(row);
+    setTimeout(() => ta.focus(), 0);
+  } else {
+    const body = document.createElement('div');
+    body.className = 'cmt-body';
+    body.textContent = c.text;
+    card.appendChild(body);
+    for (const rp of c.replies) {
+      const rdiv = document.createElement('div');
+      rdiv.className = 'cmt-reply';
+      const rh = document.createElement('div'); rh.className = 'cmt-head';
+      rh.innerHTML = '<span class="cmt-ava"></span><span class="cmt-name"></span><span class="cmt-time"></span>';
+      rh.querySelector('.cmt-ava').textContent = ((rp.author || '?').trim().charAt(0) || '?').toUpperCase();
+      rh.querySelector('.cmt-name').textContent = rp.author;
+      rh.querySelector('.cmt-time').textContent = rp.time;
+      const rb = document.createElement('div'); rb.className = 'cmt-body'; rb.textContent = rp.text;
+      rdiv.appendChild(rh); rdiv.appendChild(rb);
+      card.appendChild(rdiv);
+    }
+    if (!c.resolved) {
+      const rin = document.createElement('input');
+      rin.className = 'cmt-input';
+      rin.placeholder = t('cmtReply');
+      rin.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && rin.value.trim()) {
+          e.preventDefault();
+          c.replies.push({ author: cmtAuthor() || t('cmtYou'), time: cmtNow(), text: rin.value.trim() });
+          renderComments(c.id);
+        }
+      });
+      card.appendChild(rin);
+    }
+    const row = document.createElement('div'); row.className = 'cmt-actions';
+    const res = document.createElement('button');
+    res.textContent = c.resolved ? t('cmtReopen') : '\u2713 ' + t('cmtResolve');
+    res.addEventListener('click', () => { c.resolved = !c.resolved; renderComments(c.id); });
+    const del = document.createElement('button'); del.textContent = t('cmtDelete');
+    del.addEventListener('click', () => deleteComment(c.id));
+    row.appendChild(res); row.appendChild(del);
+    card.appendChild(row);
+  }
+  card.addEventListener('mousedown', e => {
+    if (e.target.closest('button, input, textarea')) return;
+    activateComment(c.id, false);
+    const a = anchorOf(c.id);
+    if (a) a.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+  return card;
+}
+
+function deleteComment(id) {
+  const a = anchorOf(id);
+  if (a) unwrapAnchor(a);
+  const i = CMT.list.findIndex(c => c.id === id);
+  if (i >= 0) CMT.list.splice(i, 1);
+  saveUndoState();
+  closePopover();
+  renderComments();
+}
+
+function renderComments(activeId) {
+  const rail = ensureRail();
+  rail.innerHTML = '';
+  const pageRect = cmtPage.getBoundingClientRect();
+  const rows = [];
+  for (const c of CMT.list) {
+    const a = anchorOf(c.id);
+    if (!a) continue; // anchor edited away (undo can bring it back)
+    a.classList.toggle('resolved', c.resolved);
+    a.classList.toggle('active', c.id === activeId);
+    rows.push({ c, y: a.getBoundingClientRect().top - pageRect.top });
+  }
+  rows.sort((p, q) => p.y - q.y);
+  rail.style.display = rows.length ? 'block' : 'none';
+  let bottom = 0;
+  for (const r of rows) {
+    const card = buildCard(r.c, activeId);
+    rail.appendChild(card);
+    const top = Math.max(r.y, bottom);
+    card.style.top = top + 'px';
+    bottom = top + card.offsetHeight + 10;
+  }
+  rail.style.height = bottom + 'px';
+}
+
+function activateComment(id, fromAnchor) {
+  renderComments(id);
+  if (fromAnchor && cmtRail) {
+    const card = cmtRail.querySelector('.cmt-card[data-cid="' + id + '"]');
+    if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function showPopoverCard(id) {
+  closePopover();
+  const c = cmtData(id);
+  if (!c) return;
+  const ov = document.createElement('div');
+  ov.id = 'cmtPopover';
+  const x = document.createElement('button');
+  x.id = 'cmtPopClose'; x.textContent = '\u00D7';
+  x.addEventListener('click', closePopover);
+  ov.appendChild(x);
+  ov.appendChild(buildCard(c, id));
+  ov.addEventListener('click', e => {
+    if (e.target.closest('.cmt-actions button')) setTimeout(closePopover, 60);
+  });
+  document.body.appendChild(ov);
+}
+function closePopover() { const p = document.getElementById('cmtPopover'); if (p) p.remove(); }
+
+// Delegated clicks: checkbox toggle, dropdown menu, comment anchors
+editor.addEventListener('click', e => {
+  const box = e.target.closest ? e.target.closest('.oxi-check') : null;
+  if (box) {
+    const on = box.dataset.checked === '1';
+    box.dataset.checked = on ? '0' : '1';
+    box.textContent = on ? '\u2610' : '\u2612';
+    saveUndoState();
+    return;
+  }
+  const dd = e.target.closest ? e.target.closest('.oxi-dd') : null;
+  if (dd) { openDdMenu(dd); return; }
+  const anchor = e.target.closest ? e.target.closest('mark.oxi-cmt') : null;
+  if (anchor) {
+    const id = parseInt(anchor.dataset.cid, 10);
+    if (editArea.classList.contains('reflow')) showPopoverCard(id);
+    else activateComment(id, true);
+  }
+});
+
+// Keep cards aligned with their anchors while the document is edited
+let cmtLayoutTimer = null;
+function cmtRelayout() {
+  if (!CMT.list.length) return;
+  if (cmtRail && cmtRail.contains(document.activeElement)) return;
+  if (CMT.list.some(c => c.draft)) return;
+  renderComments();
+}
+editor.addEventListener('input', () => {
+  clearTimeout(cmtLayoutTimer);
+  cmtLayoutTimer = setTimeout(cmtRelayout, 250);
+});
+window.addEventListener('resize', cmtRelayout);
 
 // ---- Columns ----
 $('col1').addEventListener('click', () => { editor.style.columnCount = ''; editor.style.columnGap = ''; $('col1').classList.add('active'); $('col2').classList.remove('active'); $('col3').classList.remove('active'); });
