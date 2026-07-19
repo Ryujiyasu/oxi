@@ -5156,8 +5156,35 @@ impl LayoutEngine {
                             } else {
                                 (next_h_with_gap, follower_moves_wholly)
                             };
-                            let pair_overflows = this_h + unit_next_h > remaining
-                                && this_h + unit_next_h <= effective_content_h;
+                            // S948 (2026-07-19, opt-out OXI_S948_DISABLE): the pair sum
+                            // double-counts spacing when the ESTIMATES included it (the
+                            // non-reset case: direct spacing or an exact/atLeast rule —
+                            // the S925 arm correctly composes the RESET case and is
+                            // skipped here by construction). Word composition = head sb +
+                            // head lines + max(head after, follower sb) + follower lines,
+                            // with the follower's TRAILING after hanging at the page
+                            // bottom. NDIS wp15 "Claiming for Time of Day": pair 96.1 vs
+                            // rem 87.9 pushed; Word arithmetic 87.1 <= 87.9 fits — the
+                            // +9 = after_head 4 + sb_next 5 uncollapsed (gap is 5) +
+                            // trailing after 5. Correction applies only to what the
+                            // estimates actually included.
+                            let s948_corr = if std::env::var("OXI_S948_DISABLE").is_err() {
+                                let inc = |st: &ParagraphStyle| st.has_direct_spacing
+                                    || matches!(st.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"));
+                                let head_inc = inc(&para.style);
+                                let next_inc = inc(&next_para.style);
+                                let ha_e = para.style.space_after.unwrap_or(0.0);
+                                let nsb_e = next_para.style.space_before.unwrap_or(0.0);
+                                let na_e = next_para.style.space_after.unwrap_or(0.0);
+                                let ha_i = if head_inc { ha_e } else { 0.0 };
+                                let nsb_i = if next_inc { nsb_e } else { 0.0 };
+                                let na_i = if next_inc { na_e } else { 0.0 };
+                                (ha_i + nsb_i - ha_e.max(nsb_e)).max(0.0) + na_i
+                            } else {
+                                0.0
+                            };
+                            let pair_overflows = this_h + unit_next_h - s948_corr > remaining
+                                && this_h + unit_next_h - s948_corr <= effective_content_h;
                             let mut do_push = if s635 {
                                 pair_overflows && (this_h > remaining || follower_moves_wholly)
                             } else {
