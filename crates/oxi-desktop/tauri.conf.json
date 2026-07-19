@@ -2,9 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "Oxi",
   "version": "0.1.0",
-  "identifier": "com.oxi.app",
+  "identifier": "com.oxi.desktop",
   "build": {
-    "frontendDist": "../../../dist-desktop",
+    "beforeBuildCommand": "node oxi-desktop/assemble-dist.mjs",
+    "frontendDist": "../../dist-desktop",
     "devUrl": "http://localhost:8080/web/"
   },
   "app": {
@@ -21,9 +22,21 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Ryujiyasu/oxi/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyNjgwQ0I0MzNEMDBGQ0IKUldUTEQ5QXp0QXhvZ25tTHBMeUNtaFllK1VxbXhINit3dlJUMEVncnlnNmgzOEFJYU53YjZlTEIK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
