@@ -22799,7 +22799,20 @@ impl LayoutEngine {
                 // max(content_h, elem_bottom) double-counts this offset and inflates
                 // row height. Trust content_h as the authoritative sum.
                 let is_vmerge_restart = cell.v_merge.as_deref() == Some("restart");
-                if !is_vmerge_continue && !is_exact_row && !is_vmerge_restart {
+                // S946 (2026-07-19, opt-out OXI_S946_DISABLE): an INK-LESS cell
+                // (all blocks are paragraphs with only whitespace runs) never
+                // drives the S648 row-height correction — its placement height
+                // uses the S503 render line (GDI, e.g. 9.7 for a 7.5pt mark)
+                // which exceeds the Word-correct estimate (mark hhea 8.6), and
+                // nothing is painted to justify the growth. NDIS zones tables:
+                // the blank enclave-column cells inflated every such row
+                // +1.1 (Oxi 14.2 vs Word 13.15). Latin scope: the JP form
+                // family's empty-cell heights are a calibrated stack.
+                let s946_inkless = std::env::var("OXI_S946_DISABLE").is_err()
+                    && !self.doc_body_has_real_cjk
+                    && cell.blocks.iter().all(|b| matches!(b,
+                        Block::Paragraph(p) if p.runs.iter().all(|r| r.text.trim().is_empty())));
+                if !is_vmerge_continue && !is_exact_row && !is_vmerge_restart && !s946_inkless {
                     let actual = pad_t + content_h + pad_b;
                     if actual > max_actual_cell_h {
                         max_actual_cell_h = actual;
