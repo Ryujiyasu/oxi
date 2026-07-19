@@ -2444,10 +2444,18 @@ impl LayoutEngine {
         // S888: U+2011/U+2010 (noBreakHyphen / hyphen) join the ambiguous
         // class — see metrics_for_char_in.
         let s888 = std::env::var("OXI_S888_DISABLE").is_err();
+        // S951: Arrows + Math Operators (U+2190..U+22FF) — Latin-doc scope
+        // (doc_body_has_real_cjk gate like S801/S888 at the break site).
+        // reference__0029c1c: a ≥ in «AHI ≥ 30» routed the LINE to the
+        // eastAsia chain (Book Antiqua eastAsia → S634 MS Mincho) and grew it
+        // 22.37→25.50 where Word keeps the Latin line height.
+        let s951 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S951_DISABLE").is_err();
         let is_q = move |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
             || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
             || (s830 && matches!(c, '\u{2026}'))
-            || (s888 && matches!(c, '\u{2011}' | '\u{2010}'));
+            || (s888 && matches!(c, '\u{2011}' | '\u{2010}'))
+            || (s951 && matches!(c, '\u{2190}'..='\u{22FF}'));
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
         // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
@@ -2592,7 +2600,12 @@ impl LayoutEngine {
             // hyphen 4.0. legal__0001482d's noBreakHyphen ISBN/Gazette lines
             // wrapped one line early each (+14..17pt ×4 anomalies).
             || (std::env::var("OXI_S888_DISABLE").is_err()
-                && matches!(ch, '\u{2011}' | '\u{2010}'));
+                && matches!(ch, '\u{2011}' | '\u{2010}'))
+            // S951: Arrows + Math Operators (U+2190..U+22FF) in a Latin doc —
+            // see the break-site comment (reference__0029c1c «AHI ≥ 30»).
+            || (!self.doc_body_has_real_cjk
+                && std::env::var("OXI_S951_DISABLE").is_err()
+                && matches!(ch, '\u{2190}'..='\u{22FF}'));
         let cjk_class = kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk);
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
@@ -14830,8 +14843,20 @@ impl LayoutEngine {
                 let s888_latin_hyphen = matches!(ch, '\u{2011}' | '\u{2010}')
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S888_DISABLE").is_err();
+                // S951 (2026-07-20): Arrows + Mathematical Operators
+                // (U+2190..U+22FF, East-Asian-Width Ambiguous) join the class —
+                // reference__0029c1c's «AHI ≥ 30» lines: is_cjk routed ≥ to the
+                // eastAsia chain (Book Antiqua eastAsia → S634 MS Mincho) and
+                // the LINE grew 22.37→25.50 where Word keeps the Latin height
+                // (measured uniform 22.32-22.44 on every ≥ line). Doc-level
+                // Latin gate like S801/S888 → JP byte-identical by construction
+                // (golden census: 0 Latin docs carry these chars).
+                let s951_latin_mathop = matches!(ch, '\u{2190}'..='\u{22FF}')
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S951_DISABLE").is_err();
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
+                    || s951_latin_mathop
                     || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                     && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
                     && {
