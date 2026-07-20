@@ -2111,7 +2111,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // Inherit keepNext, keepLines, contextualSpacing, widowControl from style
             // S955: a DIRECT `<w:keepNext w:val="0"/>` (has_explicit) beats the
             // style's ON; a style-chain explicit OFF propagates as OFF.
-            if std::env::var("OXI_S955").is_ok() {
+            if std::env::var("OXI_S955_DISABLE").is_err() {
                 if !style.has_explicit_keep_next {
                     if ds.has_explicit_keep_next {
                         style.keep_next = ds.keep_next;
@@ -8240,7 +8240,7 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
         if let Some(ref drs) = ds.default_run_style {
             style.default_run_style = Some(drs.clone());
         }
-        if std::env::var("OXI_S955").is_ok() {
+        if std::env::var("OXI_S955_DISABLE").is_err() {
             if !style.has_explicit_keep_next {
                 if ds.has_explicit_keep_next {
                     style.keep_next = ds.keep_next;

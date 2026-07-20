@@ -250,13 +250,12 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     // the monotone merge turned every body paragraph into a keepNext chain →
     // repeated chain pushes → footer-only phantom pages). The
     // has_explicit_widow_control pattern.
-    // ★HELD OPT-IN (OXI_S955=1): probe-proven Word-correct (kn0_probe:
-    // Word honors a DIRECT val=0 even against a style's explicit val=1),
-    // but default-ON flips mysignaiguide PASS→FAIL — its PASS rides the
-    // WRONG keepNext compensating the AI-guideline family's vertical-stack
-    // drift (title −11pt + heading-gap +7.3). Ships default-ON together
-    // with that co-fix.
-    if std::env::var("OXI_S955").is_ok() {
+    // Probe-proven Word-correct (kn0_probe: Word honors a DIRECT val=0 even
+    // against a style's explicit val=1). Shipped together with S956, which
+    // removed the one blocker: mysignaiguide's PASS rode the WRONG keepNext,
+    // compensating an empty-paragraph mark-font error. Opt-out
+    // OXI_S955_DISABLE.
+    if std::env::var("OXI_S955_DISABLE").is_err() {
         if !child.has_explicit_keep_next {
             if parent.has_explicit_keep_next {
                 child.keep_next = parent.keep_next;
@@ -634,9 +633,18 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             // S763c: capture the East-Asian language (w:lang w:eastAsia) — drives
             // Word's ambiguous curly-quote font choice (CJK lang → eastAsia font,
             // Latin lang → Latin font).
+            // S956: also capture the LATIN language (w:lang w:val). A CJK value
+            // there (the unusual `w:val="ja"`) makes Word resolve even Latin
+            // text — and the ¶ mark — through the East Asian font chain.
             for attr in e.attributes().flatten() {
-                if local_name(attr.key.as_ref()) == "eastAsia" {
-                    rs.east_asia_lang = Some(String::from_utf8_lossy(&attr.value).to_string());
+                match local_name(attr.key.as_ref()).as_str() {
+                    "eastAsia" => {
+                        rs.east_asia_lang = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    }
+                    "val" => {
+                        rs.latin_lang = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    }
+                    _ => {}
                 }
             }
         }

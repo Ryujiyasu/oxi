@@ -388,6 +388,11 @@ pub struct RunStyle {
     /// the Latin font. S763c.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub east_asia_lang: Option<String>,
+    /// Latin language tag (`<w:lang w:val="en-US">`). Normally Latin; a CJK
+    /// value (`w:val="ja"`) makes Word resolve Latin text AND the paragraph
+    /// mark through the East Asian font chain instead of the ASCII font. S956.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latin_lang: Option<String>,
     pub font_size: Option<f32>,
     pub bold: bool,
     pub italic: bool,
@@ -507,6 +512,7 @@ impl Default for RunStyle {
             font_family_east_asia: None,
             has_explicit_east_asia: false,
             east_asia_lang: None,
+            latin_lang: None,
             font_size: None,
             bold: false,
             italic: false,

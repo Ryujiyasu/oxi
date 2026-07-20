@@ -1759,6 +1759,9 @@ pub struct LayoutEngine {
     /// docDefaults East-Asian language is CJK (ja/zh/ko) — drives S763c ambiguous
     /// curly-quote font choice.
     doc_east_asia_lang_cjk: bool,
+    /// docDefaults LATIN language is CJK (`<w:lang w:val="ja">`) — Word then
+    /// resolves the ¶ mark through the East Asian chain, not the ASCII font. S956.
+    doc_latin_lang_cjk: bool,
     registry: FontMetricsRegistry,
     /// Compatibility: adjustLineHeightInTable=true disables grid snap in table cells.
     adjust_line_height_in_table: bool,
@@ -2018,6 +2021,7 @@ impl LayoutEngine {
             default_font_family: None,
             default_font_family_east_asia: None,
             doc_east_asia_lang_cjk: false,
+            doc_latin_lang_cjk: false,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: false,
             default_tab_stop: 36.0,
@@ -2101,11 +2105,23 @@ impl LayoutEngine {
                 let l = l.to_ascii_lowercase();
                 l.starts_with("ja") || l.starts_with("zh") || l.starts_with("ko") || l.starts_with("yue")
             });
+        // S956: the docDefaults LATIN language. The normal Japanese document
+        // sets `w:val="en-US" w:eastAsia="ja-JP"`; a few generators instead put
+        // the CJK tag in the LATIN slot (`w:val="ja"`), which makes Word treat
+        // Latin text and the ¶ mark as East Asian.
+        let doc_latin_lang_cjk = doc.styles.doc_default_run_style
+            .as_ref()
+            .and_then(|s| s.latin_lang.as_deref())
+            .map_or(false, |l| {
+                let l = l.to_ascii_lowercase();
+                l.starts_with("ja") || l.starts_with("zh") || l.starts_with("ko") || l.starts_with("yue")
+            });
         Self {
             default_font_size,
             default_font_family,
             default_font_family_east_asia,
             doc_east_asia_lang_cjk,
+            doc_latin_lang_cjk,
             registry: FontMetricsRegistry::load(),
             adjust_line_height_in_table: doc.adjust_line_height_in_table,
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
@@ -2578,10 +2594,42 @@ impl LayoutEngine {
         // calibrated those WITH the eastAsia metric — applying this there
         // regressed bd90b00/ed025 (the S559 compensating pattern). Opt-out
         // OXI_S707_DISABLE.
-        if prefer_ascii && std::env::var("OXI_S707_DISABLE").is_err() {
+        // S956 (2026-07-20): when the document's LATIN language is itself a CJK
+        // language (`<w:lang w:val="ja">` in docDefaults — not the normal
+        // `w:val="en-US" w:eastAsia="ja-JP"`), Word measures the ¶ mark through
+        // the East Asian chain, so the ASCII preference does not apply.
+        // DERIVED (tools/metrics/_pb_markfont_gen.py, 18 controlled cases, a
+        // self-calibrating anchor/empty/anchor readout at 20pt):
+        //   docDefaults lang val=en-US, ea=ja-JP  -> Arial  22.92 (ascii, S583)
+        //   docDefaults lang val=en-US, theme JP  -> Arial  22.92 (theme alone
+        //                                            does not trigger)
+        //   docDefaults lang val=ja, eastAsia=MS Mincho -> 25.92 (that font)
+        //   docDefaults lang val=ja, eastAsia Latin-only, theme Jpan=MS Mincho
+        //                                         -> 25.92 (the theme face)
+        //   ... same with theme Jpan=Meiryo       -> 39.00 (that face)
+        //   ... no theme at all                   -> 33.48 (OS default JP)
+        // The mark's OWN w:lang is ignored in both directions; the document
+        // default is what decides. Opt-out OXI_S956_DISABLE.
+        let s956 = self.doc_latin_lang_cjk && std::env::var("OXI_S956_DISABLE").is_err();
+        if prefer_ascii && !s956 && std::env::var("OXI_S707_DISABLE").is_err() {
             let ascii = self.metrics_for(run_style, para_style);
             if !ascii.is_cjk_83_64_font() {
                 return ascii;
+            }
+        }
+        if s956 {
+            // The East Asian slot here is inherited (docDefaults), so
+            // metrics_for_cjk's run-level S634 substitution never fires; a
+            // Latin-only inherited eastAsia would resolve to itself. Word
+            // font-links it to the theme's Jpan face (mysignaiguide: ＭＳ 明朝),
+            // which is what S634's substitute already names. Mark-scoped, so
+            // visible-run resolution keeps its existing calibration.
+            let ea = run_style.font_family_east_asia.as_deref()
+                .or_else(|| para_style.default_run_style.as_ref()
+                    .and_then(|d| d.font_family_east_asia.as_deref()))
+                .or(self.default_font_family_east_asia.as_deref());
+            if let Some(ff) = ea {
+                return self.registry.get(self.cjk_ea_family(ff, true));
             }
         }
         if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
