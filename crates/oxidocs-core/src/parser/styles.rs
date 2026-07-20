@@ -244,11 +244,42 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
         }
     }
     // Inherit bool fields: true from parent if child doesn't set
-    if !child.keep_next && parent.keep_next {
-        child.keep_next = true;
-    }
-    if !child.keep_lines && parent.keep_lines {
-        child.keep_lines = true;
+    // S955: three-state keepNext/keepLines — a child style's explicit
+    // `w:val="0"` must survive a basedOn parent's ON (legal__0010437a:
+    // MiscellaneousBody keepNext=0 basedOn MiscellaneousHeading keepNext=ON;
+    // the monotone merge turned every body paragraph into a keepNext chain →
+    // repeated chain pushes → footer-only phantom pages). The
+    // has_explicit_widow_control pattern.
+    // ★HELD OPT-IN (OXI_S955=1): probe-proven Word-correct (kn0_probe:
+    // Word honors a DIRECT val=0 even against a style's explicit val=1),
+    // but default-ON flips mysignaiguide PASS→FAIL — its PASS rides the
+    // WRONG keepNext compensating the AI-guideline family's vertical-stack
+    // drift (title −11pt + heading-gap +7.3). Ships default-ON together
+    // with that co-fix.
+    if std::env::var("OXI_S955").is_ok() {
+        if !child.has_explicit_keep_next {
+            if parent.has_explicit_keep_next {
+                child.keep_next = parent.keep_next;
+                child.has_explicit_keep_next = true;
+            } else if parent.keep_next {
+                child.keep_next = true;
+            }
+        }
+        if !child.has_explicit_keep_lines {
+            if parent.has_explicit_keep_lines {
+                child.keep_lines = parent.keep_lines;
+                child.has_explicit_keep_lines = true;
+            } else if parent.keep_lines {
+                child.keep_lines = true;
+            }
+        }
+    } else {
+        if !child.keep_next && parent.keep_next {
+            child.keep_next = true;
+        }
+        if !child.keep_lines && parent.keep_lines {
+            child.keep_lines = true;
+        }
     }
     if !child.has_explicit_widow_control && parent.has_explicit_widow_control {
         child.widow_control = parent.widow_control;
@@ -898,6 +929,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.keep_next = enabled;
+            style.has_explicit_keep_next = true;
         }
         "keepLines" => {
             let mut enabled = true;
@@ -908,6 +940,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.keep_lines = enabled;
+            style.has_explicit_keep_lines = true;
         }
         "widowControl" => {
             let mut enabled = true;
@@ -1444,6 +1477,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.keep_next = enabled;
+                            style.has_explicit_keep_next = true;
                         }
                         "keepLines" => {
                             let mut enabled = true;
@@ -1454,6 +1488,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.keep_lines = enabled;
+                            style.has_explicit_keep_lines = true;
                         }
                         "widowControl" => {
                             let mut enabled = true;

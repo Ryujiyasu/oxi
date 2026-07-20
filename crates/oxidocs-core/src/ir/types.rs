@@ -1336,9 +1336,18 @@ pub struct ParagraphStyle {
     /// Keep with next paragraph on same page (w:keepNext)
     #[serde(default)]
     pub keep_next: bool,
+    /// S955: keepNext was EXPLICITLY set (val present or element present) —
+    /// distinguishes an explicit `<w:keepNext w:val="0"/>` (which must beat a
+    /// basedOn parent's / paragraph style's ON) from "not set" (which
+    /// inherits). The widow_control three-state pattern.
+    #[serde(default)]
+    pub has_explicit_keep_next: bool,
     /// Keep all lines of this paragraph together (w:keepLines)
     #[serde(default)]
     pub keep_lines: bool,
+    /// S955: keepLines three-state marker (see has_explicit_keep_next).
+    #[serde(default)]
+    pub has_explicit_keep_lines: bool,
     /// Widow/orphan control (w:widowControl, default true in Word)
     #[serde(default = "default_true")]
     pub widow_control: bool,
@@ -1470,7 +1479,9 @@ impl Default for ParagraphStyle {
             page_break_after: false,
             borders: None,
             keep_next: false,
+            has_explicit_keep_next: false,
             keep_lines: false,
+            has_explicit_keep_lines: false,
             widow_control: true,
             has_explicit_widow_control: false,
             has_explicit_contextual_spacing: false,

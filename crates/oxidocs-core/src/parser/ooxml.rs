@@ -2109,7 +2109,17 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 }
             }
             // Inherit keepNext, keepLines, contextualSpacing, widowControl from style
-            if ds.keep_next { style.keep_next = true; }
+            // S955: a DIRECT `<w:keepNext w:val="0"/>` (has_explicit) beats the
+            // style's ON; a style-chain explicit OFF propagates as OFF.
+            if std::env::var("OXI_S955").is_ok() {
+                if !style.has_explicit_keep_next {
+                    if ds.has_explicit_keep_next {
+                        style.keep_next = ds.keep_next;
+                    } else if ds.keep_next {
+                        style.keep_next = true;
+                    }
+                }
+            } else if ds.keep_next { style.keep_next = true; }
             if ds.keep_lines { style.keep_lines = true; }
             // S782 (2026-07-11): a DIRECT `<w:contextualSpacing w:val="0"/>`
             // (explicit OFF) wins over the style's contextualSpacing — the
@@ -3181,6 +3191,7 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.keep_next = enabled;
+                        style.has_explicit_keep_next = true;
                     }
                     "keepLines" => {
                         let mut enabled = true;
@@ -3193,6 +3204,7 @@ fn parse_paragraph_properties(
                             }
                         }
                         style.keep_lines = enabled;
+                        style.has_explicit_keep_lines = true;
                     }
                     "widowControl" => {
                         let mut enabled = true;
@@ -8228,7 +8240,15 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
         if let Some(ref drs) = ds.default_run_style {
             style.default_run_style = Some(drs.clone());
         }
-        if ds.keep_next { style.keep_next = true; }
+        if std::env::var("OXI_S955").is_ok() {
+            if !style.has_explicit_keep_next {
+                if ds.has_explicit_keep_next {
+                    style.keep_next = ds.keep_next;
+                } else if ds.keep_next {
+                    style.keep_next = true;
+                }
+            }
+        } else if ds.keep_next { style.keep_next = true; }
         if ds.keep_lines { style.keep_lines = true; }
     }
     // Apply docDefaults fallback

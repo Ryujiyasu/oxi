@@ -1431,6 +1431,14 @@ pub struct LayoutPage {
     pub height: f32,
     pub elements: Vec<LayoutElement>,
 }
+#[track_caller]
+fn dbg_page_push(n_before: usize, n_elems: usize) {
+    if std::env::var("OXI_DBG_PGPUSH").is_ok() {
+        let loc = std::panic::Location::caller();
+        eprintln!("[PGPUSH] before={} elems={} at {}:{}", n_before, n_elems, loc.file(), loc.line());
+    }
+}
+
 
 #[derive(Clone)]
 pub struct LayoutElement {
@@ -2213,6 +2221,7 @@ impl LayoutEngine {
                     _ => false,
                 };
                 if need_blank {
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -2222,6 +2231,10 @@ impl LayoutEngine {
                 }
             }
             let laid_out = self.layout_page(page);
+            if std::env::var("OXI_DBG_IRPAGES").is_ok() {
+                eprintln!("[IRPAGE] ir={} blocks={} pages={} (cum_before={})",
+                    ir_idx, page.blocks.len(), laid_out.len(), pages.len());
+            }
             for _ in &laid_out {
                 layout_to_ir_page.push(ir_idx);
             }
@@ -3961,6 +3974,19 @@ impl LayoutEngine {
                 m
             } else { Default::default() };
         for (block_idx, block) in page.blocks.iter().enumerate() {
+            if let Ok(rng) = std::env::var("OXI_DBG_BLKTRACE") {
+                let mut it = rng.split('-');
+                let lo: usize = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                let hi: usize = it.next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+                if block_idx >= lo && block_idx <= hi {
+                    let head: String = match block {
+                        Block::Paragraph(p) => p.runs.iter().flat_map(|r| r.text.chars()).take(20).collect(),
+                        Block::Table(_) => "<TABLE>".into(),
+                        _ => "<?>".into(),
+                    };
+                    eprintln!("[BLKTRACE] blk={} page={} cur={:.1} {:?}", block_idx, pages.len() + 1, cursor.cursor_y, head);
+                }
+            }
             if !s863_vertical_geoms.is_empty() {
                 while s863_vertical_run_idx + 1 < page.vertical_runs.len()
                     && block_idx >= page.vertical_runs[s863_vertical_run_idx + 1].0
@@ -3991,6 +4017,7 @@ impl LayoutEngine {
             if let Some(&band_h) = s734_bands.get(&block_idx) {
                 let remaining = (start_y + content_height) - cursor.cursor_y;
                 if band_h > remaining && band_h <= content_height && !elements.is_empty() {
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -4038,6 +4065,7 @@ impl LayoutEngine {
                     && need <= content_height
                     && !elements.is_empty()
                 {
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -4102,6 +4130,7 @@ impl LayoutEngine {
                     && s758_max_bottom - cursor.cursor_y <= content_height
                     && !elements.is_empty()
                 {
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -4842,6 +4871,7 @@ impl LayoutEngine {
 
                     // pageBreakBefore: force a new page (not just next column)
                     if (para.style.page_break_before || lrpb_should_break) && !elements.is_empty() {
+                        dbg_page_push(pages.len(), 0);
                         pages.push(LayoutPage {
                             width: page.size.width,
                             height: page.size.height,
@@ -4885,6 +4915,7 @@ impl LayoutEngine {
                                 content_width = col_widths[current_column];
                                 cursor.set(col_band_top);
                             } else {
+                                dbg_page_push(pages.len(), 0);
                                 pages.push(LayoutPage {
                                     width: page.size.width,
                                     height: page.size.height,
@@ -5317,6 +5348,7 @@ impl LayoutEngine {
                                     content_width = col_widths[current_column];
                                     cursor.set(col_band_top);
                                 } else {
+                                    dbg_page_push(pages.len(), 0);
                                     pages.push(LayoutPage {
                                         width: page.size.width,
                                         height: page.size.height,
@@ -5392,6 +5424,7 @@ impl LayoutEngine {
                                 content_width = col_widths[current_column];
                                 cursor.set(col_band_top);
                             } else {
+                                dbg_page_push(pages.len(), 0);
                                 pages.push(LayoutPage {
                                     width: page.size.width,
                                     height: page.size.height,
@@ -5795,6 +5828,7 @@ impl LayoutEngine {
                     // block. Used for the inline-br-in-empty-paragraph pattern;
                     // see `project_empty_br_para_stub.md`.
                     if para.style.page_break_after && !elements.is_empty() {
+                        dbg_page_push(pages.len(), 0);
                         pages.push(LayoutPage {
                             width: page.size.width,
                             height: page.size.height,
@@ -5900,6 +5934,7 @@ impl LayoutEngine {
                             est += h;
                         }
                         if candidate_y_top + est > cb + 0.5 && est <= content_height {
+                            dbg_page_push(pages.len(), 0);
                             pages.push(LayoutPage {
                                 width: page.size.width,
                                 height: page.size.height,
@@ -6055,6 +6090,7 @@ impl LayoutEngine {
 
                     if target_page > current_page_idx {
                         // Finalize current page; advance to target page.
+                        dbg_page_push(pages.len(), 0);
                         pages.push(LayoutPage {
                             width: page.size.width,
                             height: page.size.height,
@@ -6062,6 +6098,7 @@ impl LayoutEngine {
                         });
                         current_page_idx += 1;
                         while current_page_idx < target_page {
+                            dbg_page_push(pages.len(), 0);
                             pages.push(LayoutPage {
                                 width: page.size.width,
                                 height: page.size.height,
@@ -6399,6 +6436,7 @@ impl LayoutEngine {
                             content_width = col_widths[current_column];
                             cursor.set(col_band_top);
                         } else {
+                            dbg_page_push(pages.len(), 0);
                             pages.push(LayoutPage {
                                 width: page.size.width,
                                 height: page.size.height,
@@ -6561,6 +6599,7 @@ impl LayoutEngine {
             }
             let sep_gap = grid_pitch.unwrap_or(14.0).max(6.0);
             if cursor.cursor_y + sep_gap * 2.0 > start_y + content_height {
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -6635,6 +6674,7 @@ impl LayoutEngine {
         }
 
         // Final page
+        dbg_page_push(pages.len(), 0);
         pages.push(LayoutPage {
             width: page.size.width,
             height: page.size.height,
@@ -6662,6 +6702,7 @@ impl LayoutEngine {
                 if overflow.is_empty() { continue; }
                 let next_idx = i + 1;
                 if next_idx >= pages.len() {
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -9614,6 +9655,7 @@ impl LayoutEngine {
                 nat_metrics.natural_line_height_hhea(marker_font_size).min(marker_break_h)
             } else { marker_break_h };
             if cursor.cursor_y + marker_break_h > page_top + content_height {
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -11706,6 +11748,7 @@ impl LayoutEngine {
                 // Same shape as the natural mid-paragraph break: keep the laid
                 // lines on this page, continue on the fresh one.
                 current_elements.extend(std::mem::take(&mut elements));
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -11721,6 +11764,7 @@ impl LayoutEngine {
                 }
             } else if widow_orphan_break {
                 // Push current page and move entire paragraph so far to next page
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -11835,6 +11879,7 @@ impl LayoutEngine {
                 // See project_d77a_phantom_page_11.md.
                 if para.runs.is_empty() && para.style.page_break_after {
                     current_elements.extend(std::mem::take(&mut elements));
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
                         height: page.size.height,
@@ -11848,6 +11893,7 @@ impl LayoutEngine {
                 // Mid-paragraph page break: keep already-laid-out lines on current page,
                 // only the overflowing line (and subsequent) go to the next page.
                 current_elements.extend(std::mem::take(&mut elements));
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -13620,6 +13666,7 @@ impl LayoutEngine {
                 // on the NEW page. Fix: merge elements into the pushed page first.
                 let mut page_elements = std::mem::take(current_elements);
                 page_elements.extend(std::mem::take(&mut elements));
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page.size.width,
                     height: page.size.height,
@@ -19878,6 +19925,7 @@ impl LayoutEngine {
                 }
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page_width,
                     height: page_height,
@@ -23825,6 +23873,7 @@ impl LayoutEngine {
                 }
                 elements.extend(current_page_elems);
                 current_elements.extend(std::mem::take(&mut elements));
+                dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page_width,
                     height: page_height,
@@ -24076,6 +24125,7 @@ impl LayoutEngine {
                         let ov_txt = overflow.iter().filter(|e| matches!(&e.content, LayoutContent::Text { .. })).count();
                         eprintln!("[SPLIT-LOOP] next_split={:.1} -> pushed this_page txt={} | overflow txt={}", next_split, tp_txt, ov_txt);
                     }
+                    dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page_width,
                         height: page_height,
