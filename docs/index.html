@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word</title>
-<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — pixel-level SSIM 0.94 vs Microsoft Word on a 235-document Japanese corpus (frozen Japanese and English blind benchmarks are published as-is). 100% client-side: your files never leave your device.">
+<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — scored against Microsoft Word on frozen blind benchmarks of never-seen documents (SSIM 0.83 Japanese / 0.81 English, published as-is). 100% client-side: your files never leave your device.">
 <meta name="keywords" content="docx viewer, docx editor, browser, Word compatible, rendering engine, Rust, WebAssembly, wasm, open source, OOXML, layout engine, Japanese typography, kinsoku, vertical writing, LibreOffice alternative, docx online, no upload">
 <!-- Google Search Console: HTML-file verification is deployed at ./googlebdcd49fe8490af38.html
      (alternative: paste the <meta name="google-site-verification"> tag here) -->
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word">
-<meta property="og:description" content="Open .docx files in the browser with Word-faithful layout. Pixel-measured against Microsoft Word (SSIM 0.94 on 235 Japanese docs). Open source, Rust + WebAssembly, 100% client-side.">
+<meta property="og:description" content="Open .docx files in the browser with Word-faithful layout. Pixel-measured against Microsoft Word on frozen blind benchmarks of never-seen documents (SSIM 0.83 Japanese / 0.81 English). Open source, Rust + WebAssembly, 100% client-side.">
 <meta property="og:image" content="https://ryujiyasu.gitlab.io/oxi/oxi-logo.png">
 <meta property="og:url" content="https://ryujiyasu.gitlab.io/oxi/">
 <meta property="og:site_name" content="Oxi">
@@ -67,7 +67,7 @@
     {
       "@type": "Question",
       "name": "How accurate is Oxi compared with Microsoft Word?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Oxi's layout is measured against Microsoft Word page by page with pixel-level SSIM. As of 2026-07-17 the per-page mean is 0.9378 (per-document 0.9591) across a 235-document / 410-page corpus of real Japanese business documents — ahead of LibreOffice (0.8872) and ONLYOFFICE (0.8913) on the same corpus." }
+      "acceptedAnswer": { "@type": "Answer", "text": "Oxi's layout is measured against Microsoft Word page by page with pixel-level SSIM, on frozen blind benchmarks of never-seen documents that are never used as fix targets. The Japanese blind set scores 0.828 per document — ahead of LibreOffice (0.816), SILURUS (0.804) and ONLYOFFICE (0.772) on the same documents (2026-07-21) — and the English blind set 0.807 (2026-07-20)." }
     },
     {
       "@type": "Question",
@@ -196,7 +196,6 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <p class="note">Free · No account · Runs entirely in your browser</p>
 
     <div class="stats" aria-label="Key measurements">
-      <div class="stat"><div class="num">0.94</div><div class="lbl">SSIM vs Word — Japanese<br>corpus (235 docs / 410 pages)</div></div>
       <div class="stat"><div class="num">0.83</div><div class="lbl">SSIM vs Word — Japanese blind<br>benchmark (50 never-seen docs)</div></div>
       <div class="stat"><div class="num">0.81</div><div class="lbl">SSIM vs Word — English blind<br>benchmark (50 never-seen docs)</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">parse success on real<br>government .docx files</div></div>
@@ -222,86 +221,6 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div class="wrap">
       <h2>Layout accuracy is measured, not asserted</h2>
       <p class="sub">Every claim below comes from a reproducible measurement pipeline, published in the repository.</p>
-      <h3>Japanese corpus — 235 documents, 410 pages</h3>
-      <p>Oxi's layout engine is compared with Microsoft Word using pixel-level <strong>SSIM (structural similarity)</strong> across <strong>235 real-world Japanese business documents (410 pages)</strong> — regulations, government forms, and contracts. As of <strong>2026-07-17</strong> the per-page mean is <strong>0.9378</strong> and the per-document mean is <strong>0.9591</strong>.</p>
-
-      <figure class="chart-card">
-        <h4>Convergence toward Word, measured week by week</h4>
-        <div class="legend"><span><span class="chip" style="background:#264653"></span>Japanese corpus — 235 docs, mean per page</span><span><span class="chip" style="background:#8B72BE"></span>English blind benchmark — 50 never-seen docs, mean per document (from 07-19)</span></div>
-<svg viewBox="0 0 720 300" role="img" aria-label="Line chart: mean SSIM vs Microsoft Word. Japanese corpus rising from 0.788 to 0.938; the English blind benchmark at 0.800 on July 19 and 0.807 on July 20." style="width:100%;height:auto;font-family:inherit">
-  <line x1="46" y1="270.0" x2="704" y2="270.0" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="274.0" text-anchor="end" font-size="11" fill="#5a5a5a">0.75</text>
-  <line x1="46" y1="219.6" x2="704" y2="219.6" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="223.6" text-anchor="end" font-size="11" fill="#5a5a5a">0.80</text>
-  <line x1="46" y1="169.2" x2="704" y2="169.2" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="173.2" text-anchor="end" font-size="11" fill="#5a5a5a">0.85</text>
-  <line x1="46" y1="118.8" x2="704" y2="118.8" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="122.8" text-anchor="end" font-size="11" fill="#5a5a5a">0.90</text>
-  <line x1="46" y1="68.4" x2="704" y2="68.4" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="72.4" text-anchor="end" font-size="11" fill="#5a5a5a">0.95</text>
-  <line x1="46" y1="18.0" x2="704" y2="18.0" stroke="#C84C3A" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <text x="40" y="22.0" text-anchor="end" font-size="11" fill="#5a5a5a">1.00</text>
-  <text x="704" y="33.0" text-anchor="end" font-size="12" font-weight="700" fill="#C84C3A">Microsoft Word = 1.00 (target)</text>
-  <line x1="69.3" y1="270" x2="69.3" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="69.3" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">Apr 2026</text>
-  <line x1="244.0" y1="270" x2="244.0" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="244.0" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">May 2026</text>
-  <line x1="424.5" y1="270" x2="424.5" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="424.5" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">Jun 2026</text>
-  <line x1="599.2" y1="270" x2="599.2" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="599.2" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">Jul 2026</text>
-  <line x1="46" y1="270" x2="704" y2="270" stroke="#d5d0c8" stroke-width="1"/>
-  <polyline points="46.0,231.3 98.4,176.3 145.0,160.7 185.8,156.6 226.5,149.1 284.7,133.4 308.0,129.4 412.8,132.7 436.1,106.1 488.5,99.7 593.4,93.3 663.2,81.5 692.4,80.7" fill="none" stroke="#264653" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="46.0" cy="231.3" r="3" fill="#264653"><title>Japanese 2026-03-28 · 0.7884</title></circle>
-  <circle cx="98.4" cy="176.3" r="3" fill="#264653"><title>Japanese 2026-04-06 · 0.8430</title></circle>
-  <circle cx="145.0" cy="160.7" r="3" fill="#264653"><title>Japanese 2026-04-14 · 0.8584</title></circle>
-  <circle cx="185.8" cy="156.6" r="3" fill="#264653"><title>Japanese 2026-04-21 · 0.8625</title></circle>
-  <circle cx="226.5" cy="149.1" r="3" fill="#264653"><title>Japanese 2026-04-28 · 0.8699</title></circle>
-  <circle cx="284.7" cy="133.4" r="3" fill="#264653"><title>Japanese 2026-05-08 · 0.8855</title></circle>
-  <circle cx="308.0" cy="129.4" r="3" fill="#264653"><title>Japanese 2026-05-12 · 0.8895</title></circle>
-  <circle cx="412.8" cy="132.7" r="3" fill="#264653"><title>Japanese 2026-05-30 · 0.8862</title></circle>
-  <circle cx="436.1" cy="106.1" r="3" fill="#264653"><title>Japanese 2026-06-03 · 0.9126</title></circle>
-  <circle cx="488.5" cy="99.7" r="3" fill="#264653"><title>Japanese 2026-06-12 · 0.9189</title></circle>
-  <circle cx="593.4" cy="93.3" r="3" fill="#264653"><title>Japanese 2026-06-30 · 0.9253</title></circle>
-  <circle cx="663.2" cy="81.5" r="3" fill="#264653"><title>Japanese 2026-07-12 · 0.9370</title></circle>
-  <circle cx="692.4" cy="80.7" r="4.5" fill="#264653"><title>Japanese 2026-07-17 · 0.9378</title></circle>
-  <circle cx="704.0" cy="212.6" r="4.5" fill="#8B72BE"><title>English blind set 2026-07-20 · 0.807</title></circle>
-  <text x="46.0" y="221.3" text-anchor="start" font-size="12" font-weight="700" fill="#1a1a1a">0.788</text>
-  <text x="690.4" y="68.7" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.9378</text>
-  <text x="702.0" y="234.6" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.807</text>
-</svg>
-        <figcaption class="fnote">Mean SSIM vs Microsoft Word. The small step at 05-30 is a from-scratch recomputation of the measurement baseline, not a regression. The purple point is the English blind benchmark — it starts at its first measurement and grows with every re-measurement.</figcaption>
-        <details>
-          <summary>View the data</summary>
-          <table>
-            <thead><tr><th>Date</th><th class="num">Japanese (mean per page)</th><th class="num">English blind set (mean per document)</th></tr></thead>
-            <tbody><tr><td>2026-03-28</td><td class="num">0.7884</td><td class="num">—</td></tr><tr><td>2026-04-06</td><td class="num">0.8430</td><td class="num">—</td></tr><tr><td>2026-04-14</td><td class="num">0.8584</td><td class="num">—</td></tr><tr><td>2026-04-21</td><td class="num">0.8625</td><td class="num">—</td></tr><tr><td>2026-04-28</td><td class="num">0.8699</td><td class="num">—</td></tr><tr><td>2026-05-08</td><td class="num">0.8855</td><td class="num">—</td></tr><tr><td>2026-05-12</td><td class="num">0.8895</td><td class="num">—</td></tr><tr><td>2026-05-30</td><td class="num">0.8862</td><td class="num">—</td></tr><tr><td>2026-06-03</td><td class="num">0.9126</td><td class="num">—</td></tr><tr><td>2026-06-12</td><td class="num">0.9189</td><td class="num">—</td></tr><tr><td>2026-06-30</td><td class="num">0.9253</td><td class="num">—</td></tr><tr><td>2026-07-12</td><td class="num">0.9370</td><td class="num">—</td></tr><tr><td>2026-07-17</td><td class="num">0.9378</td><td class="num">—</td></tr><tr><td>2026-07-19</td><td class="num">—</td><td class="num">0.800</td></tr><tr><td>2026-07-20</td><td class="num">—</td><td class="num">0.807</td></tr></tbody>
-          </table>
-        </details>
-      </figure>
-
-      <figure class="chart-card">
-        <h4>Same documents, same Word ground truth — how other engines compare</h4>
-        <div class="barchart">
-          <div class="brow">
-            <div class="blabel"><strong>Oxi</strong><span>best on 188 / 406 pages</span></div>
-            <div class="btrack"><div class="bfill oxi" style="width:93.77%"></div></div>
-            <div class="bval"><strong>0.9377</strong></div>
-          </div>
-          <div class="brow">
-            <div class="blabel">ONLYOFFICE<span>best on 134 / 406 pages</span></div>
-            <div class="btrack"><div class="bfill" style="width:89.13%"></div></div>
-            <div class="bval">0.8913</div>
-          </div>
-          <div class="brow">
-            <div class="blabel">LibreOffice<span>best on 84 / 406 pages</span></div>
-            <div class="btrack"><div class="bfill" style="width:88.72%"></div></div>
-            <div class="bval">0.8872</div>
-          </div>
-        </div>
-        <figcaption class="fnote">Mean SSIM per page on the Japanese corpus; the dashed edge marks Microsoft Word itself (1.00). ONLYOFFICE 9.3.1.8 and LibreOffice 26.2.1.2 were rendered headlessly to PDF on the same documents; "best on" counts the pages where each engine comes closest to Word.</figcaption>
-      </figure>
-
       <h3>Japanese blind set — 50 never-seen documents</h3>
       <p>Japanese is held to the same standard as English: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. At its first measurement (2026-07-21) Oxi scores <strong>0.828</strong> per document and matches Word's page count on 44 of the 50 documents — ahead of LibreOffice (<strong>0.816</strong>), SILURUS (<strong>0.804</strong>) and ONLYOFFICE (<strong>0.772</strong>) on the same documents. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, LibreOffice 26.2.1.2, ONLYOFFICE 9.3.1.8, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI.</p>
 
@@ -332,7 +251,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>English corpus — measured separately, reported honestly</h3>
-      <p>English is measured the hard way: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. As of <strong>2026-07-20</strong> Oxi scores <strong>0.807</strong> per document (0.800 at its first measurement on 2026-07-19), behind ONLYOFFICE (<strong>0.902</strong>) and LibreOffice (<strong>0.876</strong>) and ahead of SILURUS (<strong>0.776</strong>) — the closest architectural peer, a Rust + WebAssembly canvas renderer, which Oxi beats on 32 of the 50 documents. That remaining gap is the English work queue: the set is re-measured as the engine improves, and the line above grows with it. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, ONLYOFFICE 9.3.1.8, LibreOffice 26.2.1.2, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI on the same day.</p>
+      <p>English is measured the hard way: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. As of <strong>2026-07-20</strong> Oxi scores <strong>0.807</strong> per document (0.800 at its first measurement on 2026-07-19), behind ONLYOFFICE (<strong>0.902</strong>) and LibreOffice (<strong>0.876</strong>) and ahead of SILURUS (<strong>0.776</strong>) — the closest architectural peer, a Rust + WebAssembly canvas renderer, which Oxi beats on 32 of the 50 documents. That remaining gap is the English work queue: the set is re-measured as the engine improves. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, ONLYOFFICE 9.3.1.8, LibreOffice 26.2.1.2, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI on the same day.</p>
 
       <figure class="chart-card">
         <h4>English blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-07-20)</h4>
@@ -665,7 +584,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>How accurate is Oxi compared with Microsoft Word?</summary>
-        <p>Measured continuously with pixel-level SSIM against Word: per-page mean 0.9378 / per-document 0.9591 over the 235-document Japanese corpus (410 pages) as of 2026-07-17, and 0.807 per document on the English blind benchmark (50 never-seen documents — ahead of the closest architectural peer SILURUS, still behind LibreOffice and ONLYOFFICE there, published as-is) — ahead of LibreOffice and ONLYOFFICE on the same corpus. See the <a href="#accuracy">accuracy section</a> for the comparison table and methodology.</p>
+        <p>Measured with pixel-level SSIM against Word on frozen blind benchmarks — 50 never-seen documents per language that are never used as fix targets. Japanese: 0.828 per document, ahead of LibreOffice, SILURUS and ONLYOFFICE on the same documents (2026-07-21). English: 0.807 — ahead of the closest architectural peer SILURUS, still behind LibreOffice and ONLYOFFICE there, published as-is (2026-07-20). See the <a href="#accuracy">accuracy section</a> for the comparison charts and methodology.</p>
       </details>
       <details>
         <summary>Which file formats does Oxi support?</summary>

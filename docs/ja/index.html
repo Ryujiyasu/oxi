@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — ブラウザだけで Word と同じ見た目を実現する .docx レンダリングエンジン（オープンソース）</title>
-<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。日本語の実文書 235 件で Microsoft Word とピクセル単位に照合し SSIM 0.94 を実測（初見文書だけの日本語・英語ブラインドベンチマークもそのまま公開）。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
+<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。修正対象には使わない初見文書だけの凍結ブラインドベンチマークで Microsoft Word とピクセル単位に照合（SSIM 日本語 0.83・英語 0.81 をそのまま公開）。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
 <meta name="keywords" content="docx ビューア, docx ブラウザ 表示, Word 互換, レイアウトエンジン, オープンソース, Rust, WebAssembly, wasm, 禁則処理, 縦書き, ルビ, 割注, 圏点, docx 編集 オンライン, アップロード不要, LibreOffice 代替">
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
@@ -69,7 +69,7 @@
     {
       "@type": "Question",
       "name": "Microsoft Word とどれくらい同じ見た目になりますか？",
-      "acceptedAnswer": { "@type": "Answer", "text": "日本語の実文書 235 件（410 ページ）で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378、文書平均 0.9591 です。同じ条件で LibreOffice（0.8872）や ONLYOFFICE（0.8913）を上回ります。" }
+      "acceptedAnswer": { "@type": "Answer", "text": "修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマークで、Word とピクセル単位の SSIM を測定しています。日本語ブラインド 50 文書は文書平均 0.828 — 同じ文書での LibreOffice（0.816）、SILURUS（0.804）、ONLYOFFICE（0.772）を上回ります（2026-07-21）。英語ブラインドは 0.807（2026-07-20）。" }
     },
     {
       "@type": "Question",
@@ -198,7 +198,6 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <p class="note">無料 · 登録不要 · 処理はすべてブラウザ内で完結</p>
 
     <div class="stats" aria-label="主要な実測値">
-      <div class="stat"><div class="num">0.94</div><div class="lbl">Word との SSIM — 日本語<br>コーパス（235 文書 / 410 ページ）</div></div>
       <div class="stat"><div class="num">0.83</div><div class="lbl">Word との SSIM — 日本語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
       <div class="stat"><div class="num">0.81</div><div class="lbl">Word との SSIM — 英語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実文書（.docx）での<br>パース成功率</div></div>
@@ -224,86 +223,6 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div class="wrap">
       <h2>再現度は「主張」ではなく「実測」</h2>
       <p class="sub">ここに並ぶ数値はすべて、リポジトリで公開している測定パイプラインで誰でも再現できます。</p>
-      <h3>日本語コーパス — 235 文書・410 ページ</h3>
-      <p>就業規則、官公庁の申請様式、契約書……実在の日本語ビジネス文書 <strong>235 件（410 ページ）</strong>を Microsoft Word の出力と重ね、ピクセル単位の <strong>SSIM（構造的類似度）</strong>で採点しています。<strong>2026-07-17 時点の成績はページ平均 0.9378、文書平均 0.9591</strong>。満点（= Word と完全一致）は 1.00 です。</p>
-
-      <figure class="chart-card">
-        <h4>Word への収束を、毎週実測</h4>
-        <div class="legend"><span><span class="chip" style="background:#264653"></span>日本語コーパス — 235 文書・ページ平均</span><span><span class="chip" style="background:#8B72BE"></span>英語ブラインドベンチマーク — 初見 50 文書・文書平均（07-19 から）</span></div>
-<svg viewBox="0 0 720 300" role="img" aria-label="折れ線グラフ: Word との平均 SSIM。日本語コーパスは 0.788 から 0.938 へ上昇。英語ブラインドベンチマークは 07-19 の 0.800 から 07-20 に 0.807" style="width:100%;height:auto;font-family:inherit">
-  <line x1="46" y1="270.0" x2="704" y2="270.0" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="274.0" text-anchor="end" font-size="11" fill="#5a5a5a">0.75</text>
-  <line x1="46" y1="219.6" x2="704" y2="219.6" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="223.6" text-anchor="end" font-size="11" fill="#5a5a5a">0.80</text>
-  <line x1="46" y1="169.2" x2="704" y2="169.2" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="173.2" text-anchor="end" font-size="11" fill="#5a5a5a">0.85</text>
-  <line x1="46" y1="118.8" x2="704" y2="118.8" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="122.8" text-anchor="end" font-size="11" fill="#5a5a5a">0.90</text>
-  <line x1="46" y1="68.4" x2="704" y2="68.4" stroke="#e6e2da" stroke-width="1"/>
-  <text x="40" y="72.4" text-anchor="end" font-size="11" fill="#5a5a5a">0.95</text>
-  <line x1="46" y1="18.0" x2="704" y2="18.0" stroke="#C84C3A" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <text x="40" y="22.0" text-anchor="end" font-size="11" fill="#5a5a5a">1.00</text>
-  <text x="704" y="33.0" text-anchor="end" font-size="12" font-weight="700" fill="#C84C3A">Microsoft Word = 1.00（目標）</text>
-  <line x1="69.3" y1="270" x2="69.3" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="69.3" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">4月 2026</text>
-  <line x1="244.0" y1="270" x2="244.0" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="244.0" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">5月 2026</text>
-  <line x1="424.5" y1="270" x2="424.5" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="424.5" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">6月 2026</text>
-  <line x1="599.2" y1="270" x2="599.2" y2="274" stroke="#d5d0c8" stroke-width="1"/>
-  <text x="599.2" y="288" text-anchor="middle" font-size="11" fill="#5a5a5a">7月 2026</text>
-  <line x1="46" y1="270" x2="704" y2="270" stroke="#d5d0c8" stroke-width="1"/>
-  <polyline points="46.0,231.3 98.4,176.3 145.0,160.7 185.8,156.6 226.5,149.1 284.7,133.4 308.0,129.4 412.8,132.7 436.1,106.1 488.5,99.7 593.4,93.3 663.2,81.5 692.4,80.7" fill="none" stroke="#264653" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="46.0" cy="231.3" r="3" fill="#264653"><title>日本語 2026-03-28 · 0.7884</title></circle>
-  <circle cx="98.4" cy="176.3" r="3" fill="#264653"><title>日本語 2026-04-06 · 0.8430</title></circle>
-  <circle cx="145.0" cy="160.7" r="3" fill="#264653"><title>日本語 2026-04-14 · 0.8584</title></circle>
-  <circle cx="185.8" cy="156.6" r="3" fill="#264653"><title>日本語 2026-04-21 · 0.8625</title></circle>
-  <circle cx="226.5" cy="149.1" r="3" fill="#264653"><title>日本語 2026-04-28 · 0.8699</title></circle>
-  <circle cx="284.7" cy="133.4" r="3" fill="#264653"><title>日本語 2026-05-08 · 0.8855</title></circle>
-  <circle cx="308.0" cy="129.4" r="3" fill="#264653"><title>日本語 2026-05-12 · 0.8895</title></circle>
-  <circle cx="412.8" cy="132.7" r="3" fill="#264653"><title>日本語 2026-05-30 · 0.8862</title></circle>
-  <circle cx="436.1" cy="106.1" r="3" fill="#264653"><title>日本語 2026-06-03 · 0.9126</title></circle>
-  <circle cx="488.5" cy="99.7" r="3" fill="#264653"><title>日本語 2026-06-12 · 0.9189</title></circle>
-  <circle cx="593.4" cy="93.3" r="3" fill="#264653"><title>日本語 2026-06-30 · 0.9253</title></circle>
-  <circle cx="663.2" cy="81.5" r="3" fill="#264653"><title>日本語 2026-07-12 · 0.9370</title></circle>
-  <circle cx="692.4" cy="80.7" r="4.5" fill="#264653"><title>日本語 2026-07-17 · 0.9378</title></circle>
-  <circle cx="704.0" cy="212.6" r="4.5" fill="#8B72BE"><title>英語ブラインドセット 2026-07-20 · 0.807</title></circle>
-  <text x="46.0" y="221.3" text-anchor="start" font-size="12" font-weight="700" fill="#1a1a1a">0.788</text>
-  <text x="690.4" y="68.7" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.9378</text>
-  <text x="702.0" y="234.6" text-anchor="end" font-size="13" font-weight="700" fill="#1a1a1a">0.807</text>
-</svg>
-        <figcaption class="fnote">Word との平均 SSIM。05-30 の小さな段差は測定ベースラインを取り直したことによるもので、性能の後退ではありません。紫の点は英語ブラインドベンチマーク — 初回測定から始まり、再測定のたびに線が伸びていきます。</figcaption>
-        <details>
-          <summary>データを見る</summary>
-          <table>
-            <thead><tr><th>日付</th><th class="num">日本語（ページ平均）</th><th class="num">英語ブラインドセット（文書平均）</th></tr></thead>
-            <tbody><tr><td>2026-03-28</td><td class="num">0.7884</td><td class="num">—</td></tr><tr><td>2026-04-06</td><td class="num">0.8430</td><td class="num">—</td></tr><tr><td>2026-04-14</td><td class="num">0.8584</td><td class="num">—</td></tr><tr><td>2026-04-21</td><td class="num">0.8625</td><td class="num">—</td></tr><tr><td>2026-04-28</td><td class="num">0.8699</td><td class="num">—</td></tr><tr><td>2026-05-08</td><td class="num">0.8855</td><td class="num">—</td></tr><tr><td>2026-05-12</td><td class="num">0.8895</td><td class="num">—</td></tr><tr><td>2026-05-30</td><td class="num">0.8862</td><td class="num">—</td></tr><tr><td>2026-06-03</td><td class="num">0.9126</td><td class="num">—</td></tr><tr><td>2026-06-12</td><td class="num">0.9189</td><td class="num">—</td></tr><tr><td>2026-06-30</td><td class="num">0.9253</td><td class="num">—</td></tr><tr><td>2026-07-12</td><td class="num">0.9370</td><td class="num">—</td></tr><tr><td>2026-07-17</td><td class="num">0.9378</td><td class="num">—</td></tr><tr><td>2026-07-19</td><td class="num">—</td><td class="num">0.800</td></tr><tr><td>2026-07-20</td><td class="num">—</td><td class="num">0.807</td></tr></tbody>
-          </table>
-        </details>
-      </figure>
-
-      <figure class="chart-card">
-        <h4>同じ文書・同じ Word 正解データで、他エンジンと比較すると</h4>
-        <div class="barchart">
-          <div class="brow">
-            <div class="blabel"><strong>Oxi</strong><span>406 ページ中 188 で最良</span></div>
-            <div class="btrack"><div class="bfill oxi" style="width:93.77%"></div></div>
-            <div class="bval"><strong>0.9377</strong></div>
-          </div>
-          <div class="brow">
-            <div class="blabel">ONLYOFFICE<span>406 ページ中 134 で最良</span></div>
-            <div class="btrack"><div class="bfill" style="width:89.13%"></div></div>
-            <div class="bval">0.8913</div>
-          </div>
-          <div class="brow">
-            <div class="blabel">LibreOffice<span>406 ページ中 84 で最良</span></div>
-            <div class="btrack"><div class="bfill" style="width:88.72%"></div></div>
-            <div class="bval">0.8872</div>
-          </div>
-        </div>
-        <figcaption class="fnote">日本語コーパスでのページ平均 SSIM。右端の破線が Microsoft Word 自身（1.00）。ONLYOFFICE 9.3.1.8 と LibreOffice 26.2.1.2 は同じ文書をヘッドレスで PDF 出力して比較。「最良」はそのエンジンが Word に一番近かったページ数です。</figcaption>
-      </figure>
-
       <h3>日本語ブラインドセット — 初見の 50 文書</h3>
       <p>日本語も英語と同じ厳しさで測ります。公開 docx-corpus の日本語 50 文書を測定<em>前</em>に凍結した<strong>ブラインドベンチマーク</strong>で、修正のターゲットには一切使いません — すべてのスコアが「初見」の汎化性能です。初回測定（2026-07-21）で Oxi は文書平均 <strong>0.828</strong>、ページ数は 50 文書中 44 文書で Word と一致 — 同じ文書での LibreOffice（<strong>0.816</strong>）、SILURUS（<strong>0.804</strong>）、ONLYOFFICE（<strong>0.772</strong>）を上回りました。エンジン: グラウンドトゥルースは Microsoft Word（Microsoft 365 16.0.20131.20154）、LibreOffice 26.2.1.2、ONLYOFFICE 9.3.1.8、SILURUS @silurus/ooxml 0.72.2 — いずれも 150 DPI で描画。</p>
 
@@ -334,7 +253,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>英語コーパス — 別枠で測って、そのまま公開</h3>
-      <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から凍結した<strong>ブラインドベンチマーク 50 文書</strong>。修正対象には一切使わないので、出てくる数字はすべて「初見の実力」で、テストに合わせた調整が入り込む余地がありません。<strong>2026-07-20</strong> 時点で文書平均 <strong>Oxi 0.807</strong>（初回測定 2026-07-19 は 0.800）。ONLYOFFICE（<strong>0.902</strong>）と LibreOffice（<strong>0.876</strong>）にはまだ及びませんが、アーキテクチャが最も近い競合 — Rust + WebAssembly で Canvas に描く SILURUS（<strong>0.776</strong>）— は上回っており、50 文書中 32 文書で Oxi が勝っています。残る差が英語側の作業キューです — エンジンの改善に合わせて再測定し、上のグラフの線を伸ばしていきます。比較対象: 正解は Microsoft Word（Microsoft 365 16.0.20131.20154）、ONLYOFFICE 9.3.1.8、LibreOffice 26.2.1.2、SILURUS @silurus/ooxml 0.72.2 — すべて同日に 150 DPI でレンダリング。</p>
+      <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から凍結した<strong>ブラインドベンチマーク 50 文書</strong>。修正対象には一切使わないので、出てくる数字はすべて「初見の実力」で、テストに合わせた調整が入り込む余地がありません。<strong>2026-07-20</strong> 時点で文書平均 <strong>Oxi 0.807</strong>（初回測定 2026-07-19 は 0.800）。ONLYOFFICE（<strong>0.902</strong>）と LibreOffice（<strong>0.876</strong>）にはまだ及びませんが、アーキテクチャが最も近い競合 — Rust + WebAssembly で Canvas に描く SILURUS（<strong>0.776</strong>）— は上回っており、50 文書中 32 文書で Oxi が勝っています。残る差が英語側の作業キューで、エンジンの改善に合わせて再測定していきます。比較対象: 正解は Microsoft Word（Microsoft 365 16.0.20131.20154）、ONLYOFFICE 9.3.1.8、LibreOffice 26.2.1.2、SILURUS @silurus/ooxml 0.72.2 — すべて同日に 150 DPI でレンダリング。</p>
 
       <figure class="chart-card">
         <h4>英語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-07-20）</h4>
@@ -667,7 +586,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>Word とどれくらい同じ見た目になりますか？</summary>
-        <p>日本語の実文書 235 件（410 ページ）で Word とピクセル単位の SSIM を継続測定しており、2026-07-17 時点でページ平均 0.9378 / 文書平均 0.9591（英語のブラインド 50 文書は文書平均 0.807 — アーキテクチャが最も近い SILURUS を上回り、LibreOffice・ONLYOFFICE にはまだ及びません）。同じ条件で LibreOffice・ONLYOFFICE を上回ります。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
+        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマーク（各言語 50 文書）で、Word とピクセル単位の SSIM を測定しています。日本語は文書平均 0.828 — 同じ文書での LibreOffice・SILURUS・ONLYOFFICE を上回りました（2026-07-21）。英語は 0.807 — アーキテクチャが最も近い SILURUS を上回り、LibreOffice・ONLYOFFICE にはまだ及びません（2026-07-20、そのまま公開）。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
       </details>
       <details>
         <summary>対応している形式は？</summary>
