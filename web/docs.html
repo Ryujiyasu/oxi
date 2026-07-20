@@ -32,10 +32,20 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .tb .ra{display:flex;gap:4px}
 
 /* Ribbon tabs */
-.rtabs{display:flex;align-items:flex-end;background:var(--accent);padding:0 8px;flex-shrink:0;height:26px}
+.rtabs{display:flex;align-items:flex-end;background:var(--accent);padding:0 8px;flex-shrink:0;height:26px;position:relative}
 .rtabs button{background:none;border:none;color:#fff;font:inherit;font-size:13px;padding:5px 14px;cursor:pointer;border-radius:4px 4px 0 0}
 .rtabs button:hover{color:#fff;background:rgba(255,255,255,.1)}
 .rtabs button.active{background:var(--rib);color:var(--txt);font-weight:500}
+.rtabs button.ftab{font-weight:600}
+
+/* File menu (Word-style dropdown) */
+.fmenu{display:none;position:absolute;top:26px;left:8px;z-index:300;background:#fff;border:1px solid #ccc;border-radius:0 0 6px 6px;box-shadow:0 6px 24px rgba(0,0,0,.25);min-width:250px;padding:6px;flex-direction:column}
+.fmenu.show{display:flex}
+.fmenu .fm-item{display:flex;align-items:center;gap:10px;background:none;border:none;font:inherit;font-size:13px;color:var(--txt);padding:8px 12px;border-radius:4px;cursor:pointer;text-align:left;width:100%}
+.fmenu .fm-item:hover{background:var(--accent-l);color:var(--txt)}
+.fmenu .fm-item.dis{opacity:.4;pointer-events:none}
+.fmenu .fm-item .fi{width:20px;text-align:center;font-size:14px;flex-shrink:0}
+.fm-sep{height:1px;background:#E4E4E4;margin:4px 8px}
 
 /* Ribbon panel */
 .rib{background:var(--rib);border-bottom:1px solid var(--rib-b);padding:4px 10px 5px;display:flex;gap:2px;align-items:stretch;flex-shrink:0;min-height:82px}
@@ -51,6 +61,15 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .rb.active{background:#D0D8E8;border-color:#9DB2D6}
 .rb svg{width:16px;height:16px;pointer-events:none}
 .rb.lg{padding:4px 10px;font-size:12px;gap:4px}
+.rb.big{flex-direction:column;gap:3px;padding:5px 10px;font-size:11px;height:100%;min-height:52px}
+.rb.big svg{width:20px;height:20px}
+.rb.sm{justify-content:flex-start;gap:5px;font-size:11px;padding:2px 6px}
+.rb.sm svg{width:13px;height:13px}
+/* Style gallery */
+.stylebtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;background:#fff;border:1px solid #C8C8C8;border-radius:3px;cursor:pointer;padding:3px 8px;min-width:56px;height:52px;font:inherit;color:var(--txt)}
+.stylebtn:hover{border-color:var(--accent);background:var(--accent-l)}
+.stylebtn .sp{font-family:Calibri,'Yu Gothic',sans-serif;line-height:1.1}
+.stylebtn .sn{font-size:9px;color:#666;white-space:nowrap}
 .font-sel,.size-sel{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #C0C0C0;border-radius:2px;height:24px;background:#fff;cursor:pointer;color:#333}
 .font-sel{width:130px}
 .size-sel{width:46px;text-align:center}
@@ -72,7 +91,7 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .tg .tc.hl{background:var(--accent-l);border-color:var(--accent)}
 
 /* Canvas document area */
-.canvas-area{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px;background:#888}
+.canvas-area{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px;background:#888;position:relative}
 .canvas-area .page-canvas{display:block;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.3);background:#fff}
 .canvas-area .empty-state{color:#ccc;font-size:18px;margin-top:120px;text-align:center;user-select:none}
 .canvas-area .loading-state{color:#fff;font-size:14px;padding:20px}
@@ -140,6 +159,9 @@ input[type="file"]{display:none}
   <symbol id="i-ol" viewBox="0 0 16 16"><text x="1" y="5" fill="currentColor" font-size="5" font-weight="700">1.</text><text x="1" y="9" fill="currentColor" font-size="5" font-weight="700">2.</text><text x="1" y="13" fill="currentColor" font-size="5" font-weight="700">3.</text><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11z"/></symbol>
   <symbol id="i-indent" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6zm0 4h8v1.5H6zm0 4h8v1.5H6z"/><path fill="currentColor" d="M2 5l3 3-3 3z"/></symbol>
   <symbol id="i-outdent" viewBox="0 0 16 16"><path fill="currentColor" d="M6 3h8v1.5H6zm0 4h8v1.5H6zm0 4h8v1.5H6z"/><path fill="currentColor" d="M5 5l-3 3 3 3z"/></symbol>
+  <symbol id="i-paste" viewBox="0 0 16 16"><path fill="currentColor" d="M6 1h4a1 1 0 0 1 1 1h2a1 1 0 0 1 1 1v3h-1.5V4.5h-1.7A1 1 0 0 1 10 5H6a1 1 0 0 1-.8-.5H3.5V14h3v1.5H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1-1zm0 1.5v1h4v-1H6z"/><rect x="8" y="7" width="6.5" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+  <symbol id="i-cut" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" d="M12.5 2.5 6.2 10.4M3.5 2.5l6.3 7.9"/><circle cx="4.6" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.4" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="2" y="2" width="9" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.3" d="M5.5 15H13a1 1 0 0 0 1-1V5.5"/></symbol>
 </svg>
 
 <!-- Title bar -->
@@ -167,13 +189,40 @@ input[type="file"]{display:none}
 
 <!-- Ribbon tabs -->
 <div class="rtabs">
+  <button class="ftab" id="ftabBtn" data-i18n="file">File</button>
   <button class="active" data-tab="home" data-i18n="home">Home</button>
   <button data-tab="insert" data-i18n="insert">Insert</button>
   <button data-tab="layout" data-i18n="layout">Layout</button>
+  <!-- File menu (Word-style dropdown) -->
+  <div class="fmenu" id="fileMenu">
+    <button class="fm-item" id="fmNew"><span class="fi">&#128196;</span><span data-i18n="new">New</span></button>
+    <button class="fm-item" id="fmOpen"><span class="fi">&#128194;</span><span data-i18n="open">Open</span></button>
+    <div class="fm-sep"></div>
+    <button class="fm-item" id="fmSave"><span class="fi">&#128190;</span><span data-i18n="save">Save</span></button>
+    <button class="fm-item" id="fmCopy"><span class="fi">&#128209;</span><span data-i18n="makeCopy">Make a Copy</span></button>
+    <div class="fm-sep"></div>
+    <button class="fm-item" id="fmExport"><span class="fi">&#128228;</span><span data-i18n="export">Export (PDF)</span></button>
+    <button class="fm-item" id="fmPrint"><span class="fi">&#128424;</span><span data-i18n="print">Print</span></button>
+    <div class="fm-sep"></div>
+    <button class="fm-item" id="fmRename"><span class="fi">&#9998;</span><span data-i18n="rename">Rename</span></button>
+    <button class="fm-item" id="fmInfo"><span class="fi">&#8505;</span><span data-i18n="info">Info</span></button>
+  </div>
 </div>
 
 <!-- Home ribbon -->
 <div class="rib" id="ribHome">
+  <!-- Clipboard -->
+  <div class="rg">
+    <div class="rr" style="gap:3px;align-items:stretch;flex:1">
+      <button class="rb big" id="btnPaste" data-i18n-title="paste"><svg><use href="#i-paste"/></svg><span data-i18n="paste">Paste</span></button>
+      <div class="rc" style="justify-content:center;gap:2px">
+        <button class="rb sm" id="btnCut"><svg><use href="#i-cut"/></svg><span data-i18n="cut">Cut</span></button>
+        <button class="rb sm" id="btnCopy"><svg><use href="#i-copy"/></svg><span data-i18n="copy">Copy</span></button>
+      </div>
+    </div>
+    <span class="rg-l" data-i18n="clipboard">Clipboard</span>
+  </div>
+  <!-- Font -->
   <div class="rg">
     <div class="rc" style="gap:3px">
       <div class="rr">
@@ -204,37 +253,56 @@ input[type="file"]{display:none}
         <span style="width:4px"></span>
         <button class="cb" id="btnColor" data-i18n-title="fontColor"><svg style="width:14px;height:14px"><use href="#i-color"/></svg><div class="bar" id="colorBar" style="background:#F00"></div><div class="cpop" id="colorPop"></div></button>
         <button class="cb" id="btnHl" data-i18n-title="highlight"><span style="background:#FF0;padding:0 2px;font-size:11px">ab</span><div class="bar" id="hlBar" style="background:#FF0"></div><div class="cpop" id="hlPop"></div></button>
-        <span style="width:4px"></span>
+      </div>
+    </div>
+    <span class="rg-l" data-i18n="font">Font</span>
+  </div>
+  <!-- Paragraph -->
+  <div class="rg">
+    <div class="rc" style="gap:3px">
+      <div class="rr">
         <button class="rb" id="btnUL" data-i18n-title="bulletList"><svg><use href="#i-ul"/></svg></button>
         <button class="rb" id="btnOL" data-i18n-title="numberedList"><svg><use href="#i-ol"/></svg></button>
-        <button class="rb" id="btnIndent" data-i18n-title="indent"><svg><use href="#i-indent"/></svg></button>
         <button class="rb" id="btnOutdent" data-i18n-title="outdent"><svg><use href="#i-outdent"/></svg></button>
-        <span style="width:4px"></span>
+        <button class="rb" id="btnIndent" data-i18n-title="indent"><svg><use href="#i-indent"/></svg></button>
+      </div>
+      <div class="rr">
         <button class="rb" id="btnAlL" data-i18n-title="left"><svg><use href="#i-al"/></svg></button>
         <button class="rb" id="btnAlC" data-i18n-title="center"><svg><use href="#i-ac"/></svg></button>
         <button class="rb" id="btnAlR" data-i18n-title="right"><svg><use href="#i-ar"/></svg></button>
         <button class="rb" id="btnAlJ" data-i18n-title="justify"><svg><use href="#i-aj"/></svg></button>
-        <button class="rb" id="btnLS" data-i18n-title="lineSpacing"><svg><use href="#i-ls"/></svg></button>
+        <div style="position:relative">
+          <button class="rb" id="btnLS" data-i18n-title="lineSpacing"><svg><use href="#i-ls"/></svg></button>
+          <div class="cpop" id="lsPop" style="flex-direction:column;width:auto;min-width:72px;padding:4px">
+            <button class="rb" data-ls="1" style="width:100%;justify-content:flex-start">1.0</button>
+            <button class="rb" data-ls="1.15" style="width:100%;justify-content:flex-start">1.15</button>
+            <button class="rb" data-ls="1.5" style="width:100%;justify-content:flex-start">1.5</button>
+            <button class="rb" data-ls="2" style="width:100%;justify-content:flex-start">2.0</button>
+          </div>
+        </div>
       </div>
     </div>
-    <span class="rg-l" data-i18n="format">Format</span>
+    <span class="rg-l" data-i18n="paragraph">Paragraph</span>
   </div>
+  <!-- Styles -->
   <div class="rg">
-    <div class="rr" style="gap:6px">
-      <div style="position:relative">
-        <button class="rb lg" id="btnTbl"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button>
-        <div class="tgp" id="tgPop"><div class="lbl" id="tgLbl" data-i18n="insertTable">Insert Table</div><div class="tg" id="tgGrid"></div></div>
-      </div>
-      <button class="rb lg" id="btnImg"><svg><use href="#i-img"/></svg> <span data-i18n="picture">Picture</span></button>
+    <div class="rr" style="gap:3px;flex:1;align-items:center">
+      <button class="stylebtn" id="styNormal"><span class="sp" style="font-size:13px">Aa</span><span class="sn" data-i18n="styleNormal">Normal</span></button>
+      <button class="stylebtn" id="styH1"><span class="sp" style="font-size:15px;color:#2E74B5">Aa</span><span class="sn" data-i18n="heading1">Heading 1</span></button>
+      <button class="stylebtn" id="styH2"><span class="sp" style="font-size:14px;color:#2E74B5">Aa</span><span class="sn" data-i18n="heading2">Heading 2</span></button>
+      <button class="stylebtn" id="styH3"><span class="sp" style="font-size:13px;color:#1F4D78">Aa</span><span class="sn" data-i18n="heading3">Heading 3</span></button>
     </div>
-    <span class="rg-l" data-i18n="insert">Insert</span>
+    <span class="rg-l" data-i18n="styles">Styles</span>
   </div>
 </div>
 
 <!-- Insert ribbon -->
 <div class="rib" id="ribInsert" style="display:none">
   <div class="rg"><div class="rr" style="gap:6px">
-    <div style="position:relative"><button class="rb lg" id="btnTbl2"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button></div>
+    <div style="position:relative">
+      <button class="rb lg" id="btnTbl2"><svg><use href="#i-tbl"/></svg> <span data-i18n="table">Table</span></button>
+      <div class="tgp" id="tgPop"><div class="lbl" id="tgLbl" data-i18n="insertTable">Insert Table</div><div class="tg" id="tgGrid"></div></div>
+    </div>
     <button class="rb lg" id="btnImg2"><svg><use href="#i-img"/></svg> <span data-i18n="picture">Picture</span></button>
   </div><span class="rg-l" data-i18n="insert">Insert</span></div>
 </div>
@@ -303,6 +371,18 @@ input[type="file"]{display:none}
     <div class="acts"><button class="bp" id="dChoose" data-i18n="chooseFile">Choose File</button><button class="bs" id="dCancel" data-i18n="cancel">Cancel</button></div>
   </div>
 </div>
+<div class="ov" id="renameOv">
+  <div class="dlg"><h2 data-i18n="rename">Rename</h2>
+    <input type="text" id="renameIn" style="width:100%;padding:6px 8px;border:1px solid #C0C0C0;border-radius:4px;font:inherit;font-size:13px">
+    <div class="acts"><button class="bp" id="renameOk">OK</button><button class="bs" id="renameCancel" data-i18n="cancel">Cancel</button></div>
+  </div>
+</div>
+<div class="ov" id="infoOv">
+  <div class="dlg"><h2 data-i18n="info">Info</h2>
+    <div id="infoBody" style="font-size:13px;color:#444;line-height:1.9"></div>
+    <div class="acts"><button class="bp" id="infoOk">OK</button></div>
+  </div>
+</div>
 <input type="file" id="fileIn" accept=".docx">
 
 <script type="module">
@@ -322,6 +402,12 @@ const I18N = {
     bulletList: 'Bullet List', numberedList: 'Numbered List', indent: 'Indent', outdent: 'Outdent',
     page: 'Page', pages: 'pages', rendering: 'Rendering...',
     openOrDrop: 'Open or drop a .docx file',
+    file: 'File', clipboard: 'Clipboard', paste: 'Paste', cut: 'Cut', copy: 'Copy',
+    font: 'Font', paragraph: 'Paragraph', styles: 'Styles',
+    makeCopy: 'Make a Copy', export: 'Export (PDF)', print: 'Print', rename: 'Rename', info: 'Info',
+    styleNormal: 'Normal', heading1: 'Heading 1', heading2: 'Heading 2', heading3: 'Heading 3',
+    noSelection: 'No selection', noCursor: 'Click in the document first',
+    exportFailed: 'PDF export failed', pasteFailed: 'Paste failed (clipboard access denied)', copied: 'Copied', crossParaUnsupported: 'Cross-paragraph delete is not supported yet',
   },
   ja: {
     new: '新規', newDoc: '新しいドキュメント',
@@ -337,6 +423,12 @@ const I18N = {
     bulletList: '箇条書き', numberedList: '番号付きリスト', indent: 'インデント', outdent: 'インデント解除',
     page: 'ページ', pages: 'ページ', rendering: 'レンダリング中...',
     openOrDrop: '.docxファイルを開くかドロップしてください',
+    file: 'ファイル', clipboard: 'クリップボード', paste: '貼り付け', cut: '切り取り', copy: 'コピー',
+    font: 'フォント', paragraph: '段落', styles: 'スタイル',
+    makeCopy: 'コピーを作成する', export: 'エクスポート (PDF)', print: '印刷', rename: '名前の変更', info: '情報',
+    styleNormal: '標準', heading1: '見出し 1', heading2: '見出し 2', heading3: '見出し 3',
+    noSelection: '選択範囲がありません', noCursor: '文書内をクリックしてカーソルを置いてください',
+    exportFailed: 'PDF エクスポートに失敗しました', pasteFailed: '貼り付けできませんでした（クリップボードへのアクセスが拒否されました）', copied: 'コピーしました', crossParaUnsupported: '段落をまたぐ削除は未対応です',
   },
   de: {
     new: 'Neu', newDoc: 'Neues Dokument',
@@ -351,6 +443,12 @@ const I18N = {
     chooseFile: 'Datei wählen', cancel: 'Abbrechen',
     page: 'Seite', pages: 'Seiten', rendering: 'Wird gerendert...',
     openOrDrop: 'Öffnen oder eine .docx-Datei ablegen',
+    file: 'Datei', clipboard: 'Zwischenablage', paste: 'Einfügen', cut: 'Ausschneiden', copy: 'Kopieren',
+    font: 'Schriftart', paragraph: 'Absatz', styles: 'Formatvorlagen',
+    makeCopy: 'Kopie erstellen', export: 'Exportieren (PDF)', print: 'Drucken', rename: 'Umbenennen', info: 'Informationen',
+    styleNormal: 'Standard', heading1: 'Überschrift 1', heading2: 'Überschrift 2', heading3: 'Überschrift 3',
+    noSelection: 'Keine Auswahl', noCursor: 'Zuerst ins Dokument klicken',
+    exportFailed: 'PDF-Export fehlgeschlagen', pasteFailed: 'Einfügen fehlgeschlagen (Zwischenablage-Zugriff verweigert)', copied: 'Kopiert', crossParaUnsupported: 'Absatzübergreifendes Löschen wird noch nicht unterstützt',
   },
   fr: {
     new: 'Nouveau', newDoc: 'Nouveau document',
@@ -365,6 +463,12 @@ const I18N = {
     chooseFile: 'Choisir', cancel: 'Annuler',
     page: 'Page', pages: 'pages', rendering: 'Rendu en cours...',
     openOrDrop: 'Ouvrir ou déposer un fichier .docx',
+    file: 'Fichier', clipboard: 'Presse-papiers', paste: 'Coller', cut: 'Couper', copy: 'Copier',
+    font: 'Police', paragraph: 'Paragraphe', styles: 'Styles',
+    makeCopy: 'Créer une copie', export: 'Exporter (PDF)', print: 'Imprimer', rename: 'Renommer', info: 'Informations',
+    styleNormal: 'Normal', heading1: 'Titre 1', heading2: 'Titre 2', heading3: 'Titre 3',
+    noSelection: 'Aucune sélection', noCursor: 'Cliquez d’abord dans le document',
+    exportFailed: 'Échec de l’export PDF', pasteFailed: 'Échec du collage (accès au presse-papiers refusé)', copied: 'Copié', crossParaUnsupported: 'La suppression multi-paragraphes n’est pas encore prise en charge',
   },
   es: {
     new: 'Nuevo', newDoc: 'Nuevo documento',
@@ -379,6 +483,12 @@ const I18N = {
     chooseFile: 'Elegir archivo', cancel: 'Cancelar',
     page: 'Página', pages: 'páginas', rendering: 'Renderizando...',
     openOrDrop: 'Abrir o soltar un archivo .docx',
+    file: 'Archivo', clipboard: 'Portapapeles', paste: 'Pegar', cut: 'Cortar', copy: 'Copiar',
+    font: 'Fuente', paragraph: 'Párrafo', styles: 'Estilos',
+    makeCopy: 'Crear una copia', export: 'Exportar (PDF)', print: 'Imprimir', rename: 'Cambiar nombre', info: 'Información',
+    styleNormal: 'Normal', heading1: 'Título 1', heading2: 'Título 2', heading3: 'Título 3',
+    noSelection: 'Sin selección', noCursor: 'Haga clic primero en el documento',
+    exportFailed: 'Error al exportar PDF', pasteFailed: 'Error al pegar (acceso al portapapeles denegado)', copied: 'Copiado', crossParaUnsupported: 'Eliminar entre párrafos aún no es compatible',
   },
   it: {
     new: 'Nuovo', newDoc: 'Nuovo documento',
@@ -393,6 +503,12 @@ const I18N = {
     chooseFile: 'Scegli file', cancel: 'Annulla',
     page: 'Pagina', pages: 'pagine', rendering: 'Rendering...',
     openOrDrop: 'Apri o trascina un file .docx',
+    file: 'File', clipboard: 'Appunti', paste: 'Incolla', cut: 'Taglia', copy: 'Copia',
+    font: 'Carattere', paragraph: 'Paragrafo', styles: 'Stili',
+    makeCopy: 'Crea una copia', export: 'Esporta (PDF)', print: 'Stampa', rename: 'Rinomina', info: 'Informazioni',
+    styleNormal: 'Normale', heading1: 'Titolo 1', heading2: 'Titolo 2', heading3: 'Titolo 3',
+    noSelection: 'Nessuna selezione', noCursor: 'Fai prima clic nel documento',
+    exportFailed: 'Esportazione PDF non riuscita', pasteFailed: 'Incolla non riuscito (accesso agli appunti negato)', copied: 'Copiato', crossParaUnsupported: 'L’eliminazione tra paragrafi non è ancora supportata',
   },
   pt: {
     new: 'Novo', newDoc: 'Novo documento',
@@ -407,6 +523,12 @@ const I18N = {
     chooseFile: 'Escolher arquivo', cancel: 'Cancelar',
     page: 'Página', pages: 'páginas', rendering: 'Renderizando...',
     openOrDrop: 'Abrir ou soltar um arquivo .docx',
+    file: 'Arquivo', clipboard: 'Área de Transferência', paste: 'Colar', cut: 'Recortar', copy: 'Copiar',
+    font: 'Fonte', paragraph: 'Parágrafo', styles: 'Estilos',
+    makeCopy: 'Criar uma cópia', export: 'Exportar (PDF)', print: 'Imprimir', rename: 'Renomear', info: 'Informações',
+    styleNormal: 'Normal', heading1: 'Título 1', heading2: 'Título 2', heading3: 'Título 3',
+    noSelection: 'Sem seleção', noCursor: 'Clique primeiro no documento',
+    exportFailed: 'Falha ao exportar PDF', pasteFailed: 'Falha ao colar (acesso à área de transferência negado)', copied: 'Copiado', crossParaUnsupported: 'Excluir entre parágrafos ainda não é suportado',
   },
   ko: {
     new: '새로', newDoc: '새 문서',
@@ -421,6 +543,12 @@ const I18N = {
     chooseFile: '파일 선택', cancel: '취소',
     page: '페이지', pages: '페이지', rendering: '렌더링 중...',
     openOrDrop: '.docx 파일을 열거나 놓으세요',
+    file: '파일', clipboard: '클립보드', paste: '붙여넣기', cut: '잘라내기', copy: '복사',
+    font: '글꼴', paragraph: '단락', styles: '스타일',
+    makeCopy: '복사본 만들기', export: '내보내기 (PDF)', print: '인쇄', rename: '이름 바꾸기', info: '정보',
+    styleNormal: '표준', heading1: '제목 1', heading2: '제목 2', heading3: '제목 3',
+    noSelection: '선택 영역이 없습니다', noCursor: '먼저 문서를 클릭하세요',
+    exportFailed: 'PDF 내보내기 실패', pasteFailed: '붙여넣기 실패 (클립보드 접근 거부됨)', copied: '복사됨', crossParaUnsupported: '여러 단락에 걸친 삭제는 아직 지원되지 않습니다',
   },
   'zh-Hans': {
     new: '新建', newDoc: '新建文档',
@@ -435,6 +563,12 @@ const I18N = {
     chooseFile: '选择文件', cancel: '取消',
     page: '页', pages: '页', rendering: '渲染中...',
     openOrDrop: '打开或拖放 .docx 文件',
+    file: '文件', clipboard: '剪贴板', paste: '粘贴', cut: '剪切', copy: '复制',
+    font: '字体', paragraph: '段落', styles: '样式',
+    makeCopy: '创建副本', export: '导出 (PDF)', print: '打印', rename: '重命名', info: '信息',
+    styleNormal: '正文', heading1: '标题 1', heading2: '标题 2', heading3: '标题 3',
+    noSelection: '没有选定内容', noCursor: '请先在文档中单击',
+    exportFailed: 'PDF 导出失败', pasteFailed: '粘贴失败（剪贴板访问被拒绝）', copied: '已复制', crossParaUnsupported: '暂不支持跨段落删除',
   },
   'zh-Hant': {
     new: '新增', newDoc: '新建文件',
@@ -449,6 +583,12 @@ const I18N = {
     chooseFile: '選擇檔案', cancel: '取消',
     page: '頁', pages: '頁', rendering: '轉譯中...',
     openOrDrop: '開啟或拖放 .docx 檔案',
+    file: '檔案', clipboard: '剪貼簿', paste: '貼上', cut: '剪下', copy: '複製',
+    font: '字型', paragraph: '段落', styles: '樣式',
+    makeCopy: '建立複本', export: '匯出 (PDF)', print: '列印', rename: '重新命名', info: '資訊',
+    styleNormal: '內文', heading1: '標題 1', heading2: '標題 2', heading3: '標題 3',
+    noSelection: '沒有選取範圍', noCursor: '請先在文件中按一下',
+    exportFailed: 'PDF 匯出失敗', pasteFailed: '貼上失敗（剪貼簿存取遭拒）', copied: '已複製', crossParaUnsupported: '尚不支援跨段落刪除',
   },
 };
 
@@ -480,7 +620,7 @@ function applyI18n() {
 }
 
 // ---- WASM ----
-import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout } from './oxidocs_wasm.js';
+import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf } from './oxidocs_wasm.js';
 await init();
 
 // Tauri headless render mode
@@ -796,6 +936,7 @@ async function renderPage(page, index, scale) {
 async function renderDocument(docxBytes) {
   // Remove empty state
   emptyState.style.display = 'none';
+  clearSelection();
 
   // Clear previous canvases
   canvasArea.querySelectorAll('.page-canvas,.loading-state').forEach(el => el.remove());
@@ -828,6 +969,7 @@ async function renderDocument(docxBytes) {
     for (let i = 0; i < result.pages.length; i++) {
       const canvas = await renderPage(result.pages[i], i, scale);
       canvas.addEventListener('mousedown', e => onCanvasClick(e, i));
+      canvas.addEventListener('mousemove', e => onCanvasDrag(e, i));
       canvasArea.appendChild(canvas);
     }
 
@@ -847,15 +989,14 @@ async function renderDocument(docxBytes) {
 }
 
 // ---- Hit testing & cursor ----
-function onCanvasClick(e, pageIndex) {
-  if (!layoutResult) return;
+function hitTestText(e, pageIndex) {
   const canvas = e.target;
   const rect = canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) * (canvas.width / rect.width) / currentScale;
   const y = (e.clientY - rect.top) * (canvas.height / rect.height) / currentScale;
 
   const page = layoutResult.pages[pageIndex];
-  if (!page) return;
+  if (!page) return null;
 
   // Find closest text element
   let bestElem = null, bestIdx = -1, bestDist = Infinity;
@@ -890,17 +1031,39 @@ function onCanvasClick(e, pageIndex) {
     }
   }
 
-  if (!bestElem) return;
+  if (!bestElem) return null;
+  return { pageIndex, elemIndex: bestIdx, charOffset: getCharOffset(bestElem, x) };
+}
 
-  // Find character offset within the text element
-  const charOffset = getCharOffset(bestElem, x);
+function onCanvasClick(e, pageIndex) {
+  if (!layoutResult) return;
+  const hit = hitTestText(e, pageIndex);
+  if (!hit) return;
 
-  cursorPos = { pageIndex, elemIndex: bestIdx, charOffset };
+  cursorPos = hit;
+  // Start a drag selection anchored here
+  selAnchor = { ...hit };
+  selFocus = null;
+  removeSelOverlay();
+  dragSelecting = true;
   drawCursor();
   startCursorBlink();
   e.preventDefault();
   hiddenInput.focus();
+  syncRibbonFromCursor();
 }
+
+function onCanvasDrag(e, pageIndex) {
+  if (!dragSelecting || !(e.buttons & 1) || !layoutResult) return;
+  if (!selAnchor || selAnchor.pageIndex !== pageIndex) return; // v1: selection within one page
+  const hit = hitTestText(e, pageIndex);
+  if (!hit) return;
+  selFocus = hit;
+  cursorPos = { ...hit };
+  drawSelectionOverlay();
+  drawCursor();
+}
+document.addEventListener('mouseup', () => { dragSelecting = false; });
 
 function getCharOffset(elem, clickX) {
   const offscreen = document.createElement('canvas').getContext('2d');
@@ -932,6 +1095,120 @@ function getCursorXY() {
   const cy = el.y;
   const ch = el.height || fs;
   return { x: cx, y: cy, h: ch, pageIndex: cursorPos.pageIndex };
+}
+
+// ---- Selection (v1: mouse drag within a single page) ----
+let selAnchor = null;   // { pageIndex, elemIndex, charOffset }
+let selFocus = null;
+let dragSelecting = false;
+let selOverlay = null;
+
+function removeSelOverlay() { if (selOverlay) { selOverlay.remove(); selOverlay = null; } }
+function clearSelection() { selAnchor = null; selFocus = null; dragSelecting = false; removeSelOverlay(); }
+
+// Ordered selection range, or null when empty/invalid
+function selectionRange() {
+  if (!selAnchor || !selFocus || !layoutResult) return null;
+  if (selAnchor.pageIndex !== selFocus.pageIndex) return null;
+  let a = selAnchor, b = selFocus;
+  if (a.elemIndex > b.elemIndex || (a.elemIndex === b.elemIndex && a.charOffset > b.charOffset)) [a, b] = [b, a];
+  if (a.elemIndex === b.elemIndex && a.charOffset === b.charOffset) return null;
+  return { page: a.pageIndex, a, b };
+}
+
+function drawSelectionOverlay() {
+  removeSelOverlay();
+  const rng = selectionRange();
+  if (!rng) return;
+  const pageCanvas = $(`page-${rng.page}`);
+  if (!pageCanvas) return;
+
+  const overlay = document.createElement('canvas');
+  overlay.className = 'sel-overlay';
+  overlay.width = pageCanvas.width;
+  overlay.height = pageCanvas.height;
+  overlay.style.cssText = `position:absolute;left:${pageCanvas.offsetLeft}px;top:${pageCanvas.offsetTop}px;width:${pageCanvas.style.width};height:${pageCanvas.style.height};pointer-events:none;`;
+  const ctx = overlay.getContext('2d');
+  ctx.scale(currentScale, currentScale);
+  ctx.fillStyle = 'rgba(24,90,189,0.22)';
+  const els = layoutResult.pages[rng.page].elements;
+  const meas = document.createElement('canvas').getContext('2d');
+  for (let i = rng.a.elemIndex; i <= rng.b.elemIndex; i++) {
+    const el = els[i];
+    if (el.kind !== 'text' || !el.text) continue;
+    const fs = el.font_size || 11;
+    meas.font = `${el.italic ? 'italic ' : ''}${el.bold ? 'bold ' : ''}${fs}px ${el.font_family || 'Calibri, sans-serif'}`;
+    const s = (i === rng.a.elemIndex) ? rng.a.charOffset : 0;
+    const en = (i === rng.b.elemIndex) ? rng.b.charOffset : el.text.length;
+    if (en <= s) continue;
+    const x0 = el.x + meas.measureText(el.text.substring(0, s)).width;
+    const x1 = el.x + meas.measureText(el.text.substring(0, en)).width;
+    ctx.fillRect(x0, el.y, x1 - x0, el.height || fs);
+  }
+  pageCanvas.parentElement.style.position = 'relative';
+  pageCanvas.insertAdjacentElement('afterend', overlay);
+  selOverlay = overlay;
+}
+
+function selectedText() {
+  const rng = selectionRange();
+  if (!rng) return '';
+  const els = layoutResult.pages[rng.page].elements;
+  let out = '', lastPara = null;
+  for (let i = rng.a.elemIndex; i <= rng.b.elemIndex; i++) {
+    const el = els[i];
+    if (el.kind !== 'text' || !el.text) continue;
+    const s = (i === rng.a.elemIndex) ? rng.a.charOffset : 0;
+    const en = (i === rng.b.elemIndex) ? rng.b.charOffset : el.text.length;
+    if (en <= s) continue;
+    if (lastPara != null && el.paragraph_index !== lastPara) out += '\n';
+    out += el.text.substring(s, en);
+    lastPara = el.paragraph_index;
+  }
+  return out;
+}
+
+// Delete the selected text (v1: within one paragraph; runs are trimmed via set_run_text)
+function deleteSelection() {
+  const rng = selectionRange();
+  if (!rng || !currentDocx) return false;
+  const els = layoutResult.pages[rng.page].elements;
+  const aEl = els[rng.a.elemIndex], bEl = els[rng.b.elemIndex];
+  if (aEl.paragraph_index == null || aEl.paragraph_index !== bEl.paragraph_index) {
+    $('statusText').textContent = t('crossParaUnsupported');
+    return false;
+  }
+  const p = aEl.paragraph_index;
+  // Collect per-run global cut ranges (a run may span several wrapped-line fragments)
+  const cuts = new Map(); // run_index -> { start, end } in run-global offsets
+  for (let i = rng.a.elemIndex; i <= rng.b.elemIndex; i++) {
+    const el = els[i];
+    if (el.kind !== 'text' || !el.text || el.paragraph_index !== p || el.run_index == null) continue;
+    const s = (i === rng.a.elemIndex) ? rng.a.charOffset : 0;
+    const en = (i === rng.b.elemIndex) ? rng.b.charOffset : el.text.length;
+    if (en <= s) continue;
+    const gs = (el.char_offset || 0) + s, ge = (el.char_offset || 0) + en;
+    const cur = cuts.get(el.run_index);
+    if (cur) { cur.start = Math.min(cur.start, gs); cur.end = Math.max(cur.end, ge); }
+    else cuts.set(el.run_index, { start: gs, end: ge });
+  }
+  if (!cuts.size) return false;
+  const edits = [];
+  for (const [ri, c] of cuts.entries()) {
+    const old = getRunText(p, ri);
+    if (old == null) continue;
+    edits.push({ type: 'set_run_text', paragraph_index: p, run_index: ri, new_text: old.substring(0, c.start) + old.substring(c.end) });
+  }
+  if (!edits.length) return false;
+  currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+  pendingCursorRestore = {
+    paraIndex: p,
+    runIndex: aEl.run_index,
+    charOff: (aEl.char_offset || 0) + rng.a.charOffset,
+  };
+  clearSelection();
+  scheduleRender();
+  return true;
 }
 
 let cursorOverlay = null;
@@ -1065,8 +1342,9 @@ function scheduleRender() {
     layoutResult = result;
     const layoutMs = Math.round(performance.now() - start);
 
-    // Remove cursor overlay only
+    // Remove cursor overlay; element indices changed, so drop any selection
     if (cursorOverlay) { cursorOverlay.remove(); cursorOverlay = null; }
+    clearSelection();
 
     const isMobile = window.innerWidth < 769;
     const scale = isMobile
@@ -1085,6 +1363,7 @@ function scheduleRender() {
         canvas = document.createElement('canvas');
         canvas.className = 'page-canvas';
         canvas.addEventListener('mousedown', e => onCanvasClick(e, i));
+        canvas.addEventListener('mousemove', e => onCanvasDrag(e, i));
         canvasArea.appendChild(canvas);
       }
       canvas.id = `page-${i}`;
@@ -1134,6 +1413,7 @@ function scheduleRender() {
 
 async function insertText(text) {
   if (!cursorPos || !layoutResult) return;
+  clearSelection(); // v1: typing does not replace the selection, it just clears it
   const page = layoutResult.pages[cursorPos.pageIndex];
   const el = page.elements[cursorPos.elemIndex];
   if (!el || el.paragraph_index == null || el.run_index == null) return;
@@ -1230,6 +1510,7 @@ function restoreCursor(paraIndex, runIndex, globalCharOff) {
           cursorPos = { pageIndex: pi, elemIndex: ei, charOffset: globalCharOff - fragStart };
           startCursorBlink();
           hiddenInput.focus();
+          syncRibbonFromCursor();
           return;
         }
       }
@@ -1242,14 +1523,29 @@ function restoreCursor(paraIndex, runIndex, globalCharOff) {
 
 hiddenInput.addEventListener('keydown', e => {
   if (!cursorPos || !currentDocx) return;
-  if (e.ctrlKey || e.metaKey) return;
+  if (e.ctrlKey || e.metaKey) {
+    const k = e.key.toLowerCase();
+    if (!e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
+      e.preventDefault();
+      $(k === 'b' ? 'btnBold' : k === 'i' ? 'btnItalic' : 'btnUnderline').click();
+    } else if (!e.altKey && k === 'c') {
+      e.preventDefault();
+      doCopy();
+    } else if (!e.altKey && k === 'x') {
+      e.preventDefault();
+      doCut();
+    }
+    return;
+  }
 
   if (e.key === 'Backspace') {
     e.preventDefault();
-    deleteChar(-1);
+    if (selectionRange()) deleteSelection();
+    else deleteChar(-1);
   } else if (e.key === 'Delete') {
     e.preventDefault();
-    deleteChar(1);
+    if (selectionRange()) deleteSelection();
+    else deleteChar(1);
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault();
     moveCursor(-1);
@@ -1258,11 +1554,77 @@ hiddenInput.addEventListener('keydown', e => {
     moveCursor(1);
   } else if (e.key === 'Enter') {
     e.preventDefault();
+    splitParagraphAtCursor();
   } else if (e.key.length === 1 && !e.altKey) {
     e.preventDefault();
     insertText(e.key);
   }
 });
+
+// ---- Enter: split the paragraph at the cursor ----
+function getParaBlock(paraIndex) {
+  const docStruct = parse_document(currentDocx);
+  for (const page of (docStruct.pages || [])) {
+    const blocks = page.blocks || [];
+    if (paraIndex < blocks.length) {
+      const block = blocks[paraIndex];
+      return block.Paragraph || block;
+    }
+  }
+  return null;
+}
+
+function splitParagraphAtCursor() {
+  const el = cursorEl();
+  if (!el || el.run_index == null || !currentDocx) return;
+  const p = el.paragraph_index, r = el.run_index;
+  const globalOff = (el.char_offset || 0) + cursorPos.charOffset;
+  const para = getParaBlock(p);
+  if (!para || !para.runs) return;
+  const runs = para.runs;
+  const curText = (runs[r] && runs[r].text) || '';
+  const head = curText.substring(0, globalOff);
+  // Tail = rest of the cursor run + all following runs (v1: merged as plain text)
+  let tail = curText.substring(globalOff);
+  for (let i = r + 1; i < runs.length; i++) tail += runs[i].text || '';
+
+  const edits = [{ type: 'set_run_text', paragraph_index: p, run_index: r, new_text: head }];
+  for (let i = runs.length - 1; i > r; i--) {
+    edits.push({ type: 'delete_run', paragraph_index: p, run_index: i });
+  }
+  edits.push({ type: 'insert_paragraph', index: p + 1, text: tail });
+
+  currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+  // Cursor to the start of the new paragraph (falls back to no cursor when the tail is empty)
+  pendingCursorRestore = { paraIndex: p + 1, runIndex: 0, charOff: 0 };
+  clearSelection();
+  scheduleRender();
+}
+
+// ---- Clipboard (selection-based) ----
+async function doCopy() {
+  const text = selectedText();
+  if (!text) { $('statusText').textContent = t('noSelection'); return false; }
+  try {
+    await navigator.clipboard.writeText(text);
+    $('statusText').textContent = t('copied');
+    return true;
+  } catch {
+    $('statusText').textContent = t('pasteFailed');
+    return false;
+  }
+}
+
+async function doCut() {
+  const rng = selectionRange();
+  if (!rng) { $('statusText').textContent = t('noSelection'); return; }
+  const els = layoutResult.pages[rng.page].elements;
+  if (els[rng.a.elemIndex].paragraph_index !== els[rng.b.elemIndex].paragraph_index) {
+    $('statusText').textContent = t('crossParaUnsupported');
+    return;
+  }
+  if (await doCopy()) deleteSelection();
+}
 
 function moveCursor(dir) {
   if (!cursorPos || !layoutResult) return;
@@ -1365,8 +1727,12 @@ $('fileIn').addEventListener('change', async e => {
   e.target.value = '';
 });
 
-$('btnNew').addEventListener('click', () => {
+function doNew() {
   currentDocx = null;
+  layoutResult = null;
+  stopCursorBlink();
+  cursorPos = null;
+  clearSelection();
   fileName = t('newDoc');
   $('docName').textContent = fileName;
   $('docName').dataset.i18n = 'newDoc';
@@ -1374,7 +1740,8 @@ $('btnNew').addEventListener('click', () => {
   emptyState.style.display = '';
   $('pgInfo').textContent = '';
   $('statusText').textContent = '';
-});
+}
+$('btnNew').addEventListener('click', doNew);
 
 // Drag and drop
 canvasArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
@@ -1400,11 +1767,28 @@ $('btnSave').addEventListener('click', () => {
   dl(currentDocx, (fileName || 'doc') + '.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 });
 
-$('btnPdf').addEventListener('click', () => {
-  // PDF export placeholder -- docx_to_pdf not imported but can be added
+function exportPdf() {
   if (!currentDocx) return;
-  alert('PDF export coming soon');
-});
+  try {
+    const pdf = docx_to_pdf(currentDocx);
+    dl(pdf, (fileName || 'doc') + '.pdf', 'application/pdf');
+  } catch (e) {
+    alert(t('exportFailed') + ': ' + ((e && e.message) || e));
+  }
+}
+$('btnPdf').addEventListener('click', exportPdf);
+
+function printDoc() {
+  if (!layoutResult) return;
+  const w = window.open('', '_blank');
+  if (!w) return;
+  const imgs = [...canvasArea.querySelectorAll('.page-canvas')]
+    .map(c => `<img src="${c.toDataURL('image/png')}" style="width:100%;display:block;page-break-after:always">`)
+    .join('');
+  w.document.write(`<!DOCTYPE html><html><head><title>${fileName || 'doc'}</title></head><body style="margin:0">${imgs}</body></html>`);
+  w.document.close();
+  setTimeout(() => { w.focus(); w.print(); }, 300);
+}
 
 // ---- Zoom ----
 let zoomLevel = 100;
@@ -1446,11 +1830,263 @@ function buildPal(el, cb) {
     el.appendChild(b);
   }
 }
-buildPal($('colorPop'), c => { $('colorBar').style.background = c; });
-buildPal($('hlPop'), c => { $('hlBar').style.background = c; });
+// ---- Formatting at the cursor (run / paragraph granularity) ----
+function cursorEl() {
+  if (!cursorPos || !layoutResult) return null;
+  const page = layoutResult.pages[cursorPos.pageIndex];
+  const el = page && page.elements[cursorPos.elemIndex];
+  return (el && el.paragraph_index != null) ? el : null;
+}
+
+function applyDocxEdits(edits, el) {
+  currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+  pendingCursorRestore = {
+    paraIndex: el.paragraph_index,
+    runIndex: el.run_index ?? 0,
+    charOff: (el.char_offset || 0) + (cursorPos ? cursorPos.charOffset : 0),
+  };
+  scheduleRender();
+}
+
+// Text elements covered by the current selection (whole-run granularity), or null
+function selectionEls() {
+  const rng = selectionRange();
+  if (!rng) return null;
+  const els = layoutResult.pages[rng.page].elements;
+  const out = [];
+  for (let i = rng.a.elemIndex; i <= rng.b.elemIndex; i++) {
+    const el = els[i];
+    if (el.kind === 'text' && el.text && el.paragraph_index != null) out.push(el);
+  }
+  return out.length ? { els: out, anchor: els[rng.a.elemIndex], anchorOff: rng.a.charOffset } : null;
+}
+
+function applyRunFormat(patch) {
+  if (!currentDocx) return;
+  const sel = selectionEls();
+  if (sel) {
+    // Apply to every run the selection touches (whole runs; run splitting comes later)
+    const seen = new Set();
+    const edits = [];
+    for (const el of sel.els) {
+      if (el.run_index == null) continue;
+      const key = el.paragraph_index + ':' + el.run_index;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edits.push({ type: 'set_run_format', paragraph_index: el.paragraph_index, run_index: el.run_index, style: patch });
+    }
+    if (edits.length) {
+      currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+      pendingCursorRestore = {
+        paraIndex: sel.anchor.paragraph_index,
+        runIndex: sel.anchor.run_index ?? 0,
+        charOff: (sel.anchor.char_offset || 0) + sel.anchorOff,
+      };
+      clearSelection();
+      scheduleRender();
+      return;
+    }
+  }
+  const el = cursorEl();
+  if (!el || el.run_index == null) { $('statusText').textContent = t('noCursor'); return; }
+  applyDocxEdits([{ type: 'set_run_format', paragraph_index: el.paragraph_index, run_index: el.run_index, style: patch }], el);
+}
+
+function applyParaFormat(patch) {
+  if (!currentDocx) return;
+  const sel = selectionEls();
+  if (sel) {
+    const seen = new Set();
+    const edits = [];
+    for (const el of sel.els) {
+      if (seen.has(el.paragraph_index)) continue;
+      seen.add(el.paragraph_index);
+      edits.push({ type: 'set_paragraph_format', paragraph_index: el.paragraph_index, para_style: patch });
+    }
+    if (edits.length) {
+      currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+      pendingCursorRestore = {
+        paraIndex: sel.anchor.paragraph_index,
+        runIndex: sel.anchor.run_index ?? 0,
+        charOff: (sel.anchor.char_offset || 0) + sel.anchorOff,
+      };
+      clearSelection();
+      scheduleRender();
+      return;
+    }
+  }
+  const el = cursorEl();
+  if (!el) { $('statusText').textContent = t('noCursor'); return; }
+  applyDocxEdits([{ type: 'set_paragraph_format', paragraph_index: el.paragraph_index, para_style: patch }], el);
+}
+
+// '#F00' / '#FF0000' -> 'FF0000' (OOXML w:color val)
+function hex6(c) {
+  c = c.replace('#', '');
+  if (c.length === 3) c = c.split('').map(x => x + x).join('');
+  return c.toUpperCase();
+}
+
+// Sync ribbon toggle states / font selects from the element at the cursor
+function syncRibbonFromCursor() {
+  const el = cursorEl();
+  if (!el) return;
+  $('btnBold').classList.toggle('active', !!el.bold);
+  $('btnItalic').classList.toggle('active', !!el.italic);
+  $('btnUnderline').classList.toggle('active', !!el.underline);
+  $('btnStrike').classList.toggle('active', !!el.strikethrough);
+  if (el.font_size != null) {
+    const v = String(el.font_size);
+    if ([...$('fontSize').options].some(o => o.value === v)) $('fontSize').value = v;
+  }
+  if (el.font_family) {
+    const base = el.font_family.split(',')[0].replace(/['"]/g, '').trim();
+    if ([...$('fontFamily').options].some(o => o.value === base)) $('fontFamily').value = base;
+  }
+}
+
+buildPal($('colorPop'), c => { $('colorBar').style.background = c; applyRunFormat({ color: hex6(c) }); });
+// Highlight: OOXML named colors only (w:highlight)
+const HL_COLORS = [
+  ['yellow', '#FFFF00'], ['green', '#00FF00'], ['cyan', '#00FFFF'], ['magenta', '#FF00FF'],
+  ['blue', '#0000FF'], ['red', '#FF0000'], ['darkBlue', '#00008B'], ['darkCyan', '#008B8B'],
+  ['darkGreen', '#006400'], ['darkMagenta', '#8B008B'], ['darkRed', '#8B0000'], ['darkYellow', '#808000'],
+  ['darkGray', '#A9A9A9'], ['lightGray', '#D3D3D3'], ['black', '#000000'],
+];
+{
+  const pop = $('hlPop');
+  pop.innerHTML = '';
+  for (const [name, css] of HL_COLORS) {
+    const b = document.createElement('button');
+    b.className = 'sw';
+    b.style.background = css;
+    b.title = name;
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      $('hlBar').style.background = css;
+      pop.classList.remove('show');
+      applyRunFormat({ highlight: name });
+    });
+    pop.appendChild(b);
+  }
+}
 $('btnColor').addEventListener('click', e => { e.stopPropagation(); $('colorPop').classList.toggle('show'); $('hlPop').classList.remove('show'); });
 $('btnHl').addEventListener('click', e => { e.stopPropagation(); $('hlPop').classList.toggle('show'); $('colorPop').classList.remove('show'); });
-document.addEventListener('click', () => { $('colorPop').classList.remove('show'); $('hlPop').classList.remove('show'); $('tgPop').classList.remove('show'); });
+document.addEventListener('click', () => { $('colorPop').classList.remove('show'); $('hlPop').classList.remove('show'); $('tgPop').classList.remove('show'); $('lsPop').classList.remove('show'); });
+
+// ---- Home: clipboard group ----
+$('btnPaste').addEventListener('click', async () => {
+  if (!cursorPos) { $('statusText').textContent = t('noCursor'); return; }
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) insertText(text.replace(/\r?\n/g, ' '));
+  } catch {
+    $('statusText').textContent = t('pasteFailed');
+  }
+});
+$('btnCut').addEventListener('click', () => doCut());
+$('btnCopy').addEventListener('click', () => doCopy());
+
+// ---- Home: font group ----
+function toggleRun(prop, elKey) {
+  // Toggle based on the first selected element when a selection exists
+  const sel = selectionEls();
+  const el = sel ? sel.els[0] : cursorEl();
+  applyRunFormat({ [prop]: !(el && el[elKey]) });
+}
+$('btnBold').addEventListener('click', () => toggleRun('bold', 'bold'));
+$('btnItalic').addEventListener('click', () => toggleRun('italic', 'italic'));
+$('btnUnderline').addEventListener('click', () => toggleRun('underline', 'underline'));
+$('btnStrike').addEventListener('click', () => toggleRun('strikethrough', 'strikethrough'));
+$('fontFamily').addEventListener('change', e => { if (cursorEl()) applyRunFormat({ font_family: e.target.value }); });
+$('fontSize').addEventListener('change', e => { if (cursorEl()) applyRunFormat({ font_size: parseFloat(e.target.value) }); });
+// Mobile bar shares the same appliers
+$('mBold').addEventListener('click', () => toggleRun('bold', 'bold'));
+$('mItalic').addEventListener('click', () => toggleRun('italic', 'italic'));
+$('mUnder').addEventListener('click', () => toggleRun('underline', 'underline'));
+$('mStrike').addEventListener('click', () => toggleRun('strikethrough', 'strikethrough'));
+$('mFontFamily').addEventListener('change', e => { if (cursorEl()) applyRunFormat({ font_family: e.target.value }); });
+$('mFontSize').addEventListener('change', e => { if (cursorEl()) applyRunFormat({ font_size: parseFloat(e.target.value) }); });
+
+// ---- Home: paragraph group ----
+$('btnAlL').addEventListener('click', () => applyParaFormat({ alignment: 'left' }));
+$('btnAlC').addEventListener('click', () => applyParaFormat({ alignment: 'center' }));
+$('btnAlR').addEventListener('click', () => applyParaFormat({ alignment: 'right' }));
+$('btnAlJ').addEventListener('click', () => applyParaFormat({ alignment: 'both' }));
+$('mAlL').addEventListener('click', () => applyParaFormat({ alignment: 'left' }));
+$('mAlC').addEventListener('click', () => applyParaFormat({ alignment: 'center' }));
+$('mAlR').addEventListener('click', () => applyParaFormat({ alignment: 'right' }));
+$('btnLS').addEventListener('click', e => { e.stopPropagation(); $('lsPop').classList.toggle('show'); });
+$('lsPop').querySelectorAll('[data-ls]').forEach(b => {
+  b.addEventListener('click', e => {
+    e.stopPropagation();
+    $('lsPop').classList.remove('show');
+    applyParaFormat({ line_spacing: parseFloat(b.dataset.ls) });
+  });
+});
+
+// ---- Home: styles group ----
+$('styNormal').addEventListener('click', () => applyParaFormat({ style_id: 'Normal' }));
+$('styH1').addEventListener('click', () => applyParaFormat({ style_id: 'Heading1' }));
+$('styH2').addEventListener('click', () => applyParaFormat({ style_id: 'Heading2' }));
+$('styH3').addEventListener('click', () => applyParaFormat({ style_id: 'Heading3' }));
+
+// ---- File menu ----
+const fileMenu = $('fileMenu');
+function closeFileMenu() { fileMenu.classList.remove('show'); }
+$('ftabBtn').addEventListener('click', e => {
+  e.stopPropagation();
+  for (const id of ['fmSave', 'fmCopy', 'fmExport', 'fmPrint', 'fmRename', 'fmInfo']) {
+    $(id).classList.toggle('dis', !currentDocx);
+  }
+  fileMenu.classList.toggle('show');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#fileMenu') && !e.target.closest('#ftabBtn')) closeFileMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeFileMenu(); clearSelection(); } });
+
+$('fmNew').addEventListener('click', () => { closeFileMenu(); doNew(); });
+$('fmOpen').addEventListener('click', () => { closeFileMenu(); $('openOv').classList.add('show'); });
+$('fmSave').addEventListener('click', () => { closeFileMenu(); $('btnSave').click(); });
+$('fmCopy').addEventListener('click', () => {
+  closeFileMenu();
+  if (!currentDocx) return;
+  dl(currentDocx, `${fileName || 'doc'} - ${t('copy')}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+});
+$('fmExport').addEventListener('click', () => { closeFileMenu(); exportPdf(); });
+$('fmPrint').addEventListener('click', () => { closeFileMenu(); printDoc(); });
+$('fmRename').addEventListener('click', () => {
+  closeFileMenu();
+  if (!currentDocx) return;
+  $('renameIn').value = fileName;
+  $('renameOv').classList.add('show');
+  $('renameIn').focus();
+  $('renameIn').select();
+});
+$('fmInfo').addEventListener('click', () => {
+  closeFileMenu();
+  if (!currentDocx) return;
+  const kb = Math.max(1, Math.round(currentDocx.length / 1024));
+  const pages = layoutResult ? layoutResult.pages.length : 0;
+  $('infoBody').innerHTML =
+    `<div><b>${(fileName || 'doc')}.docx</b></div>` +
+    `<div>${pages} ${t('pages')}</div>` +
+    `<div>${kb} KB</div>`;
+  $('infoOv').classList.add('show');
+});
+$('renameOk').addEventListener('click', () => {
+  const v = $('renameIn').value.trim();
+  if (v) {
+    fileName = v;
+    $('docName').textContent = v;
+    $('docName').removeAttribute('data-i18n');
+  }
+  $('renameOv').classList.remove('show');
+});
+$('renameCancel').addEventListener('click', () => $('renameOv').classList.remove('show'));
+$('renameIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('renameOk').click(); });
+$('infoOk').addEventListener('click', () => $('infoOv').classList.remove('show'));
 
 // ---- Table grid (kept for future editing) ----
 const tg = $('tgGrid');
@@ -1466,13 +2102,14 @@ for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
   b.addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.remove('show'); });
   tg.appendChild(b);
 }
-$('btnTbl').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
+$('btnTbl2').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
 
 // ---- Keyboard shortcuts ----
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey) {
     if (e.key === 's') { e.preventDefault(); $('btnSave').click(); }
     if (e.key === 'o') { e.preventDefault(); $('btnOpen').click(); }
+    if (e.key === 'p') { e.preventDefault(); printDoc(); }
   }
 });
 
