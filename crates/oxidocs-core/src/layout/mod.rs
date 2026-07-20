@@ -42,6 +42,20 @@ pub(crate) fn s864_part(part: &str) -> bool {
         && std::env::var(format!("OXI_S864{part}_DISABLE")).is_err()
 }
 
+/// S958: extra right-edge allowance for text following a CENTER tab.
+///
+/// A center tab's segment straddles its stop: its right edge is `stop + S/2`
+/// where `S` is the segment width, while the breaker's width track only grows
+/// rightward to `stop + S`. The over-count is therefore `S/2`, capped by the
+/// leftward room `stop` — beyond that Word cannot centre the segment and
+/// clamps it at the left edge (whereupon the segment alone must fit).
+fn s958_center_slack(center_tab_stop_tw: Option<i32>, current_width_tw: i32) -> i32 {
+    match center_tab_stop_tw {
+        Some(stop) => (((current_width_tw - stop) / 2).max(0)).min(stop.max(0)),
+        None => 0,
+    }
+}
+
 fn is_break_after(ch: char) -> bool {
     matches!(ch, '-' | '/' | '\\' | ')' | ']' | '}' | '>' | '!' | '?' | ';' | ':' | ',')
 }
@@ -14136,6 +14150,15 @@ impl LayoutEngine {
         // renders exactly right-aligned. Reset with the other per-line
         // accumulators and on the next tab.
         let mut right_tab_slack_tw: i32 = 0;
+        // S958 (2026-07-20): the tw position of the last CENTER tab stop on this
+        // line. A center tab's following segment straddles the stop — its right
+        // edge is stop + S/2, not stop + S — so the overflow track (which only
+        // grows rightward) over-counts by S/2. policies__00148f8d's footer
+        // disclaimer (Arial 8pt, leading <w:tab/> at a 3600tw center stop) is ONE
+        // line in Word (PDF: x 172.94..429.99, centre 301.5 = the stop) but Oxi
+        // broke it in two, inflating the footer stack by 9.2pt and pulling the
+        // body bottom from 639.3 to 630.10 -> a 4-line paragraph widow-split.
+        let mut center_tab_stop_tw: Option<i32> = None;
         let mut word_breaks: Vec<(usize, f32)> = Vec::new();
         // Per-SEGMENT (run_idx, char_offset) so a split token keeps the EXACT run
         // metadata of the default per-«/» fragmentation (DWrite re-derives glyph
@@ -14189,10 +14212,10 @@ impl LayoutEngine {
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + pt_to_tw(word_trail_hang_w)
+                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                         }
                         // Place the token as SEGMENTS split at the recorded break
                         // opportunities — IDENTICAL fragmentation to the default path (which
@@ -14214,10 +14237,10 @@ impl LayoutEngine {
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
-                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw
+                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 lines.push(std::mem::take(&mut current_line));
-                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                             }
                             // Exact run metadata for this segment (matches the default
                             // per-«/» fragmentation), so DWrite shapes it identically.
@@ -14239,10 +14262,10 @@ impl LayoutEngine {
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
@@ -14365,7 +14388,7 @@ impl LayoutEngine {
                 if current_width_tw + vw_tw > available_tw
                     && !current_line.fragments.is_empty() && !para_all_whitespace {
                     lines.push(std::mem::take(&mut current_line));
-                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                 }
                 current_line.fragments.push(LineFragment {
                     text: text.to_string(), width: font_size, natural_width: font_size,
@@ -14399,7 +14422,7 @@ impl LayoutEngine {
                 if current_width_tw + cw_tw > available_tw
                     && !current_line.fragments.is_empty() && !para_all_whitespace {
                     lines.push(std::mem::take(&mut current_line));
-                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                    current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                 }
                 current_line.fragments.push(LineFragment {
                     text: text.to_string(), width: cw, natural_width: cw,
@@ -14430,7 +14453,7 @@ impl LayoutEngine {
                     let is_hr = style.hr_rule.is_some();
                     if is_hr && !current_line.fragments.is_empty() {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                     }
                     let ow_tw = pt_to_tw(ow);
                     // NO overflow wrap for the object fragment (v1): hmrc's
@@ -14449,7 +14472,7 @@ impl LayoutEngine {
                     current_width += ow; current_width_tw += ow_tw; current_capw_tw += ow_tw;
                     if is_hr {
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                     }
                     continue;
                 }
@@ -15368,7 +15391,7 @@ impl LayoutEngine {
                         };
                         current_line.break_type = break_type;
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                     } else {
                         // Space or tab
                         if ch == '\t' {
@@ -15541,6 +15564,11 @@ impl LayoutEngine {
                                 // S774: a RIGHT tab's jump is slack the following
                                 // segment consumes leftward (see the declaration).
                                 // A new tab of any kind resets the prior slack.
+                                center_tab_stop_tw = if tab_align == TabStopAlignment::Center
+                                    && std::env::var("OXI_S958_DISABLE").is_err()
+                                {
+                                    Some(current_width_tw)
+                                } else { None };
                                 right_tab_slack_tw = if s883_nowrap {
                                     // S883: a clamped out-of-bounds right tab's content
                                     // never wraps the line (right-aligned content pulls
@@ -16478,7 +16506,7 @@ impl LayoutEngine {
                                 char_offset: char_pos_in_run,
                             });
                             lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                             continue;
                         }
 
@@ -16503,7 +16531,7 @@ impl LayoutEngine {
                             popped.push(f);
                         }
                         lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; compress_used = false;
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
                         for f in popped.into_iter().rev() {
                             current_width += f.width;
                             current_width_tw += pt_to_tw(f.width);
@@ -25053,6 +25081,12 @@ impl LayoutEngine {
                                 break;
                             }
                         }
+                        // NOTE: the RENDER side (mod.rs ~22123) commits this boundary
+                        // only at `carry.len() >= 2`; a 1-char carry is un-carried there.
+                        // Mirroring that here (S958a, 2026-07-20) is byte-INERT across 40
+                        // docx_corpus/en documents and did NOT move policies__00148f8d, so
+                        // the mismatch stays unfixed until a document actually demands it
+                        // and Word can be measured for that case.
                         if hit_boundary && !carry.is_empty() {
                             stage_carry = Some(carry);
                             break;
