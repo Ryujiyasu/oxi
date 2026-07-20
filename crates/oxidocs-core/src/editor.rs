@@ -2118,6 +2118,10 @@ fn patch_paragraph_xml(
     let mut collecting_rpr = false;
     let mut rpr_collector: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut rpr_depth: i32 = 0;
+    // Whether the current run's rPr has been seen (or injected). A run with a
+    // pending format edit but NO existing <w:rPr> gets a generated one injected
+    // before its first child (schema: rPr is the first element child of w:r).
+    let mut rpr_seen_in_run = false;
 
     loop {
         match reader.read_event()? {
@@ -2146,6 +2150,18 @@ fn patch_paragraph_xml(
                         w.write_event(Event::Start(e.clone()))?;
                     }
                     continue;
+                }
+
+                // Run needs formatting but has no rPr: inject one before its
+                // first child element
+                if in_run && !rpr_seen_in_run && local != "rPr" {
+                    if let Some(fmt) = run_format_edits.get(&run_idx) {
+                        let new_rpr = generate_rpr_xml(fmt);
+                        if !new_rpr.is_empty() {
+                            writer.write_event(Event::Text(BytesText::from_escaped(&new_rpr)))?;
+                        }
+                    }
+                    rpr_seen_in_run = true;
                 }
 
                 match local.as_str() {
@@ -2179,9 +2195,11 @@ fn patch_paragraph_xml(
                         }
 
                         in_run = true;
+                        rpr_seen_in_run = false;
                         writer.write_event(Event::Start(e.clone()))?;
                     }
                     "rPr" if in_run => {
+                        rpr_seen_in_run = true;
                         if run_format_edits.contains_key(&run_idx) {
                             // Collect existing rPr for merging
                             collecting_rpr = true;
@@ -2279,11 +2297,16 @@ fn patch_paragraph_xml(
                         writer.write_event(Event::End(e.clone()))?;
                     }
                     "r" if in_run => {
-                        // If this run needs formatting but had no rPr, add one
-                        if let Some(_fmt) = run_format_edits.get(&run_idx) {
-                            // rPr wasn't seen for this run — we need to inject it
-                            // But we've already written the run content...
-                            // This is handled by checking if rPr was seen when run started.
+                        // Childless run that still needs formatting: rPr as the
+                        // only child is schema-valid
+                        if !rpr_seen_in_run {
+                            if let Some(fmt) = run_format_edits.get(&run_idx) {
+                                let new_rpr = generate_rpr_xml(fmt);
+                                if !new_rpr.is_empty() {
+                                    writer.write_event(Event::Text(BytesText::from_escaped(&new_rpr)))?;
+                                }
+                            }
+                            rpr_seen_in_run = true;
                         }
                         in_run = false;
                         writer.write_event(Event::End(e.clone()))?;
@@ -2352,6 +2375,7 @@ fn patch_paragraph_xml(
 
                 // Handle self-closing rPr element (empty rPr)
                 if local == "rPr" && in_run {
+                    rpr_seen_in_run = true;
                     if let Some(fmt) = run_format_edits.get(&run_idx) {
                         // Empty rPr — generate new one from scratch
                         let new_rpr = generate_rpr_xml(fmt);
@@ -2360,6 +2384,18 @@ fn patch_paragraph_xml(
                         }
                         continue;
                     }
+                }
+
+                // Self-closing child (w:br, w:tab, ...) of a run that needs
+                // formatting but has no rPr yet: inject one first
+                if in_run && !rpr_seen_in_run && local != "rPr" {
+                    if let Some(fmt) = run_format_edits.get(&run_idx) {
+                        let new_rpr = generate_rpr_xml(fmt);
+                        if !new_rpr.is_empty() {
+                            writer.write_event(Event::Text(BytesText::from_escaped(&new_rpr)))?;
+                        }
+                    }
+                    rpr_seen_in_run = true;
                 }
 
                 writer.write_event(Event::Empty(e.clone()))?;
@@ -3427,6 +3463,34 @@ mod tests {
             assert_eq!(p.runs[0].style.font_size, Some(24.0));
             assert_eq!(p.runs[0].style.color.as_deref(), Some("FF0000"));
             assert_eq!(p.alignment, crate::ir::Alignment::Center);
+        } else {
+            panic!("expected paragraph");
+        }
+    }
+
+    #[test]
+    fn v1_set_run_format_injects_rpr_when_missing() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.docx");
+        let mut editor = DocxEditor::new(data).expect("should open");
+        // A plain inserted paragraph has a run with NO <w:rPr>
+        editor.insert_paragraph(0, "Plain run", None, None);
+        let saved = editor.save().expect("should save");
+
+        // Second pass: format that rPr-less run
+        let mut editor2 = DocxEditor::new(&saved).expect("should reopen");
+        editor2.add_edit(DocxEdit::SetRunFormat {
+            paragraph_index: 0,
+            run_index: 0,
+            style: RunProps { bold: Some(true), ..Default::default() },
+        });
+        let saved2 = editor2.save().expect("should save again");
+        let doc = parse_docx(&saved2).expect("saved docx should parse");
+        if let crate::ir::Block::Paragraph(p) = &doc.pages[0].blocks[0] {
+            assert_eq!(p.runs[0].text, "Plain run");
+            assert!(
+                p.runs[0].style.bold,
+                "set_run_format must apply to a run without an existing rPr"
+            );
         } else {
             panic!("expected paragraph");
         }
