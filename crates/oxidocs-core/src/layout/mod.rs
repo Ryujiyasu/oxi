@@ -2234,7 +2234,33 @@ impl LayoutEngine {
                 let need_blank = match page.section_start_type.as_deref() {
                     Some("evenPage") => next_no % 2 == 1,
                     Some("oddPage") => next_no % 2 == 0,
-                    _ => false,
+                    // S957 (2026-07-20): with <w:evenAndOddHeaders/> in force, a
+                    // section that DECLARES pgNumType w:start must begin on a
+                    // physical page whose parity matches the declared logical
+                    // number — Word pads with one blank page otherwise, so that
+                    // the odd/even header alternation stays consistent.
+                    // DERIVED (tools/metrics/_pb_blankpage_gen.py, 8 cases,
+                    // Word PDF page census; legal__0010437a's blank page 2):
+                    //   evenAndOddHeaders + start=1 (odd) onto physical 2 -> blank p2
+                    //   NO evenAndOddHeaders, same restart                -> no blank
+                    //   evenAndOddHeaders, no pgNumType on the section    -> no blank
+                    //   evenAndOddHeaders + start=2 (even) onto physical 2 -> no blank
+                    //   titlePg removed from both sections                -> unchanged
+                    //   2-page cover, start=2 (EVEN) onto physical 3      -> blank p3
+                    //   2-page cover, start=1 (ODD)  onto physical 3      -> no blank
+                    // The last two are the discriminator: an EVEN restart pads
+                    // too, so the rule is parity MATCHING, not "odd restarts
+                    // only". CONTINUOUS sections cannot trigger it — S560 merges
+                    // them into the previous IR page and drops their pgNumType,
+                    // so their start never reaches a section-first page here.
+                    // Opt-out OXI_S957_DISABLE.
+                    _ => {
+                        std::env::var("OXI_S957_DISABLE").is_err()
+                            && page.even_odd_hf
+                            && page.page_number_start.map_or(false, |st| {
+                                (st % 2) != (next_no as u32 % 2)
+                            })
+                    }
                 };
                 if need_blank {
                     dbg_page_push(pages.len(), 0);
