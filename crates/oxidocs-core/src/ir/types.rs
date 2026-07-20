@@ -689,6 +689,16 @@ pub struct Image {
     /// behindDoc=1 places the object behind body text. Default false.
     #[serde(default)]
     pub behind_doc: bool,
+    /// S965: the resolved before/after spacing of the image-only HOST paragraph
+    /// (S537 lowers that paragraph to a bare `Block::Image`, so without this the
+    /// spacing at both of its boundaries is lost). Layout collapses
+    /// `max(prev.after, before)` above the image and exposes `after` to the next
+    /// paragraph — the ordinary paragraph rule. Zero for images that are not the
+    /// sole content of their paragraph.
+    #[serde(default)]
+    pub paragraph_space_before: f32,
+    #[serde(default)]
+    pub paragraph_space_after: f32,
 }
 
 /// Image crop rectangle (percentages from each edge)

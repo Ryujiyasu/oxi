@@ -1101,6 +1101,16 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && pr.math_blocks.is_empty()
                             && std::env::var("OXI_S537_DISABLE").is_err();
+                        // S965: capture the host paragraph's spacing before
+                        // pr.paragraph may move (same reason as S898a below).
+                        let s965_sp: Option<(f32, f32)> = if image_only
+                            && std::env::var("OXI_S965_DISABLE").is_err()
+                        {
+                            Some((pr.paragraph.style.space_before.unwrap_or(0.0),
+                                  pr.paragraph.style.space_after.unwrap_or(0.0)))
+                        } else {
+                            None
+                        };
                         // S898a: capture the frame before pr.paragraph may move.
                         let s898_fp: Option<crate::ir::FrameProperties> =
                             if std::env::var("OXI_S898_DISABLE").is_err() && image_only {
@@ -1184,6 +1194,31 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     img.wrap_type = Some(crate::ir::WrapType::None);
                                     img.anchor_block_index = anchor_idx;
                                     current_floating_images.push(img);
+                                }
+                            }
+                        }
+                        // S965 (2026-07-21, opt-out OXI_S965_DISABLE): when S537
+                        // lowers an image-only paragraph to a bare Block::Image the
+                        // paragraph's own spacing is lost, so neither of its
+                        // boundaries can be collapsed. Carry the resolved
+                        // before/after onto the image (before on the first, after on
+                        // the last, so several images in one paragraph do not
+                        // multiply it). Word truth, 3 specimens: the image paragraph
+                        // is `Graphics` (no spacing) in policies__00148f8d and
+                        // style-less (docDefaults after=200 = 10pt) in
+                        // legal__00089377 / reports__000e8acd — one formula,
+                        // max(prev.after, before) above and max(after, next.before)
+                        // below, explains all three.
+                        if let (Some((before, after)), false) =
+                            (s965_sp, pr.inline_images.is_empty())
+                        {
+                            let last = pr.inline_images.len() - 1;
+                            for (i, block) in pr.inline_images.iter_mut().enumerate() {
+                                if let Block::Image(img) = block {
+                                    img.paragraph_space_before =
+                                        if i == 0 { before } else { 0.0 };
+                                    img.paragraph_space_after =
+                                        if i == last { after } else { 0.0 };
                                 }
                             }
                         }
@@ -5070,6 +5105,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
         Some(Image {
+            paragraph_space_before: 0.0,
+            paragraph_space_after: 0.0,
             data,
             width,
             height,
@@ -5232,6 +5269,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         && width > 0.0 && height > 0.0
     {
         Some(Image {
+            paragraph_space_before: 0.0,
+            paragraph_space_after: 0.0,
             data: Vec::new(),
             width,
             height,
@@ -5563,6 +5602,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     {
         return Ok(DrawingResult {
             image: Some(Image {
+                paragraph_space_before: 0.0,
+                paragraph_space_after: 0.0,
                 data: Vec::new(),
                 width: group_width,
                 height: group_height,
@@ -5612,6 +5653,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         let img_position = if s566 { vml_position.clone() } else { None };
         let img_wrap = if s566 && vml_position.is_some() { Some(WrapType::None) } else { None };
         Some(Image {
+            paragraph_space_before: 0.0,
+            paragraph_space_after: 0.0,
             data,
             width,
             height,
@@ -5674,6 +5717,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             vector_shapes: Vec::new(),
         });
         let placeholder = Some(Image {
+            paragraph_space_before: 0.0,
+            paragraph_space_after: 0.0,
             data: Vec::new(),
             width,
             height,
@@ -5811,6 +5856,8 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
         Some(Image {
+            paragraph_space_before: 0.0,
+            paragraph_space_after: 0.0,
             data,
             width,
             height,
@@ -7303,6 +7350,8 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                             && pr.math_blocks.is_empty();
                         if s838_visual_only {
                             blocks.push(Block::Image(crate::ir::Image {
+                                paragraph_space_before: 0.0,
+                                paragraph_space_after: 0.0,
                                 data: Vec::new(),
                                 width: s838_cx,
                                 height: s838_cy,

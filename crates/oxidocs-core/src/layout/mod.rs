@@ -6796,7 +6796,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                         _ => img.height,
                     };
-                    if cursor.cursor_y + img_adv > start_y + content_height {
+                    // S965 (2026-07-21, opt-out OXI_S965_DISABLE): an image-only
+                    // paragraph is a real paragraph, so its spacing collapses with
+                    // its neighbours' exactly like any other — max(prev.after,
+                    // own.before) above, and its own.after is what the NEXT
+                    // paragraph collapses against. Before this the arm applied
+                    // nothing above and let the PREVIOUS paragraph's after leak
+                    // across the image onto the next one (a third behaviour that is
+                    // neither). Word truth on the three specimens: the image
+                    // paragraph resolves to after=0 in policies__00148f8d
+                    // (`Graphics`) and after=10pt in legal__00089377 /
+                    // reports__000e8acd (style-less → docDefaults after=200), and
+                    // legal p2 measures 14.95pt MORE space around the figure in
+                    // Word than Oxi placed. Suppressed at a fresh region top, where
+                    // a body paragraph's space_before drops too.
+                    let s965 = std::env::var("OXI_S965_DISABLE").is_err();
+                    let mut img_before = if s965 {
+                        prev_space_after.max(img.paragraph_space_before)
+                    } else { 0.0 };
+                    if cursor.cursor_y <= start_y + 0.1 { img_before = 0.0; }
+                    if cursor.cursor_y + img_before + img_adv > start_y + content_height {
+                        img_before = 0.0;
                         if num_columns > 1 && current_column + 1 < num_columns {
                             current_column += 1;
                             start_x = col_x_positions[current_column];
@@ -6817,6 +6837,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             lm2_cells = 0; current_page_idx += 1;
                         }
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                    }
+                    if img_before > 0.0 {
+                        cursor.advance(img_before);
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                     }
                     elements.push(LayoutElement::new(start_x, cursor.visual_y, img.width, img.height, LayoutContent::Image {
@@ -6848,6 +6872,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // may ship.
                     if std::env::var("OXI_S961").is_ok() {
                         prev_space_after = 0.0;
+                    } else if s965 {
+                        // S965: the image paragraph's OWN after is what the next
+                        // paragraph collapses against — not the one before it.
+                        prev_space_after = img.paragraph_space_after;
                     }
                 }
                 Block::UnsupportedElement(_) => {
