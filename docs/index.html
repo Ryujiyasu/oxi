@@ -303,13 +303,13 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </figure>
 
       <h3>Japanese blind set — 50 never-seen documents</h3>
-      <p>The 235-document corpus above doubles as the development corpus, so it is complemented by a <strong>frozen blind benchmark</strong>: 50 Japanese documents from the public docx-corpus, frozen on 2026-07-20 <em>before</em> any measurement and never used as fix targets — every score is first-sight generalization. At its first measurement (2026-07-21) Oxi scores <strong>0.828</strong> per document, ahead of LibreOffice (<strong>0.816</strong>) on the same documents — Oxi is closer to Word on 33 of the 50 — and the page count matches Word on <strong>44/50</strong>. In a separate paragraph-level pagination check, 41 of 48 measurable documents place every matched paragraph on the same page as Word. Ground truth: Microsoft Word; LibreOffice 26.2.1.2; both rendered at 150 DPI.</p>
+      <p>Japanese is held to the same standard as English: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. At its first measurement (2026-07-21) Oxi scores <strong>0.828</strong> per document and matches Word's page count on 44 of the 50 documents — ahead of LibreOffice (<strong>0.816</strong>), SILURUS (<strong>0.804</strong>) and ONLYOFFICE (<strong>0.772</strong>) on the same documents. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, LibreOffice 26.2.1.2, ONLYOFFICE 9.3.1.8, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI.</p>
 
       <figure class="chart-card">
         <h4>Japanese blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-07-21)</h4>
         <div class="barchart">
           <div class="brow">
-            <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 44/50 · closer to Word on 33/50 docs</span></div>
+            <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 44/50</span></div>
             <div class="btrack"><div class="bfill oxi" style="width:82.8%"></div></div>
             <div class="bval"><strong>0.828</strong></div>
           </div>
@@ -318,8 +318,17 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
             <div class="btrack"><div class="bfill" style="width:81.6%"></div></div>
             <div class="bval">0.816</div>
           </div>
+          <div class="brow">
+            <div class="blabel">SILURUS<span>page count matches Word on 32/50 · v0.72.2</span></div>
+            <div class="btrack"><div class="bfill" style="width:80.4%"></div></div>
+            <div class="bval">0.804</div>
+          </div>
+          <div class="brow">
+            <div class="blabel">ONLYOFFICE<span>page count matches Word on 38/50 · v9.3.1.8</span></div>
+            <div class="btrack"><div class="bfill" style="width:77.2%"></div></div>
+            <div class="bval">0.772</div>
+          </div>
         </div>
-        <figcaption class="fnote">First measurement of the frozen Japanese blind set. Unlike the development corpus above, nothing here has ever been a fix target. ONLYOFFICE and SILURUS have not yet been run on this set; they will be added at the next re-measurement.</figcaption>
       </figure>
 
       <h3>English corpus — measured separately, reported honestly</h3>
