@@ -221,36 +221,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div class="wrap">
       <h2>Layout accuracy is measured, not asserted</h2>
       <p class="sub">Every claim below comes from a reproducible measurement pipeline, published in the repository.</p>
-      <h3>Japanese blind set — 50 never-seen documents</h3>
-      <p>Japanese is held to the same standard as English: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. At its first measurement (2026-07-21) Oxi scores <strong>0.828</strong> per document and matches Word's page count on 44 of the 50 documents — ahead of LibreOffice (<strong>0.816</strong>), SILURUS (<strong>0.804</strong>) and ONLYOFFICE (<strong>0.772</strong>) on the same documents. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, LibreOffice 26.2.1.2, ONLYOFFICE 9.3.1.8, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI.</p>
-
-      <figure class="chart-card">
-        <h4>Japanese blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-07-21)</h4>
-        <div class="barchart">
-          <div class="brow">
-            <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 44/50</span></div>
-            <div class="btrack"><div class="bfill oxi" style="width:82.8%"></div></div>
-            <div class="bval"><strong>0.828</strong></div>
-          </div>
-          <div class="brow">
-            <div class="blabel">LibreOffice<span>page count matches Word on 41/50 · v26.2.1.2</span></div>
-            <div class="btrack"><div class="bfill" style="width:81.6%"></div></div>
-            <div class="bval">0.816</div>
-          </div>
-          <div class="brow">
-            <div class="blabel">SILURUS<span>page count matches Word on 32/50 · v0.72.2</span></div>
-            <div class="btrack"><div class="bfill" style="width:80.4%"></div></div>
-            <div class="bval">0.804</div>
-          </div>
-          <div class="brow">
-            <div class="blabel">ONLYOFFICE<span>page count matches Word on 38/50 · v9.3.1.8</span></div>
-            <div class="btrack"><div class="bfill" style="width:77.2%"></div></div>
-            <div class="bval">0.772</div>
-          </div>
-        </div>
-      </figure>
-
-      <h3>English corpus — measured separately, reported honestly</h3>
+      <h3>English blind set — 50 never-seen documents</h3>
       <p>English is measured the hard way: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. As of <strong>2026-07-20</strong> Oxi scores <strong>0.807</strong> per document (0.800 at its first measurement on 2026-07-19), behind ONLYOFFICE (<strong>0.902</strong>) and LibreOffice (<strong>0.876</strong>) and ahead of SILURUS (<strong>0.776</strong>) — the closest architectural peer, a Rust + WebAssembly canvas renderer, which Oxi beats on 32 of the 50 documents. That remaining gap is the English work queue: the set is re-measured as the engine improves. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, ONLYOFFICE 9.3.1.8, LibreOffice 26.2.1.2, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI on the same day.</p>
 
       <figure class="chart-card">
@@ -527,6 +498,284 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 </div>
         <figcaption class="fnote">Top: per-engine mean — the dashed edge marks Microsoft Word itself (1.00). SILURUS is the closest architectural peer (Rust + WebAssembly rendering to a canvas, like Oxi); ONLYOFFICE and LibreOffice are mature native suites. Bottom: every dot is one document, with Oxi on the vertical axis; dots above the dashed diagonal are documents where Oxi is closer to Word. The blind set is measured but never fixed against, so this is first-sight generalization, published as-is.</figcaption>
       </figure>
+      <h3>Japanese blind set — 50 never-seen documents</h3>
+      <p>Japanese is held to the same standard as English: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets — every score is first-sight generalization, with nothing tuned to the test. At its first measurement (2026-07-21) Oxi scores <strong>0.828</strong> per document and matches Word's page count on 44 of the 50 documents — ahead of LibreOffice (<strong>0.816</strong>), SILURUS (<strong>0.804</strong>) and ONLYOFFICE (<strong>0.772</strong>) on the same documents. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, LibreOffice 26.2.1.2, ONLYOFFICE 9.3.1.8, SILURUS @silurus/ooxml 0.72.2 — all rendered at 150 DPI.</p>
+
+      <figure class="chart-card">
+        <h4>Japanese blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-07-21)</h4>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 44/50</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:82.8%"></div></div>
+            <div class="bval"><strong>0.828</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice<span>page count matches Word on 41/50 · v26.2.1.2</span></div>
+            <div class="btrack"><div class="bfill" style="width:81.6%"></div></div>
+            <div class="bval">0.816</div>
+          </div>
+          <div class="brow">
+            <div class="blabel">SILURUS<span>page count matches Word on 32/50 · v0.72.2</span></div>
+            <div class="btrack"><div class="bfill" style="width:80.4%"></div></div>
+            <div class="bval">0.804</div>
+          </div>
+          <div class="brow">
+            <div class="blabel">ONLYOFFICE<span>page count matches Word on 38/50 · v9.3.1.8</span></div>
+            <div class="btrack"><div class="bfill" style="width:77.2%"></div></div>
+            <div class="bval">0.772</div>
+          </div>
+        </div>
+<div class="scatter-row">
+<div>
+<svg viewBox="0 0 340 340" role="img" aria-label="Scatter plot of 50 blind Japanese documents: Oxi SSIM vs LibreOffice SSIM; most points sit above the diagonal" style="width:100%;height:auto;font-family:inherit">
+  <line x1="42" y1="300.0" x2="328" y2="300.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42.0" y1="26" x2="42.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="303.5" text-anchor="end" font-size="10" fill="#5a5a5a">0.4</text>
+  <text x="42.0" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.4</text>
+  <line x1="42" y1="254.3" x2="328" y2="254.3" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="89.7" y1="26" x2="89.7" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="208.7" x2="328" y2="208.7" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="137.3" y1="26" x2="137.3" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="212.2" text-anchor="end" font-size="10" fill="#5a5a5a">0.6</text>
+  <text x="137.3" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.6</text>
+  <line x1="42" y1="163.0" x2="328" y2="163.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="185.0" y1="26" x2="185.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="117.3" x2="328" y2="117.3" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="232.7" y1="26" x2="232.7" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="120.8" text-anchor="end" font-size="10" fill="#5a5a5a">0.8</text>
+  <text x="232.7" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.8</text>
+  <line x1="42" y1="71.7" x2="328" y2="71.7" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="280.3" y1="26" x2="280.3" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="26.0" x2="328" y2="26.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="328.0" y1="26" x2="328.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="29.5" text-anchor="end" font-size="10" fill="#5a5a5a">1.0</text>
+  <text x="328.0" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">1.0</text>
+  <line x1="42.0" y1="300.0" x2="328.0" y2="26.0" stroke="#8a8378" stroke-width="1.3" stroke-dasharray="5 4"/>
+  <text x="75.4" y="58.0" font-size="10.5" fill="#5a5a5a">Oxi better ↑</text>
+  <text x="328" y="286.3" text-anchor="end" font-size="10.5" fill="#5a5a5a">LibreOffice better ↓</text>
+  <circle cx="308.7" cy="36.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.978 / LibreOffice 0.960</title></circle>
+  <circle cx="295.2" cy="29.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.993 / LibreOffice 0.931</title></circle>
+  <circle cx="313.5" cy="28.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.994 / LibreOffice 0.970</title></circle>
+  <circle cx="256.1" cy="74.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.893 / LibreOffice 0.849</title></circle>
+  <circle cx="285.7" cy="51.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.945 / LibreOffice 0.911</title></circle>
+  <circle cx="258.7" cy="99.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.840 / LibreOffice 0.855</title></circle>
+  <circle cx="276.7" cy="57.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.931 / LibreOffice 0.892</title></circle>
+  <circle cx="232.7" cy="75.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.892 / LibreOffice 0.800</title></circle>
+  <circle cx="242.9" cy="131.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.768 / LibreOffice 0.821</title></circle>
+  <circle cx="295.4" cy="74.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.894 / LibreOffice 0.932</title></circle>
+  <circle cx="214.9" cy="130.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.772 / LibreOffice 0.763</title></circle>
+  <circle cx="246.8" cy="100.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.838 / LibreOffice 0.830</title></circle>
+  <circle cx="209.0" cy="97.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.843 / LibreOffice 0.750</title></circle>
+  <circle cx="233.9" cy="90.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.859 / LibreOffice 0.803</title></circle>
+  <circle cx="277.1" cy="58.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.928 / LibreOffice 0.893</title></circle>
+  <circle cx="304.2" cy="81.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.879 / LibreOffice 0.950</title></circle>
+  <circle cx="213.9" cy="138.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.754 / LibreOffice 0.761</title></circle>
+  <circle cx="241.0" cy="40.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.969 / LibreOffice 0.818</title></circle>
+  <circle cx="237.6" cy="168.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.689 / LibreOffice 0.810</title></circle>
+  <circle cx="265.3" cy="80.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.880 / LibreOffice 0.868</title></circle>
+  <circle cx="270.6" cy="73.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.895 / LibreOffice 0.880</title></circle>
+  <circle cx="264.2" cy="131.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.770 / LibreOffice 0.866</title></circle>
+  <circle cx="195.2" cy="171.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.681 / LibreOffice 0.721</title></circle>
+  <circle cx="240.3" cy="89.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.860 / LibreOffice 0.816</title></circle>
+  <circle cx="221.5" cy="155.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.716 / LibreOffice 0.777</title></circle>
+  <circle cx="236.0" cy="95.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.848 / LibreOffice 0.807</title></circle>
+  <circle cx="251.6" cy="60.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.925 / LibreOffice 0.840</title></circle>
+  <circle cx="256.2" cy="116.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.802 / LibreOffice 0.849</title></circle>
+  <circle cx="216.8" cy="90.6" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.858 / LibreOffice 0.767</title></circle>
+  <circle cx="171.6" cy="140.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.749 / LibreOffice 0.672</title></circle>
+  <circle cx="237.4" cy="78.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.886 / LibreOffice 0.810</title></circle>
+  <circle cx="216.2" cy="94.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.850 / LibreOffice 0.765</title></circle>
+  <circle cx="296.6" cy="54.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.937 / LibreOffice 0.934</title></circle>
+  <circle cx="126.8" cy="138.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.754 / LibreOffice 0.578</title></circle>
+  <circle cx="224.2" cy="63.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.919 / LibreOffice 0.782</title></circle>
+  <circle cx="252.6" cy="128.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.776 / LibreOffice 0.842</title></circle>
+  <circle cx="218.0" cy="129.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.773 / LibreOffice 0.769</title></circle>
+  <circle cx="319.7" cy="73.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.897 / LibreOffice 0.983</title></circle>
+  <circle cx="177.2" cy="162.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.701 / LibreOffice 0.684</title></circle>
+  <circle cx="283.4" cy="175.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.673 / LibreOffice 0.906</title></circle>
+  <circle cx="112.8" cy="267.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.472 / LibreOffice 0.549</title></circle>
+  <circle cx="213.0" cy="150.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.729 / LibreOffice 0.759</title></circle>
+  <circle cx="224.3" cy="87.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.865 / LibreOffice 0.783</title></circle>
+  <circle cx="247.3" cy="121.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.790 / LibreOffice 0.831</title></circle>
+  <circle cx="241.8" cy="89.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.860 / LibreOffice 0.819</title></circle>
+  <circle cx="241.4" cy="79.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.884 / LibreOffice 0.818</title></circle>
+  <circle cx="251.2" cy="79.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.882 / LibreOffice 0.839</title></circle>
+  <circle cx="215.0" cy="110.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.815 / LibreOffice 0.763</title></circle>
+  <circle cx="219.5" cy="186.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.649 / LibreOffice 0.772</title></circle>
+  <circle cx="151.4" cy="194.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.630 / LibreOffice 0.629</title></circle>
+  <text x="42" y="14" font-size="12" font-weight="700" fill="#1a1a1a">vs LibreOffice — Oxi ahead on 33/50</text>
+  <text x="185" y="334" text-anchor="middle" font-size="10.5" fill="#5a5a5a">LibreOffice SSIM (per document)</text>
+  <text x="11" y="163" text-anchor="middle" font-size="10.5" fill="#5a5a5a" transform="rotate(-90 11 163)">Oxi SSIM</text>
+</svg>
+</div>
+<div>
+<svg viewBox="0 0 340 340" role="img" aria-label="Scatter plot of 50 blind Japanese documents: Oxi SSIM vs ONLYOFFICE SSIM; most points sit above the diagonal" style="width:100%;height:auto;font-family:inherit">
+  <line x1="42" y1="300.0" x2="328" y2="300.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42.0" y1="26" x2="42.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="303.5" text-anchor="end" font-size="10" fill="#5a5a5a">0.4</text>
+  <text x="42.0" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.4</text>
+  <line x1="42" y1="254.3" x2="328" y2="254.3" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="89.7" y1="26" x2="89.7" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="208.7" x2="328" y2="208.7" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="137.3" y1="26" x2="137.3" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="212.2" text-anchor="end" font-size="10" fill="#5a5a5a">0.6</text>
+  <text x="137.3" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.6</text>
+  <line x1="42" y1="163.0" x2="328" y2="163.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="185.0" y1="26" x2="185.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="117.3" x2="328" y2="117.3" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="232.7" y1="26" x2="232.7" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="120.8" text-anchor="end" font-size="10" fill="#5a5a5a">0.8</text>
+  <text x="232.7" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.8</text>
+  <line x1="42" y1="71.7" x2="328" y2="71.7" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="280.3" y1="26" x2="280.3" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="26.0" x2="328" y2="26.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="328.0" y1="26" x2="328.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="29.5" text-anchor="end" font-size="10" fill="#5a5a5a">1.0</text>
+  <text x="328.0" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">1.0</text>
+  <line x1="42.0" y1="300.0" x2="328.0" y2="26.0" stroke="#8a8378" stroke-width="1.3" stroke-dasharray="5 4"/>
+  <text x="75.4" y="58.0" font-size="10.5" fill="#5a5a5a">Oxi better ↑</text>
+  <text x="328" y="286.3" text-anchor="end" font-size="10.5" fill="#5a5a5a">ONLYOFFICE better ↓</text>
+  <circle cx="293.4" cy="36.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.978 / ONLYOFFICE 0.927</title></circle>
+  <circle cx="273.6" cy="29.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.993 / ONLYOFFICE 0.886</title></circle>
+  <circle cx="302.9" cy="28.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.994 / ONLYOFFICE 0.947</title></circle>
+  <circle cx="246.0" cy="74.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.893 / ONLYOFFICE 0.828</title></circle>
+  <circle cx="246.8" cy="51.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.945 / ONLYOFFICE 0.830</title></circle>
+  <circle cx="304.0" cy="99.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.840 / ONLYOFFICE 0.950</title></circle>
+  <circle cx="208.1" cy="57.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.931 / ONLYOFFICE 0.748</title></circle>
+  <circle cx="215.9" cy="75.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.892 / ONLYOFFICE 0.765</title></circle>
+  <circle cx="248.9" cy="131.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.768 / ONLYOFFICE 0.834</title></circle>
+  <circle cx="272.2" cy="74.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.894 / ONLYOFFICE 0.883</title></circle>
+  <circle cx="195.6" cy="130.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.772 / ONLYOFFICE 0.722</title></circle>
+  <circle cx="242.7" cy="100.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.838 / ONLYOFFICE 0.821</title></circle>
+  <circle cx="194.8" cy="97.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.843 / ONLYOFFICE 0.721</title></circle>
+  <circle cx="219.2" cy="90.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.859 / ONLYOFFICE 0.772</title></circle>
+  <circle cx="234.0" cy="58.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.928 / ONLYOFFICE 0.803</title></circle>
+  <circle cx="264.0" cy="81.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.879 / ONLYOFFICE 0.866</title></circle>
+  <circle cx="179.4" cy="138.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.754 / ONLYOFFICE 0.688</title></circle>
+  <circle cx="207.3" cy="40.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.969 / ONLYOFFICE 0.747</title></circle>
+  <circle cx="136.9" cy="168.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.689 / ONLYOFFICE 0.599</title></circle>
+  <circle cx="261.5" cy="80.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.880 / ONLYOFFICE 0.861</title></circle>
+  <circle cx="268.7" cy="73.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.895 / ONLYOFFICE 0.876</title></circle>
+  <circle cx="207.9" cy="131.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.770 / ONLYOFFICE 0.748</title></circle>
+  <circle cx="186.0" cy="171.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.681 / ONLYOFFICE 0.702</title></circle>
+  <circle cx="202.0" cy="89.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.860 / ONLYOFFICE 0.736</title></circle>
+  <circle cx="173.7" cy="155.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.716 / ONLYOFFICE 0.676</title></circle>
+  <circle cx="259.6" cy="95.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.848 / ONLYOFFICE 0.856</title></circle>
+  <circle cx="227.6" cy="60.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.925 / ONLYOFFICE 0.789</title></circle>
+  <circle cx="238.5" cy="116.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.802 / ONLYOFFICE 0.812</title></circle>
+  <circle cx="201.7" cy="90.6" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.858 / ONLYOFFICE 0.735</title></circle>
+  <circle cx="177.9" cy="140.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.749 / ONLYOFFICE 0.685</title></circle>
+  <circle cx="190.3" cy="78.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.886 / ONLYOFFICE 0.711</title></circle>
+  <circle cx="198.4" cy="94.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.850 / ONLYOFFICE 0.728</title></circle>
+  <circle cx="293.3" cy="54.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.937 / ONLYOFFICE 0.927</title></circle>
+  <circle cx="160.5" cy="138.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.754 / ONLYOFFICE 0.649</title></circle>
+  <circle cx="213.1" cy="63.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.919 / ONLYOFFICE 0.759</title></circle>
+  <circle cx="235.1" cy="128.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.776 / ONLYOFFICE 0.805</title></circle>
+  <circle cx="200.4" cy="129.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.773 / ONLYOFFICE 0.732</title></circle>
+  <circle cx="326.9" cy="73.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.897 / ONLYOFFICE 0.998</title></circle>
+  <circle cx="161.6" cy="162.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.701 / ONLYOFFICE 0.651</title></circle>
+  <circle cx="255.0" cy="175.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.673 / ONLYOFFICE 0.847</title></circle>
+  <circle cx="137.6" cy="267.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.472 / ONLYOFFICE 0.600</title></circle>
+  <circle cx="201.7" cy="150.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.729 / ONLYOFFICE 0.735</title></circle>
+  <circle cx="241.2" cy="87.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.865 / ONLYOFFICE 0.818</title></circle>
+  <circle cx="218.4" cy="121.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.790 / ONLYOFFICE 0.770</title></circle>
+  <circle cx="165.5" cy="89.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.860 / ONLYOFFICE 0.659</title></circle>
+  <circle cx="228.1" cy="79.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.884 / ONLYOFFICE 0.790</title></circle>
+  <circle cx="159.4" cy="79.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.882 / ONLYOFFICE 0.646</title></circle>
+  <circle cx="229.4" cy="110.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.815 / ONLYOFFICE 0.793</title></circle>
+  <circle cx="107.2" cy="186.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.649 / ONLYOFFICE 0.537</title></circle>
+  <circle cx="145.4" cy="194.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.630 / ONLYOFFICE 0.617</title></circle>
+  <text x="42" y="14" font-size="12" font-weight="700" fill="#1a1a1a">vs ONLYOFFICE — Oxi ahead on 40/50</text>
+  <text x="185" y="334" text-anchor="middle" font-size="10.5" fill="#5a5a5a">ONLYOFFICE SSIM (per document)</text>
+  <text x="11" y="163" text-anchor="middle" font-size="10.5" fill="#5a5a5a" transform="rotate(-90 11 163)">Oxi SSIM</text>
+</svg>
+</div>
+<div>
+<svg viewBox="0 0 340 340" role="img" aria-label="Scatter plot of 50 blind Japanese documents: Oxi SSIM vs SILURUS SSIM; most points sit above the diagonal" style="width:100%;height:auto;font-family:inherit">
+  <line x1="42" y1="300.0" x2="328" y2="300.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42.0" y1="26" x2="42.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="303.5" text-anchor="end" font-size="10" fill="#5a5a5a">0.4</text>
+  <text x="42.0" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.4</text>
+  <line x1="42" y1="254.3" x2="328" y2="254.3" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="89.7" y1="26" x2="89.7" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="208.7" x2="328" y2="208.7" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="137.3" y1="26" x2="137.3" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="212.2" text-anchor="end" font-size="10" fill="#5a5a5a">0.6</text>
+  <text x="137.3" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.6</text>
+  <line x1="42" y1="163.0" x2="328" y2="163.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="185.0" y1="26" x2="185.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="117.3" x2="328" y2="117.3" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="232.7" y1="26" x2="232.7" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="120.8" text-anchor="end" font-size="10" fill="#5a5a5a">0.8</text>
+  <text x="232.7" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">0.8</text>
+  <line x1="42" y1="71.7" x2="328" y2="71.7" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="280.3" y1="26" x2="280.3" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="42" y1="26.0" x2="328" y2="26.0" stroke="#eeeae2" stroke-width="1"/>
+  <line x1="328.0" y1="26" x2="328.0" y2="300" stroke="#eeeae2" stroke-width="1"/>
+  <text x="37" y="29.5" text-anchor="end" font-size="10" fill="#5a5a5a">1.0</text>
+  <text x="328.0" y="314" text-anchor="middle" font-size="10" fill="#5a5a5a">1.0</text>
+  <line x1="42.0" y1="300.0" x2="328.0" y2="26.0" stroke="#8a8378" stroke-width="1.3" stroke-dasharray="5 4"/>
+  <text x="75.4" y="58.0" font-size="10.5" fill="#5a5a5a">Oxi better ↑</text>
+  <text x="328" y="286.3" text-anchor="end" font-size="10.5" fill="#5a5a5a">SILURUS better ↓</text>
+  <circle cx="307.4" cy="36.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.978 / SILURUS 0.957</title></circle>
+  <circle cx="289.3" cy="29.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.993 / SILURUS 0.919</title></circle>
+  <circle cx="314.1" cy="28.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.994 / SILURUS 0.971</title></circle>
+  <circle cx="263.4" cy="74.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.893 / SILURUS 0.864</title></circle>
+  <circle cx="283.4" cy="51.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.945 / SILURUS 0.906</title></circle>
+  <circle cx="238.3" cy="99.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.840 / SILURUS 0.812</title></circle>
+  <circle cx="254.2" cy="57.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.931 / SILURUS 0.845</title></circle>
+  <circle cx="212.8" cy="75.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.892 / SILURUS 0.758</title></circle>
+  <circle cx="202.0" cy="131.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>forms: Oxi 0.768 / SILURUS 0.736</title></circle>
+  <circle cx="271.7" cy="74.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.894 / SILURUS 0.882</title></circle>
+  <circle cx="229.8" cy="130.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.772 / SILURUS 0.794</title></circle>
+  <circle cx="237.3" cy="100.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>legal: Oxi 0.838 / SILURUS 0.810</title></circle>
+  <circle cx="212.5" cy="97.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.843 / SILURUS 0.758</title></circle>
+  <circle cx="277.5" cy="90.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.859 / SILURUS 0.894</title></circle>
+  <circle cx="272.8" cy="58.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.928 / SILURUS 0.884</title></circle>
+  <circle cx="259.0" cy="81.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.879 / SILURUS 0.855</title></circle>
+  <circle cx="215.3" cy="138.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.754 / SILURUS 0.764</title></circle>
+  <circle cx="235.0" cy="40.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.969 / SILURUS 0.805</title></circle>
+  <circle cx="177.0" cy="168.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>reports: Oxi 0.689 / SILURUS 0.683</title></circle>
+  <circle cx="265.8" cy="80.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>policies: Oxi 0.880 / SILURUS 0.869</title></circle>
+  <circle cx="268.1" cy="73.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.895 / SILURUS 0.874</title></circle>
+  <circle cx="236.8" cy="131.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.770 / SILURUS 0.809</title></circle>
+  <circle cx="178.4" cy="171.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.681 / SILURUS 0.686</title></circle>
+  <circle cx="275.7" cy="89.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.860 / SILURUS 0.890</title></circle>
+  <circle cx="217.6" cy="155.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.716 / SILURUS 0.768</title></circle>
+  <circle cx="208.2" cy="95.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.848 / SILURUS 0.749</title></circle>
+  <circle cx="250.6" cy="60.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.925 / SILURUS 0.838</title></circle>
+  <circle cx="259.2" cy="116.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.802 / SILURUS 0.856</title></circle>
+  <circle cx="246.0" cy="90.6" r="3.4" fill="#264653" fill-opacity="0.55"><title>correspondence: Oxi 0.858 / SILURUS 0.828</title></circle>
+  <circle cx="240.3" cy="140.7" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.749 / SILURUS 0.816</title></circle>
+  <circle cx="252.3" cy="78.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.886 / SILURUS 0.841</title></circle>
+  <circle cx="206.4" cy="94.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.850 / SILURUS 0.745</title></circle>
+  <circle cx="297.7" cy="54.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.937 / SILURUS 0.936</title></circle>
+  <circle cx="140.9" cy="138.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.754 / SILURUS 0.608</title></circle>
+  <circle cx="261.6" cy="63.1" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.919 / SILURUS 0.861</title></circle>
+  <circle cx="251.0" cy="128.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>educational: Oxi 0.776 / SILURUS 0.839</title></circle>
+  <circle cx="232.2" cy="129.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.773 / SILURUS 0.799</title></circle>
+  <circle cx="285.8" cy="73.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.897 / SILURUS 0.912</title></circle>
+  <circle cx="170.4" cy="162.8" r="3.4" fill="#264653" fill-opacity="0.55"><title>administrative: Oxi 0.701 / SILURUS 0.669</title></circle>
+  <circle cx="243.8" cy="175.4" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.673 / SILURUS 0.823</title></circle>
+  <circle cx="112.2" cy="267.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.472 / SILURUS 0.547</title></circle>
+  <circle cx="205.5" cy="150.0" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.729 / SILURUS 0.743</title></circle>
+  <circle cx="260.8" cy="87.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.865 / SILURUS 0.859</title></circle>
+  <circle cx="221.6" cy="121.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.790 / SILURUS 0.777</title></circle>
+  <circle cx="232.1" cy="89.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>creative: Oxi 0.860 / SILURUS 0.799</title></circle>
+  <circle cx="244.7" cy="79.2" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.884 / SILURUS 0.825</title></circle>
+  <circle cx="194.4" cy="79.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.882 / SILURUS 0.720</title></circle>
+  <circle cx="192.1" cy="110.5" r="3.4" fill="#264653" fill-opacity="0.55"><title>technical: Oxi 0.815 / SILURUS 0.715</title></circle>
+  <circle cx="173.9" cy="186.3" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.649 / SILURUS 0.677</title></circle>
+  <circle cx="158.4" cy="194.9" r="3.4" fill="#264653" fill-opacity="0.55"><title>reference: Oxi 0.630 / SILURUS 0.644</title></circle>
+  <text x="42" y="14" font-size="12" font-weight="700" fill="#1a1a1a">vs SILURUS — Oxi ahead on 33/50</text>
+  <text x="185" y="334" text-anchor="middle" font-size="10.5" fill="#5a5a5a">SILURUS SSIM (per document)</text>
+  <text x="11" y="163" text-anchor="middle" font-size="10.5" fill="#5a5a5a" transform="rotate(-90 11 163)">Oxi SSIM</text>
+</svg>
+</div>
+</div>
+        <figcaption class="fnote">Top: per-engine mean — the dashed edge marks Microsoft Word itself (1.00). Bottom: every dot is one document, with Oxi on the vertical axis; dots above the dashed diagonal are documents where Oxi is closer to Word. The blind set is measured but never fixed against, so this is first-sight generalization, published as-is.</figcaption>
+      </figure>
+
       <h3>How the fidelity is earned</h3>
       <ul>
         <li><strong>100% clean-room:</strong> no disassembly or binary analysis. Specifications come only from published standards (OOXML — ISO/IEC 29500 / ECMA-376) and black-box observation of Word's output via the COM API.</li>
