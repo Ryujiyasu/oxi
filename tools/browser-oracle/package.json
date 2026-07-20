@@ -11,7 +11,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@silurus/ooxml": "^0.71.0",
+    "@silurus/ooxml": "^0.72.2",
     "vite": "^8.1.4"
   }
 }
