@@ -13976,6 +13976,29 @@ impl LayoutEngine {
         let s799_space_shrink = std::env::var("OXI_S799_DISABLE").is_err()
             && is_justified
             && !self.doc_body_has_real_cjk;
+        // S953 (2026-07-20, opt-out OXI_S953_DISABLE): a COMPAT-15 JUSTIFIED
+        // line hangs its trailing '.'/',' past the right edge — the S809 rule's
+        // modern-justified arm. DERIVED (hang_probe, Arial-12, 12-space line,
+        // 2tw margin sweeps against the RENDER-measured natural 444.14):
+        //   left-aligned flip  = natural EXACT (no shrink, no hang — matches
+        //                        the S809 compat15 control);
+        //   justified flip B* = (natural − w('.')) − quarter_cap  ⇒ the '.'
+        //                        HANGS on top of the S825 quarter-space shrink.
+        // Real doc 0018d5f3 (blind knife-edge): «…access sick notes.» — Word
+        // compresses 12 spaces by 8.54 (≤ cap 9.99) and parks the '.' at
+        // 522.12→525.45 past the 522.15 margin; Oxi missed the fit by 1.5pt
+        // without the hang (DBGFLUSH needed 8879tw vs avail+cred 8849). The
+        // first probe round mis-read "no hang" because a hand-summed natural
+        // was −3.25 off (Oxi's own width sum matches Word within 0.19) — the
+        // measured-natural lesson (S825b) again.
+        let s953_hang = s809_hang
+            || (!self.doc_body_has_real_cjk
+                && self.compat_mode >= 15
+                && self.compat_mode_explicit
+                && s799_space_shrink
+                && !s929_right_fence
+                && std::env::var("OXI_S953_DISABLE").is_err());
+        let s809_hang = s953_hang;
         // S799 cap: the no-kern justified shrink is SMALLER than KERNBREAK's 0.25
         // (a blanket 0.25 over-fits — framework {−1:20}→{−1:31}); sweep knob.
         let s799_cap: f32 = std::env::var("OXI_S799_CAP").ok()
