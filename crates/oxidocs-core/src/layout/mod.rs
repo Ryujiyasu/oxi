@@ -5713,7 +5713,7 @@ impl LayoutEngine {
                     let dc_indent = pending_dropcap.take().unwrap_or(0.0);
                     let dbg_para_start_y = cursor.cursor_y;
                     let dbg_para_start_pages = pages.len();
-                    let (para_elements, sa, final_col) = self.layout_paragraph(
+                    let (mut para_elements, sa, final_col) = self.layout_paragraph(
                         para,
                         start_x + dc_indent,
                         &mut cursor,
@@ -5776,6 +5776,141 @@ impl LayoutEngine {
                         current_column = final_col;
                         start_x = col_x_positions[current_column];
                         content_width = col_widths[current_column];
+                    }
+                    // ── S960 (default ON, opt-out OXI_S960_DISABLE): pull a
+                    // stranded keepNext chain onto the page its follower
+                    // actually reached.
+                    //
+                    // S802B already does this, but it lives inside `if do_push`
+                    // — it only fires when the PREDICTION pushed. A chain whose
+                    // pairwise checks all pass, yet overflows during real
+                    // layout, leaves its heads behind: policies__00148f8d's TOC
+                    // kept «Part 10» + «Division 1» at the p8 bottom while
+                    // «140.» flowed to p9 (both checks fit: 21.8+24.0 <= 62.6
+                    // and 27.0+12.0 <= 40.5). Word keeps all three together.
+                    //
+                    // Word's rule, MEASURED (tools/metrics/_pb_kchain_gen.py,
+                    // 68 cases over N ∈ {2,3,5,8,60} × body lines × widowControl
+                    // × start position, page capacity calibrated empirically):
+                    // the whole contiguous keepNext run moves as ONE unit — no
+                    // maximal-suffix split at any N — and it stops only when
+                    // the unit cannot fit a fresh page (N=60 fills the fresh
+                    // page to capacity and splits naturally) or would blank the
+                    // page it came from. So the cutoff is actual geometry, not
+                    // an estimate, and no page is ever left empty.
+                    let s960_added = pages.len() - pages_before;
+                    if std::env::var("OXI_S960_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && num_columns == 1
+                        && s960_added == 1
+                        && !para.style.page_break_before
+                        && std::env::var("OXI_S802").is_err()
+                    {
+                        let old_idx = pages.len() - 1;
+                        // A whole-move is the only shape this may touch: an S916
+                        // n−2/2 split or an S790 widow split leaves some of this
+                        // paragraph's elements on the old page, and pulling the
+                        // heads across such a split would break those rules.
+                        let on_old = pages[old_idx].elements.iter()
+                            .any(|e| e.paragraph_index == Some(block_idx));
+                        let on_new = para_elements.iter()
+                            .any(|e| e.paragraph_index == Some(block_idx));
+                        if !on_old && on_new {
+                            let mut pull_from = block_idx;
+                            while pull_from > 0 {
+                                match page.blocks.get(pull_from - 1) {
+                                    Some(Block::Paragraph(p))
+                                        if p.style.keep_next
+                                            && !p.style.page_break_before
+                                            && p.style.borders.is_none()
+                                            && !p.runs.iter().any(|r| r.footnote_ref.is_some())
+                                            && block_page_indices.get(pull_from - 1)
+                                                == Some(&current_page_idx) =>
+                                    {
+                                        pull_from -= 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            // v1 scope: two or more heads. A single keepNext head
+                            // is what the S635/S709/S914/S925/S934/S948 pair rules
+                            // already predict; only the TRANSITIVE case (the chain
+                            // that no pairwise check can see) is new here.
+                            let chain_len = block_idx - pull_from;
+                            let pulled_here: Vec<usize> = (pull_from..block_idx).collect();
+                            let chain_min_y = pages[old_idx].elements.iter()
+                                .filter(|e| e.paragraph_index
+                                    .is_some_and(|pi| pulled_here.contains(&pi)))
+                                .map(|e| e.y)
+                                .fold(f32::INFINITY, f32::min);
+                            // Anything unowned sitting in the vacated band (a
+                            // float, a paragraph border, a shape) would be left
+                            // behind by a paragraph_index drain — bail instead.
+                            // The chain must also be PLAIN TEXT: an image or a
+                            // box rect inside it may be positioned by machinery
+                            // that keys off the block's page (float bands,
+                            // anchors), which a bare element move would desync.
+                            let region_clean = chain_len >= 2
+                                && chain_min_y.is_finite()
+                                && !pages[old_idx].elements.iter().any(|e| {
+                                    let mine = e.paragraph_index
+                                        .is_some_and(|pi| pulled_here.contains(&pi));
+                                    (e.y >= chain_min_y - 0.1 && !mine)
+                                        || (mine
+                                            && !matches!(e.content,
+                                                LayoutContent::Text { .. }))
+                                });
+                            // Never blank the page the chain came from (Word's
+                            // own cutoff: the N=60 probe splits rather than push).
+                            let old_keeps_body = pages[old_idx].elements.iter().any(|e| {
+                                e.paragraph_index
+                                    .is_some_and(|pi| !pulled_here.contains(&pi))
+                            });
+                            let chain_advance = dbg_para_start_y - chain_min_y;
+                            let (new_top, new_ch) = s755_geom.as_ref().map_or(
+                                (start_y, effective_content_h),
+                                |g| (g.top(pages.len() + 1), g.ch(pages.len() + 1)));
+                            let fits_fresh = chain_advance > 0.0
+                                && cursor.cursor_y + chain_advance
+                                    <= new_top + new_ch + 0.05;
+                            if region_clean && old_keeps_body && fits_fresh {
+                                let mut pulled: Vec<LayoutElement> = Vec::new();
+                                pages[old_idx].elements.retain(|e| {
+                                    if e.paragraph_index
+                                        .is_some_and(|pi| pulled_here.contains(&pi))
+                                    {
+                                        pulled.push(e.clone());
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                                let chain_dy = new_top - chain_min_y;
+                                for e in pulled.iter_mut() {
+                                    e.y += chain_dy;
+                                }
+                                for e in para_elements.iter_mut() {
+                                    e.y += chain_advance;
+                                }
+                                pulled.extend(std::mem::take(&mut para_elements));
+                                para_elements = pulled;
+                                cursor.advance(chain_advance);
+                                for pi in pulled_here.iter() {
+                                    if let Some(p) = block_page_indices.get_mut(*pi) {
+                                        *p = current_page_idx + 1;
+                                    }
+                                    if let Some(y) = block_y_positions.get_mut(*pi) {
+                                        *y += chain_dy;
+                                    }
+                                }
+                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                    eprintln!("[KCHAIN-ACTUAL] pull_from={} block_idx={} \
+old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.1}",
+                                        pull_from, block_idx, old_idx, chain_advance,
+                                        chain_min_y, new_top, new_top + new_ch);
+                                }
+                            }
+                        }
                     }
                     elements.extend(para_elements);
                     if std::env::var("OXI_FN_PROBE").is_ok() && !para_fn_refs_per_page.is_empty() {
