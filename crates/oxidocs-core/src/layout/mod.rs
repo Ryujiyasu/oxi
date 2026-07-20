@@ -5505,6 +5505,41 @@ impl LayoutEngine {
                                         eprintln!("[KN635-IMG] {:?} this_h={:.1} img_h={:.1} rem={:.1} push=true",
                                             t, this_h, next_h, remaining);
                                     }
+                                    // S963b: the image arm gets the SAME transitive
+                                    // back-pull as the paragraph arm (S802B). Word
+                                    // treats a keepNext run as one unit whatever the
+                                    // terminal block is — measured for paragraphs by
+                                    // _pb_kchain_gen.py and equally true when the
+                                    // terminal is a figure. policies__00148f8d p65:
+                                    // «(6) If only one brake light» (keepNext) →
+                                    // «(7) Subrule (6) applies» (keepNext) → image;
+                                    // S959 pushed the (7)+image pair and stranded (6).
+                                    let s963b = !self.doc_body_has_real_cjk
+                                        && std::env::var("OXI_S802B_DISABLE").is_err()
+                                        && std::env::var("OXI_S963_DISABLE").is_err();
+                                    let mut pull_from = block_idx;
+                                    if s963b && !(num_columns > 1 && current_column + 1 < num_columns) {
+                                        while pull_from > 0 {
+                                            if let Some(Block::Paragraph(pp)) = page.blocks.get(pull_from - 1) {
+                                                if pp.style.keep_next
+                                                    && block_page_indices.get(pull_from - 1)
+                                                        == Some(&current_page_idx)
+                                                {
+                                                    pull_from -= 1;
+                                                    continue;
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    let pulled: Vec<LayoutElement> = if pull_from < block_idx {
+                                        let y0 = block_y_positions[pull_from] - 0.1;
+                                        let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
+                                            elements.drain(..).partition(|e| e.y < y0);
+                                        elements = keep;
+                                        moved
+                                    } else { Vec::new() };
+                                    let chain_end_old = cursor.cursor_y;
                                     if num_columns > 1 && current_column + 1 < num_columns {
                                         current_column += 1;
                                         start_x = col_x_positions[current_column];
@@ -5522,6 +5557,63 @@ impl LayoutEngine {
                                             content_height = g.ch(pages.len() + 1);
                                         }
                                         cursor.set(start_y);
+                                        // S963 (2026-07-21, opt-out OXI_S963_DISABLE):
+                                        // bring this push up to parity with the
+                                        // paragraph arm's (5445). S959 shipped with a
+                                        // bare pages.push — it never advanced
+                                        // current_page_idx, reset the column/lm2 state
+                                        // or re-pointed this block's page index, and
+                                        // because it fires BEFORE `pages_before` is
+                                        // sampled the later `pages_added` bookkeeping
+                                        // cannot compensate. Everything keyed off the
+                                        // page index (footnote attribution, float
+                                        // anchors, block_page_indices) was therefore
+                                        // one page stale for the rest of the section.
+                                        if std::env::var("OXI_S963_DISABLE").is_err() {
+                                            current_column = 0;
+                                            start_x = col_x_positions[0];
+                                            content_width = col_widths[0];
+                                            lm2_cells = 0;
+                                            current_page_idx += 1;
+                                            footnote_reserve_current = 0.0;
+                                            footnote_ids_current_page.clear();
+                                            s900_fold(&mut footnote_reserve_current,
+                                                &mut footnote_ids_current_page,
+                                                &mut s900_pending_deferred, current_page_idx);
+                                            commit_para_footnotes(&mut footnote_reserve_current,
+                                                &mut footnote_ids_current_page,
+                                                current_page_idx, block_idx);
+                                            if !pulled.is_empty() {
+                                                let min_y = pulled.iter().map(|e| e.y)
+                                                    .fold(f32::MAX, f32::min);
+                                                let dy = cursor.cursor_y - min_y;
+                                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                                    eprintln!("[S963B] pull {} blocks ({} els) dy={:.1}",
+                                                        block_idx - pull_from, pulled.len(), dy);
+                                                }
+                                                for mut e in pulled {
+                                                    e.y += dy;
+                                                    if let LayoutContent::TableBorder {
+                                                        ref mut y1, ref mut y2, .. } = e.content
+                                                    {
+                                                        *y1 += dy;
+                                                        *y2 += dy;
+                                                    }
+                                                    elements.push(e);
+                                                }
+                                                cursor.set(chain_end_old + dy);
+                                                for bi in pull_from..block_idx {
+                                                    if let Some(p) = block_page_indices.get_mut(bi) {
+                                                        *p = current_page_idx;
+                                                    }
+                                                    if let Some(y) = block_y_positions.get_mut(bi) {
+                                                        *y += dy;
+                                                    }
+                                                }
+                                            }
+                                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                                        }
                                     }
                                 }
                             }
@@ -6689,6 +6781,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // unchanged). Live 3a4f "/" figures (extent 185 → Word
                     // block 198) were leaving every downstream para 13pt high
                     // → the last 3 Phase-1 delta=-1 boundary paras.
+                    // NOTE (2026-07-21): S549's whole-cell rounding was derived on a
+                    // TYPED docGrid ("docGrid none → extent EXACTLY"), and a NO-TYPE
+                    // grid reaches it only because S571-refine makes grid_line_pitch
+                    // Some for a custom (≠360) pitch. Disabling the rounding for
+                    // no-type grids was TESTED and is WRONG: it fixes the
+                    // policies__00148f8d p45 figure but breaks its p81/p109/p110
+                    // figures (0.9957 → 0.9941), so Word does round most of them.
+                    // The p45 residual (~5.4pt) needs a real inline-image line-box
+                    // probe, not a blanket scope change.
                     let img_adv = match page.grid_line_pitch {
                         Some(p) if p > 0.1 && std::env::var("OXI_S549_DISABLE").is_err() => {
                             (img.height / p).ceil() * p
@@ -6728,6 +6829,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     prev_borders = None; // S658: an image breaks border-merge adjacency
                     prev_autospacing_numid = None; // S931: and list adjacency
                     prev_keep_next = false; // S739
+                    // S961 (2026-07-21, HELD OPT-IN OXI_S961=1, default OFF):
+                    // this arm resets every OTHER paragraph carry (style id,
+                    // borders, autospacing, keepNext) but leaves space_after, so
+                    // the paragraph BEFORE an image leaks its after-spacing onto
+                    // the paragraph AFTER it — the Table arm (6680) zeroes it.
+                    // Zeroing it here IS right for policies__00148f8d p45 (its
+                    // caption sits 8pt low without it) but WRONG for
+                    // legal__00089377 and reports__000e8acd (both PASS 1.0 →
+                    // 0.98 with it). Neither behaviour is Word's: an image-only
+                    // paragraph is a real paragraph, so Word collapses
+                    // max(prev.after, imagePara.before) above it and
+                    // max(imagePara.after, next.before) below it — and S537
+                    // discards the image paragraph's own spacing, so the IR
+                    // cannot express either boundary. The real fix carries that
+                    // paragraph's space_before/space_after onto ir::Image and
+                    // collapses at both ends; until then neither approximation
+                    // may ship.
+                    if std::env::var("OXI_S961").is_ok() {
+                        prev_space_after = 0.0;
+                    }
                 }
                 Block::UnsupportedElement(_) => {
                     // Skip unsupported elements in layout
