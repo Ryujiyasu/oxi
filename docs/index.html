@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word</title>
-<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — pixel-level SSIM 0.94 vs Microsoft Word on a 235-document Japanese corpus (an English blind benchmark is published as-is). 100% client-side: your files never leave your device.">
+<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — pixel-level SSIM 0.94 vs Microsoft Word on a 235-document Japanese corpus (frozen Japanese and English blind benchmarks are published as-is). 100% client-side: your files never leave your device.">
 <meta name="keywords" content="docx viewer, docx editor, browser, Word compatible, rendering engine, Rust, WebAssembly, wasm, open source, OOXML, layout engine, Japanese typography, kinsoku, vertical writing, LibreOffice alternative, docx online, no upload">
 <!-- Google Search Console: HTML-file verification is deployed at ./googlebdcd49fe8490af38.html
      (alternative: paste the <meta name="google-site-verification"> tag here) -->
@@ -197,6 +197,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
     <div class="stats" aria-label="Key measurements">
       <div class="stat"><div class="num">0.94</div><div class="lbl">SSIM vs Word — Japanese<br>corpus (235 docs / 410 pages)</div></div>
+      <div class="stat"><div class="num">0.83</div><div class="lbl">SSIM vs Word — Japanese blind<br>benchmark (50 never-seen docs)</div></div>
       <div class="stat"><div class="num">0.81</div><div class="lbl">SSIM vs Word — English blind<br>benchmark (50 never-seen docs)</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">parse success on real<br>government .docx files</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">bytes uploaded —<br>everything runs client-side</div></div>
@@ -299,6 +300,26 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
           </div>
         </div>
         <figcaption class="fnote">Mean SSIM per page on the Japanese corpus; the dashed edge marks Microsoft Word itself (1.00). ONLYOFFICE 9.3.1.8 and LibreOffice 26.2.1.2 were rendered headlessly to PDF on the same documents; "best on" counts the pages where each engine comes closest to Word.</figcaption>
+      </figure>
+
+      <h3>Japanese blind set — 50 never-seen documents</h3>
+      <p>The 235-document corpus above doubles as the development corpus, so it is complemented by a <strong>frozen blind benchmark</strong>: 50 Japanese documents from the public docx-corpus, frozen on 2026-07-20 <em>before</em> any measurement and never used as fix targets — every score is first-sight generalization. At its first measurement (2026-07-21) Oxi scores <strong>0.828</strong> per document, ahead of LibreOffice (<strong>0.816</strong>) on the same documents — Oxi is closer to Word on 33 of the 50 — and the page count matches Word on <strong>44/50</strong>. In a separate paragraph-level pagination check, 41 of 48 measurable documents place every matched paragraph on the same page as Word. Ground truth: Microsoft Word; LibreOffice 26.2.1.2; both rendered at 150 DPI.</p>
+
+      <figure class="chart-card">
+        <h4>Japanese blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-07-21)</h4>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 44/50 · closer to Word on 33/50 docs</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:82.8%"></div></div>
+            <div class="bval"><strong>0.828</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice<span>page count matches Word on 41/50 · v26.2.1.2</span></div>
+            <div class="btrack"><div class="bfill" style="width:81.6%"></div></div>
+            <div class="bval">0.816</div>
+          </div>
+        </div>
+        <figcaption class="fnote">First measurement of the frozen Japanese blind set. Unlike the development corpus above, nothing here has ever been a fix target. ONLYOFFICE and SILURUS have not yet been run on this set; they will be added at the next re-measurement.</figcaption>
       </figure>
 
       <h3>English corpus — measured separately, reported honestly</h3>

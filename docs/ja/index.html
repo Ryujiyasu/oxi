@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — ブラウザだけで Word と同じ見た目を実現する .docx レンダリングエンジン（オープンソース）</title>
-<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。日本語の実文書 235 件で Microsoft Word とピクセル単位に照合し SSIM 0.94 を実測。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
+<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。日本語の実文書 235 件で Microsoft Word とピクセル単位に照合し SSIM 0.94 を実測（初見文書だけの日本語・英語ブラインドベンチマークもそのまま公開）。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
 <meta name="keywords" content="docx ビューア, docx ブラウザ 表示, Word 互換, レイアウトエンジン, オープンソース, Rust, WebAssembly, wasm, 禁則処理, 縦書き, ルビ, 割注, 圏点, docx 編集 オンライン, アップロード不要, LibreOffice 代替">
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
@@ -199,6 +199,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
     <div class="stats" aria-label="主要な実測値">
       <div class="stat"><div class="num">0.94</div><div class="lbl">Word との SSIM — 日本語<br>コーパス（235 文書 / 410 ページ）</div></div>
+      <div class="stat"><div class="num">0.83</div><div class="lbl">Word との SSIM — 日本語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
       <div class="stat"><div class="num">0.81</div><div class="lbl">Word との SSIM — 英語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実文書（.docx）での<br>パース成功率</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">アップロードは 0 バイト<br>処理はすべて手元のブラウザで</div></div>
@@ -301,6 +302,26 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
           </div>
         </div>
         <figcaption class="fnote">日本語コーパスでのページ平均 SSIM。右端の破線が Microsoft Word 自身（1.00）。ONLYOFFICE 9.3.1.8 と LibreOffice 26.2.1.2 は同じ文書をヘッドレスで PDF 出力して比較。「最良」はそのエンジンが Word に一番近かったページ数です。</figcaption>
+      </figure>
+
+      <h3>日本語ブラインドセット — 初見の 50 文書</h3>
+      <p>上の 235 文書コーパスは開発にも使っているため、それを補う<strong>凍結ブラインドベンチマーク</strong>を用意しました。公開 docx-corpus の日本語 50 文書を、測定する<em>前</em>の 2026-07-20 に凍結し、修正のターゲットには一切使いません — すべてのスコアが「初見」の汎化性能です。初回測定（2026-07-21）で Oxi は文書平均 <strong>0.828</strong>。同じ文書での LibreOffice（<strong>0.816</strong>）を上回り、50 文書中 33 文書で Word により近い結果でした。ページ数は <strong>44/50</strong> で Word と一致。別枠の段落単位ページネーション検証では、測定可能な 48 文書のうち 41 文書で、対応づいた全段落が Word と同じページに配置されました。グラウンドトゥルースは Microsoft Word、比較は LibreOffice 26.2.1.2、いずれも 150 DPI で描画しています。</p>
+
+      <figure class="chart-card">
+        <h4>日本語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-07-21）</h4>
+        <div class="barchart">
+          <div class="brow">
+            <div class="blabel"><strong>Oxi</strong><span>ページ数一致 44/50 · 33/50 文書で Word に最接近</span></div>
+            <div class="btrack"><div class="bfill oxi" style="width:82.8%"></div></div>
+            <div class="bval"><strong>0.828</strong></div>
+          </div>
+          <div class="brow">
+            <div class="blabel">LibreOffice<span>ページ数一致 41/50 · v26.2.1.2</span></div>
+            <div class="btrack"><div class="bfill" style="width:81.6%"></div></div>
+            <div class="bval">0.816</div>
+          </div>
+        </div>
+        <figcaption class="fnote">凍結済み日本語ブラインドセットの初回測定。上の開発コーパスと違い、ここに並ぶ文書は一度も修正のターゲットになっていません。ONLYOFFICE と SILURUS はまだこのセットでは未測定で、次回の再測定時に追加します。</figcaption>
       </figure>
 
       <h3>英語コーパス — 別枠で測って、そのまま公開</h3>
