@@ -5482,6 +5482,49 @@ impl LayoutEngine {
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                             }
+                        } else if let Some(Block::Image(next_img)) = page.blocks.get(block_idx + 1) {
+                            // S959 (2026-07-20, opt-out OXI_S959_DISABLE): the follower is
+                            // an IMAGE. S537 replaces an image-only paragraph with a bare
+                            // Block::Image, so this lookahead — which only ever matched a
+                            // Paragraph follower — silently ignored keepNext across that
+                            // boundary. policies__00148f8d p54: «(5) A parking light…»
+                            // (keepNext) is followed by an image-only Graphics paragraph
+                            // and its caption; Word puts all three on p55, Oxi left the
+                            // text on p54 and pushed only the image. An image cannot
+                            // split, so the follower always "moves wholly" — push this
+                            // paragraph when the pair does not fit the remaining space.
+                            if std::env::var("OXI_S959_DISABLE").is_err() {
+                                let this_h = self.estimate_para_height(
+                                    para, content_width, grid_pitch, None, false, None, None);
+                                let next_h = next_img.height;
+                                let remaining = start_y + content_height - cursor.cursor_y;
+                                if this_h + next_h > remaining && this_h <= remaining {
+                                    if std::env::var("OXI_DBG_KN635").is_ok() {
+                                        let t: String = para.runs.iter()
+                                            .flat_map(|r| r.text.chars()).take(16).collect();
+                                        eprintln!("[KN635-IMG] {:?} this_h={:.1} img_h={:.1} rem={:.1} push=true",
+                                            t, this_h, next_h, remaining);
+                                    }
+                                    if num_columns > 1 && current_column + 1 < num_columns {
+                                        current_column += 1;
+                                        start_x = col_x_positions[current_column];
+                                        content_width = col_widths[current_column];
+                                        cursor.set(col_band_top);
+                                    } else {
+                                        dbg_page_push(pages.len(), 0);
+                                        pages.push(LayoutPage {
+                                            width: page.size.width,
+                                            height: page.size.height,
+                                            elements: std::mem::take(&mut elements),
+                                        });
+                                        if let Some(g) = s755_geom.as_ref() {
+                                            start_y = g.top(pages.len() + 1);
+                                            content_height = g.ch(pages.len() + 1);
+                                        }
+                                        cursor.set(start_y);
+                                    }
+                                }
+                            }
                         }
                     }
 
