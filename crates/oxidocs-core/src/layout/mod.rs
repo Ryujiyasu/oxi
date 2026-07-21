@@ -22896,6 +22896,44 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     self.line_height_inner(*fs, effective_line_spacing, effective_line_rule, metrics, para.style.snap_to_grid, row_line_pitch, true)
                                 }).fold(0.0_f32, f32::max);
                             }
+                            // S973 (2026-07-21, opt-out OXI_S973_DISABLE): a soft
+                            // break inside a CELL paragraph opens a line whether or
+                            // not anything lands on it, and Word gives that line the
+                            // paragraph's full height. With no fragments the two
+                            // folds above both yield 0, so an empty subline occupied
+                            // nothing. MEASURED (tools/metrics/_pb_cellbr_gen.py, one
+                            // document, marker rows above and below each case against
+                            // a break-free control, Times New Roman 12): a leading
+                            // break adds 13.800, a trailing one 13.830, two
+                            // consecutive 27.600, three 41.420 and two mid-paragraph
+                            // 27.600 — exactly one 13.8pt line per break, wherever it
+                            // sits. This is the sole axis separating
+                            // policies__0028d1be's one 41.67pt auto-spacing boundary
+                            // from the sixteen 27.8pt ones: `Physical Demands` opens
+                            // with a <w:br/>.
+                            if lh == 0.0 && std::env::var("OXI_S973_DISABLE").is_err() {
+                                // Same resolution as the empty-PARAGRAPH branch
+                                // above (22794): the paragraph mark's own rPr when
+                                // it names a size, else the document default.
+                                // Word gives the empty line the SAME height as a text
+                                // line of this paragraph, so take it from the
+                                // paragraph's own already-resolved fragments rather
+                                // than the paragraph mark (whose eastAsia chain would
+                                // price a Latin line at the CJK 83/64 box — measured
+                                // 15.56 against Word's 13.8 on this very boundary).
+                                lh = lines.iter().flat_map(|l| l.iter())
+                                    .filter(|(text, ..)| !text.trim().is_empty())
+                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                        let metrics = match font_family.as_deref() {
+                                            Some(ff) => self.registry.get(ff),
+                                            None => self.registry.default_metrics(),
+                                        };
+                                        self.line_height_inner(*fs, effective_line_spacing,
+                                            effective_line_rule, metrics,
+                                            para.style.snap_to_grid, row_line_pitch, true)
+                                    })
+                                    .fold(0.0_f32, f32::max);
+                            }
 
                             // Paragraph indentation: first line uses indent_left + first_line_indent
                             let line_indent = p_indent_left + if line_idx == 0 { p_first_line_indent } else { 0.0 };
