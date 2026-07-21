@@ -5411,7 +5411,24 @@ impl LayoutEngine {
                             // radius (Unit B3, KN635 trace, 519 docs): golden 0, ja
                             // 0, word_png 0; 2 EN decisions (legal only). Unscoped
                             // (rule-10 clean).
-                            if do_push && s635 && this_h <= remaining
+                            // S978 (2026-07-22, opt-out OXI_S978_DISABLE): the same
+                            // split rule in CASE A — `this_h > remaining`, i.e. the
+                            // keepNext paragraph does NOT fit the rest of the page. It
+                            // will therefore SPLIT at the page bottom, and keepNext only
+                            // requires its LAST line to sit with the follower — which a
+                            // split guarantees (the tail lands on the next page, the
+                            // follower right after it). Whole-moving it instead is what
+                            // let S802B's chain back-pull sweep a long run-in-heading
+                            // chain off the page (technical__0056b52f: 18 consecutive
+                            // keepNext paragraphs, ~440pt, dragged to the next page and
+                            // leaving p6 60% empty, where Word breaks INSIDE the chain).
+                            // Short paragraphs (< 4 lines) cannot split without a
+                            // widow/orphan, so they keep the whole-move — the S916 gate.
+                            let s978 = do_push
+                                && s635
+                                && this_h > remaining
+                                && std::env::var("OXI_S978_DISABLE").is_err();
+                            if do_push && s635 && (this_h <= remaining || s978)
                                 && std::env::var("OXI_S916_DISABLE").is_err()
                             {
                                 let para_one_line = self.estimate_para_height(
@@ -5441,8 +5458,29 @@ impl LayoutEngine {
                                     / (para_one_line - para_sb).max(0.01))
                                     .round() as usize)
                                     .max(1);
-                                if para_lines >= 4 {
-                                    s916_split = true;
+                                // S978: the S915 form subtracts only space_BEFORE, so a
+                                // paragraph carrying a direct space_after is still
+                                // under-counted (4 real lines of 11.5 with after=12 read
+                                // as round(58/23.5)=2). Case A needs the exact count, so
+                                // subtract the space_after the estimate also added. Kept
+                                // LOCAL to the new gate — S916's case-B count keeps its
+                                // measured blast radius unchanged.
+                                let para_sa = if !para.style.has_direct_after
+                                    && !p_explicit_rule
+                                {
+                                    0.0
+                                } else {
+                                    para.style.space_after.unwrap_or(0.0)
+                                };
+                                let para_lines_exact = (((this_h0 - para_sb - para_sa)
+                                    / (para_one_line - para_sb - para_sa).max(0.01))
+                                    .round() as usize)
+                                    .max(1);
+                                let eff_lines = if s978 { para_lines_exact } else { para_lines };
+                                if eff_lines >= 4 {
+                                    // S978: in case A the page-bottom break already
+                                    // splits the paragraph — no forced split point.
+                                    s916_split = !s978;
                                     do_push = false;
                                 }
                             }
