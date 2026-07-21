@@ -4084,6 +4084,21 @@ impl LayoutEngine {
                 }
                 m
             } else { Default::default() };
+        // S970 v2 (2026-07-21, default ON, opt-out OXI_S970_DISABLE): a table whose
+        // document-order TERMINAL paragraph declares keepNext keeps the FOLLOWING
+        // body paragraph with it — Word puts terminal and follower on the same page
+        // at all 15 firing points in the corpus. The v1 decided this from
+        // estimate_table_row_natural_h and over-fired badly (technical__00501ca: it
+        // summed 420.8pt for a table that lays out over ~1700pt across four page
+        // fragments, so the "fits a fresh page" guard passed for a table that fits
+        // no page at all, and 10 pages = Word became 11). This version decides from
+        // ACTUAL geometry like S960: the table must have laid out without pushing a
+        // single page (that IS "the table fits one page"), and the follower must
+        // then have whole-moved — only then are the already-emitted table elements
+        // pulled onto the follower's page. Nothing here pushes a page, so the whole
+        // page-transition state comes from the follower's own normal layout.
+        // (table_block_idx, page_idx, elem_start, elem_end, table_top)
+        let mut s970_pending: Option<(usize, usize, usize, usize, f32)> = None;
         for (block_idx, block) in page.blocks.iter().enumerate() {
             if let Ok(rng) = std::env::var("OXI_DBG_BLKTRACE") {
                 let mut it = rng.split('-');
@@ -5914,6 +5929,86 @@ impl LayoutEngine {
                     // page it came from. So the cutoff is actual geometry, not
                     // an estimate, and no page is ever left empty.
                     let s960_added = pages.len() - pages_before;
+                    // S970 v2: the table recorded just before this paragraph keeps
+                    // it (its terminal paragraph is keepNext). If the paragraph
+                    // whole-moved to a fresh page, the table must follow it — pull
+                    // the already-emitted table elements onto this page, ahead of
+                    // the paragraph. Same actual-geometry contract as S960: no page
+                    // is pushed here, the follower's own layout already performed
+                    // the transition, and the table's element range is moved intact
+                    // (borders and shading have no paragraph_index, so a range move
+                    // is the only correct one).
+                    if let Some((tbl_blk, tbl_page, e0, e1, tbl_top)) = s970_pending.take() {
+                        // The follower must have landed on the page AFTER the
+                        // table's. It gets there two ways — a natural push inside
+                        // layout_paragraph (s960_added == 1, current_page_idx not yet
+                        // advanced) or a pre-layout push by the block loop
+                        // (s960_added == 0, current_page_idx already advanced) — and
+                        // legal__0010437a takes the second. One expression covers both.
+                        if current_page_idx + s960_added == tbl_page + 1
+                            && tbl_blk + 1 == block_idx
+                            && !para.style.page_break_before
+                        {
+                            let old_idx = tbl_page;
+                            let on_old = pages[old_idx].elements.iter()
+                                .any(|e| e.paragraph_index == Some(block_idx));
+                            let on_new = para_elements.iter()
+                                .any(|e| e.paragraph_index == Some(block_idx));
+                            let range_ok = e1 <= pages[old_idx].elements.len() && e0 < e1;
+                            // Never blank the page the table came from.
+                            let old_keeps_body = range_ok && pages[old_idx].elements.iter()
+                                .enumerate()
+                                .any(|(i, e)| (i < e0 || i >= e1)
+                                    && e.paragraph_index.is_some());
+                            let (new_top, new_ch) = s755_geom.as_ref().map_or(
+                                (start_y, effective_content_h),
+                                |g| (g.top(tbl_page + 2), g.ch(tbl_page + 2)));
+                            // The table's ACTUAL extent on the old page. S960 could
+                            // use `dbg_para_start_y - chain_top` because its follower
+                            // was still on the old page when that cursor was sampled;
+                            // here the follower may already have been pre-pushed, so
+                            // that difference is meaningless (measured -35.6 on
+                            // legal__0010437a). Measure the emitted elements instead.
+                            let tbl_advance = if range_ok {
+                                pages[old_idx].elements[e0..e1].iter()
+                                    .map(|e| e.y + e.height)
+                                    .fold(f32::NEG_INFINITY, f32::max) - tbl_top
+                            } else { 0.0 };
+                            let fits_fresh = tbl_advance > 0.0
+                                && cursor.cursor_y + tbl_advance <= new_top + new_ch + 0.05;
+                            if !on_old && on_new && range_ok && old_keeps_body && fits_fresh {
+                                let mut pulled: Vec<LayoutElement> =
+                                    pages[old_idx].elements.drain(e0..e1).collect();
+                                let dy = new_top - tbl_top;
+                                for e in pulled.iter_mut() {
+                                    e.y += dy;
+                                    if let LayoutContent::TableBorder {
+                                        ref mut y1, ref mut y2, .. } = e.content
+                                    {
+                                        *y1 += dy;
+                                        *y2 += dy;
+                                    }
+                                }
+                                for e in para_elements.iter_mut() {
+                                    e.y += tbl_advance;
+                                }
+                                pulled.extend(std::mem::take(&mut para_elements));
+                                para_elements = pulled;
+                                cursor.advance(tbl_advance);
+                                if let Some(pi) = block_page_indices.get_mut(tbl_blk) {
+                                    *pi = tbl_page + 1;
+                                }
+                                if let Some(y) = block_y_positions.get_mut(tbl_blk) {
+                                    *y += dy;
+                                }
+                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                    eprintln!("[S970] pull table blk={} els={}..{} \
+tbl_top={:.1} advance={:.1} new_top={:.1}",
+                                        tbl_blk, e0, e1, tbl_top, tbl_advance, new_top);
+                                }
+                            }
+                        }
+                    }
                     if std::env::var("OXI_S960_DISABLE").is_err()
                         && !self.doc_body_has_real_cjk
                         && num_columns == 1
@@ -6242,118 +6337,6 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     cursor.advance(prev_space_after);
                     prev_space_after = 0.0;
 
-                    // S970 (2026-07-21, HELD OPT-IN OXI_S970=1, default OFF): a table whose
-                    // document-order TERMINAL paragraph declares keepNext keeps the
-                    // FOLLOWING body paragraph with it, so when the pair does not
-                    // fit the whole table moves rather than the follower alone.
-                    // legal__0010437a Form 63: the terminal cell paragraph
-                    // "Taken and acknowledged..." is keepNext and its follower is
-                    // the body "[Form 63 amended...]"; Word moves the table to the
-                    // next page and leaves the (keepNext=0) heading alone on a
-                    // near-empty one, while Oxi kept the table with the heading and
-                    // pushed only the amendment. Over the 15 firing points in the
-                    // corpus Word puts terminal and follower on the same page 15/15.
-                    // Cutoffs are S960's, measured: the unit must fit a fresh page,
-                    // and the page it leaves must keep body content.
-                    // HELD because the fit test uses ESTIMATES and they are not
-                    // good enough: on technical__00501ca the row estimator sums
-                    // 420.8pt for a table that actually lays out over ~1700pt
-                    // (four page fragments), so the fresh-page guard passes and a
-                    // splitting table gets pushed — 10 pages (= Word) becomes 11.
-                    // legal__0010437a does improve (0.8998 -> 0.9455, pcd -3 -> -2)
-                    // and educational__00161422 holds PASS 1.0, so the RULE is
-                    // right; it needs S960's actual-geometry form (lay the table,
-                    // then pull it when the follower ends up separated) instead of
-                    // an estimate — exactly why the estimate-based S802 over-fired.
-                    if std::env::var("OXI_S970").is_ok()
-                        && !self.doc_body_has_real_cjk
-                        && num_columns == 1
-                        && table.style.position.is_none()
-                        && !elements.is_empty()
-                    {
-                        // The terminal paragraph is the LAST one in document order
-                        // (last row, last cell). Widening this to "any cell of the
-                        // last row" is wrong: technical__002c1ffa has a table where
-                        // only a NON-terminal cell carries keepNext.
-                        let terminal_kn = table.rows.last()
-                            .and_then(|r| r.cells.last())
-                            .and_then(|c| c.blocks.iter().rev().find_map(|b| match b {
-                                Block::Paragraph(pp) => Some(pp.style.keep_next),
-                                _ => None,
-                            }))
-                            .unwrap_or(false);
-                        if terminal_kn {
-                            if let Some(Block::Paragraph(follower)) =
-                                page.blocks.get(block_idx + 1)
-                            {
-                                let cw_est = self.resolve_table_col_widths(table, content_width);
-                                let dp = table.style.default_cell_margins.as_ref();
-                                let (pl, pr, pt, pb) = (
-                                    dp.and_then(|m| m.left).unwrap_or(5.4),
-                                    dp.and_then(|m| m.right).unwrap_or(5.4),
-                                    dp.and_then(|m| m.top).unwrap_or(0.0),
-                                    dp.and_then(|m| m.bottom).unwrap_or(0.0),
-                                );
-                                let mut tbl_h: f32 = 0.0;
-                                for row in &table.rows {
-                                    let nat = self.estimate_table_row_natural_h(
-                                        row, &cw_est, pl, pr, pt, pb, table,
-                                        page.grid_line_pitch, page.grid_char_pitch, None);
-                                    tbl_h += row.height.map(|th| match row.height_rule.as_deref() {
-                                        Some("exact") => th,
-                                        _ => (th + self.rowbox2_trh_bw(table, row)).max(nat),
-                                    }).unwrap_or(nat);
-                                }
-                                // The follower's first LEGAL fragment (S960's measured
-                                // terminal requirement): one line, or two when
-                                // widowControl forbids leaving a single line behind.
-                                let f_all = self.estimate_para_height(
-                                    follower, content_width, grid_pitch, None, false, None, None);
-                                let f_one = self.estimate_para_height(
-                                    follower, 1.0e6, grid_pitch, None, false, None, None);
-                                let f_need = if follower.style.widow_control {
-                                    (f_one * 2.0).min(f_all)
-                                } else {
-                                    f_one.min(f_all)
-                                };
-                                let need = tbl_h
-                                    + follower.style.space_before.unwrap_or(0.0) + f_need;
-                                let page_bottom = start_y + content_height;
-                                if cursor.cursor_y + need > page_bottom
-                                    && start_y + need <= page_bottom
-                                {
-                                    if std::env::var("OXI_DBG_KN635").is_ok() {
-                                        eprintln!("[S970] block_idx={} tbl_h={:.1} f_need={:.1} cursor={:.1} bottom={:.1} push=true",
-                                            block_idx, tbl_h, f_need, cursor.cursor_y, page_bottom);
-                                    }
-                                    dbg_page_push(pages.len(), 0);
-                                    pages.push(LayoutPage {
-                                        width: page.size.width,
-                                        height: page.size.height,
-                                        elements: std::mem::take(&mut elements),
-                                    });
-                                    if let Some(g) = s755_geom.as_ref() {
-                                        start_y = g.top(pages.len() + 1);
-                                        content_height = g.ch(pages.len() + 1);
-                                    }
-                                    cursor.set(start_y);
-                                    current_column = 0;
-                                    start_x = col_x_positions[0];
-                                    content_width = col_widths[0];
-                                    lm2_cells = 0;
-                                    current_page_idx += 1;
-                                    footnote_reserve_current = 0.0;
-                                    footnote_ids_current_page.clear();
-                                    s900_fold(&mut footnote_reserve_current,
-                                        &mut footnote_ids_current_page,
-                                        &mut s900_pending_deferred, current_page_idx);
-                                    *block_page_indices.last_mut().unwrap() = current_page_idx;
-                                    *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
-                                }
-                            }
-                        }
-                    }
-
                     let is_floating = table.style.position.is_some();
                     let saved_cursor_y = cursor.cursor_y;
 
@@ -6511,6 +6494,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         footnote_sep_alloc(first)
                     } else { 0.0 };
                     let mut s740_fn_pages: Vec<Vec<u32>> = Vec::new();
+                    let s970_pages_before_tbl = pages.len();
                     let table_elements = self.layout_table(
                         table,
                         start_x,
@@ -6603,7 +6587,51 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     while floating_tables_per_page.len() <= current_page_idx {
                         floating_tables_per_page.push(Vec::new());
                     }
+                    let s970_elem_start = elements.len();
                     elements.extend(table_elements);
+                    // S970 v2: remember this table's element range when it is a
+                    // candidate. `pages.len() == pages_before_tbl` is the actual
+                    // one-page predicate — a table that spanned pages pushed at
+                    // least one, and Word does not whole-move a splitting table.
+                    s970_pending = None;
+                    if std::env::var("OXI_S970_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && num_columns == 1
+                        && !is_floating
+                        && pages.len() == s970_pages_before_tbl
+                        && !elements.is_empty()
+                    {
+                        // The terminal paragraph is the LAST one in document order
+                        // (last row, last cell). Widening this to "any cell of the
+                        // last row" is wrong: technical__002c1ffa has a table whose
+                        // keepNext sits on a NON-terminal cell.
+                        let terminal_kn = table.rows.last()
+                            .and_then(|r| r.cells.last())
+                            .and_then(|c| c.blocks.iter().rev().find_map(|b| match b {
+                                Block::Paragraph(pp) => Some(pp.style.keep_next),
+                                _ => None,
+                            }))
+                            .unwrap_or(false);
+                        // v1 scope: plain tables only. A cell footnote would need its
+                        // S740 ids and reserve moved between pages, and an anchored
+                        // drawing carries page state in another registry.
+                        let plain = !table.rows.iter().any(|r| r.cells.iter().any(|c|
+                            c.blocks.iter().any(|b| match b {
+                                Block::Paragraph(pp) => pp.runs.iter()
+                                    .any(|rn| rn.footnote_ref.is_some()),
+                                _ => true,
+                            })));
+                        if terminal_kn && plain
+                            && matches!(page.blocks.get(block_idx + 1), Some(Block::Paragraph(_)))
+                        {
+                            let top = elements[s970_elem_start..].iter()
+                                .map(|e| e.y).fold(f32::INFINITY, f32::min);
+                            if top.is_finite() {
+                                s970_pending = Some((block_idx, current_page_idx,
+                                    s970_elem_start, elements.len(), top));
+                            }
+                        }
+                    }
                     if is_body_floating {
                         floating_tables_per_page[current_page_idx]
                             .push((candidate_y_top, candidate_y_bottom));
