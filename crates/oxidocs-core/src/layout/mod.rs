@@ -11764,8 +11764,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             {
                 para_font_size / 16.0
             } else { 0.0 };
+            // S967 (2026-07-21, opt-out OXI_S967_DISABLE): OOXML coordinates are
+            // twips, so a page-bottom overshoot below HALF A TWIP is not a real
+            // overshoot. S926 already grants exactly this tolerance to the orphan
+            // lookahead (12120); the natural comparison kept a raw float `>`, so
+            // policies__00148f8d wi=906 broke on over=+0.013pt (0.26 twip) where
+            // Word keeps the line. Census over all 200 EN corpus documents:
+            // only THREE natural breaks fall in 0 < over < 0.025 (this one, plus
+            // legal__0010437a pi=415 and technical__002c6778 pi=121, both in
+            // already-failing documents) — so the blast radius is three lines,
+            // and round-to-twip and half-twip tolerance agree at all of them.
+            // Same constant as S926: no second magic number.
+            let s967_tol = if std::env::var("OXI_S967_DISABLE").is_ok() { 0.0 } else { 0.025 };
             let mut natural_needs_page_break = if in_textbox || s832_trailing_empty { false } else {
-                cursor.cursor_y + break_threshold - s835_fn_relief > effective_break_bottom
+                cursor.cursor_y + break_threshold - s835_fn_relief > effective_break_bottom + s967_tol
             };
             // S916 (2026-07-18, opt-out OXI_S916_DISABLE): force the split at
             // lines.len()-2 for a multi-line keepNext paragraph (the keepNext
