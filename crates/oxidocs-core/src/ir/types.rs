@@ -1171,6 +1171,11 @@ pub struct TabStop {
     /// Leader character
     #[serde(default)]
     pub leader: Option<String>,
+    /// S977: this entry is a `<w:tab w:val="clear"/>` — it REMOVES an inherited
+    /// stop at `position` rather than being a stop itself (ECMA-376
+    /// §17.3.1.38). Never reaches layout: the merge drops it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

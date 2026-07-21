@@ -2193,8 +2193,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     style.num_ilvl = ds.num_ilvl;
                 }
             }
-            // Inherit tab stops from style
-            if style.tab_stops.is_empty() && !ds.tab_stops.is_empty() {
+            // Inherit tab stops from style. S977: the direct pPr's <w:tabs>
+            // ADDS to the style's set (and its w:val="clear" entries remove
+            // inherited stops) — the old replace-if-empty rule made a paragraph
+            // that merely clears one inherited stop lose all the others, and
+            // turned the cleared position into a phantom LEFT stop.
+            if std::env::var("OXI_S977_DISABLE").is_err() {
+                style.tab_stops = super::styles::merge_tab_stops(&style.tab_stops, &ds.tab_stops);
+            } else if style.tab_stops.is_empty() && !ds.tab_stops.is_empty() {
                 style.tab_stops = ds.tab_stops.clone();
             }
             // Inherit paragraph borders from style
@@ -2309,6 +2315,13 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 style.word_wrap = false;
             }
         }
+    }
+
+    // S977: a `w:val="clear"` directive is never a stop. The merge above drops
+    // it, but a paragraph with no resolvable pStyle skips that merge — strip
+    // here so a removal directive can never reach layout as a phantom LEFT stop.
+    if std::env::var("OXI_S977_DISABLE").is_err() {
+        style.tab_stops.retain(|t| !t.clear);
     }
 
     // Apply docDefaults fallback (field-by-field merge per ECMA-376 priority)
@@ -3492,6 +3505,7 @@ pub(crate) fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>
                     let mut position: f32 = 0.0;
                     let mut alignment = TabStopAlignment::Left;
                     let mut leader: Option<String> = None;
+                    let mut clear = false;
 
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
@@ -3502,6 +3516,8 @@ pub(crate) fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>
                                 position = val.parse::<f32>().unwrap_or(0.0) / 20.0;
                             }
                             "val" => {
+                                // S977: "clear" is a REMOVAL directive, not a stop.
+                                clear = val.as_ref() == "clear";
                                 alignment = match val.as_ref() {
                                     "center" => TabStopAlignment::Center,
                                     "right" | "end" => TabStopAlignment::Right,
@@ -3523,6 +3539,7 @@ pub(crate) fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>
                         position,
                         alignment,
                         leader,
+                        clear,
                     });
                 }
             }

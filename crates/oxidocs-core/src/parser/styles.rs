@@ -305,7 +305,10 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if child.borders.is_none() {
         child.borders = parent.borders.clone();
     }
-    if child.tab_stops.is_empty() {
+    if std::env::var("OXI_S977_DISABLE").is_err() {
+        // S977: accumulate through the basedOn chain instead of replacing.
+        child.tab_stops = merge_tab_stops(&child.tab_stops, &parent.tab_stops);
+    } else if child.tab_stops.is_empty() {
         child.tab_stops = parent.tab_stops.clone();
     }
     if child.default_run_style.is_none() {
@@ -538,6 +541,28 @@ fn parse_para_properties_block(reader: &mut Reader<&[u8]>) -> Result<ParagraphSt
     }
 
     Ok(style)
+}
+
+/// S977: merge a child's tab stops into an inherited list. ECMA-376
+/// §17.3.1.38: custom tab stops ACCUMULATE through the style hierarchy (they do
+/// not replace), and `<w:tab w:val="clear" w:pos="N"/>` removes the inherited
+/// stop at N. The child's entry wins at an equal position. Clear directives
+/// never survive, so layout only ever sees real stops.
+pub(crate) fn merge_tab_stops(child: &[crate::ir::TabStop], parent: &[crate::ir::TabStop]) -> Vec<crate::ir::TabStop> {
+    let same = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let mut out: Vec<crate::ir::TabStop> = parent.iter().filter(|t| !t.clear).cloned().collect();
+    for c in child {
+        out.retain(|t| !same(t.position, c.position));
+        if !c.clear {
+            out.push(c.clone());
+        }
+    }
+    out.sort_by(|a, b| {
+        a.position
+            .partial_cmp(&b.position)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
 }
 
 /// S976: read a CT_OnOff element's value. The element being present IS the
