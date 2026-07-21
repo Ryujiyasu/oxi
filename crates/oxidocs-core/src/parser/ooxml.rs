@@ -1103,6 +1103,15 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             && std::env::var("OXI_S537_DISABLE").is_err();
                         // S965: capture the host paragraph's spacing before
                         // pr.paragraph may move (same reason as S898a below).
+                        // S971: the host paragraph itself (runs dropped — only the
+                        // style drives an empty line's height).
+                        let s971_host: Option<crate::ir::Paragraph> = if image_only {
+                            let mut h = pr.paragraph.clone();
+                            h.runs.clear();
+                            Some(h)
+                        } else {
+                            None
+                        };
                         let s965_sp: Option<(f32, f32)> = if image_only
                             && std::env::var("OXI_S965_DISABLE").is_err()
                         {
@@ -1219,6 +1228,11 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                         if i == 0 { before } else { 0.0 };
                                     img.paragraph_space_after =
                                         if i == last { after } else { 0.0 };
+                                    // S971: keep the host's line metrics reachable.
+                                    if std::env::var("OXI_S971_DISABLE").is_err() {
+                                        img.host_paragraph =
+                                            s971_host.clone().map(Box::new);
+                                    }
                                 }
                             }
                         }
@@ -5107,6 +5121,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
+                    host_paragraph: None,
             data,
             width,
             height,
@@ -5271,6 +5286,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
+                    host_paragraph: None,
             data: Vec::new(),
             width,
             height,
@@ -5604,6 +5620,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             image: Some(Image {
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
+                    host_paragraph: None,
                 data: Vec::new(),
                 width: group_width,
                 height: group_height,
@@ -5655,6 +5672,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
+                    host_paragraph: None,
             data,
             width,
             height,
@@ -5719,6 +5737,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         let placeholder = Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
+                    host_paragraph: None,
             data: Vec::new(),
             width,
             height,
@@ -5858,6 +5877,7 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
+                    host_paragraph: None,
             data,
             width,
             height,
@@ -7288,7 +7308,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let pr = parse_paragraph(reader, ctx, styles, false)?;
+                        let mut pr = parse_paragraph(reader, ctx, styles, false)?;
                         // S486: preserve in-cell floating text boxes/shapes
                         // (previously discarded). S488: stamp each preserved
                         // text box with its anchor paragraph's index within THIS
@@ -7341,6 +7361,8 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                             && !pr.inline_images.is_empty()
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && pr.math_blocks.is_empty();
+                        // S971: snapshot the host before it may be moved below.
+                        let s971_cell_host = pr.paragraph.clone();
                         // S838: visual-only cell para (inline vector group, no
                         // text/images/math) -> height-only placeholder Image.
                         let s838_visual_only = std::env::var("OXI_S838_DISABLE").is_err()
@@ -7352,6 +7374,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                             blocks.push(Block::Image(crate::ir::Image {
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,
+                    host_paragraph: None,
                                 data: Vec::new(),
                                 width: s838_cx,
                                 height: s838_cy,
@@ -7382,6 +7405,18 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                         if std::env::var("OXI_S331_DISABLE").is_err() {
                             for mb in pr.math_blocks {
                                 blocks.push(Block::Math(mb));
+                            }
+                            // S971: an image-only CELL paragraph is dropped by S536
+                            // for the same reason as the body's S537, so carry its
+                            // line metrics on the image (see ir::Image).
+                            if image_only && std::env::var("OXI_S971_DISABLE").is_err() {
+                                let mut host = s971_cell_host.clone();
+                                host.runs.clear();
+                                for b in pr.inline_images.iter_mut() {
+                                    if let Block::Image(img) = b {
+                                        img.host_paragraph = Some(Box::new(host.clone()));
+                                    }
+                                }
                             }
                             blocks.extend(pr.inline_images);
                             // S331b (2026-05-26): also forward floating (anchored)

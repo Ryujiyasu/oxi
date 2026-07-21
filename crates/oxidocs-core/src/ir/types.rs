@@ -699,6 +699,14 @@ pub struct Image {
     pub paragraph_space_before: f32,
     #[serde(default)]
     pub paragraph_space_after: f32,
+    /// S971: the image-only HOST paragraph, runs removed. Word's inline-image
+    /// line is `max(host paragraph line, image extent)` (measured — see
+    /// tools/metrics/_pb_imgline_gen.py), and S536/S537 drop that paragraph, so
+    /// without it the line is the extent alone and a small image (a spacer gif)
+    /// under-counts by the whole line. Only the STYLE is needed; the parser
+    /// cannot compute a line height because it has no font metrics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_paragraph: Option<Box<Paragraph>>,
 }
 
 /// Image crop rectangle (percentages from each edge)

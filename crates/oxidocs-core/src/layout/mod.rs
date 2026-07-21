@@ -6953,11 +6953,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // figures (0.9957 → 0.9941), so Word does round most of them.
                     // The p45 residual (~5.4pt) needs a real inline-image line-box
                     // probe, not a blanket scope change.
+                    let img_line = self.s971_image_line_h(img, content_width, page.grid_line_pitch);
                     let img_adv = match page.grid_line_pitch {
                         Some(p) if p > 0.1 && std::env::var("OXI_S549_DISABLE").is_err() => {
-                            (img.height / p).ceil() * p
+                            (img_line / p).ceil() * p
                         }
-                        _ => img.height,
+                        _ => img_line,
                     };
                     // S965 (2026-07-21, opt-out OXI_S965_DISABLE): an image-only
                     // paragraph is a real paragraph, so its spacing collapses with
@@ -20039,12 +20040,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // border at 596.11 ≈ image_top + 17 cells; Oxi resumed
                             // the body at image_top + 289.5 exactly, 1 grid line
                             // early → the 変形 p35/36 −1s).
+                            let img_line = self.s971_image_line_h(img, 1.0e6, row_line_pitch);
                             let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
                                 match row_line_pitch {
-                                    Some(p) if p > 0.0 => (img.height / p).ceil() * p,
-                                    _ => img.height,
+                                    Some(p) if p > 0.0 => (img_line / p).ceil() * p,
+                                    _ => img_line,
                                 }
-                            } else { img.height };
+                            } else { img_line };
                             cell_content_h += img_h_eff;
                             cell_content_h_visual += img_h_eff;
                         }
@@ -23551,12 +23553,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }));
                     // S715: typed-grid cell image line snaps to whole grid cells
                     // (mirrors the pre-pass arm; see comment there).
+                    let img_line = self.s971_image_line_h(img, 1.0e6, row_line_pitch);
                     let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
                         match row_line_pitch {
-                            Some(p) if p > 0.0 => (img.height / p).ceil() * p,
-                            _ => img.height,
+                            Some(p) if p > 0.0 => (img_line / p).ceil() * p,
+                            _ => img_line,
                         }
-                    } else { img.height };
+                    } else { img_line };
                     content_h += img_h_eff;
                     prev_cell_sa = None;
                     s939_prev_r = None;
@@ -25882,6 +25885,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     /// this fix but was blocked by derive_oxi_heights metric noise,
     /// resolved in S221; S222 re-applies. Caller layers trHeight semantic
     /// and zero-fallback.
+    /// S971 (2026-07-21, opt-out OXI_S971_DISABLE): the height of the LINE that
+    /// holds an inline image. Word composes it as `max(host paragraph line,
+    /// image extent)` — measured over three extents against an empty-host
+    /// control (tools/metrics/_pb_imgline_gen.py): a 7.5pt image in a
+    /// Times-New-Roman-12 cell adds nothing to the empty line, an 18pt image
+    /// adds 4.08 and a 321.75pt image adds 307.97, which solve to a host line of
+    /// 13.78/13.92 against TNR12's hhea 13.799 (within one 0.12pt device
+    /// quantum). `extent` alone, `host + extent`, and `max(ascent, extent) +
+    /// descent` are all rejected by the same three points. Only images SHORTER
+    /// than their host line change, so the S536 calibration on 3a4f's 321.75pt
+    /// calendar is untouched.
+    fn s971_image_line_h(&self, img: &crate::ir::Image, width: f32,
+                         grid_pitch: Option<f32>) -> f32 {
+        let ext = img.height;
+        if std::env::var("OXI_S971_DISABLE").is_ok() {
+            return ext;
+        }
+        match img.host_paragraph.as_deref() {
+            Some(host) => {
+                let full = self.estimate_para_height(
+                    host, width, grid_pitch, None, false, None, None);
+                let sp = img.paragraph_space_before + img.paragraph_space_after;
+                ext.max((full - sp).max(0.0))
+            }
+            None => ext,
+        }
+    }
+
     fn estimate_table_row_natural_h(
         &self,
         row: &TableRow,
