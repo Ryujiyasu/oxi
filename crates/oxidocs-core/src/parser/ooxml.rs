@@ -7495,8 +7495,22 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 if let Block::Paragraph(prev) = &mut before[i - 1] {
                     prev.style.after_autospacing = false;
                 }
-                if let Block::Paragraph(next) = &mut after[0] {
-                    next.style.before_autospacing = false;
+                // S972 (2026-07-21, opt-out OXI_S972_DISABLE): clear only ONE
+                // side. Suppressing both leaves the boundary with the explicit
+                // values, which S427 then collapses to 5pt — but Word keeps one
+                // auto there. MEASURED over every direct-auto adjacency in
+                // policies__0028d1be (17 boundaries readable in its Word PDF):
+                // 16 of them sit at 13.92-14.07pt above one line, i.e. exactly
+                // ONE auto, whatever the previous paragraph's break count
+                // (0, 1, 4, 6, 7, 8, 9 and 13 all appear). The lone 27.87pt
+                // outlier shares its break count (9) with a 14pt boundary, so
+                // it is not explained by this rule and is left alone. Since both
+                // sides resolve to the same 14.0, which side survives cannot be
+                // distinguished and does not matter: max(14, explicit) = 14.
+                if std::env::var("OXI_S972_DISABLE").is_ok() {
+                    if let Block::Paragraph(next) = &mut after[0] {
+                        next.style.before_autospacing = false;
+                    }
                 }
             }
         }
