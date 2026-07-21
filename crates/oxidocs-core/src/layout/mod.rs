@@ -6242,6 +6242,118 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     cursor.advance(prev_space_after);
                     prev_space_after = 0.0;
 
+                    // S970 (2026-07-21, HELD OPT-IN OXI_S970=1, default OFF): a table whose
+                    // document-order TERMINAL paragraph declares keepNext keeps the
+                    // FOLLOWING body paragraph with it, so when the pair does not
+                    // fit the whole table moves rather than the follower alone.
+                    // legal__0010437a Form 63: the terminal cell paragraph
+                    // "Taken and acknowledged..." is keepNext and its follower is
+                    // the body "[Form 63 amended...]"; Word moves the table to the
+                    // next page and leaves the (keepNext=0) heading alone on a
+                    // near-empty one, while Oxi kept the table with the heading and
+                    // pushed only the amendment. Over the 15 firing points in the
+                    // corpus Word puts terminal and follower on the same page 15/15.
+                    // Cutoffs are S960's, measured: the unit must fit a fresh page,
+                    // and the page it leaves must keep body content.
+                    // HELD because the fit test uses ESTIMATES and they are not
+                    // good enough: on technical__00501ca the row estimator sums
+                    // 420.8pt for a table that actually lays out over ~1700pt
+                    // (four page fragments), so the fresh-page guard passes and a
+                    // splitting table gets pushed — 10 pages (= Word) becomes 11.
+                    // legal__0010437a does improve (0.8998 -> 0.9455, pcd -3 -> -2)
+                    // and educational__00161422 holds PASS 1.0, so the RULE is
+                    // right; it needs S960's actual-geometry form (lay the table,
+                    // then pull it when the follower ends up separated) instead of
+                    // an estimate — exactly why the estimate-based S802 over-fired.
+                    if std::env::var("OXI_S970").is_ok()
+                        && !self.doc_body_has_real_cjk
+                        && num_columns == 1
+                        && table.style.position.is_none()
+                        && !elements.is_empty()
+                    {
+                        // The terminal paragraph is the LAST one in document order
+                        // (last row, last cell). Widening this to "any cell of the
+                        // last row" is wrong: technical__002c1ffa has a table where
+                        // only a NON-terminal cell carries keepNext.
+                        let terminal_kn = table.rows.last()
+                            .and_then(|r| r.cells.last())
+                            .and_then(|c| c.blocks.iter().rev().find_map(|b| match b {
+                                Block::Paragraph(pp) => Some(pp.style.keep_next),
+                                _ => None,
+                            }))
+                            .unwrap_or(false);
+                        if terminal_kn {
+                            if let Some(Block::Paragraph(follower)) =
+                                page.blocks.get(block_idx + 1)
+                            {
+                                let cw_est = self.resolve_table_col_widths(table, content_width);
+                                let dp = table.style.default_cell_margins.as_ref();
+                                let (pl, pr, pt, pb) = (
+                                    dp.and_then(|m| m.left).unwrap_or(5.4),
+                                    dp.and_then(|m| m.right).unwrap_or(5.4),
+                                    dp.and_then(|m| m.top).unwrap_or(0.0),
+                                    dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                                );
+                                let mut tbl_h: f32 = 0.0;
+                                for row in &table.rows {
+                                    let nat = self.estimate_table_row_natural_h(
+                                        row, &cw_est, pl, pr, pt, pb, table,
+                                        page.grid_line_pitch, page.grid_char_pitch, None);
+                                    tbl_h += row.height.map(|th| match row.height_rule.as_deref() {
+                                        Some("exact") => th,
+                                        _ => (th + self.rowbox2_trh_bw(table, row)).max(nat),
+                                    }).unwrap_or(nat);
+                                }
+                                // The follower's first LEGAL fragment (S960's measured
+                                // terminal requirement): one line, or two when
+                                // widowControl forbids leaving a single line behind.
+                                let f_all = self.estimate_para_height(
+                                    follower, content_width, grid_pitch, None, false, None, None);
+                                let f_one = self.estimate_para_height(
+                                    follower, 1.0e6, grid_pitch, None, false, None, None);
+                                let f_need = if follower.style.widow_control {
+                                    (f_one * 2.0).min(f_all)
+                                } else {
+                                    f_one.min(f_all)
+                                };
+                                let need = tbl_h
+                                    + follower.style.space_before.unwrap_or(0.0) + f_need;
+                                let page_bottom = start_y + content_height;
+                                if cursor.cursor_y + need > page_bottom
+                                    && start_y + need <= page_bottom
+                                {
+                                    if std::env::var("OXI_DBG_KN635").is_ok() {
+                                        eprintln!("[S970] block_idx={} tbl_h={:.1} f_need={:.1} cursor={:.1} bottom={:.1} push=true",
+                                            block_idx, tbl_h, f_need, cursor.cursor_y, page_bottom);
+                                    }
+                                    dbg_page_push(pages.len(), 0);
+                                    pages.push(LayoutPage {
+                                        width: page.size.width,
+                                        height: page.size.height,
+                                        elements: std::mem::take(&mut elements),
+                                    });
+                                    if let Some(g) = s755_geom.as_ref() {
+                                        start_y = g.top(pages.len() + 1);
+                                        content_height = g.ch(pages.len() + 1);
+                                    }
+                                    cursor.set(start_y);
+                                    current_column = 0;
+                                    start_x = col_x_positions[0];
+                                    content_width = col_widths[0];
+                                    lm2_cells = 0;
+                                    current_page_idx += 1;
+                                    footnote_reserve_current = 0.0;
+                                    footnote_ids_current_page.clear();
+                                    s900_fold(&mut footnote_reserve_current,
+                                        &mut footnote_ids_current_page,
+                                        &mut s900_pending_deferred, current_page_idx);
+                                    *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                    *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                                }
+                            }
+                        }
+                    }
+
                     let is_floating = table.style.position.is_some();
                     let saved_cursor_y = cursor.cursor_y;
 
