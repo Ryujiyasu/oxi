@@ -3639,8 +3639,28 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             // vs Word 6pg). Real OLE (Equation.3 / Visio, saw_ole) keeps
                             // the block path → the JP canaries 3a4f/model/tokyoshugyo
                             // (Equation) + uklocalspending (Visio) are byte-identical.
+                            // S974 (2026-07-21, HELD OPT-IN OXI_S974=1, default OFF): Word flows a
+                            // REAL OLE (an equation) inline — policies__0016b30b's nine
+                            // lone Equation.3 objects each got their own block line,
+                            // which is the whole of its 6-vs-5 page gap (0.4384 ->
+                            // PASS 1.0000). The four single-OLE canaries the S851
+                            // note protects — 3a4f, model, tokyoshugyo and
+                            // uklocalspending, one such paragraph each — all stay
+                            // PASS 1.0 with identical page counts, and so does the JP
+                            // corpus. HELD because a FIFTH single-OLE document flips
+                            // the other way: administrative__00018048 goes 1.0 ->
+                            // 0.9938. Its object is not a lone equation but a
+                            // 228.5x48.2pt ProgID="Unknown" banner, so inlining it
+                            // moves a heading — yet its host paragraph also carries
+                            // text, exactly like the target's equations, so "the
+                            // paragraph has text" does not separate them. The
+                            // discriminator is still missing; ProgID would be a
+                            // per-format carve-out, which rule 10 forbids without a
+                            // derivation. Needs Word render-truth on 00018048's
+                            // object (is it on the heading's line or its own?).
+                            let s974 = std::env::var("OXI_S974").is_ok();
                             let s851_ole_less = std::env::var("OXI_S851_DISABLE").is_err()
-                                && !saw_ole
+                                && (!saw_ole || s974)
                                 && ole.shape.is_none() && ole.text_box.is_none()
                                 && ole.image.as_ref().map_or(false, |i|
                                     i.position.is_none() && i.width > 0.0 && i.height > 0.0);
