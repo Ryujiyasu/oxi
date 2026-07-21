@@ -65,11 +65,28 @@ fn load(name: &str) -> Option<Document> {
     Some(parse_docx(&data).expect("parse fixture"))
 }
 
+/// The OLE preview image, wherever the parser routes it.
+///
+/// S974 (2026-07-21) moved a BODY `<w:object>` preview off the sibling
+/// `Block::Image` path and onto its host run (`inline_object_image`), because
+/// Word flows it inline in the host line — measured on
+/// administrative__00018048, whose two 228.5x48.2 banners both sit on their
+/// host line. The preview and its metadata must survive either way, so this
+/// helper looks in both places; the tests below pin alt_text / dimensions /
+/// position, which are the contract, not the storage slot.
 fn first_inline_image(doc: &Document) -> Option<&oxidocs_core::ir::Image> {
     for page in &doc.pages {
         for block in &page.blocks {
-            if let Block::Image(img) = block {
-                return Some(img);
+            match block {
+                Block::Image(img) => return Some(img),
+                Block::Paragraph(p) => {
+                    for r in &p.runs {
+                        if let Some(img) = r.style.inline_object_image.as_deref() {
+                            return Some(img);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
