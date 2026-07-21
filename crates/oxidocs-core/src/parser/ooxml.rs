@@ -6213,8 +6213,17 @@ fn parse_run_properties(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
-                    "b" => style.bold = true,
-                    "i" => style.italic = true,
+                    "b" => {
+                        // S976: CT_OnOff — an explicit `<w:b w:val="0"/>` turns
+                        // the paragraph style's bold OFF (and must survive the
+                        // merge, see merge_run_style).
+                        style.bold = super::styles::ct_on_off(&e);
+                        style.has_explicit_bold = true;
+                    }
+                    "i" => {
+                        style.italic = super::styles::ct_on_off(&e);
+                        style.has_explicit_italic = true;
+                    }
                     "u" => {
                         style.underline = true;
                         for attr in e.attributes().flatten() {

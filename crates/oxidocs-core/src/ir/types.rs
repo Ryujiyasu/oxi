@@ -395,7 +395,17 @@ pub struct RunStyle {
     pub latin_lang: Option<String>,
     pub font_size: Option<f32>,
     pub bold: bool,
+    /// S976: `w:b` was EXPLICITLY set (the element is present, whatever its
+    /// `w:val`) — distinguishes an explicit `<w:b w:val="0"/>`, which must beat
+    /// a basedOn parent's / paragraph style's ON, from "not set", which
+    /// inherits. The keepNext (S955) three-state pattern; without it a run that
+    /// switches a bold heading style off is measured with BOLD glyph widths.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_explicit_bold: bool,
     pub italic: bool,
+    /// S976: `w:i` three-state marker (see has_explicit_bold).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_explicit_italic: bool,
     pub underline: bool,
     /// Underline style (e.g. "single", "double", "wave", "dash", "dotted", "thick")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -515,7 +525,9 @@ impl Default for RunStyle {
             latin_lang: None,
             font_size: None,
             bold: false,
+            has_explicit_bold: false,
             italic: false,
+            has_explicit_italic: false,
             underline: false,
             underline_style: None,
             strikethrough: false,

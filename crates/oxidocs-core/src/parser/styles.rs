@@ -354,12 +354,35 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.text_scale.is_none() {
         child.text_scale = parent.text_scale;
     }
-    // Boolean properties: inherit from parent if child doesn't explicitly set them
-    if !child.bold && parent.bold {
-        child.bold = true;
-    }
-    if !child.italic && parent.italic {
-        child.italic = true;
+    // Boolean properties: inherit from parent if child doesn't explicitly set them.
+    // S976: bold/italic are three-state — a run that carries `<w:b w:val="0"/>`
+    // has explicitly turned bold OFF and must not pick the parent's ON back up
+    // (Word then measures it with REGULAR glyph widths; the monotonic rule
+    // measured a non-bold run of a bold heading style ~10% too wide).
+    if std::env::var("OXI_S976_DISABLE").is_err() {
+        if !child.has_explicit_bold {
+            if parent.has_explicit_bold {
+                child.bold = parent.bold;
+                child.has_explicit_bold = true;
+            } else if parent.bold {
+                child.bold = true;
+            }
+        }
+        if !child.has_explicit_italic {
+            if parent.has_explicit_italic {
+                child.italic = parent.italic;
+                child.has_explicit_italic = true;
+            } else if parent.italic {
+                child.italic = true;
+            }
+        }
+    } else {
+        if !child.bold && parent.bold {
+            child.bold = true;
+        }
+        if !child.italic && parent.italic {
+            child.italic = true;
+        }
     }
     if !child.underline && parent.underline {
         child.underline = true;
@@ -517,12 +540,30 @@ fn parse_para_properties_block(reader: &mut Reader<&[u8]>) -> Result<ParagraphSt
     Ok(style)
 }
 
+/// S976: read a CT_OnOff element's value. The element being present IS the
+/// setting; `w:val` only says which way. Absent val means ON.
+pub(crate) fn ct_on_off(e: &quick_xml::events::BytesStart) -> bool {
+    for attr in e.attributes().flatten() {
+        if local_name(attr.key.as_ref()) == "val" {
+            let val = String::from_utf8_lossy(&attr.value);
+            return val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+        }
+    }
+    true
+}
+
 /// Apply a single empty run property element to RunStyle
 fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle, theme: &ThemeColors) {
     let local = local_name(e.name().as_ref());
     match local.as_str() {
-        "b" => rs.bold = true,
-        "i" => rs.italic = true,
+        "b" => {
+            rs.bold = ct_on_off(e);
+            rs.has_explicit_bold = true;
+        }
+        "i" => {
+            rs.italic = ct_on_off(e);
+            rs.has_explicit_italic = true;
+        }
         "u" => {
             rs.underline = true;
             for attr in e.attributes().flatten() {
@@ -1093,11 +1134,13 @@ fn parse_style_definition(
                 } else if in_rpr {
                     match local.as_str() {
                         "b" => {
-                            run_style.bold = true;
+                            run_style.bold = ct_on_off(&e);
+                            run_style.has_explicit_bold = true;
                             has_run_style = true;
                         }
                         "i" => {
-                            run_style.italic = true;
+                            run_style.italic = ct_on_off(&e);
+                            run_style.has_explicit_italic = true;
                             has_run_style = true;
                         }
                         "u" => {

@@ -2776,6 +2776,13 @@ impl LayoutEngine {
 
     /// Resolve bold for a run, considering paragraph style defaults
     fn resolve_bold(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> bool {
+        // S976: a run that carries an explicit `<w:b w:val="0"/>` has turned
+        // bold OFF and does NOT fall through to the paragraph style's ON. The
+        // monotonic OR below measured such a run with BOLD glyph widths (Arial
+        // Bold is ~10% wider than regular), over-wrapping the line.
+        if run_style.has_explicit_bold && std::env::var("OXI_S976_DISABLE").is_err() {
+            return run_style.bold;
+        }
         if run_style.bold {
             return true;
         }
@@ -2815,6 +2822,10 @@ impl LayoutEngine {
     }
 
     fn resolve_italic(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> bool {
+        // S976: see resolve_bold — an explicit `<w:i w:val="0"/>` wins.
+        if run_style.has_explicit_italic && std::env::var("OXI_S976_DISABLE").is_err() {
+            return run_style.italic;
+        }
         if run_style.italic {
             return true;
         }
