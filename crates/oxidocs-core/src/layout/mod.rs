@@ -4031,7 +4031,28 @@ impl LayoutEngine {
         {
             let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
             for (ti, tb) in page.text_boxes.iter().enumerate() {
-                if tb.wrap_type == Some(crate::ir::WrapType::Square)
+                // S975 (2026-07-21, HELD OPT-IN OXI_S975=1, default OFF):
+                // wrapTIGHT side-wrap. Word render-truth (reports__0013bcb8,
+                // whose gray title box is Tight): the host run 'R' renders at
+                // x=476.62 BESIDE the box, so Tight wraps like Square and the
+                // band contract needs no change; that document goes 0.7849 ->
+                // 0.9140. ★The parser half is a REAL bug (see the ooxml.rs
+                // arm): wrapTight/wrapThrough always carry a wrapPolygon child
+                // so they arrive as Start events, and the wrap arms live in the
+                // Empty arm only — Tight was never parsed at all.
+                // HELD because policies__0026b7f7 flips PASS->FAIL (1.0000 ->
+                // 0.7568, 2 -> 3 pages): its Tight box sits on the RIGHT
+                // (x 355.5, w 184.8, h 312.8) and the band correctly narrows
+                // the body beside it, but Oxi then wraps MORE lines than Word
+                // fits on the page. So the open question is the band's
+                // vertical extent / narrowed-wrap width for a right-side tall
+                // box, not the Tight classification. SCOPE when enabled:
+                // paragraph-relative Tight textboxes are 3 sites in 2
+                // docx_corpus/en docs and ZERO in golden-test / real_en /
+                // docx_corpus/ja (census).
+                let s975 = std::env::var("OXI_S975").is_ok()
+                    && tb.wrap_type == Some(crate::ir::WrapType::Tight);
+                if (tb.wrap_type == Some(crate::ir::WrapType::Square) || s975)
                     && tb.position.as_ref()
                         .map_or(false, |tp| tp.v_relative.as_deref() == Some("paragraph")
                             && tp.y >= 0.0)

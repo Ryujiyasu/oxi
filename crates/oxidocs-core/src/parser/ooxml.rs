@@ -4277,6 +4277,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                 let local = local_name(e.name().as_ref());
                 depth += 1;
                 match local.as_str() {
+                    // S975 (2026-07-21): wrapTight / wrapThrough ALWAYS carry a
+                    // <wp:wrapPolygon> child, so they arrive as Start events —
+                    // the wrap arms below live in the Empty arm only (where
+                    // wrapNone/wrapSquare/wrapTopAndBottom, which are always
+                    // self-closing, do land), and wrapTight was therefore never
+                    // parsed at all. reports__0013bcb8's gray title box is Tight
+                    // and reached layout with wrap_type = None.
+                    "wrapTight" | "wrapThrough" if std::env::var("OXI_S975").is_ok() => {
+                        wrap_type = Some(WrapType::Tight);
+                    }
                     "wpc" => {
                         is_canvas = true;
                     }
