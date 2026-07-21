@@ -2520,7 +2520,7 @@ impl LayoutEngine {
         // 22.37→25.50 where Word keeps the Latin line height.
         let s951 = !self.doc_body_has_real_cjk
             && std::env::var("OXI_S951_DISABLE").is_err();
-        // S966 (HELD OPT-IN OXI_S966=1, default OFF): U+2022 BULLET belongs to
+        // S966 (default ON, opt-out OXI_S966_DISABLE): U+2022 BULLET belongs to
         // the ambiguous class (the fifth member after
         // S801 dashes, S830 ellipsis, S888 hyphens, S951 arrows/math).
         // policies__0028d1be writes 88 literal «• text» runs whose explicit
@@ -2533,9 +2533,11 @@ impl LayoutEngine {
         // PASS 1.0 -> 0.9583 (its wi=66 «DTA - Advisory Board Statewide»
         // rides up to p2; Word ends p2 at 680.5 where Oxi then reaches
         // 690.5), i.e. its PASS was riding the inflated bullet height.
-        // Ships with whatever supplies that missing ~10pt on its p2.
+        // That missing ~10pt is S968 (style-derived cell autospacing); the
+        // two ship together as a compensating pair — either alone leaves
+        // administrative__0001ce58 at 0.9583, both together restore 1.0.
         let s966 = !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S966").is_ok();
+            && std::env::var("OXI_S966_DISABLE").is_err();
         let is_q = move |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
             || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
             || (s830 && matches!(c, '\u{2026}'))
@@ -2721,7 +2723,7 @@ impl LayoutEngine {
                 && matches!(ch, '\u{2011}' | '\u{2010}'))
             // S966: U+2022 BULLET, same ambiguous class as the dashes above.
             || (!self.doc_body_has_real_cjk
-                && std::env::var("OXI_S966").is_ok()
+                && std::env::var("OXI_S966_DISABLE").is_err()
                 && ch == '\u{2022}')
             // S951: Arrows + Math Operators (U+2190..U+22FF) in a Latin doc —
             // see the break-site comment (reference__0029c1c «AHI ≥ 30»).
@@ -15383,7 +15385,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     && std::env::var("OXI_S951_DISABLE").is_err();
                 let s966_latin_bullet = ch == '\u{2022}'
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S966").is_ok();
+                    && std::env::var("OXI_S966_DISABLE").is_err();
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
                     || s951_latin_mathop
@@ -26598,7 +26600,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // sets its own flags without from_style for the ≥10-break case).
         // The S952 table-style layer is a distinct, measured source and
         // bypasses that neutralization.
-        let para_active = cellas_enabled && !para.style.autospacing_from_style;
+        // S968 (2026-07-21, opt-out OXI_S968_DISABLE): give the CELL site the
+        // same Latin escape the two BODY sites already carry (9535, 14148) —
+        // S895 established that Word DOES apply style-derived autospacing in a
+        // Latin document, and only the JP calibration needs the neutralization.
+        // administrative__0001ce58's Zoom cell holds six NormalWeb paragraphs
+        // (before/afterAutospacing=1, no direct spacing); Word advances ~27.4pt
+        // across each of five boundaries (line 13.44 + auto 13.92) where Oxi
+        // returned the explicit 5pt, i.e. 8.93-9.05pt short five times =
+        // 44.902pt, and the Kiyana->Find-local span closes at 45.006pt.
+        let s968 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S968_DISABLE").is_err();
+        let para_active = cellas_enabled
+            && (!para.style.autospacing_from_style || s968);
         let b_flag = (para_active && para.style.before_autospacing) || s952_b;
         let a_flag = (para_active && para.style.after_autospacing) || s952_a;
         if !b_flag && !a_flag {
