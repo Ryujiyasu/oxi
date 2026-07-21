@@ -2520,11 +2520,28 @@ impl LayoutEngine {
         // 22.37→25.50 where Word keeps the Latin line height.
         let s951 = !self.doc_body_has_real_cjk
             && std::env::var("OXI_S951_DISABLE").is_err();
+        // S966 (HELD OPT-IN OXI_S966=1, default OFF): U+2022 BULLET belongs to
+        // the ambiguous class (the fifth member after
+        // S801 dashes, S830 ellipsis, S888 hyphens, S951 arrows/math).
+        // policies__0028d1be writes 88 literal «• text» runs whose explicit
+        // eastAsia is Times New Roman; is_cjk('•') sent the whole run down the
+        // CJK chain, S634 substituted MS Mincho, and the line became
+        // 83/64 × 12 = 15.5625 where Word renders 13.80 — 6 pages instead of 5.
+        // Word confirms the Latin reading on a SECOND specimen too
+        // (administrative__0001ce58 renders its bullets Calibri 11 / pitch
+        // 13.47), so the rule is right — but enabling it flips that doc
+        // PASS 1.0 -> 0.9583 (its wi=66 «DTA - Advisory Board Statewide»
+        // rides up to p2; Word ends p2 at 680.5 where Oxi then reaches
+        // 690.5), i.e. its PASS was riding the inflated bullet height.
+        // Ships with whatever supplies that missing ~10pt on its p2.
+        let s966 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S966").is_ok();
         let is_q = move |c: char| matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
             || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
             || (s830 && matches!(c, '\u{2026}'))
             || (s888 && matches!(c, '\u{2011}' | '\u{2010}'))
-            || (s951 && matches!(c, '\u{2190}'..='\u{22FF}'));
+            || (s951 && matches!(c, '\u{2190}'..='\u{22FF}'))
+            || (s966 && c == '\u{2022}');
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
         // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
@@ -2702,6 +2719,10 @@ impl LayoutEngine {
             // wrapped one line early each (+14..17pt ×4 anomalies).
             || (std::env::var("OXI_S888_DISABLE").is_err()
                 && matches!(ch, '\u{2011}' | '\u{2010}'))
+            // S966: U+2022 BULLET, same ambiguous class as the dashes above.
+            || (!self.doc_body_has_real_cjk
+                && std::env::var("OXI_S966").is_ok()
+                && ch == '\u{2022}')
             // S951: Arrows + Math Operators (U+2190..U+22FF) in a Latin doc —
             // see the break-site comment (reference__0029c1c «AHI ≥ 30»).
             || (!self.doc_body_has_real_cjk
@@ -15348,9 +15369,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let s951_latin_mathop = matches!(ch, '\u{2190}'..='\u{22FF}')
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S951_DISABLE").is_err();
+                let s966_latin_bullet = ch == '\u{2022}'
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S966").is_ok();
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
                     || s951_latin_mathop
+                    || s966_latin_bullet
                     || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                     && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
                     && {
