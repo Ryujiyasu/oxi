@@ -1077,7 +1077,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let mut pr = parse_paragraph(&mut reader, ctx, styles, true, false)?;
+                        let mut pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
                         // S525 (coverage): a paragraph whose ONLY content is display
                         // math (oMathPara, no runs/images/shapes) must NOT emit an
                         // empty paragraph line before the math — the Math block IS
@@ -1338,7 +1338,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     } else if in_sdt_content {
                                         match sl.as_str() {
                                             "p" => {
-                                                let pr = parse_paragraph(&mut reader, ctx, styles, true, false)?;
+                                                let pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
                                                 current_blocks.push(Block::Paragraph(pr.paragraph));
                                                 for mb in pr.math_blocks {
                                                     current_blocks.push(Block::Math(mb));
@@ -1527,7 +1527,7 @@ fn application_default_font_size_override(default_paragraph_size: Option<f32>) -
     }
 }
 
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool, in_cell: bool) -> Result<ParagraphResult, ParseError> {
+fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool, in_cell: bool, cell_inline_flow_width: Option<f32>) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
     // S854: (run_index, image) for INLINE (non-positioned) images. A paragraph
@@ -2556,7 +2556,32 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // is NOT drawn by those emit paths (kyotei36spec's 18 form-marker images
     // live in a textbox at the page-right edge; flowing them there dropped all
     // 18 from the render). Body emit (mod.rs:11135) draws inline_object_image.
-    if allow_inline_flow && inline_img_runs.len() >= 2 {
+    // S984 (Task U, 2026-07-22, default ON, opt-out OXI_S984_DISABLE): the S854
+    // horizontal inline-image flow, extended to a TABLE CELL. Word flows ≥2
+    // inline images in a cell paragraph into one row (reference__00476cb8: 4
+    // header logos at y=78.2, x=74/188/303/417 = one 74pt row; Oxi stacked them
+    // ~300pt → +226pt header → the copyright spilled to p2). S854 was body-only
+    // (its inline_object_image is not drawn by the textbox/cell emit); S982 now
+    // gives the CELL builder that machinery (F8FE registry), so the cell can
+    // flow inline images too. GATE (REPORT_U census, 569 docs): fires on ONLY
+    // the target — kyotei36spec (golden, 18 cell inline images) is EXCLUDED by
+    // `cell_visual_only` (its runs carry 14 spaces between images, so
+    // text.is_empty() is false; a trim() would wrongly admit it). sum(width) ≤
+    // tcW keeps a genuinely-wider-than-the-cell run on the block path. Depends
+    // on S982 (OXI_S982_DISABLE): the cell emit only draws the run object under
+    // S982; without it the images would VANISH, so S984 gates on it too.
+    let s984_inline_w: f32 = inline_img_runs.iter().map(|(_, image)| image.width).sum();
+    let s984_visual_only = runs.iter().all(|run| run.text.is_empty());
+    let s984_cell_flow = std::env::var("OXI_S984_DISABLE").is_err()
+        && std::env::var("OXI_S982_DISABLE").is_err()
+        && in_cell
+        && s984_visual_only
+        && cell_inline_flow_width.map_or(false, |w| s984_inline_w <= w + 0.01);
+    if s984_cell_flow && inline_img_runs.len() >= 2 && std::env::var("OXI_DBG_CELLOLE").is_ok() {
+        eprintln!("[S984] in_cell=1 n={} visual_only={} image_w={:.3} tc_w={:?} eligible=1",
+            inline_img_runs.len(), s984_visual_only as u8, s984_inline_w, cell_inline_flow_width);
+    }
+    if (allow_inline_flow || s984_cell_flow) && inline_img_runs.len() >= 2 {
         for (ridx, image) in inline_img_runs {
             if let Some(run) = runs.get_mut(ridx) {
                 run.style.inline_object_extent = Some((image.width, image.height));
@@ -4042,7 +4067,7 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                         }
                     }
                     "p" if in_note && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, &note_ctx, styles, false, false)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, styles, false, false, None)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
@@ -4687,7 +4712,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 Ok(Event::Start(se)) => {
                                     let sl = local_name(se.name().as_ref());
                                     if sl == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false) {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false, None) {
                                             shape_text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -5443,7 +5468,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
                                     if local_name(se.name().as_ref()) == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false) {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false, None) {
                                             text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -7412,7 +7437,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let mut pr = parse_paragraph(reader, ctx, styles, false, true)?;
+                        let mut pr = parse_paragraph(reader, ctx, styles, false, true, cell_props.width)?;
                         // S486: preserve in-cell floating text boxes/shapes
                         // (previously discarded). S488: stamp each preserved
                         // text box with its anchor paragraph's index within THIS
@@ -8514,7 +8539,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false)?;
+                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false, None)?;
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and
@@ -8561,7 +8586,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "p" {
-                                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false)?;
+                                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false, None)?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if in_sdt_content && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
@@ -8955,7 +8980,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                                 }
                             }
                         }
-                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles, false, false)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles, false, false, None)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
