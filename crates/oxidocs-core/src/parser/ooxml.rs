@@ -1077,7 +1077,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         depth = 0;
                     }
                     "p" if in_body && depth == 0 => {
-                        let mut pr = parse_paragraph(&mut reader, ctx, styles, true)?;
+                        let mut pr = parse_paragraph(&mut reader, ctx, styles, true, false)?;
                         // S525 (coverage): a paragraph whose ONLY content is display
                         // math (oMathPara, no runs/images/shapes) must NOT emit an
                         // empty paragraph line before the math — the Math block IS
@@ -1338,7 +1338,7 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     } else if in_sdt_content {
                                         match sl.as_str() {
                                             "p" => {
-                                                let pr = parse_paragraph(&mut reader, ctx, styles, true)?;
+                                                let pr = parse_paragraph(&mut reader, ctx, styles, true, false)?;
                                                 current_blocks.push(Block::Paragraph(pr.paragraph));
                                                 for mb in pr.math_blocks {
                                                     current_blocks.push(Block::Math(mb));
@@ -1527,7 +1527,7 @@ fn application_default_font_size_override(default_paragraph_size: Option<f32>) -
     }
 }
 
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool) -> Result<ParagraphResult, ParseError> {
+fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool, in_cell: bool) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
     // S854: (run_index, image) for INLINE (non-positioned) images. A paragraph
@@ -1643,7 +1643,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         math_blocks.push(mb);
                     }
                     "r" if depth == 0 => {
-                        let (mut run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow)?;
+                        let (mut run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                         // Track field state: fldChar begin/separate/end spans across runs.
                         // Remember a CrossRef field so its cached result run is KEPT.
                         if run.field_type.is_some() {
@@ -1728,7 +1728,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 link_url = Some(format!("#{}", val));
                             }
                         }
-                        let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url, allow_inline_flow)?;
+                        let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url, allow_inline_flow, in_cell)?;
                         // Word does NOT apply the "Hyperlink" character style inside a
                         // TOC entry: ToC links render in the paragraph text colour
                         // (black), no underline — while body hyperlinks with the SAME
@@ -1814,7 +1814,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             pair_id,
                         };
                         let end_tag = local.clone();
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, &end_tag, tc, allow_inline_flow)?;
+                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, &end_tag, tc, allow_inline_flow, in_cell)?;
                         runs.extend(tracked_runs);
                     }
                     // mc:AlternateContent at paragraph level
@@ -1847,7 +1847,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                         }
                                     } else if in_choice && sl == "r" && ac_depth == 1 {
                                         // Text runs inside mc:Choice belong to this paragraph
-                                        let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow)?;
+                                        let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                                         runs.push(run);
                                         if let Some(drawing) = dr {
                                             if let Some(image) = drawing.image {
@@ -1890,7 +1890,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "r" {
-                                        let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow)?;
+                                        let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                                         runs.push(run);
                                         if let Some(drawing) = dr {
                                             if let Some(image) = drawing.image {
@@ -3561,7 +3561,7 @@ pub(crate) fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>
 
 /// Parse a w:r element (run). Returns the Run, optionally an Image, and field info.
 /// `url` is set when this run is inside a w:hyperlink element.
-fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>, allow_inline_flow: bool) -> Result<(Run, Option<DrawingResult>), ParseError> {
+fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>, allow_inline_flow: bool, in_cell: bool) -> Result<(Run, Option<DrawingResult>), ParseError> {
     let mut text = String::new();
     let mut style = RunStyle::default();
     let mut drawing_result: Option<DrawingResult> = None;
@@ -3641,7 +3641,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                     }
                     // OLE object — extract preview image from embedded VML shape
                     "object" if depth == 0 => {
-                        let (ole, saw_ole) = parse_ole_object(reader, ctx)?;
+                        let (ole, saw_ole, prog_id) = parse_ole_object(reader, ctx)?;
                         if drawing_result.is_none() {
                             // S851 (2026-07-14, default ON, opt-out OXI_S851_DISABLE):
                             // an inline OLEObject-LESS <w:object> (a bare form-field
@@ -3683,8 +3683,31 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                                 && ole.shape.is_none() && ole.text_box.is_none()
                                 && ole.image.as_ref().map_or(false, |i|
                                     i.position.is_none() && i.width > 0.0 && i.height > 0.0);
-                            if s851_ole_less {
+                            // Task P step 3 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a REAL OLE
+                            // (`Equation.DSMT4`) inside a TABLE CELL flows inline in Word
+                            // like the body S974 case, but cells kept the block path
+                            // because the cell content builder cannot carry a run-level
+                            // inline object (S974 note). Route it to the run inline object
+                            // (default ON, opt-out OXI_S982_DISABLE) (the cell builder/emit are added in later
+                            // steps behind the same flag). ProgID gate = exactly the 5
+                            // Equation.DSMT4 objects in policies__0016b30b (census); the JP
+                            // Equation.3 canaries + administrative Unknown are excluded, so
+                            // OFF and every non-target doc are byte-identical.
+                            let s982 = std::env::var("OXI_S982_DISABLE").is_err();
+                            let cell_dsmt4 = s982
+                                && in_cell
+                                && prog_id.as_deref() == Some("Equation.DSMT4")
+                                && ole.shape.is_none() && ole.text_box.is_none()
+                                && ole.image.as_ref().map_or(false, |i|
+                                    i.position.is_none() && i.width > 0.0 && i.height > 0.0);
+                            if s851_ole_less || cell_dsmt4 {
                                 let img = ole.image.unwrap();
+                                if cell_dsmt4 {
+                                    if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                                        eprintln!("[CELL-OLE] phase=parse enabled=1 progid={:?} w={} h={}",
+                                            prog_id.as_deref(), img.width, img.height);
+                                    }
+                                }
                                 style.inline_object_extent = Some((img.width, img.height));
                                 style.inline_object_image = Some(Box::new(img));
                             } else {
@@ -3937,7 +3960,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
 }
 
 /// Parse runs inside a w:hyperlink element
-fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>, allow_inline_flow: bool) -> Result<Vec<Run>, ParseError> {
+fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>, allow_inline_flow: bool, in_cell: bool) -> Result<Vec<Run>, ParseError> {
     let mut runs = Vec::new();
     let mut depth = 0;
 
@@ -3946,7 +3969,7 @@ fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (run, _dr) = parse_run(reader, ctx, styles, url.clone(), allow_inline_flow)?;
+                    let (run, _dr) = parse_run(reader, ctx, styles, url.clone(), allow_inline_flow, in_cell)?;
                     runs.push(run);
                 } else {
                     depth += 1;
@@ -4019,7 +4042,7 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                         }
                     }
                     "p" if in_note && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, &note_ctx, styles, false)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, styles, false, false)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
@@ -4664,7 +4687,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 Ok(Event::Start(se)) => {
                                     let sl = local_name(se.name().as_ref());
                                     if sl == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false) {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false) {
                                             shape_text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -5420,7 +5443,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
                                     if local_name(se.name().as_ref()) == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false) {
+                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false) {
                                             text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -5854,11 +5877,16 @@ fn parse_css_length_opt(s: &str) -> Option<f32> {
 }
 
 /// Parse w:object (OLE embedded object) — extract preview image from VML shape inside
-fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(DrawingResult, bool), ParseError> {
+fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(DrawingResult, bool, Option<String>), ParseError> {
     let mut rel_id: Option<String> = None;
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     let mut depth = 0;
+    // Task P step 1 (2026-07-22): capture o:OLEObject/@ProgID (the embed's
+    // class — "Equation.DSMT4" / "Equation.3" / "Unknown" / …). Threaded out
+    // for a future cell-inline route discriminator; NOT consumed yet (routing
+    // unchanged), so this step is byte-identical for every doc, OFF and ON.
+    let mut prog_id: Option<String> = None;
     // S851: whether an <o:OLEObject> child was seen. A real OLE embed
     // (Equation.3, Visio, …) has one; a bare form-field picture (the
     // MassHealth PA-form field underlines) does NOT — the discriminator for
@@ -5870,7 +5898,14 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 depth += 1;
-                if local == "OLEObject" { saw_ole_object = true; }
+                if local == "OLEObject" {
+                    saw_ole_object = true;
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "ProgID" {
+                            prog_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                        }
+                    }
+                }
                 match local.as_str() {
                     // VML shape inside OLE object — parse style for dimensions
                     "shape" | "rect" => {
@@ -5905,7 +5940,14 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
                         }
                     }
                     // OLEObject element — skip gracefully (S851: note presence)
-                    "OLEObject" => { saw_ole_object = true; }
+                    "OLEObject" => {
+                        saw_ole_object = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "ProgID" {
+                                prog_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -5947,7 +5989,7 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
         None
     };
 
-    Ok((DrawingResult { image, shape: None, text_box: None }, saw_ole_object))
+    Ok((DrawingResult { image, shape: None, text_box: None }, saw_ole_object, prog_id))
 }
 
 /// Parse mc:AlternateContent — prefer mc:Choice (DrawingML), fall back to mc:Fallback (VML)
@@ -7370,7 +7412,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let mut pr = parse_paragraph(reader, ctx, styles, false)?;
+                        let mut pr = parse_paragraph(reader, ctx, styles, false, true)?;
                         // S486: preserve in-cell floating text boxes/shapes
                         // (previously discarded). S488: stamp each preserved
                         // text box with its anchor paragraph's index within THIS
@@ -8472,7 +8514,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, ctx, styles, false)?;
+                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false)?;
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and
@@ -8519,7 +8561,7 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "p" {
-                                        let pr = parse_paragraph(&mut reader, ctx, styles, false)?;
+                                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false)?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if in_sdt_content && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
@@ -8668,6 +8710,7 @@ fn parse_tracked_change_runs(
     end_tag: &str,
     tc: TrackedChange,
     allow_inline_flow: bool,
+    in_cell: bool,
 ) -> Result<Vec<Run>, ParseError> {
     let mut runs = Vec::new();
     let mut depth = 0;
@@ -8677,7 +8720,7 @@ fn parse_tracked_change_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (mut run, _dr) = parse_run(reader, ctx, styles, None, allow_inline_flow)?;
+                    let (mut run, _dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                     // R62 (2026-04-29): parser stores tracked_change ONLY.
                     // Visual styling (underline/strikethrough + author-palette
                     // color) is applied at layout time by R-01
@@ -8912,7 +8955,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                                 }
                             }
                         }
-                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles, false)?;
+                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles, false, false)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
@@ -9523,7 +9566,7 @@ mod tests {
             }
         };
         let _ = start;
-        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None, true).expect("parse_run");
+        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
         assert_eq!(run.comment_references, vec!["0".to_string()]);
     }
 
@@ -9553,7 +9596,7 @@ mod tests {
                 _ => continue,
             }
         }
-        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None, true).expect("parse_run");
+        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
         assert_eq!(run.text, "Status\n");
     }
 

@@ -21951,6 +21951,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing, text_scale)
                         let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)>> = Vec::new();
                         let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)> = Vec::new();
+                        // Task P (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a cell-inline OLE object
+                        // (Equation.DSMT4, step 3 routed it to run.style.inline_object_*)
+                        // is carried as a paragraph-local `&Image` registry + a U+F8FE
+                        // sentinel fragment (the S703c F8FF pattern; the 13-element cell
+                        // tuple carries no style fields, so the image ref cannot ride the
+                        // tuple). Default (s982_cell=false) never pushes — byte-identical.
+                        let s982_cell = std::env::var("OXI_S982_DISABLE").is_err();
+                        let mut cell_inline_objects: Vec<&Image> = Vec::new();
                         let mut line_x: f32 = 0.0;
                         // Session 118 jc=both refactor — gated by OXI_JCBOTH_REFACTOR env var.
                         // When enabled, calls compute_compression from jc_both_compress module
@@ -22042,6 +22050,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let bold = self.resolve_bold(&run.style, &para.style);
                             let font_family = self.resolve_font_family_for_text(&run.text, &run.style, &para.style)
                                 .map(|s| s.to_string());
+
+                            // Task P step 4 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a cell-inline
+                            // OLE object → a U+F8FE{index} atomic fragment (width = the
+                            // object extent). Registry holds the &Image for the emit
+                            // (step 5). Do NOT `continue` — a same-run trailing text
+                            // (target object 1) must still be processed. Gated on
+                            // s982_cell → 0 hits in default (byte-identical).
+                            if s982_cell {
+                                if let (Some((ow, _)), Some(img)) =
+                                    (run.style.inline_object_extent, run.style.inline_object_image.as_deref())
+                                {
+                                    let ew = if is_first_line { first_line_wrap_w } else { wrap_w };
+                                    if line_x + ow > ew && !current_line.is_empty() {
+                                        lines.push(std::mem::take(&mut current_line));
+                                        line_x = 0.0; current_line_chars.clear(); is_first_line = false;
+                                    }
+                                    let index = cell_inline_objects.len();
+                                    cell_inline_objects.push(img);
+                                    if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                                        eprintln!("[CELL-OLE] phase=builder enabled=1 index={} w={} h={}",
+                                            index, ow, img.height);
+                                    }
+                                    current_line.push((format!("\u{F8FE}{index}"),
+                                        font_size, ow, bold, run.style.italic, false, None, false,
+                                        font_family.clone(), None, None, 0.0, 100.0));
+                                    line_x += ow;
+                                }
+                            }
 
                             // S703c (2026-06-30): a `combine` run (割注 / two-lines-in-one)
                             // in a TABLE CELL renders as warichu. Push ONE compact tuple
@@ -23060,6 +23096,48 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     .fold(0.0_f32, f32::max);
                             }
 
+                            // Task P step 6 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): grow the cell
+                            // line to fit an inline OLE object. The F8FE fragment carries
+                            // the object EXTENT as width but line_height_inner priced it
+                            // at the run font_size (~13.8), so a 17-21pt object overflowed
+                            // (negative y in step 5). Apply the body S851/S875 fold to the
+                            // cell line: target = obj_h + text_win_descent + auto_extra
+                            // (mixed: descent>0 → max with text lh; solo: descent=0 →
+                            // obj+extra). Gated on s982_cell → a default line has no F8FE
+                            // fragment so obj_h=0 and this is inert (byte-identical).
+                            if s982_cell {
+                                let obj_h: f32 = line.iter()
+                                    .filter_map(|(text, ..)| text.strip_prefix('\u{F8FE}')
+                                        .and_then(|s| s.parse::<usize>().ok()))
+                                    .filter_map(|i| cell_inline_objects.get(i).map(|im| im.height))
+                                    .fold(0.0_f32, f32::max);
+                                if obj_h > 0.0 {
+                                    let descent: f32 = line.iter()
+                                        .filter(|(text, ..)| !text.starts_with('\u{F8FE}') && !text.trim().is_empty())
+                                        .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                            let metrics = match font_family.as_deref() {
+                                                Some(ff) => self.registry.get(ff),
+                                                None => self.registry.default_metrics(),
+                                            };
+                                            metrics.win_descent * *fs
+                                        }).fold(0.0_f32, f32::max);
+                                    // S875 auto-rule extra leading (multiple > 1 only).
+                                    let factor = if matches!(para.style.line_spacing_rule.as_deref(),
+                                        None | Some("auto"))
+                                    {
+                                        para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0)
+                                    } else { 1.0 };
+                                    let extra = if factor > 1.0 { lh * (1.0 - 1.0 / factor) } else { 0.0 };
+                                    let target = obj_h + descent + extra;
+                                    if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                                        eprintln!("[CELL-OLE] phase=height {} obj_h={} desc={:.2} extra={:.2} text_lh={:.2} chosen={:.2}",
+                                            if descent > 0.0 { "mixed" } else { "solo" },
+                                            obj_h, descent, extra, lh, target.max(lh));
+                                    }
+                                    if target > lh { lh = target; }
+                                }
+                            }
+
                             // Paragraph indentation: first line uses indent_left + first_line_indent
                             let line_indent = p_indent_left + if line_idx == 0 { p_first_line_indent } else { 0.0 };
 
@@ -23445,6 +23523,42 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                             for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs, ts)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
+                                // Task P step 5 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a U+F8FE{index}
+                                // cell-inline OLE fragment → the registered &Image drawn on
+                                // the line. Step 5 places the object bottom at the line
+                                // bottom (content_h + lh); step 6 refines it to the text
+                                // baseline (mixed) / line bottom (solo). Gated on s982_cell;
+                                // a default line has no F8FE text so the strip_prefix never
+                                // matches — byte-identical either way, the flag is explicit.
+                                if s982_cell {
+                                    if let Some(index) = text.strip_prefix('\u{F8FE}')
+                                        .and_then(|s| s.parse::<usize>().ok())
+                                    {
+                                        if let Some(img) = cell_inline_objects.get(index).copied() {
+                                            let oh = img.height;
+                                            let base_x = cell_x + pad_l + line_indent + align_offset + rx;
+                                            let obj_bottom = content_h + lh;
+                                            let mut e = LayoutElement::new(
+                                                base_x, obj_bottom - oh, img.width, oh,
+                                                LayoutContent::Image {
+                                                    data: img.data.clone(),
+                                                    content_type: img.content_type.clone(),
+                                                    crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
+                                                });
+                                            e.paragraph_index = block_idx;
+                                            e.cell_paragraph_index = Some(cell_para_counter);
+                                            e.cell_row_index = Some(row_idx);
+                                            e.cell_col_index = Some(cell_idx);
+                                            if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                                                eprintln!("[CELL-OLE] phase=emit enabled=1 index={} w={} h={} y={}",
+                                                    index, img.width, oh, obj_bottom - oh);
+                                            }
+                                            cell_elements.push(e);
+                                            rx += adj_w;
+                                            continue;
+                                        }
+                                    }
+                                }
                                 // S703c: a SENTINEL-encoded combine tuple → warichu (2
                                 // small rows + brackets), in place of one glyph element.
                                 if let Some(rest) = text.strip_prefix('\u{F8FF}') {
@@ -26606,6 +26720,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     self.line_height_inner(font_size, eff_ls, eff_lr, metrics, false, None, true)
                 };
                 if lh > max_line_height { max_line_height = lh; }
+            }
+            // Task P step 7 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): grow the cell estimate
+            // to fit an inline OLE object, mirroring the emit line-height fold
+            // (step 6). count_cell_lines already returns 1 for an object-only
+            // paragraph (lines.max(1)), so growing max_line_height suffices — the
+            // legacy count path is UNTOUCHED (avoids the shared-estimate leak that
+            // broke the earlier one-shot attempt). Gated on OXI_S982 && in_cell:
+            // the shared estimate also serves BODY callers (keepNext lookahead,
+            // footnote reserves) with in_cell=false, and OFF is byte-identical.
+            if std::env::var("OXI_S982_DISABLE").is_err() && in_cell {
+                let obj_h: f32 = para.runs.iter()
+                    .filter_map(|r| if r.style.inline_object_image.is_some() {
+                        r.style.inline_object_extent.map(|(_, oh)| oh)
+                    } else { None })
+                    .fold(0.0_f32, f32::max);
+                if obj_h > 0.0 {
+                    let descent: f32 = para.runs.iter()
+                        .filter(|r| r.style.inline_object_image.is_none() && !r.text.trim().is_empty())
+                        .map(|r| {
+                            let fs = self.resolve_font_size(&r.style, &para.style);
+                            self.metrics_for_text(&r.text, &r.style, &para.style).win_descent * fs
+                        }).fold(0.0_f32, f32::max);
+                    let factor = if matches!(para.style.line_spacing_rule.as_deref(),
+                        None | Some("auto"))
+                    {
+                        para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0)
+                    } else { 1.0 };
+                    let extra = if factor > 1.0 { max_line_height * (1.0 - 1.0 / factor) } else { 0.0 };
+                    let obj_composed = obj_h + descent + extra;
+                    if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                        eprintln!("[CELL-OLE] phase=estimate enabled=1 use_render_lh={} obj_h={} desc={:.2} extra={:.2} composed={:.2} prev_max_lh={:.2} lines={}",
+                            use_render_lh, obj_h, descent, extra, obj_composed, max_line_height, line_count);
+                    }
+                    if obj_composed > max_line_height { max_line_height = obj_composed; }
+                }
             }
             if std::env::var("OXI_DUMP_TABLE").is_ok() {
                 let first_run_fs = self.resolve_font_size(
