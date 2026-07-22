@@ -27,8 +27,23 @@ pub fn resolve_theme_font_pub(theme_val: &str, theme: &ThemeColors) -> Option<St
             theme.minor_font_ea.clone()
                 .or_else(|| Some("MS Mincho".to_string()))
         }
+    } else if theme_val.contains("Bidi") && std::env::var("OXI_S987_DISABLE").is_err() {
+        // S987 (Task educational__00235411): "majorBidi"/"minorBidi" resolve to
+        // the theme's complex-script (Bidi) font — a non-empty <a:cs> else the
+        // locale's Arab supplemental <a:font> — NOT the Latin major/minor. Word
+        // renders educational__00235411's asciiTheme=majorBidi body in Times New
+        // Roman (the Arab supplemental), not Cambria (Latin major), so its 12pt
+        // double-spaced line pitch is 27.6pt not 28.14pt (+0.54pt/line → +1
+        // page). Fall back to the Latin font when no Bidi font is derivable, so a
+        // *Bidi token in a doc with no <a:cs>/Arab mapping stays byte-identical.
+        // Opt-out OXI_S987_DISABLE (falls through to the Latin branch below).
+        if theme_val.starts_with("major") {
+            theme.major_font_bidi.clone().or_else(|| theme.major_font.clone())
+        } else {
+            theme.minor_font_bidi.clone().or_else(|| theme.minor_font.clone())
+        }
     } else {
-        // "majorHAnsi" / "minorHAnsi" / "majorBidi" / "minorBidi" → Latin font
+        // "majorHAnsi" / "minorHAnsi" → Latin font (and "*Bidi" when S987 is off)
         if theme_val.starts_with("major") {
             theme.major_font.clone()
         } else {

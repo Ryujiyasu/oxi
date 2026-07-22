@@ -19,6 +19,12 @@ pub struct ThemeColors {
     pub major_font_ea: Option<String>,
     /// Minor East Asian font
     pub minor_font_ea: Option<String>,
+    /// Major complex-script (Bidi) font — non-empty `<a:cs>` else the locale's
+    /// supplemental `<a:font script="Arab">` (S987: `*Bidi` theme tokens resolve
+    /// here, not to the Latin major/minor font).
+    pub major_font_bidi: Option<String>,
+    /// Minor complex-script (Bidi) font.
+    pub minor_font_bidi: Option<String>,
 }
 
 impl ThemeColors {
@@ -239,6 +245,31 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                             }
                         }
                     }
+                    // S987: <a:cs> is the complex-script (Bidi) font. A non-empty
+                    // value wins; an empty one means consult the locale's
+                    // supplemental <a:font script=...> (handled below). Only the
+                    // gated resolver (styles::resolve_theme_font_pub) reads these
+                    // fields, so populating them is byte-identical when S987 is off.
+                    "cs" if in_major_font && theme.major_font_bidi.is_none() => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "typeface" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if !val.is_empty() {
+                                    theme.major_font_bidi = Some(val);
+                                }
+                            }
+                        }
+                    }
+                    "cs" if in_minor_font && theme.minor_font_bidi.is_none() => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "typeface" {
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if !val.is_empty() {
+                                    theme.minor_font_bidi = Some(val);
+                                }
+                            }
+                        }
+                    }
                     // Script-specific fonts (e.g. <a:font script="Jpan" typeface="ＭＳ ゴシック"/>)
                     // Historically Oxi used Jpan as the EA fallback even when
                     // <a:ea typeface=""/> was explicit-empty (S245 comment said
@@ -257,6 +288,21 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                                 "script" => script = val,
                                 "typeface" => typeface = val,
                                 _ => {}
+                            }
+                        }
+                        // S987: the complex-script (Bidi) supplemental font. The
+                        // corpus's exact `*Bidi`-referencing docs all carry
+                        // w:themeFontLang bidi="ar-SA" (or omit it, whose Word
+                        // default is Arab), so Arab is the measured supplemental
+                        // key. Only used when <a:cs> was empty (_bidi still None).
+                        // Generalizing to other bidi locales (Hebr, ...) is
+                        // deferred (no measured corpus doc).
+                        if script == "Arab" && !typeface.is_empty() {
+                            if in_major_font && theme.major_font_bidi.is_none() {
+                                theme.major_font_bidi = Some(typeface.clone());
+                            }
+                            if in_minor_font && theme.minor_font_bidi.is_none() {
+                                theme.minor_font_bidi = Some(typeface.clone());
                             }
                         }
                         if script == "Jpan" && !typeface.is_empty() {
