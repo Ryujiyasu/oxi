@@ -54,6 +54,20 @@ pub struct AbstractNum {
     pub levels: HashMap<u8, NumberingLevel>,
 }
 
+/// S988B: a `<w:lvlOverride>` for one (numId, ilvl). A lvlOverride can carry a
+/// `<w:startOverride>` (restart the counter) AND/OR a full nested `<w:lvl>` that
+/// REPLACES the abstract level's numFmt/lvlText/indent for this numId. Word uses
+/// the override level's format (technical__0055119c: numId 2 overrides its levels
+/// with decimalZero "%2.%3"=1.01, upper/lowerLetter, compact indent, where the
+/// abstract levels are decimal/lowerLetter/lowerRoman with large indent).
+#[derive(Debug, Clone, Default)]
+pub struct LevelOverride {
+    /// startOverride value (counter restart), if declared.
+    pub start: Option<u32>,
+    /// A nested `<w:lvl>` that replaces the abstract level for this numId.
+    pub level: Option<NumberingLevel>,
+}
+
 /// Parsed numbering definitions from word/numbering.xml
 #[derive(Debug, Clone, Default)]
 pub struct NumberingDefinitions {
@@ -61,8 +75,9 @@ pub struct NumberingDefinitions {
     pub abstract_nums: HashMap<String, AbstractNum>,
     /// numId -> abstractNumId
     pub num_map: HashMap<String, String>,
-    /// numId -> (ilvl -> start override value)
-    pub level_overrides: HashMap<String, HashMap<u8, u32>>,
+    /// numId -> (ilvl -> LevelOverride) — S988B: start override and/or a full
+    /// override level.
+    pub level_overrides: HashMap<String, HashMap<u8, LevelOverride>>,
 }
 
 /// Result of resolving a list marker
@@ -120,7 +135,7 @@ impl NumberingDefinitions {
             None => return fallback,
         };
 
-        let level = match abstract_num.levels.get(&ilvl) {
+        let level = match self.effective_level(num_id, abstract_num, ilvl) {
             Some(l) => l,
             None => return fallback,
         };
@@ -143,8 +158,8 @@ impl NumberingDefinitions {
         let key = (num_id.to_string(), ilvl);
         let count = counters.entry(key).or_insert_with(|| {
             // startOverride takes priority over abstractNum start
-            if let Some(overrides) = self.level_overrides.get(num_id) {
-                if let Some(&ov_start) = overrides.get(&ilvl) {
+            if let Some(ov) = self.level_overrides.get(num_id).and_then(|m| m.get(&ilvl)) {
+                if let Some(ov_start) = ov.start {
                     return ov_start - 1;
                 }
             }
@@ -204,7 +219,7 @@ impl NumberingDefinitions {
                     if lvl_i == ilvl {
                         text = text.replace(&placeholder, "");
                     } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
-                        if let Some(other_level) = abstract_num.levels.get(&lvl_i) {
+                        if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
                             let other_key = (num_id.to_string(), lvl_i);
                             let other_count = counters.get(&other_key).copied().unwrap_or(0);
                             let other_fmt = if other_level.num_fmt == "none" {
@@ -233,7 +248,7 @@ impl NumberingDefinitions {
                 if lvl_i == ilvl {
                     text = text.replace(&placeholder, &formatted_num);
                 } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
-                    if let Some(other_level) = abstract_num.levels.get(&lvl_i) {
+                    if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
                         let other_key = (num_id.to_string(), lvl_i);
                         let other_count = counters.get(&other_key).copied().unwrap_or(0);
                         let other_fmt = format_number(other_count, &other_level.num_fmt);
@@ -247,11 +262,31 @@ impl NumberingDefinitions {
         ResolvedMarker { text: marker, marker_size: level.marker_size, hanging, suff, tab_stop, level_left: level.indent_left }
     }
 
+    /// S988B: the EFFECTIVE level for (numId, ilvl) — the `<w:lvlOverride>`'s
+    /// nested `<w:lvl>` when present (its numFmt/lvlText/indent replace the
+    /// abstract level for this numId), else the abstract level. Opt-out
+    /// OXI_S988B_DISABLE returns the abstract level (legacy).
+    fn effective_level<'a>(
+        &'a self,
+        num_id: &str,
+        abstract_num: &'a AbstractNum,
+        ilvl: u8,
+    ) -> Option<&'a NumberingLevel> {
+        if std::env::var("OXI_S988B_DISABLE").is_err() {
+            if let Some(ov) = self.level_overrides.get(num_id).and_then(|m| m.get(&ilvl)) {
+                if let Some(lvl) = &ov.level {
+                    return Some(lvl);
+                }
+            }
+        }
+        abstract_num.levels.get(&ilvl)
+    }
+
     /// Get the left indent for a given numId and ilvl
     pub fn get_level_indent(&self, num_id: &str, ilvl: u8) -> Option<f32> {
         let abstract_num_id = self.num_map.get(num_id)?;
         let abstract_num = self.abstract_nums.get(abstract_num_id)?;
-        let level = abstract_num.levels.get(&ilvl)?;
+        let level = self.effective_level(num_id, abstract_num, ilvl)?;
         level.indent_left
     }
 
@@ -259,7 +294,7 @@ impl NumberingDefinitions {
     pub fn get_level_hanging(&self, num_id: &str, ilvl: u8) -> Option<f32> {
         let abstract_num_id = self.num_map.get(num_id)?;
         let abstract_num = self.abstract_nums.get(abstract_num_id)?;
-        let level = abstract_num.levels.get(&ilvl)?;
+        let level = self.effective_level(num_id, abstract_num, ilvl)?;
         level.indent_hanging
     }
 
@@ -268,7 +303,7 @@ impl NumberingDefinitions {
     pub fn get_level_first_line(&self, num_id: &str, ilvl: u8) -> Option<f32> {
         let abstract_num_id = self.num_map.get(num_id)?;
         let abstract_num = self.abstract_nums.get(abstract_num_id)?;
-        let level = abstract_num.levels.get(&ilvl)?;
+        let level = self.effective_level(num_id, abstract_num, ilvl)?;
         level.indent_first_line
     }
 }
@@ -320,6 +355,9 @@ fn map_symbol_bullets(text: &str) -> String {
 pub(crate) fn format_number(n: u32, fmt: &str) -> String {
     match fmt {
         "decimal" => n.to_string(),
+        // S988B: zero-padded to two digits (01, 02, ..., 10, 11). Used by
+        // technical__0055119c's numId-2 ilvl-2 lvlOverride (numFmt=decimalZero).
+        "decimalZero" => format!("{:02}", n),
         // pgNumType: page number wrapped in dashes ("- 1 -"). Word renders
         // halfwidth digits with "- " / " -" (3a4f p34 footer pixel-confirmed).
         "numberInDash" => format!("- {} -", n),
@@ -657,10 +695,13 @@ fn parse_numbering_level(
     })
 }
 
-/// Parse a w:num element to get its abstractNumId and any lvlOverride/startOverride
-fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<(String, HashMap<u8, u32>), ParseError> {
+/// Parse a w:num element to get its abstractNumId and any lvlOverride
+/// (startOverride and/or a full nested `<w:lvl>` — S988B).
+fn parse_num_element(
+    reader: &mut Reader<&[u8]>,
+) -> Result<(String, HashMap<u8, LevelOverride>), ParseError> {
     let mut abstract_num_id = String::new();
-    let mut overrides: HashMap<u8, u32> = HashMap::new();
+    let mut overrides: HashMap<u8, LevelOverride> = HashMap::new();
     let mut depth = 0;
     let mut current_override_ilvl: Option<u8> = None;
 
@@ -675,8 +716,31 @@ fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<(String, HashMap<u8, 
                             current_override_ilvl = val.parse().ok();
                         }
                     }
+                    depth += 1;
+                } else if local == "lvl" {
+                    // S988B: a nested <w:lvl> inside a lvlOverride REPLACES the
+                    // abstract level for this numId. parse_numbering_level
+                    // consumes through </w:lvl> (its own depth counter), so this
+                    // branch must NOT touch `depth`.
+                    if let Some(ov_ilvl) = current_override_ilvl {
+                        let mut lvl_ilvl = ov_ilvl;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "ilvl" {
+                                if let Ok(v) =
+                                    String::from_utf8_lossy(&attr.value).parse::<u8>()
+                                {
+                                    lvl_ilvl = v;
+                                }
+                            }
+                        }
+                        let level = parse_numbering_level(reader, lvl_ilvl)?;
+                        overrides.entry(ov_ilvl).or_default().level = Some(level);
+                    } else {
+                        depth += 1;
+                    }
+                } else {
+                    depth += 1;
                 }
-                depth += 1;
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
@@ -693,7 +757,7 @@ fn parse_num_element(reader: &mut Reader<&[u8]>) -> Result<(String, HashMap<u8, 
                             if local_name(attr.key.as_ref()) == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 if let Ok(start) = val.parse::<u32>() {
-                                    overrides.insert(ilvl, start);
+                                    overrides.entry(ilvl).or_default().start = Some(start);
                                 }
                             }
                         }
