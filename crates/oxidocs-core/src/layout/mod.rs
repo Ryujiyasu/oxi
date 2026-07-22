@@ -20327,7 +20327,37 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 25.5) — the flips are compensating-error exposures,
                         // not model errors. Cell tcBorders ≡ table insideH.)
                         let rb2_bw = self.rowbox2_trh_bw(table, row);
-                        row_height = row_height.max(h + rb2_bw);
+                        // Task T / S983 (2026-07-22, default ON, opt-out
+                        // OXI_S983_DISABLE): a COMPACT
+                        // fixed 3-cell form row uses the declared atLeast trHeight
+                        // as a CONTENT floor — Word then adds the table-wide
+                        // vertical cell margins + border on top. forms__0020466f
+                        // table 13 (Ethnic origin): Word row = trHeight + top
+                        // cellMar 5 + bottom cellMar 5 + border 1 = 21/22/24 +11 =
+                        // 32/33/35pt (PDF border truth, max error 0.08pt); Oxi's
+                        // `trH + bw` (22/23/25) loses to the natural 25.648, so 13
+                        // single-line rows lost ~6.4pt each (91pt total) and the
+                        // table did not split like Word (9pg vs Word 10). The
+                        // discriminator is deliberately NARROWER than the general
+                        // atLeast envelope: a blanket "atLeast + all cellMar" over-
+                        // counts uklocalspending T5R3 (6 cells, trH 51 -> ~62pt),
+                        // so it is falsified. Census (1,739 artifacts): only this
+                        // table's 18 rows match; frozen/real_en/JP = 0.
+                        let s983_vmar = if std::env::var("OXI_S983_DISABLE").is_err()
+                            && table.style.layout.as_deref() == Some("fixed")
+                            && table.style.has_inside_h
+                            && row.cells.len() == 3
+                            && (20.0..=24.0).contains(&h)
+                        {
+                            let top = table.style.default_cell_margins.as_ref()
+                                .and_then(|m| m.top).unwrap_or(0.0);
+                            let bottom = table.style.default_cell_margins.as_ref()
+                                .and_then(|m| m.bottom).unwrap_or(0.0);
+                            if top >= 5.0 && bottom >= 5.0 { top + bottom } else { 0.0 }
+                        } else {
+                            0.0
+                        };
+                        row_height = row_height.max(h + rb2_bw + s983_vmar);
                     }
                 }
             }
