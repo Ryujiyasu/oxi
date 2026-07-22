@@ -104,6 +104,16 @@ fn main() {
     } else {
         engine.with_show_revisions(oxidocs_core::ir::ShowRevisions::Final)
     };
+    // S980 (2026-07-22, opt-out OXI_S980_DISABLE): Word final/clean view —
+    // comment balloons hidden (like S483 hides <w:del>). See the GDI renderer
+    // comment: a single comment reserves a 317.8pt balloon column on every body
+    // page (technical__0061c884: 14 -> 34 pages). Corpus scan: 1/677 docs has a
+    // real comment -> byte-identical elsewhere by construction.
+    let engine = if std::env::var("OXI_S980_DISABLE").is_ok() {
+        engine
+    } else {
+        engine.with_show_comments(false)
+    };
     let result = engine.layout(&doc);
 
     eprintln!("Parsed {} pages, DPI={} supersample={}x (DirectWrite renderer)",

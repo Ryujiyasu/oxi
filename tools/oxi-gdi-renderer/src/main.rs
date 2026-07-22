@@ -57,6 +57,20 @@ fn main() {
     } else {
         engine.with_show_revisions(oxidocs_core::ir::ShowRevisions::Final)
     };
+    // S980 (2026-07-22, opt-out OXI_S980_DISABLE): render Word's final/clean
+    // view — comment balloons hidden — like S483 hides <w:del>. The engine
+    // default keeps show_comments=true for the web/WASM comment UI; the
+    // Word-ground-truth renderers must match Word's PDF export, which omits the
+    // comment balloon. A single comment otherwise reserves a 317.8pt balloon
+    // column on EVERY body page (technical__0061c884: text width 453.5 -> 135.7,
+    // wrapping everything to 3-10x lines, 14 -> 34 pages). Corpus scan: real
+    // comments = 1/677 docs (golden 0, real_en 0, JP 0) -> byte-identical
+    // elsewhere by construction.
+    let engine = if std::env::var("OXI_S980_DISABLE").is_ok() {
+        engine
+    } else {
+        engine.with_show_comments(false)
+    };
     let result = engine.layout(&doc);
 
     eprintln!("Parsed {} pages, DPI={} supersample={}x", result.pages.len(), dpi, supersample);
