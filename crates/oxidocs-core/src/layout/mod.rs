@@ -26704,7 +26704,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // height (mirror of the render-side rule; b35123 note sz-21 「　」).
             let cellpair_ws_est = self.cellpair_active()
                 && para.runs.iter().any(|r| !r.text.trim().is_empty());
+            // S986 (Task reports__00253cd4): a bookmark anchor is metadata, not
+            // glyph content. The parser makes an empty default-styled anchor Run
+            // for `<w:bookmarkStart>`; in a CELL it was folded into
+            // max_line_height at the paragraph/default 11pt, inflating a
+            // visible-10pt row's height estimate (reports__00253cd4 row 5:
+            // 46.5→54.5pt → the actual-correction max() cannot shrink it → +1
+            // page). Skip a bookmark-only run when the paragraph has visible
+            // text; a bookmark-only paragraph keeps its empty-line height.
+            // in_cell-gated per the S944/S946 lesson — this shared estimator
+            // also drives the body keepNext lookahead + footnote reservation.
+            // Opt-out OXI_S986_DISABLE.
+            let s986_skip_anchor = in_cell
+                && std::env::var("OXI_S986_DISABLE").is_err()
+                && para.runs.iter().any(|r| !r.text.is_empty());
             for run in &para.runs {
+                if s986_skip_anchor && run.bookmark_name.is_some() && run.text.is_empty() {
+                    continue;
+                }
                 if cellpair_ws_est && run.text.trim().is_empty() { continue; }
                 let font_size = self.resolve_font_size(&run.style, &para.style);
                 let metrics = self.metrics_for_text(&run.text, &run.style, &para.style);
