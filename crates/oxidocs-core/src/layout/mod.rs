@@ -8903,7 +8903,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         self.doc_default_metrics()
                     };
-                    let lh = metrics.word_line_height(fs, 96.0);
+                    // S979 (2026-07-22, opt-out OXI_S979_DISABLE): a Latin header
+                    // line's height is the hhea-natural line box (the body's
+                    // S805/S671 model), NOT word_line_height (the GDI-pixel-rounded
+                    // win box). For TNR 10pt the GDI value is 12.0 but Word renders
+                    // 11.499 (hhea); the ~0.5pt/line surplus pushed every page's
+                    // body ~1.15pt low (reference__00525b22: a constant per-page
+                    // offset that overflowed 14 pages' last line by ~0.4pt each ->
+                    // whole-para widow-push -> +1). uklocal's S813 landscape-Annex
+                    // header ALSO wants hhea (its "line 12.65" IS Arial-11 hhea
+                    // 12.649, not the 12.75 GDI value). CJK headers keep the
+                    // word_line_height (83/64) calibration.
+                    let lh = if !self.doc_body_has_real_cjk
+                        && !metrics.is_cjk_83_64_font()
+                        && std::env::var("OXI_S979_DISABLE").is_err()
+                    {
+                        metrics.natural_line_height_hhea(fs)
+                    } else {
+                        metrics.word_line_height(fs, 96.0)
+                    };
+                    if std::env::var("OXI_DBG_HDR").is_ok() {
+                        let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(12).collect();
+                        eprintln!("[DBG_HDR] fs={:.1} lh={:.3} word_lh={:.3} hhea={:.3} fam={:?} text={:?}",
+                            fs, lh, metrics.word_line_height(fs, 96.0), metrics.natural_line_height_hhea(fs), metrics.family, txt);
+                    }
                     hdr_h += lh;
                     if s813 && !para.style.has_direct_spacing {
                         let sb = para.style.space_before.unwrap_or(0.0);
