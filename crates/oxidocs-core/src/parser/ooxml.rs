@@ -6325,10 +6325,28 @@ fn parse_run_properties(
                             }
                         }
                     }
-                    "strike" => style.strikethrough = true,
+                    "strike" => {
+                        // S988A: honor w:val="false" on a direct run property
+                        // (CT_OnOff three-state, same as the style path). Opt-out
+                        // OXI_S988A_DISABLE.
+                        if std::env::var("OXI_S988A_DISABLE").is_err() {
+                            style.strikethrough = super::styles::ct_on_off(&e);
+                            style.has_explicit_strikethrough = true;
+                        } else {
+                            style.strikethrough = true;
+                        }
+                    }
                     "dstrike" => {
-                        style.strikethrough = true;
-                        style.double_strikethrough = true;
+                        if std::env::var("OXI_S988A_DISABLE").is_err() {
+                            let v = super::styles::ct_on_off(&e);
+                            style.strikethrough = v;
+                            style.double_strikethrough = v;
+                            style.has_explicit_strikethrough = true;
+                            style.has_explicit_double_strikethrough = true;
+                        } else {
+                            style.strikethrough = true;
+                            style.double_strikethrough = true;
+                        }
                     }
                     "highlight" => {
                         for attr in e.attributes().flatten() {
@@ -6451,10 +6469,20 @@ fn parse_run_properties(
                         }
                     }
                     "smallCaps" => {
-                        style.small_caps = true;
+                        if std::env::var("OXI_S988A_DISABLE").is_err() {
+                            style.small_caps = super::styles::ct_on_off(&e);
+                            style.has_explicit_small_caps = true;
+                        } else {
+                            style.small_caps = true;
+                        }
                     }
                     "caps" => {
-                        style.all_caps = true;
+                        if std::env::var("OXI_S988A_DISABLE").is_err() {
+                            style.all_caps = super::styles::ct_on_off(&e);
+                            style.has_explicit_all_caps = true;
+                        } else {
+                            style.all_caps = true;
+                        }
                     }
                     "shd" => {
                         // S704 (2026-06-30): compute the EFFECTIVE run-shading colour from

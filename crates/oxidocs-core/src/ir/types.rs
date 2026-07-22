@@ -411,9 +411,16 @@ pub struct RunStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underline_style: Option<String>,
     pub strikethrough: bool,
+    /// S988A: the strike/dstrike/caps/smallCaps CT_OnOff was set explicitly
+    /// (incl. `w:val="false"`), so it wins over an inherited ON — the S976
+    /// bold/italic three-state extended to these siblings.
+    #[serde(default)]
+    pub has_explicit_strikethrough: bool,
     /// Double strikethrough (w:dstrike)
     #[serde(default)]
     pub double_strikethrough: bool,
+    #[serde(default)]
+    pub has_explicit_double_strikethrough: bool,
     pub color: Option<String>,
     pub highlight: Option<String>,
     pub vertical_align: Option<VerticalAlign>,
@@ -423,9 +430,13 @@ pub struct RunStyle {
     /// Small capitals (w:smallCaps)
     #[serde(default)]
     pub small_caps: bool,
+    #[serde(default)]
+    pub has_explicit_small_caps: bool,
     /// All capitals (w:caps)
     #[serde(default)]
     pub all_caps: bool,
+    #[serde(default)]
+    pub has_explicit_all_caps: bool,
     /// Character-level shading/background color (w:shd fill, hex)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shading: Option<String>,
@@ -531,13 +542,17 @@ impl Default for RunStyle {
             underline: false,
             underline_style: None,
             strikethrough: false,
+            has_explicit_strikethrough: false,
             double_strikethrough: false,
+            has_explicit_double_strikethrough: false,
             color: None,
             highlight: None,
             vertical_align: None,
             character_spacing: None,
             small_caps: false,
+            has_explicit_small_caps: false,
             all_caps: false,
+            has_explicit_all_caps: false,
             shading: None,
             rtl: false,
             vanish: false,

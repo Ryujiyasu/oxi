@@ -420,7 +420,26 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if !child.underline && parent.underline {
         child.underline = true;
     }
-    if !child.strikethrough && parent.strikethrough {
+    // S988A: strikethrough is three-state (mirror bold/italic above) — an
+    // explicit child `<w:strike w:val="false"/>` beats the parent's ON, while a
+    // non-explicit child still inherits via the same monotonic OR as before.
+    // Opt-out OXI_S988A_DISABLE keeps the legacy monotonic OR. NOTE: caps/
+    // dstrike/smallCaps deliberately keep their pre-S988A no-inheritance in the
+    // style chain — the report's verified A/B removed val="false" NODES (= the
+    // producer fix below), it did NOT test adding caps INHERITANCE (which would
+    // newly fire on ~129 golden docs with basedOn+plain-caps). The target
+    // (CSILevel, no basedOn) needs only the producer's val="false" honoring;
+    // caps-through-basedOn is a separate, unverified correctness change.
+    if std::env::var("OXI_S988A_DISABLE").is_err() {
+        if !child.has_explicit_strikethrough {
+            if parent.has_explicit_strikethrough {
+                child.strikethrough = parent.strikethrough;
+                child.has_explicit_strikethrough = true;
+            } else if parent.strikethrough {
+                child.strikethrough = true;
+            }
+        }
+    } else if !child.strikethrough && parent.strikethrough {
         child.strikethrough = true;
     }
     // Round 29: vertical_align inheritance (footnote reference style "aa"
@@ -632,10 +651,27 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 }
             }
         }
-        "strike" => rs.strikethrough = true,
+        "strike" => {
+            // S988A: honor `w:val="false"` (CT_OnOff three-state, mirrors S976
+            // bold/italic). Opt-out OXI_S988A_DISABLE keeps the presence-only ON.
+            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                rs.strikethrough = ct_on_off(e);
+                rs.has_explicit_strikethrough = true;
+            } else {
+                rs.strikethrough = true;
+            }
+        }
         "dstrike" => {
-            rs.strikethrough = true;
-            rs.double_strikethrough = true;
+            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                let v = ct_on_off(e);
+                rs.strikethrough = v;
+                rs.double_strikethrough = v;
+                rs.has_explicit_strikethrough = true;
+                rs.has_explicit_double_strikethrough = true;
+            } else {
+                rs.strikethrough = true;
+                rs.double_strikethrough = true;
+            }
         }
         "sz" => {
             for attr in e.attributes().flatten() {
@@ -752,8 +788,22 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 }
             }
         }
-        "smallCaps" => rs.small_caps = true,
-        "caps" => rs.all_caps = true,
+        "smallCaps" => {
+            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                rs.small_caps = ct_on_off(e);
+                rs.has_explicit_small_caps = true;
+            } else {
+                rs.small_caps = true;
+            }
+        }
+        "caps" => {
+            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                rs.all_caps = ct_on_off(e);
+                rs.has_explicit_all_caps = true;
+            } else {
+                rs.all_caps = true;
+            }
+        }
         "shd" => {
             for attr in e.attributes().flatten() {
                 let key = local_name(attr.key.as_ref());
@@ -1224,12 +1274,26 @@ fn parse_style_definition(
                             }
                         }
                         "strike" => {
-                            run_style.strikethrough = true;
+                            // S988A: honor w:val="false" (CT_OnOff three-state).
+                            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                                run_style.strikethrough = ct_on_off(&e);
+                                run_style.has_explicit_strikethrough = true;
+                            } else {
+                                run_style.strikethrough = true;
+                            }
                             has_run_style = true;
                         }
                         "dstrike" => {
-                            run_style.strikethrough = true;
-                            run_style.double_strikethrough = true;
+                            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                                let v = ct_on_off(&e);
+                                run_style.strikethrough = v;
+                                run_style.double_strikethrough = v;
+                                run_style.has_explicit_strikethrough = true;
+                                run_style.has_explicit_double_strikethrough = true;
+                            } else {
+                                run_style.strikethrough = true;
+                                run_style.double_strikethrough = true;
+                            }
                             has_run_style = true;
                         }
                         "sz" => {
@@ -1332,11 +1396,21 @@ fn parse_style_definition(
                             }
                         }
                         "smallCaps" => {
-                            run_style.small_caps = true;
+                            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                                run_style.small_caps = ct_on_off(&e);
+                                run_style.has_explicit_small_caps = true;
+                            } else {
+                                run_style.small_caps = true;
+                            }
                             has_run_style = true;
                         }
                         "caps" => {
-                            run_style.all_caps = true;
+                            if std::env::var("OXI_S988A_DISABLE").is_err() {
+                                run_style.all_caps = ct_on_off(&e);
+                                run_style.has_explicit_all_caps = true;
+                            } else {
+                                run_style.all_caps = true;
+                            }
                             has_run_style = true;
                         }
                         "shd" => {
