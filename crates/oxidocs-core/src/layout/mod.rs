@@ -4042,28 +4042,23 @@ impl LayoutEngine {
         {
             let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
             for (ti, tb) in page.text_boxes.iter().enumerate() {
-                // S975 (2026-07-21, HELD OPT-IN OXI_S975=1, default OFF):
+                // S981 (2026-07-22, default ON, opt-out OXI_S981_DISABLE):
                 // wrapTIGHT side-wrap. Word render-truth (reports__0013bcb8,
                 // whose gray title box is Tight): the host run 'R' renders at
                 // x=476.62 BESIDE the box, so Tight wraps like Square and the
                 // band contract needs no change; that document goes 0.7849 ->
-                // 0.9140. ★The parser half is a REAL bug (see the ooxml.rs
-                // arm): wrapTight/wrapThrough always carry a wrapPolygon child
-                // so they arrive as Start events, and the wrap arms live in the
-                // Empty arm only — Tight was never parsed at all.
-                // HELD because policies__0026b7f7 flips PASS->FAIL (1.0000 ->
-                // 0.7568, 2 -> 3 pages): its Tight box sits on the RIGHT
-                // (x 355.5, w 184.8, h 312.8) and the band correctly narrows
-                // the body beside it, but Oxi then wraps MORE lines than Word
-                // fits on the page. So the open question is the band's
-                // vertical extent / narrowed-wrap width for a right-side tall
-                // box, not the Tight classification. SCOPE when enabled:
-                // paragraph-relative Tight textboxes are 3 sites in 2
-                // docx_corpus/en docs and ZERO in golden-test / real_en /
-                // docx_corpus/ja (census).
-                let s975 = std::env::var("OXI_S975").is_ok()
+                // 0.9140. Formerly HELD (S975 opt-in) because policies__0026b7f7
+                // flipped 1.0000 -> 0.7568 (2 -> 3 pages) — its behindDoc Tight
+                // sidebar was pushed to p3 by the content-bottom clamp. REPORT_N
+                // derived the pair fix (physical-bottom fit + identical-x band
+                // union, see the s758_srcs `physical` field): policies is now
+                // back to 2 pages (PASS). BLAST RADIUS (byte-compare, S981
+                // off/on): 2/200 EN docs change (policies + reports, both
+                // Word-correct); 0 golden / 0 real_en (ukframework PASS 1.0 both
+                // ways) / 0 JP / ssim_ab 0 changed.
+                let s981 = std::env::var("OXI_S981_DISABLE").is_err()
                     && tb.wrap_type == Some(crate::ir::WrapType::Tight);
-                if (tb.wrap_type == Some(crate::ir::WrapType::Square) || s975)
+                if (tb.wrap_type == Some(crate::ir::WrapType::Square) || s981)
                     && tb.position.as_ref()
                         .map_or(false, |tp| tp.v_relative.as_deref() == Some("paragraph")
                             && tp.y >= 0.0)
@@ -4240,17 +4235,25 @@ impl LayoutEngine {
             }
             // S758: resolve wrapSquare bands anchored to this block (band top =
             // the anchor paragraph's first-line top = the cursor here).
-            let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32)> = {
-                // unified (pos_y, width, height, h_align, x, dist_l, dist_r)
+            // S981 (2026-07-22, gated under S975 opt-in): the trailing bool is
+            // `physical` — a behindDoc Tight textbox occupies the BOTTOM MARGIN
+            // (drawn to the physical page bottom), so it is fit against the
+            // physical page height, NOT the content bottom, and it is NOT
+            // whole-pushed to the next page. policies__0026b7f7: a behindDoc
+            // wrapTight sidebar (y 528..840.75, past content bottom 770) that
+            // Word keeps on p2; the content-bottom clamp/push sent it + its
+            // anchor to p3 (S975=1: 2 -> 3 pages). REPORT_N.
+            let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool)> = {
+                // unified (pos_y, width, height, h_align, x, dist_l, dist_r, physical)
                 // over image + textbox wrapSquare sources anchored to this block
-                let mut v: Vec<(f32, f32, f32, Option<String>, f32, f32, f32)> = Vec::new();
+                let mut v: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool)> = Vec::new();
                 if let Some(iis) = s758_squares.get(&block_idx) {
                     for &ii in iis {
                         let img = &page.floating_images[ii];
                         if let Some(ip) = img.position.as_ref() {
                             v.push((ip.y, img.width, img.height,
                                     ip.h_align.clone(), ip.x,
-                                    ip.dist_l.unwrap_or(9.0), ip.dist_r.unwrap_or(9.0)));
+                                    ip.dist_l.unwrap_or(9.0), ip.dist_r.unwrap_or(9.0), false));
                         }
                     }
                 }
@@ -4258,9 +4261,13 @@ impl LayoutEngine {
                     for &ti in tis {
                         let tb = &page.text_boxes[ti];
                         if let Some(tp) = tb.position.as_ref() {
+                            let s981_physical = std::env::var("OXI_S981_DISABLE").is_err()
+                                && tb.behind_doc
+                                && tb.wrap_type == Some(crate::ir::WrapType::Tight);
                             v.push((tp.y, tb.width, tb.height,
                                     tp.h_align.clone(), tp.x,
-                                    tp.dist_l.unwrap_or(9.0), tp.dist_r.unwrap_or(9.0)));
+                                    tp.dist_l.unwrap_or(9.0), tp.dist_r.unwrap_or(9.0),
+                                    s981_physical));
                         }
                     }
                 }
@@ -4276,13 +4283,16 @@ impl LayoutEngine {
                 // PUSH only when some source cannot be clamped below the
                 // anchor line (derived rule branch (b)); a clampable
                 // overflow keeps the anchor (branch (a)).
-                let s758_needs_push = s758_srcs.iter().any(|(py, _w, h, _a, _x, _dl, _dr)| {
+                let s758_needs_push = s758_srcs.iter().any(|(py, _w, h, _a, _x, _dl, _dr, physical)| {
+                    // S981: a physical (behindDoc Tight) source is fit against the
+                    // physical page bottom — it may use the bottom margin.
+                    let fit_bottom = if *physical { page.size.height } else { s758_content_bottom };
                     let nat_bottom = cursor.cursor_y + py.max(0.0) + h;
-                    nat_bottom > s758_content_bottom
-                        && (s758_content_bottom - h) < cursor.cursor_y - 0.1
+                    nat_bottom > fit_bottom
+                        && (fit_bottom - h) < cursor.cursor_y - 0.1
                 });
                 let s758_max_bottom = s758_srcs.iter()
-                    .map(|(py, _w, h, _a, _x, _dl, _dr)| cursor.cursor_y + py.max(0.0) + h)
+                    .map(|(py, _w, h, _a, _x, _dl, _dr, _)| cursor.cursor_y + py.max(0.0) + h)
                     .fold(f32::NEG_INFINITY, f32::max);
                 if s758_needs_push
                     && s758_max_bottom - cursor.cursor_y <= content_height
@@ -4302,9 +4312,11 @@ impl LayoutEngine {
                     footnote_ids_current_page.clear();
                     s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
                 }
-                for (py, w, h, h_align, px, dl, dr) in &s758_srcs {
+                for (py, w, h, h_align, px, dl, dr, physical) in &s758_srcs {
                     let nat_top = cursor.cursor_y + py.max(0.0);
-                    let cb = start_y + content_height;
+                    // S981: a physical (behindDoc Tight) float may extend into the
+                    // bottom margin, so clamp against the physical page bottom.
+                    let cb = if *physical { page.size.height } else { start_y + content_height };
                     // derived rule branch (a): clamp an overflowing float up
                     // against the content bottom (never above the anchor).
                     let top = if nat_top + h > cb {
@@ -4323,7 +4335,27 @@ impl LayoutEngine {
                     // the keep-out rect includes the wp:anchor distL/distR
                     // margins (default 114300EMU = 9.0pt); the consumption
                     // side then narrows exactly to the rect edge.
-                    s758_bands.push((current_page_idx, top, bottom, x0 - dl, x0 + w + dr));
+                    let nb = (current_page_idx, top, bottom, x0 - dl, x0 + w + dr);
+                    // S981: a physical Tight band that vertically overlaps an
+                    // already-registered band of the SAME x-extent (the leading
+                    // wrapSquare sidebar the author chains to it) is UNIONed —
+                    // the consumer picks one band by `.find()`, so without the
+                    // union the following lines rebreak at the Square's shorter
+                    // bottom and ignore the Tight extent.
+                    if *physical {
+                        if let Some(b) = s758_bands.iter_mut().rev().find(|b| {
+                            b.0 == nb.0
+                                && nb.1 <= b.2 + 0.5
+                                && nb.2 >= b.1 - 0.5
+                                && (b.3 - nb.3).abs() <= 0.5
+                                && (b.4 - nb.4).abs() <= 0.5
+                        }) {
+                            b.1 = b.1.min(nb.1);
+                            b.2 = b.2.max(nb.2);
+                            continue;
+                        }
+                    }
+                    s758_bands.push(nb);
                 }
             }
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and

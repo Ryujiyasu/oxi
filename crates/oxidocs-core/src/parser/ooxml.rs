@@ -4301,7 +4301,11 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     // self-closing, do land), and wrapTight was therefore never
                     // parsed at all. reports__0013bcb8's gray title box is Tight
                     // and reached layout with wrap_type = None.
-                    "wrapTight" | "wrapThrough" if std::env::var("OXI_S975").is_ok() => {
+                    // S981 (2026-07-22, default ON, opt-out OXI_S981_DISABLE):
+                    // parse wrapTight/wrapThrough (formerly the S975 opt-in). The
+                    // side-wrap + behindDoc-Tight physical-bottom rules that
+                    // blocked default-on are now correct on both target docs.
+                    "wrapTight" | "wrapThrough" if std::env::var("OXI_S981_DISABLE").is_err() => {
                         wrap_type = Some(WrapType::Tight);
                     }
                     "wpc" => {
