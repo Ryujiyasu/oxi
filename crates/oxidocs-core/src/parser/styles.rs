@@ -284,7 +284,22 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
         child.widow_control = parent.widow_control;
         child.has_explicit_widow_control = true;
     }
-    if !child.page_break_before && parent.page_break_before {
+    // S985: CT_OnOff three-state (mirrors keepNext/keepLines/widowControl above).
+    // A child style that EXPLICITLY set pageBreakBefore (incl. val="0") keeps its
+    // own value; only a child that did NOT set it inherits — the parent's value +
+    // explicitness if the parent set it, else the legacy monotonic OR. This stops
+    // a derived style's explicit `val="0"` from being overwritten by a basedOn
+    // parent's true (legal__001410a8 yHeading2/nHeading2).
+    if std::env::var("OXI_S985_DISABLE").is_err() {
+        if !child.has_explicit_page_break_before {
+            if parent.has_explicit_page_break_before {
+                child.page_break_before = parent.page_break_before;
+                child.has_explicit_page_break_before = true;
+            } else if parent.page_break_before {
+                child.page_break_before = true;
+            }
+        }
+    } else if !child.page_break_before && parent.page_break_before {
         child.page_break_before = true;
     }
     if !child.contextual_spacing && parent.contextual_spacing {
@@ -982,6 +997,17 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.page_break_before = enabled;
+            // S985 (Task legal__001410a8, 2026-07-22): record explicitness so a
+            // derived style's `<w:pageBreakBefore w:val="0"/>` beats a basedOn
+            // parent's ON (the CT_OnOff three-state — S633 keepNext / S976 bold /
+            // S606b snapToGrid class; S884 fixed the DIRECT pPr path, this fixes
+            // the STYLE chain). Without it merge_paragraph_style's monotonic OR
+            // restores the parent's true (legal__001410a8 yHeading2/nHeading2 →
+            // spurious page breaks before Forms / Details of applicant → +2 pages).
+            // Opt-out OXI_S985_DISABLE (gates producer + merge → legacy monotonic OR).
+            if std::env::var("OXI_S985_DISABLE").is_err() {
+                style.has_explicit_page_break_before = true;
+            }
         }
         "contextualSpacing" => {
             let mut enabled = true;
@@ -1543,6 +1569,9 @@ fn parse_style_definition(
                                 }
                             }
                             style.page_break_before = enabled;
+                            if std::env::var("OXI_S985_DISABLE").is_err() {
+                                style.has_explicit_page_break_before = true; // S985 (see other site)
+                            }
                         }
                         "keepNext" => {
                             let mut enabled = true;
@@ -2091,6 +2120,47 @@ fn local_name(name: &[u8]) -> String {
     match s.rfind(':') {
         Some(pos) => s[pos + 1..].to_string(),
         None => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod s985_pbb_inheritance {
+    // S985 (Task legal__001410a8): pageBreakBefore is CT_OnOff three-state in the
+    // style chain — a derived style's explicit value (incl. val="0") beats a
+    // basedOn parent, and only an unspecified child inherits.
+    use crate::ir::ParagraphStyle;
+
+    fn ps(pbb: bool, explicit: bool) -> ParagraphStyle {
+        ParagraphStyle {
+            page_break_before: pbb,
+            has_explicit_page_break_before: explicit,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn parent_true_child_unspecified_inherits_true() {
+        let mut child = ps(false, false);
+        super::merge_para_style(&mut child, &ps(true, true));
+        assert!(child.page_break_before, "unspecified child inherits parent ON");
+        assert!(child.has_explicit_page_break_before, "explicitness propagates");
+    }
+
+    #[test]
+    fn parent_true_child_explicit_false_stays_false() {
+        let mut child = ps(false, true);
+        super::merge_para_style(&mut child, &ps(true, true));
+        assert!(
+            !child.page_break_before,
+            "an explicit child val=0 must beat the basedOn parent's ON"
+        );
+    }
+
+    #[test]
+    fn parent_false_child_explicit_true_stays_true() {
+        let mut child = ps(true, true);
+        super::merge_para_style(&mut child, &ps(false, true));
+        assert!(child.page_break_before, "explicit child true survives parent OFF");
     }
 }
 
