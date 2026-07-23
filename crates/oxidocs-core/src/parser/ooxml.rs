@@ -69,6 +69,7 @@ impl OoxmlParser {
         let settings_part_exists = self.read_part("word/settings.xml").is_ok();
         let fn_special_declared = self.parse_fn_special_declared();
         let compress_punctuation = self.parse_compress_punctuation();
+        let wp_justification = self.parse_compat_bool_flag("wpJustification");
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
         let balance_single_byte_double_byte_width =
             self.parse_compat_bool_flag("balanceSingleByteDoubleByteWidth");
@@ -487,6 +488,7 @@ impl OoxmlParser {
             settings_part_exists,
             fn_special_declared,
             compress_punctuation,
+            wp_justification,
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
         })

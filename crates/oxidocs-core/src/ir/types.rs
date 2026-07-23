@@ -65,6 +65,14 @@ pub struct Document {
     /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.
     #[serde(default)]
     pub compress_punctuation: bool,
+    /// S994 (2026-07-23): w:compat/w:wpJustification (CT_OnOff). The WordPerfect
+    /// 6.x justification-compat rule (MS-OE376 §2.1.481): a fully-justified line
+    /// selects content for an EFFECTIVE width `W_actual × (1 + 281/7200)` — fitting
+    /// ~one more word per line and compressing the inter-word spacing to the physical
+    /// width. Two docx_corpus/en legal docs carry it (0011dcc / 0011b198); 0 golden /
+    /// 0 JP → byte-identical elsewhere by construction.
+    #[serde(default)]
+    pub wp_justification: bool,
     /// w:doNotExpandShiftReturn compat setting.
     /// When true, Shift+Enter (soft break) lines are NOT justified even in jc=both paragraphs.
     #[serde(default)]

@@ -1796,6 +1796,10 @@ pub struct LayoutEngine {
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
     compress_punctuation: bool,
+    /// S994 (2026-07-23): w:compat/w:wpJustification (WordPerfect justify-compat).
+    /// A fully-justified line fits content for W_actual × (1 + 281/7200), then
+    /// compresses inter-word spacing to the physical width. See ir::Document.
+    wp_justification: bool,
     /// CELLPAIR scope (2026-07-02): the document has a linesAndChars docGrid with
     /// NEGATIVE charSpace (the 文字詰め form family: 191cb/b35123/atimesresume/
     /// parttime). Within this scope the derived Word cell model applies: subtract
@@ -2044,6 +2048,7 @@ impl LayoutEngine {
             settings_part_exists: true,
             fn_special_declared: false,
             compress_punctuation: false,
+            wp_justification: false,
             cellpair_neg_charspace: false,
             do_not_expand_shift_return: false,
             balance_single_byte_double_byte_width: false,
@@ -2144,6 +2149,7 @@ impl LayoutEngine {
             settings_part_exists: doc.settings_part_exists,
             fn_special_declared: doc.fn_special_declared,
             compress_punctuation: doc.compress_punctuation,
+            wp_justification: doc.wp_justification,
             cellpair_neg_charspace: doc.pages.iter().any(|pg| {
                 pg.doc_grid_lines_and_chars
                     && pg.grid_char_space_raw.map_or(false, |cs| cs < 0)
@@ -13213,6 +13219,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                         // Pure Latin with no spaces: do NOT add inter-character spacing
                     }
+                } else if slack < 0.0 && self.wp_justification
+                    && std::env::var("OXI_S994_DISABLE").is_err() {
+                    // S994 render: wpJustification selected content WIDER than the
+                    // physical line (the break used the W_actual × (1 + 281/7200)
+                    // budget, MS-OE376 §2.1.481). Compress the inter-word ASCII
+                    // spacing back to the physical width — symmetric to the positive
+                    // expansion above. Scoped to wp_justification (2 docx_corpus/en
+                    // docs) → byte-identical elsewhere by construction.
+                    let space_count = line.fragments.iter().enumerate()
+                        .filter(|(i, f)| *i < line.fragments.len() - 1
+                            && f.text.chars().all(|c| c == ' ') && !f.text.is_empty())
+                        .count();
+                    if space_count > 0 {
+                        let per_space = slack / space_count as f32; // negative → compress
+                        for (fi, frag) in line.fragments.iter().enumerate() {
+                            if fi < line.fragments.len() - 1
+                                && frag.text.chars().all(|c| c == ' ') && !frag.text.is_empty() {
+                                frag_spacing_after[fi] += per_space;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -14895,6 +14922,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // (a blanket 0.25 over-fits — framework {−1:20}→{−1:31}); sweep knob.
         let s799_cap: f32 = std::env::var("OXI_S799_CAP").ok()
             .and_then(|v| v.parse().ok()).unwrap_or(0.10);
+        // S994 (2026-07-23, opt-out OXI_S994_DISABLE): w:wpJustification widens a
+        // fully-justified line's fit budget to W_actual × (1 + 281/7200) (MS-OE376
+        // §2.1.481) — fitting ~one more word per line. The effective COLUMN width
+        // widens uniformly, so the credit is `available_tw × 281/7200` on EVERY line
+        // (Model A / "paragraph-width"): the first-line indent is a start offset, not
+        // a column-width reduction. This is both physically correct AND the empirical
+        // winner over the 0011dcc/0011b198 population (Model B, which subtracts the
+        // indent on line 0, under-fits the first line). OXI_WPJ_MODEL=B for the
+        // post-indent alternative. The matching render inter-word compression is at
+        // the justify site.
+        let wpj_active = self.wp_justification && is_justified
+            && std::env::var("OXI_S994_DISABLE").is_err();
+        let wpj_model_a = std::env::var("OXI_WPJ_MODEL").map(|v| v != "B").unwrap_or(true);
+        let wpj_first_indent_tw = pt_to_tw(first_line_indent);
+        let wpj_credit_at = |nlines: usize| -> i32 {
+            if !wpj_active { return 0; }
+            let content_tw = if nlines == 0 && !wpj_model_a {
+                (available_tw - wpj_first_indent_tw).max(0)
+            } else {
+                available_tw
+            };
+            ((content_tw as f32) * 281.0 / 7200.0).round() as i32
+        };
         let mut latin_space_credit_tw: i32 = 0;
         // S774 (2026-07-10, rides the TABTW/Latin scope): a RIGHT-aligned tab
         // pins the following segment's END at the tab stop — the segment grows
@@ -14969,7 +15019,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w)
+                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + wpj_credit_at(lines.len()) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -14994,7 +15044,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
-                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw + wpj_credit_at(lines.len()) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 lines.push(std::mem::take(&mut current_line));
                                 current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -15019,7 +15069,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + wpj_credit_at(lines.len()) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
