@@ -9101,6 +9101,59 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         }
     }
 
+    /// S992 (R1, 2026-07-23, default ON, opt-out OXI_S992_DISABLE): H-ink footer
+    /// collision. Word lets a body content border descend to the footer's
+    /// first-glyph-INK top, not the footer line-box top where footer_reserved
+    /// stops. The relief the body gains = the footer FIRST line's ascent-leading
+    /// = (ascent_em − cap) × fs. DERIVED (_pb_r1_footer_collision_gen.py, Word
+    /// COM+PDF): the max body row-bottom Word keeps = footer_ink_top − ~0.5,
+    /// and it TRACKS the ink across footer sizes (8/11/12pt), confirming H-ink
+    /// over H-box/H-border. forms__001c51d6 row35 (empty atLeast bordered) is
+    /// whole-pushed by a 2.13pt early rejection = exactly this leading.
+    /// cap=0.716 (Arial cap-height fraction) → forms exact; other Latin fonts
+    /// (Calibri/Times cap 0.64/0.66) are UNDER-estimated = less relief = safer.
+    /// Latin-scoped (JP footers keep the calibrated legacy path byte-identical).
+    fn footer_ink_relief(&self, blocks: &[Block]) -> f32 {
+        if self.doc_body_has_real_cjk { return 0.0; }
+        if std::env::var("OXI_S992_DISABLE").is_ok() { return 0.0; }
+        fn first_text_para(blocks: &[Block]) -> Option<&Paragraph> {
+            for b in blocks {
+                match b {
+                    Block::Paragraph(p)
+                        if p.style.frame_pr.is_none()
+                            && p.runs.iter().any(|r| !r.text.is_empty()) =>
+                    {
+                        return Some(p)
+                    }
+                    Block::Table(t) => {
+                        for row in &t.rows {
+                            for cell in &row.cells {
+                                if let Some(p) = first_text_para(&cell.blocks) {
+                                    return Some(p);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        let Some(p) = first_text_para(blocks) else { return 0.0 };
+        let Some(run) = p.runs.iter().find(|r| !r.text.is_empty()) else { return 0.0 };
+        let fs = self.resolve_font_size(&run.style, &p.style);
+        let m = self.metrics_for_text(&run.text, &run.style, &p.style);
+        // ascent/win_ascent are stored EM-NORMALIZED (~0.905 for Arial). The
+        // footer line-box top sits `ascent` above the baseline; the glyph cap
+        // ink sits cap≈0.71em below the baseline → the leading the body may
+        // encroach = (ascent − 0.71)×fs. cap=0.71 pins forms exact (relief
+        // 2.145 ≥ the measured 2.13 rejection) and UNDER-estimates Calibri
+        // (cap 0.644) / Times (0.662) = less relief = safer. The probe's
+        // "gap ≈0.5" was a last-fit granularity artifact; the true body limit
+        // is ≈ the footer glyph ink (gap ~0), so no gap subtraction.
+        (m.ascent - 0.71).max(0.0) * fs
+    }
+
     /// S755: (footer_reserved, footer_has_text) for one footer variant's
     /// blocks (the extracted reservation incl the Day-33 empty-para and
     /// framePr rules) so first/even/odd variants share one code path.
@@ -20459,7 +20512,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // SPILLS its footnote to the next page when the note area is full
             // (row12 stays, 表注12 renders on p2) — a line is never pushed by
             // its own note, only by the area accrued from earlier references.
-            let page_bottom = page_top + content_height - s740_reserve;
+            // S992 (R1, 2026-07-23, default ON, opt-out OXI_S992_DISABLE): H-ink
+            // footer collision. An EMPTY atLeast row whole-pushed by a binding
+            // footer may descend into the footer first line's ascent-leading
+            // (the body limit is the footer glyph-INK, not the footer line-box
+            // top). DERIVED _pb_r1_footer_collision_gen.py (Word COM+PDF):
+            // max row-bottom Word keeps = footer_ink − ~0 (tracks the ink,
+            // H-ink), the leading = (ascent − 0.71)×footer_fs. forms__001c51d6
+            // row35 (empty atLeast, footer table 11pt) is rejected by 2.13pt =
+            // exactly this leading. SCOPED to EMPTY atLeast rows only — the
+            // global content-height version fit uk_local_spending's BODY TEXT
+            // lines where Word pushes (the H-empty-row discriminator, report §8).
+            // Latin-scoped (footer_ink_relief); s755_footer_geom only computed
+            // for the rare empty-atLeast row.
+            let s992_relief = if !self.doc_body_has_real_cjk
+                && row.height.is_some()
+                && row.height_rule.as_deref() != Some("exact")
+                && row.cells.iter().all(|c| {
+                    c.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
+                        if p.runs.iter().all(|r| r.text.trim().is_empty())))
+                }) {
+                let (fr, _) = self.s755_footer_geom(&page.footer, page);
+                if fr > page.margin.bottom + 0.05 {
+                    self.footer_ink_relief(&page.footer)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let page_bottom = page_top + content_height - s740_reserve + s992_relief;
             s740_pending_commit = Some(row_idx);
             let row_overflows = cursor.cursor_y + row_height > page_bottom;
             // R7.47 (Day 34 part 16, 2026-05-13): row-level SOFT LRPB. When
