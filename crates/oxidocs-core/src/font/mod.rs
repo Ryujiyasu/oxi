@@ -578,6 +578,38 @@ impl FontMetricsRegistry {
             fonts.insert("HGPGothicM".to_string(), hgp);
         }
 
+        // S990B (2026-07-23): Gill Sans Nova — synthesize LINE-ONLY vertical
+        // metrics from the PDF-embedded font (educational__00252fa: upm 2048,
+        // hhea 2054/-612 lineGap 0, win 2054/612, typo 1397/-471, fsSelection
+        // USE_TYPO_METRICS off → natural_line_height_hhea = max(hhea_sum,
+        // win_sum)/upm = 1.3017578em; Word WritingLines empty-mark line =
+        // 20 × 1.3017578 × 1.1 = 28.6387pt, matching the PDF border pitch once
+        // the between reservation [S990A] is added). Oxi fell back to Calibri
+        // (1.2207em → 26.855) — 1.7837pt short/empty. KEEP Calibri's char_widths
+        // (vertical-only evidence; the width axis is not measured, so the
+        // visible wrapping stays on the existing fallback). Family-scoped: no
+        // golden/JP/word_png doc references Gill Sans Nova (census) → byte-
+        // identical by construction. Opt-out OXI_S990B_DISABLE.
+        if std::env::var("OXI_S990B_DISABLE").is_err() {
+            if let Some(calibri) = fonts.get("Calibri").cloned() {
+                let gill = FontMetrics {
+                    family: "Gill Sans Nova".to_string(),
+                    units_per_em: 2048,
+                    ascent: 2054.0 / 2048.0,
+                    descent: 612.0 / 2048.0,
+                    line_gap: 0.0,
+                    win_ascent: 2054.0 / 2048.0,
+                    win_descent: 612.0 / 2048.0,
+                    typo_ascent: 1397.0 / 2048.0,
+                    typo_descent: 471.0 / 2048.0,
+                    typo_line_gap: 0.0,
+                    use_typo_metrics: false,
+                    char_widths: calibri.char_widths,
+                };
+                fonts.insert("Gill Sans Nova".to_string(), gill);
+            }
+        }
+
         // Load COM-measured line height table
         let com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>> = {
             #[cfg(has_local_font_metrics)]
