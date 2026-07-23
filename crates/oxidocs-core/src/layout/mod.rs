@@ -22984,7 +22984,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
                             let empty_lh = if let Some(empty_fs) = pprrpr_fs {
                                 let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                                let empty_metrics = self.metrics_for_para_mark(&rpr_ref, &para.style);
+                                // S989 (2026-07-23, default ON, opt-out OXI_S989_DISABLE):
+                                // mirror S940E (the estimate) in the ACTUAL cell-empty
+                                // consumer. The estimate resolves a Latin cell ¶ mark in
+                                // the ASCII font (Arial hhea 11.499 for fs=10), but this
+                                // actual path used metrics_for_para_mark (prefer_ascii=
+                                // false), resolving the eastAsia CJK 83/64 box (12.969 =
+                                // 10 × 83/64) — +1.47pt per empty cell. reports__0020157f:
+                                // the first table's 28 empty cells add ~+41pt, pushing the
+                                // pre-break empty paragraph into a spurious page (Oxi 6 vs
+                                // Word 4). line_height_inner's S815 branch returns hhea for
+                                // the ASCII (non-CJK) metrics, matching the estimate exactly.
+                                // Narrow discriminator = the estimate's effective-change set
+                                // AND excludes the calibrated gen2/golden inherited-font
+                                // cells: explicit ASCII rFonts, no explicit eastAsia,
+                                // single/auto rule, Latin body.
+                                let s989_ascii = std::env::var("OXI_S989_DISABLE").is_err()
+                                    && !self.doc_body_has_real_cjk
+                                    && matches!(effective_line_rule, None | Some("auto"))
+                                    && effective_line_spacing.map_or(true, |f| (f - 1.0).abs() <= 0.01)
+                                    && rpr_ref.font_family.is_some()
+                                    && rpr_ref.font_family_east_asia.is_none();
+                                let empty_metrics = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s989_ascii);
                                 self.line_height_inner(empty_fs, effective_line_spacing, effective_line_rule, empty_metrics, para.style.snap_to_grid, row_line_pitch, true)
                             } else {
                                 let metrics = self.doc_default_metrics();
