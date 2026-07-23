@@ -7288,6 +7288,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         let mut tp = TablePosition {
                             x: 0.0, y: 0.0,
                             h_anchor: None, v_anchor: None, h_align: None,
+                            y_spec: None,
                             left_from_text: 0.0, right_from_text: 0.0,
                             top_from_text: 0.0, bottom_from_text: 0.0,
                         };
@@ -7298,6 +7299,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 "tblpX" => tp.x = val.parse::<f32>().unwrap_or(0.0) / 20.0,
                                 "tblpY" => tp.y = val.parse::<f32>().unwrap_or(0.0) / 20.0,
                                 "tblpXSpec" => tp.h_align = Some(val.to_string()),
+                                "tblpYSpec" => tp.y_spec = Some(val.to_string()),
                                 "horzAnchor" => tp.h_anchor = Some(val.to_string()),
                                 "vertAnchor" => tp.v_anchor = Some(val.to_string()),
                                 "leftFromText" => tp.left_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,

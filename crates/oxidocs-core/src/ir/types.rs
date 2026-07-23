@@ -1657,6 +1657,10 @@ pub struct TablePosition {
     /// Horizontal alignment spec: "left", "center", "right"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h_align: Option<String>,
+    /// Vertical alignment spec (w:tblpYSpec): "top", "center", "bottom",
+    /// "inside", "outside". S99x bottom-alignment reads this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_spec: Option<String>,
     /// Distance from surrounding text (points)
     #[serde(default)]
     pub left_from_text: f32,

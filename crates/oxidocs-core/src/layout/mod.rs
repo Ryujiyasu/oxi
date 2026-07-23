@@ -6451,6 +6451,55 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             Some("margin") => start_y + pos.y,
                             _ => cursor.cursor_y + pos.y, // "text": offset from anchor para bottom
                         };
+                        // S991 (2026-07-23, default ON, opt-out OXI_S991_DISABLE):
+                        // a floating table with w:tblpYSpec="bottom" and vertAnchor
+                        // ∈ {absent, margin} is BOTTOM-ALIGNED to the page content
+                        // bottom — the rows that fit in avail = CBOT − anchor_bottom
+                        // end exactly at CBOT (row0 = CBOT − Σ fitting-row heights),
+                        // and the remainder split to the next page top via the
+                        // existing row-split. DERIVED (_pb_tblpybottom_gen.py, Word
+                        // COM): a small table (60pt) sits at CBOT−60 anchor-
+                        // independently; policies' 7-row 540pt table (anchor@325,
+                        // avail 444.9) fits 5 rows bottom-aligned to CBOT (row0=405.0
+                        // ≈769.9−365.3), 2 rows split to p2. vertAnchor="text"
+                        // (forms/0013892c) is NOT bottom-aligned — it renders near
+                        // the anchor, so it keeps the "text" arm above. SCOPE:
+                        // tblpYSpec="bottom" occurs in 0 golden + 0 JP docs (census)
+                        // → byte-identical everywhere else by construction; only
+                        // policies__003496577 fires. Its Table 3-1 renders ~60pt too
+                        // high in Oxi (row4 y=567.6 vs Word 631.4), tipping row5
+                        // 'Climatic shell' onto p10 where Word has it on p11.
+                        if pos.y_spec.as_deref() == Some("bottom")
+                            && !matches!(pos.v_anchor.as_deref(), Some("text") | Some("page"))
+                            && std::env::var("OXI_S991_DISABLE").is_err()
+                        {
+                            let anchor_bottom = candidate_y_top;
+                            let cb = start_y + content_height;
+                            let avail = cb - anchor_bottom;
+                            let cw_est = self.resolve_table_col_widths(table, content_width);
+                            let dp = table.style.default_cell_margins.as_ref();
+                            let (pl, pr, pt, pb) = (
+                                dp.and_then(|m| m.left).unwrap_or(5.4),
+                                dp.and_then(|m| m.right).unwrap_or(5.4),
+                                dp.and_then(|m| m.top).unwrap_or(0.0),
+                                dp.and_then(|m| m.bottom).unwrap_or(0.0),
+                            );
+                            let mut fit_h: f32 = 0.0;
+                            for row in &table.rows {
+                                let nat = self.estimate_table_row_natural_h(
+                                    row, &cw_est, pl, pr, pt, pb, table,
+                                    page.grid_line_pitch, page.grid_char_pitch, None);
+                                let h = row.height.map(|th| match row.height_rule.as_deref() {
+                                    Some("exact") => th,
+                                    _ => (th + self.rowbox2_trh_bw(table, row)).max(nat),
+                                }).unwrap_or(nat);
+                                if fit_h + h > avail + 0.5 { break; }
+                                fit_h += h;
+                            }
+                            if fit_h > 0.5 {
+                                candidate_y_top = cb - fit_h;
+                            }
+                        }
                         cursor.set(candidate_y_top);
                         // R7.60 body-floating eligibility: vertAnchor="page" AND
                         // table positioned below top margin (in body region).
