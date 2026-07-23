@@ -20611,6 +20611,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // it allowed split for no-LRPB rows that Word didn't break).
             // Single-cell 1x1 box tables retain prior unconditional split.
             let is_single_cell_row = row.cells.len() == 1 && num_rows == 1;
+            // S993 (R2/R3, 2026-07-23, opt-out OXI_S993_DISABLE): a fixed-layout,
+            // 3-cell, auto-height row in a Latin doc reads the EXACT mid-run LRPB
+            // fragment anchor (the `lrpb_before` tuple flag) instead of the R7.73
+            // next-paragraph approximation. This is the Word-truth-measured
+            // geometry for reference__0052ba53 (3 markers, run 12 / run 2 / run 2)
+            // and technical__002c1ffa; census = 2 EN docs, 0 golden / 0 JP, so
+            // every other doc keeps the approximation → byte-identical.
+            let s993_exact = !self.doc_body_has_real_cjk
+                && table.style.layout.as_deref() == Some("fixed")
+                && row.cells.len() == 3
+                && row.height.is_none()
+                && std::env::var("OXI_S993_DISABLE").is_err();
             // Scan row content for an LRPB that is NOT at the row-start position
             // (cell=0, first paragraph block in cell, run=0).
             let has_lrpb_mid_row = {
@@ -22137,8 +22149,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
                         // Collect runs into lines with greedy wrapping
                         // Tuple: (text, font_size, width, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, character_spacing, text_scale)
-                        let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)>> = Vec::new();
-                        let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32)> = Vec::new();
+                        // S993 (R2/R3, 2026-07-23): the trailing `bool` is
+                        // `lrpb_before` — this fragment's originating run carried a
+                        // mid-run `<w:lastRenderedPageBreak/>`. Consumed only when
+                        // s993_exact (fixed 3-cell auto Latin row); replaces the
+                        // R7.73 next-paragraph approximation for those rows.
+                        let mut lines: Vec<Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32, bool)>> = Vec::new();
+                        let mut current_line: Vec<(String, f32, f32, bool, bool, bool, Option<String>, bool, Option<String>, Option<String>, Option<String>, f32, f32, bool)> = Vec::new();
                         // Task P (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a cell-inline OLE object
                         // (Equation.DSMT4, step 3 routed it to run.style.inline_object_*)
                         // is carried as a paragraph-local `&Image` registry + a U+F8FE
@@ -22233,7 +22250,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .and_then(|v| v.parse().ok()).unwrap_or(3.5);
                         let mut s586_run_offset = 0usize;
 
-                        for run in &para.runs {
+                        // S993 (R2/R3): pending flag for the exact mid-run LRPB
+                        // fragment anchor. Set when entering a mid-run LRPB run
+                        // (p0/r0 excluded — that is a continuation/row-start marker,
+                        // R7.64), taken by the FIRST emitted fragment (mem::take).
+                        // Not reset on non-LRPB runs → an empty LRPB run carries to
+                        // the next visible run's first fragment.
+                        let mut s993_lrpb_pending = false;
+                        for (run_idx, run) in para.runs.iter().enumerate() {
+                            if run.has_last_rendered_page_break
+                                && !(cell_para_counter == 0 && run_idx == 0) {
+                                s993_lrpb_pending = true;
+                            }
                             let font_size = self.resolve_font_size(&run.style, &para.style);
                             let bold = self.resolve_bold(&run.style, &para.style);
                             let font_family = self.resolve_font_family_for_text(&run.text, &run.style, &para.style)
@@ -22262,7 +22290,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     }
                                     current_line.push((format!("\u{F8FE}{index}"),
                                         font_size, ow, bold, run.style.italic, false, None, false,
-                                        font_family.clone(), None, None, 0.0, 100.0));
+                                        font_family.clone(), None, None, 0.0, 100.0,
+                                        std::mem::take(&mut s993_lrpb_pending)));
                                     line_x += ow;
                                 }
                             }
@@ -22291,7 +22320,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 current_line.push((encoded, font_size, cw, bold,
                                     run.style.italic, run.style.underline, run.style.underline_style.clone(),
                                     run.style.strikethrough, font_family.clone(), run.style.color.clone(),
-                                    run.style.highlight.clone().or_else(|| run.style.shading.clone()), 0.0, 100.0));
+                                    run.style.highlight.clone().or_else(|| run.style.shading.clone()), 0.0, 100.0,
+                                    std::mem::take(&mut s993_lrpb_pending)));
                                 line_x += cw;
                                 continue;
                             }
@@ -22330,6 +22360,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             run.style.color.clone(),
                                             run.style.highlight.clone().or_else(|| run.style.shading.clone()),
                                             cs, run.style.text_scale.unwrap_or(100.0),
+                                            std::mem::take(&mut s993_lrpb_pending),
                                         ));
                                         buf.clear();
                                         buf_w = 0.0;
@@ -22871,7 +22902,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                                 // Oikomi succeeded: flush remaining buf as
                                                 // line1 tail, push line1, seed line2 with carry.
                                                 if !buf.is_empty() {
-                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0), std::mem::take(&mut s993_lrpb_pending)));
                                                     buf.clear();
                                                     buf_w = 0.0;
                                                     current_line_chars.extend(buf_chars.drain(..));
@@ -22897,7 +22928,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             ch, natural_advance: cw, font_size,
                                         });
                                         if !buf.is_empty() {
-                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                            current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0), std::mem::take(&mut s993_lrpb_pending)));
                                             buf.clear();
                                             buf_w = 0.0;
                                             current_line_chars.extend(buf_chars.drain(..));
@@ -23007,7 +23038,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             }
                                             if hit_boundary && carry.len() >= 2 {
                                                 if !buf.is_empty() {
-                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                                    current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0), std::mem::take(&mut s993_lrpb_pending)));
                                                     buf.clear();
                                                     buf_w = 0.0;
                                                     current_line_chars.extend(buf_chars.drain(..));
@@ -23046,7 +23077,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     }
                                     // Flush buffer to current line, then wrap
                                     if !buf.is_empty() {
-                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                        current_line.push((buf.clone(), font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family.clone(), run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0), std::mem::take(&mut s993_lrpb_pending)));
                                         buf.clear();
                                         buf_w = 0.0;
                                         current_line_chars.extend(buf_chars.drain(..));
@@ -23075,12 +23106,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     && kinsoku::is_line_start_prohibited(ch)
                                 {
                                     if let Some(last) = lines.last_mut() {
+                                        // S993: a kinsoku-prohibited char joins the
+                                        // PREVIOUS line — never the LRPB anchor. Pass
+                                        // false so s993_lrpb_pending survives to the
+                                        // next real fragment.
                                         last.push((char_to_string(ch), font_size, cw, bold,
                                             run.style.italic, run.style.underline,
                                             run.style.underline_style.clone(), run.style.strikethrough,
                                             font_family.clone(), run.style.color.clone(),
                                             run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs,
-                                            run.style.text_scale.unwrap_or(100.0)));
+                                            run.style.text_scale.unwrap_or(100.0), false));
                                         prev_char_emitted = Some(ch);
                                         continue;
                                     }
@@ -23093,7 +23128,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 prev_char_emitted = Some(ch);
                             }
                             if !buf.is_empty() {
-                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0)));
+                                current_line.push((buf, font_size, buf_w, bold, run.style.italic, run.style.underline, run.style.underline_style.clone(), run.style.strikethrough, font_family, run.style.color.clone(), run.style.highlight.clone().or_else(|| run.style.shading.clone()), cs, run.style.text_scale.unwrap_or(100.0), std::mem::take(&mut s993_lrpb_pending)));
                                 line_x += buf_w;
                                 current_line_chars.extend(buf_chars.drain(..));
                             }
@@ -23249,7 +23284,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let cellpair_ws = self.cellpair_active();
                             let mut lh: f32 = line.iter()
                                 .filter(|(t, ..)| !cellpair_ws || !t.trim().is_empty())
-                                .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
                                 let metrics = match font_family.as_deref() {
                                     Some(ff) => self.registry.get(ff),
                                     None => self.registry.default_metrics(),
@@ -23258,7 +23293,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }).fold(0.0_f32, f32::max);
                             if lh == 0.0 {
                                 // whitespace-only line: fall back to all fragments
-                                lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
                                     let metrics = match font_family.as_deref() {
                                         Some(ff) => self.registry.get(ff),
                                         None => self.registry.default_metrics(),
@@ -23293,7 +23328,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // 15.56 against Word's 13.8 on this very boundary).
                                 lh = lines.iter().flat_map(|l| l.iter())
                                     .filter(|(text, ..)| !text.trim().is_empty())
-                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
                                         let metrics = match font_family.as_deref() {
                                             Some(ff) => self.registry.get(ff),
                                             None => self.registry.default_metrics(),
@@ -23323,7 +23358,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 if obj_h > 0.0 {
                                     let descent: f32 = line.iter()
                                         .filter(|(text, ..)| !text.starts_with('\u{F8FE}') && !text.trim().is_empty())
-                                        .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _)| {
+                                        .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
                                             let metrics = match font_family.as_deref() {
                                                 Some(ff) => self.registry.get(ff),
                                                 None => self.registry.default_metrics(),
@@ -23351,7 +23386,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let line_indent = p_indent_left + if line_idx == 0 { p_first_line_indent } else { 0.0 };
 
                             // Calculate line total width for alignment
-                            let line_total_w: f32 = line.iter().map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _)| tw).sum();
+                            let line_total_w: f32 = line.iter().map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _, _)| tw).sum();
                             // S502 (2026-06-08, FALSIFIED as a clean win — NOT shipped):
                             // hypothesized that docGrid linesAndChars cells must center/right-align
                             // on the GRID-EXPANDED width (natural tw sum + per-fullwidth-char
@@ -23417,7 +23452,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
                                 // Phase 1: CJK punctuation compression (only when overflowing)
                                 if slack < 0.0 {
-                                    for (fi, (text, fs, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                    for (fi, (text, fs, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
                                         for ch in text.chars() {
                                             if kinsoku::is_cjk_compressible(ch) {
                                                 let fm = self.registry.default_metrics();
@@ -23434,11 +23469,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 if slack > 0.0 {
                                     let space_count = line.iter()
                                         .enumerate()
-                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
                                         .count();
                                     if space_count > 0 {
                                         let per_space = slack / space_count as f32;
-                                        for (fi, (text, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                        for (fi, (text, _, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
                                             if fi < line.len() - 1 && text.trim().is_empty() {
                                                 frag_spacing[fi] += per_space;
                                             }
@@ -23448,15 +23483,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         // Only activate when line is noticeably short (>10% slack);
                                         // COM-confirmed 2026-04-19: for b35 "法令の理解" row with
                                         // 4% slack Word does NOT distribute, showing natural widths.
-                                        let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
+                                        let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
                                         let slack_ratio = if effective_wrap > 0.0 { slack / effective_wrap } else { 0.0 };
                                         if has_cjk && slack_ratio > 0.10 {
                                             let total_chars: usize = line.iter()
-                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
+                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
                                                 .sum();
                                             if total_chars > 1 {
                                                 let per_char_gap = slack / (total_chars - 1) as f32;
-                                                for (fi, (text, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
+                                                for (fi, (text, _, _, _, _, _, _, _, _, _, _, _, _, _)) in line.iter().enumerate() {
                                                     let n = text.chars().count();
                                                     if n > 1 {
                                                         frag_width_adj[fi] += per_char_gap * (n - 1) as f32;
@@ -23478,7 +23513,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // For grid-snapped cell lines (line_height = n*pitch), this centers
                             // the character cell; for exact spacing, bottom-aligns.
                             let cell_max_fs: f32 = line.iter()
-                                .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _)| *fs)
+                                .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                 .fold(0.0_f32, f32::max);
                             // S175 (2026-05-22): match body's S166 fix — use word_line_height_table_cell
                             // (font's natural height incl. ascent+descent) as centering height,
@@ -23493,7 +23528,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 cell_max_fs
                             } else {
                                 line.iter()
-                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts)| {
+                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _)| {
                                         let mut rs = RunStyle::default();
                                         rs.font_size = Some(*fs);
                                         rs.bold = *bold;
@@ -23619,7 +23654,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             };
                             if s660_extra != 0.0 && !line.is_empty() {
                                 let mut natural_cjk = 0.0_f32;
-                                for (text, fs, _, bold, italic, _u, _us, _st, ff, _c, _h, _cs, _ts) in line.iter() {
+                                for (text, fs, _, bold, italic, _u, _us, _st, ff, _c, _h, _cs, _ts, _) in line.iter() {
                                     let mut rs = RunStyle::default();
                                     rs.font_size = Some(*fs);
                                     rs.bold = *bold; rs.italic = *italic;
@@ -23669,7 +23704,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let s698_reduce: f32 = if std::env::var("OXI_S698_DISABLE").is_err()
                                 && !line.is_empty() {
                                 let mut has_cjk = false;
-                                for (text, fs, _, bold, italic, _u, _us, _st, ff, _c, _h, _cs, _ts) in line.iter() {
+                                for (text, fs, _, bold, italic, _u, _us, _st, ff, _c, _h, _cs, _ts, _) in line.iter() {
                                     let mut rs = RunStyle::default();
                                     rs.font_size = Some(*fs);
                                     rs.bold = *bold; rs.italic = *italic;
@@ -23730,7 +23765,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     cell_elements.push(marker_el);
                                 }
                             }
-                            for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs, ts)) in line.iter().enumerate() {
+                            for (frag_idx, (text, fs, tw, bold, italic, underline, underline_style, strikethrough, font_family, color, highlight, cs, ts, lrpb_before)) in line.iter().enumerate() {
                                 let adj_w = *tw + frag_width_adj[frag_idx];
                                 // Task P step 5 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a U+F8FE{index}
                                 // cell-inline OLE fragment → the registered &Image drawn on
@@ -23873,7 +23908,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // row 1 content pushed to next page. Mirrors R7.58 gate
                                 // (mod.rs:6166) which excludes (ci==0, first_para, ri==0)
                                 // — extends exclusion to ALL cells' first paragraphs.
-                                if line_idx == 0 && frag_idx == 0 && cell_para_counter > 0 {
+                                if s993_exact {
+                                    // S993 (R2/R3, 2026-07-23): mark the EXACT fragment
+                                    // whose originating run carried the mid-run LRPB —
+                                    // the split consumer pulls that line to the next
+                                    // page. The R7.73 next-paragraph approximation
+                                    // (below) placed the anchor 1-2 lines late (or lost
+                                    // it when the marker was in the cell's LAST
+                                    // paragraph), stranding the continuation text on the
+                                    // previous page. p0/r0 is already excluded via
+                                    // s993_lrpb_pending (a continuation/row-start marker,
+                                    // R7.64), so *lrpb_before is false there.
+                                    if *lrpb_before {
+                                        cell_el.is_paragraph_start_with_lrpb = true;
+                                    }
+                                } else if line_idx == 0 && frag_idx == 0 && cell_para_counter > 0 {
                                     let para_has_lrpb_on_run0 = para.runs.first()
                                         .map(|r| r.has_last_rendered_page_break)
                                         .unwrap_or(false);
