@@ -14492,13 +14492,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let border_x = start_x;
             let border_width = content_width;
 
+            // S990A (2026-07-23): an INTERIOR merged boundary (next para has the
+            // same effective borders) with a `between` border reserves the
+            // between line's vertical extent (thickness + 2×space) — the derived
+            // Round-74 rule (measure_between_border.py, 2026-05-03), previously
+            // draw-only (S903 reserved ZERO). educational__00252fa WritingLines:
+            // sz=4/space=1 → 0.5 + 2×1 = 2.5pt/boundary × 94, which (with the
+            // Gill line height S990B) makes the border pitch = Word PDF 34.14.
+            // Latin scope (JP 3a4f 6-box stack keeps its calibration) + the
+            // between must be a real border. The duplicate overlapping bottom is
+            // skipped below; the between draw stays UNCONDITIONAL so a CJK doc's
+            // between line is never lost. Opt-out OXI_S990A_DISABLE.
+            let s990a_between = std::env::var("OXI_S990A_DISABLE").is_err()
+                && !self.doc_body_has_real_cjk
+                && s903_next_borders.map_or(false, |nb| nb == borders)
+                && borders.between.as_ref()
+                    .map_or(false, |b| b.style != "none" && b.style != "nil");
+
             if let Some(ref bottom) = borders.bottom {
                 let bw = bottom.width;
                 let color = bottom.color.clone().unwrap_or_else(|| "000000".to_string());
                 let border_y = para_bottom + bottom.space;
-                elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
+                // S990A: the interior `between` element below draws this line;
+                // skip the duplicate overlapping bottom shading.
+                if !s990a_between {
+                    elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
-                }));
+                    }));
+                }
                 // S467 (2026-05-31, env-gated OFF default; opt-in OXI_S467_PBDR_ENABLE):
                 // the FULL border width (space + bw) is the CORRECT advance, not the
                 // midpoint (space + bw/2). The old "bw/2" comment cited a gen2_036
@@ -14546,6 +14567,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
                 }));
+                // S990A: reserve the between line's extent (thickness + 2×space)
+                // at an interior merged boundary. cursor.cursor_y == para_bottom
+                // here so this only advances the flow.
+                if s990a_between {
+                    cursor.set(para_bottom + bw + 2.0 * between.space);
+                }
             }
             // Left border
             if let Some(ref left) = borders.left {
