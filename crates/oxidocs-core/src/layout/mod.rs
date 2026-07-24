@@ -14946,6 +14946,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             ((content_tw as f32) * 281.0 / 7200.0).round() as i32
         };
         let mut latin_space_credit_tw: i32 = 0;
+        // S995 / C14JUST (2026-07-24, default ON, opt-out OXI_C14JUST_DISABLE): the
+        // probe-derived compat14 legacy Latin justify rule. A justified line KEEPS a
+        // candidate word (compressing inter-word SPACES demand-driven to the half-em
+        // floor 0.5×space, letters unchanged) iff alt_slack = available − line-width-
+        // without-candidate > 1.49 × natural_space; else it WRAPS. (_pb_c14just: the
+        // 1→2 flip is at alt_slack ∈ (10.68,10.78]pt for Courier 12, D/C-independent;
+        // T/space = 1.490 at both 10pt and 12pt → font-relative.) This SUPERSEDES the
+        // S933 fs/4 clamp + S994 flat wpj_credit for compat14 docs (do NOT add them).
+        // MONOSPACE-scoped at the accumulation (char i-width == M-width): the T=1.49
+        // and half-em floor were DERIVED on Courier; the ungated version put
+        // reference__0029c1c (Book Antiqua) + technical__00549a8f (TNR) PASS→FAIL, so
+        // proportional compat14 docs keep their original S933 fs/4 allowance (the 15
+        // Latin compat14+jc=both corpus docs: only the 2 Courier legal docs change,
+        // both →pcd 0). c14_space_tw>0 (set only for monospace) gates the fit tests.
+        let c14_active = std::env::var("OXI_C14JUST_DISABLE").is_err()
+            && self.compat_mode == 14 && self.compat_mode_explicit
+            && is_justified && !self.doc_body_has_real_cjk;
+        let mut c14_space_tw: i32 = 0;   // natural space width (captured at accumulation)
         // S774 (2026-07-10, rides the TABTW/Latin scope): a RIGHT-aligned tab
         // pins the following segment's END at the tab stop — the segment grows
         // LEFTWARD into the gap the tab jumped, so the wrap check must credit
@@ -15019,7 +15037,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + wpj_credit_at(lines.len()) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w)
+                            && current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { if (available_tw - current_width_tw) as f32 > 1.49 * c14_space_tw as f32 { latin_space_credit_tw } else { 0 } } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -15044,7 +15062,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
-                            if current_width_tw + seg_w_tw > available_tw + latin_space_credit_tw + wpj_credit_at(lines.len()) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + (if c14_active && c14_space_tw > 0 { if (available_tw - current_width_tw) as f32 > 1.49 * c14_space_tw as f32 { latin_space_credit_tw } else { 0 } } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 lines.push(std::mem::take(&mut current_line));
                                 current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -15069,7 +15087,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + latin_space_credit_tw + wpj_credit_at(lines.len()) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { if (available_tw - current_width_tw) as f32 > 1.49 * c14_space_tw as f32 { latin_space_credit_tw } else { 0 } } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -16446,7 +16464,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // «…agrees to submit | to» (13 spaces, needed 12.9):
                                 // 0.365-model granted 14.2 → over-fit (Word wraps);
                                 // 0.25-model grants 9.75 → wraps = Word.
-                                if self.compat_mode >= 15
+                                if c14_active
+                                    && (char_metrics.char_width_em('i')
+                                        - char_metrics.char_width_em('M'))
+                                        .abs()
+                                        < 0.001
+                                {
+                                    // C14JUST (monospace-scoped): accumulate the
+                                    // half-em compression capacity per space (letters
+                                    // unchanged); the fit consumers gate it on
+                                    // alt_slack > 1.49×space. The T=1.49×space + half-em
+                                    // floor were DERIVED on Courier (monospace); they
+                                    // OVER-fit proportional fonts (reference__0029c1c
+                                    // Book Antiqua / technical__00549a8f TNR both went
+                                    // PASS→FAIL under an ungated version), so a
+                                    // proportional compat14 doc (i-width ≠ M-width)
+                                    // keeps its original S933 fs/4 allowance below.
+                                    latin_space_credit_tw += pt_to_tw(char_width * 0.5);
+                                    c14_space_tw = pt_to_tw(char_width);
+                                } else if self.compat_mode >= 15
                                     && self.compat_mode_explicit
                                     && std::env::var("OXI_S825_DISABLE").is_err()
                                 {
