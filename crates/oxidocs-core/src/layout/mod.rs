@@ -20864,7 +20864,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // PUSHED; 3a4f box 29.9 PUSHED; 精勤手当 59.9 SPLIT); a MULTI-CELL
             // data row splits with just one line of room (all 4 probe families).
             let s754_min_fit = if row.cells.len() == 1 {
-                table_grid_pitch.map(|p| p * 2.2).unwrap_or(58.0)
+                match table_grid_pitch {
+                    Some(p) => p * 2.2,
+                    // S999 (probe _pb_s754, opt-in OXI_S999): Word SPLITS a
+                    // no-TYPE-docGrid / no-grid single-column row line-by-line
+                    // (keep-all-that-fit, NO widow-keep) — measured sz24 keeps
+                    // 5/4/3/2 lines as R=78/64/51/37, sz28 5..1 as R=87..23,
+                    // one line dropped per pitch of R, no whole-push floor. The
+                    // 58.0 fallback was a TYPED-grid prose-box widow-keep
+                    // heuristic (tokyoshugyo 遅刻早退/3a4f boxes push at <~2
+                    // lines) that does NOT apply to a no-type row. technical__
+                    // 0061c884 p5 (R=41.1) Word keeps 2 lines; Oxi's 58.0
+                    // whole-pushed it (+1). Use the multi-cell ~1-line floor.
+                    None if std::env::var("OXI_S999").is_ok() => 14.0,
+                    None => 58.0,
+                }
             } else {
                 table_grid_pitch.unwrap_or(14.0)
             };
