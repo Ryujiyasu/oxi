@@ -20798,7 +20798,47 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // still split (unavoidable).
             let row_has_image_block = row.cells.iter()
                 .any(|c| c.blocks.iter().any(|b| matches!(b, Block::Image(_))));
-            let image_atomic_push = row_has_image_block && row_height <= content_height;
+            // S998 (2026-07-25, default ON, opt-out OXI_S998_DISABLE): the S533
+            // veto above ("a row carrying an image is pushed WHOLE") is TOO
+            // BROAD — it fires on any row that contains an image anywhere, but
+            // Word only keeps the IMAGE LINE atomic, not the text around it. In
+            // technical__0061c884 table 12 row 2 the image is the 10th of 11
+            // cell blocks (9 text paragraphs before it, 1 after); Word splits
+            // the row — paragraphs 0..8 on p10, image + the trailing paragraph
+            // on p11 — while Oxi whole-pushed all 11 blocks to p11, cascading
+            // +1 from p10 to the last page (15 vs Word 14). The DISCRIMINATOR
+            // is an INTERIOR image: real (non-whitespace) content BOTH before
+            // the first image AND after the last image in a cell. A TERMINAL
+            // image (educational__00161422's 5 image rows, image = last block)
+            // keeps the whole-push (its 14 pages match Word, at least one push
+            // is load-bearing) — so the after-content half of the predicate is
+            // load-bearing. The image element itself is atomic (a single
+            // LayoutElement), so the existing element-level splitter moves it
+            // whole to the next page when it overflows; verified the image does
+            // not straddle the boundary and the post-split cursor advances (the
+            // S533-era stranding bug does not recur for the interior case).
+            // SCOPE: static candidates = 3 rows / 3 docs (kyotei36spec /
+            // reference__0035761e / target); only the target's row actually
+            // reaches ROWPUSH (row_overflows) — golden/real_en/JP are
+            // byte-identical by construction.
+            let s998_interior_image = std::env::var("OXI_S998_DISABLE").is_err()
+                && row.cells.iter().any(|cell| {
+                    let first_image = cell.blocks.iter()
+                        .position(|b| matches!(b, Block::Image(_)));
+                    let last_image = cell.blocks.iter()
+                        .rposition(|b| matches!(b, Block::Image(_)));
+                    match (first_image, last_image) {
+                        (Some(first), Some(last)) => {
+                            let real_para = |b: &Block| matches!(b, Block::Paragraph(p)
+                                if p.runs.iter().any(|r| !r.text.trim().is_empty()));
+                            cell.blocks[..first].iter().any(real_para)
+                                && cell.blocks[last + 1..].iter().any(real_para)
+                        }
+                        _ => false,
+                    }
+                });
+            let image_atomic_push = row_has_image_block && row_height <= content_height
+                && !s998_interior_image;
 
             // needs_row_split: only when overflow + table allows split.
             // widow_break_needed overrides split — we want the whole table on next page.
@@ -24868,9 +24908,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let s719_collapsible = |text: &str| -> bool {
                     if s719_true_empty { text.is_empty() } else { text.trim().is_empty() }
                 };
+                // S998 (2026-07-25): when this row is the interior-image case
+                // (real content before AND after the image), the re-anchor must
+                // also anchor the IMAGE, not just text. The generic re-anchor
+                // (Step 1) moves only TEXT to page_top, leaving a straddling
+                // image at its raw shift position — so the image and the text
+                // AFTER it decouple and overlap (technical__0061c884: image at
+                // y=4.18, VOSpace at 109.38 instead of ~415.5, the S533 stranding
+                // recurrence the whole-push veto papered over). Including the
+                // image in min_overflow and in the adjust keeps the image + its
+                // following text coupled (image lands at page_top+tcMar_t, the
+                // suffix text lands after it with the full image height reserved).
+                let s998_reanchor_img = s998_interior_image
+                    && next_page_elems.iter()
+                        .any(|e| matches!(e.content, LayoutContent::Image { .. }));
                 let min_overflow_text_y = next_page_elems.iter()
                     .filter(|e| matches!(&e.content,
-                        LayoutContent::Text { text, .. } if !s570 || !s719_collapsible(text)))
+                        LayoutContent::Text { text, .. } if !s570 || !s719_collapsible(text))
+                        || (s998_reanchor_img
+                            && matches!(&e.content, LayoutContent::Image { .. })))
                     .map(|e| e.y)
                     .fold(f32::INFINITY, f32::min);
                 if s570 && min_overflow_text_y.is_finite() {
@@ -24929,7 +24985,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             page_top, split_y, min_overflow_text_y, original_shift, correct_shift, adjust, first_after);
                     }
                     for e in next_page_elems.iter_mut() {
-                        if matches!(e.content, LayoutContent::Text { .. }) {
+                        if matches!(e.content, LayoutContent::Text { .. })
+                            || (s998_reanchor_img
+                                && matches!(e.content, LayoutContent::Image { .. })) {
                             e.y -= adjust;
                         }
                     }
