@@ -14946,20 +14946,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             ((content_tw as f32) * 281.0 / 7200.0).round() as i32
         };
         let mut latin_space_credit_tw: i32 = 0;
-        // S995 / C14JUST (2026-07-24, default ON, opt-out OXI_C14JUST_DISABLE): the
-        // probe-derived compat14 legacy Latin justify rule. A justified line KEEPS a
-        // candidate word (compressing inter-word SPACES demand-driven to the half-em
-        // floor 0.5×space, letters unchanged) iff alt_slack = available − line-width-
-        // without-candidate > 1.49 × natural_space; else it WRAPS. (_pb_c14just: the
-        // 1→2 flip is at alt_slack ∈ (10.68,10.78]pt for Courier 12, D/C-independent;
-        // T/space = 1.490 at both 10pt and 12pt → font-relative.) This SUPERSEDES the
-        // S933 fs/4 clamp + S994 flat wpj_credit for compat14 docs (do NOT add them).
-        // MONOSPACE-scoped at the accumulation (char i-width == M-width): the T=1.49
-        // and half-em floor were DERIVED on Courier; the ungated version put
-        // reference__0029c1c (Book Antiqua) + technical__00549a8f (TNR) PASS→FAIL, so
-        // proportional compat14 docs keep their original S933 fs/4 allowance (the 15
-        // Latin compat14+jc=both corpus docs: only the 2 Courier legal docs change,
-        // both →pcd 0). c14_space_tw>0 (set only for monospace) gates the fit tests.
+        // S995/S996 / C14JUST (2026-07-24, default ON, opt-out OXI_C14JUST_DISABLE):
+        // the probe-derived compat14 legacy Latin justify rule. A justified line KEEPS
+        // a candidate word (compressing inter-word SPACES to the half-em floor) iff the
+        // whole line FITS within its compression CAPACITY:
+        //    natural(line_body + space + candidate) − available ≤ n_spaces × half_em
+        // i.e. the fit budget = latin_space_credit_tw (= Σ half-em per accumulated
+        // space) with NO alt_slack gate and NO trailing-punct hang. (S996 correction:
+        // S995 shipped `alt_slack>1.49×space ? capacity : 0 + hang`, which mis-predicts
+        // BOTH ways — the alt_slack gate zeroes the credit for low-alt_slack candidates
+        // [213 'law.'/584 'or' wrap, should KEEP] and the +hang over-credits wide ones
+        // [581 'partnership.'/twin147 'programs.' keep, should WRAP]. _pb_c14floor
+        // pinned: floor C≈3.556pt≈half-em, candidate-width-INDEPENDENT, period-hang=0
+        // ['final.'≡'finalx' flip], double-space = 2 space-chars. _pb_c14down FALSIFIED
+        // line-ordinal. The report's "same-excess reversals" [581/660, 147/105] were
+        // rendered-width measurement artifacts — 660's natural overflow is −71.9pt
+        // [trivial keep], NOT the 43.2pt of 581; the capacity rule has no reversal and
+        // predicts all 4 S995 errors + the 2 counterexamples correctly [DELIVERABLE].)
+        // SUPERSEDES S933 fs/4 + S994 wpj_credit for c14 (do NOT add them). MONOSPACE-
+        // scoped at the accumulation (char i-width == M-width): the half-em floor was
+        // DERIVED on Courier; proportional c14 docs keep their S933 fs/4 allowance
+        // [reference__0029c1c/technical__00549a8f]. c14_space_tw>0 (monospace only)
+        // gates the fit tests.
         let c14_active = std::env::var("OXI_C14JUST_DISABLE").is_err()
             && self.compat_mode == 14 && self.compat_mode_explicit
             && is_justified && !self.doc_body_has_real_cjk;
@@ -15037,7 +15045,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { if (available_tw - current_width_tw) as f32 > 1.49 * c14_space_tw as f32 { latin_space_credit_tw } else { 0 } } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w)
+                            && current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w })
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -15062,7 +15070,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
-                            if current_width_tw + seg_w_tw > available_tw + (if c14_active && c14_space_tw > 0 { if (available_tw - current_width_tw) as f32 > 1.49 * c14_space_tw as f32 { latin_space_credit_tw } else { 0 } } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                            if current_width_tw + seg_w_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 lines.push(std::mem::take(&mut current_line));
                                 current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -15087,7 +15095,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         word_natural_width = 0.0;
                     } else {
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { if (available_tw - current_width_tw) as f32 > 1.49 * c14_space_tw as f32 { latin_space_credit_tw } else { 0 } } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(word_trail_hang_w) && !current_line.fragments.is_empty()
+                    if current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -16472,14 +16480,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 {
                                     // C14JUST (monospace-scoped): accumulate the
                                     // half-em compression capacity per space (letters
-                                    // unchanged); the fit consumers gate it on
-                                    // alt_slack > 1.49×space. The T=1.49×space + half-em
-                                    // floor were DERIVED on Courier (monospace); they
-                                    // OVER-fit proportional fonts (reference__0029c1c
-                                    // Book Antiqua / technical__00549a8f TNR both went
-                                    // PASS→FAIL under an ungated version), so a
-                                    // proportional compat14 doc (i-width ≠ M-width)
-                                    // keeps its original S933 fs/4 allowance below.
+                                    // unchanged). The fit consumers use this as the
+                                    // budget DIRECTLY (S996: no alt_slack gate, no
+                                    // hang) = the capacity rule. The half-em floor was
+                                    // DERIVED on Courier (monospace); it OVER-fits
+                                    // proportional fonts (reference__0029c1c Book
+                                    // Antiqua / technical__00549a8f TNR went PASS→FAIL
+                                    // under an ungated version), so a proportional
+                                    // compat14 doc (i-width ≠ M-width) keeps its
+                                    // original S933 fs/4 allowance below.
                                     latin_space_credit_tw += pt_to_tw(char_width * 0.5);
                                     c14_space_tw = pt_to_tw(char_width);
                                 } else if self.compat_mode >= 15
