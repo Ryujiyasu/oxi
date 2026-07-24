@@ -1099,8 +1099,37 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         // Block::Image double-counted one line (~14.5pt) per image
                         // paragraph. Body twin of the S536 cell suppression.
                         // opt-out OXI_S537_DISABLE.
+                        // S997 (2026-07-24, HELD OPT-IN OXI_S997=1, default OFF
+                        // byte-identical): a body paragraph holding EXACTLY one wp:inline
+                        // image + a single ASCII space (concatenated run text == " ") is
+                        // also image-only — Word places the image as the paragraph's
+                        // line, not a separate text line for the space (creative__0158c02a
+                        // p12: image would-be line at y=72; Oxi stacked an empty line +
+                        // " " line + image = +36pt → +1 cascade p13-p71). The S537
+                        // predicate required ALL runs empty, so the " " blocked it.
+                        // DISCRIMINATOR = exactly ONE U+0020 (NOT .trim().is_empty():
+                        // 2/47/66-space runs are horizontal-positioning, U+3000 is a JP
+                        // fullwidth layout char — census: exact " " = 18 sites / 2 EN
+                        // docs [target + educational__00116bbe], 0 golden / 0 real_en /
+                        // 0 JP → byte-identical elsewhere by construction). Consumers
+                        // (S965 spacing / S971 host metrics) already exist; no new arm.
+                        // ★HELD OPT-IN (report recommendation): the causal A/B is clean
+                        // (creative__0158c02a 0.8526→0.9359, +1 cascade 88→9, JP 0-flip,
+                        // lib 36/0, census byte-identical) BUT the correct host-line
+                        // removal EXPOSES a -1 compensating cascade at Word p71-p83 (26
+                        // previously-correct paras) — an S559 pair. Ships default-ON with
+                        // its p71 counterpart (a separate empty-para page-bottom
+                        // under-reservation), co-gated per the merge gate.
+                        let s997_single_ascii_space_host = pr.inline_images.len() == 1
+                            && std::env::var("OXI_S997").is_ok()
+                            && {
+                                let mut chars =
+                                    pr.paragraph.runs.iter().flat_map(|r| r.text.chars());
+                                matches!(chars.next(), Some(' ')) && chars.next().is_none()
+                            };
                         let image_only = !pr.inline_images.is_empty()
-                            && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                            && (pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                                || s997_single_ascii_space_host)
                             && pr.math_blocks.is_empty()
                             && std::env::var("OXI_S537_DISABLE").is_err();
                         // S965: capture the host paragraph's spacing before
