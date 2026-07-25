@@ -1238,6 +1238,9 @@ pub fn render_family_name(name: &str) -> &str {
         "Calibri"
     } else if name == "CG Times" || name.starts_with("CG Times ") {
         "Times New Roman"
+    } else if name == "Times" && std::env::var("OXI_S1005_DISABLE").is_err() {
+        // S1005: bare "Times" (PostScript) → Times New Roman (FontSubstitutes).
+        "Times New Roman"
     } else if name == "宋体" || name == "新宋体" || name == "NSimSun" {
         // S858: draw real SimSun glyphs (installed) — the metrics alias to MS
         // Mincho, but the Chinese Han glyphs should render in SimSun. Latin
@@ -1277,6 +1280,13 @@ fn normalize_family_name(name: &str) -> String {
         // = the wp27-35 natural-flow cascade). Corpus scan: CG Times appears
         // in usnyserda ONLY → single-doc-scoped by construction.
         "CG Times" => "Times New Roman".to_string(),
+        // S1005 (2026-07-25): bare "Times" is the PostScript/Mac Times face;
+        // Windows FontSubstitutes resolves it to Times New Roman and Word
+        // renders TNR metrics. Same class as CG Times (S831). Census: exact
+        // "Times" (not "Times New Roman") appears in 0 golden / 0 real_en / 19
+        // docx_corpus/en (incl. forms__002a6444) / 2 ja — no word_png doc → SSIM
+        // byte-identical by construction. Gated OXI_S1005_DISABLE for A/B.
+        "Times" if std::env::var("OXI_S1005_DISABLE").is_err() => "Times New Roman".to_string(),
         // S846 (2026-07-14): Helvetica family → Arial (metric-compatible clone,
         // uninstalled on Windows; Word substitutes Arial). Feeds the METRICS
         // side so layout uses Arial's wider space (3.05pt vs the Calibri
