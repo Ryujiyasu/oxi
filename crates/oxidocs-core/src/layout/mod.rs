@@ -27328,6 +27328,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         if self.doc_body_has_real_cjk || std::env::var("OXI_S936_DISABLE").is_ok() {
             return (None, None);
         }
+        // S1000 (2026-07-25, default ON, opt-out OXI_S1000_DISABLE): the S936
+        // helper returned (None, None) whenever the table style did NOT declare
+        // a spacing side — conflating "the table style is silent, so KEEP the
+        // docDefaults value" with "no override", so the downstream reset zeroed
+        // a docDefaults space_before/after. forms__0020466f (docDefaults
+        // before/after=200tw=10pt; table styles a/a0/a3 basedOn TableNormal
+        // declare NO paragraph pPr/spacing): every firing cell row under-
+        // reserved ~10pt (2 paras -> ~20pt), 3 tables -241.3pt total, pushing
+        // Section 2 231pt early (Word PDF row-box verified). Contract: a side
+        // whose spacing came from docDefaults is REPLACED by the table style's
+        // DECLARED value (0 counts) if any, else KEPT at the docDefaults value.
+        // Consistent with S865 (0009d767's TableGrid DECLARES before/after=0 ->
+        // still 0). Gate: byte-compare over all 369 golden docs changes ONLY 3
+        // synthetic test docs (test_cell_width/test_exact_spacing/
+        // test_table_spacing) and ALL 3 IMPROVE SSIM (+0.0149/+0.0218/+0.0099
+        // vs Word word_png, net +0.0466, 0 regressed) -> the docDefaults-kept
+        // cell spacing MATCHES Word. JP byte-identical (Latin-scoped).
+        if std::env::var("OXI_S1000_DISABLE").is_err() {
+            let sb = if style.space_before_from_doc_defaults {
+                Some(table_para_style.and_then(|t| t.space_before)
+                    .or(style.space_before).unwrap_or(0.0))
+            } else {
+                None
+            };
+            let sa = if style.space_after_from_doc_defaults {
+                Some(table_para_style.and_then(|t| t.space_after)
+                    .or(style.space_after).unwrap_or(0.0))
+            } else {
+                None
+            };
+            return (sb, sa);
+        }
         let Some(tps) = table_para_style else { return (None, None) };
         let sb = if style.space_before_from_doc_defaults { tps.space_before } else { None };
         let sa = if style.space_after_from_doc_defaults { tps.space_after } else { None };
