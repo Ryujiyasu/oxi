@@ -25918,16 +25918,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     /// column + left/right cellMar (the minimum a column can shrink to). Uses the
     /// same char widths + break opportunities as the line breaker; gridSpan>1 cells
     /// are skipped (they constrain the span collectively, not one column).
-    /// ★INCOMPLETE (report §10.2 wall, measured 2026-07-25 on reports__001f1397
-    /// table 3): when a column's widest word exceeds its preferred AND the sum of
-    /// content_mins > available, Word FORCE-BREAKS the long words (col2
-    /// "recommendation" → "recommendat", col2 stays 83.9 < preferred 88.25) rather
-    /// than expand. This widest-word content_min over-estimates there → the
-    /// waterfill freezes over-wide → the table overflows (490 vs 430) → reports
-    /// 0.9117 → 0.7780 (WORSE). The probe W1 expanded (M×14, single wide column
-    /// with room); real docs with multiple over-long words break. The force-break
-    /// rule (which words Word breaks under pressure) is un-derived — Stage 2 waits
-    /// on it. Hence OXI_S1003 is opt-in / default byte-identical.
+    /// When the sum of these widest-word mins EXCEEDS the target the table is
+    /// infeasible and Word FORCE-BREAKS the long words; that case is handled by the
+    /// infeasible (equal-waterfill) branch in `waterfill_autofit_columns` (Probe
+    /// W-2, 2026-07-25), so this raw widest-word min is only the FEASIBLE-case min.
     fn column_content_mins(&self, table: &Table) -> Vec<f32> {
         let ncols = table.grid_columns.len();
         let mut mins = vec![0.0f32; ncols];
@@ -26003,6 +25997,40 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             .unwrap_or(5.4);
         let available = available + lead_l;
         let n = preferred.len();
+        // Probe W-2 (2026-07-25): if the content_min sum EXCEEDS the target, the
+        // table is INFEASIBLE at widest-word widths — Word FORCE-BREAKS the long
+        // words and the columns share EQUALLY (short columns freeze at content_min,
+        // the rest split the remainder equally, breaking their words to fit).
+        // Verified <0.2pt on X1-X5 (reports table 3 = this case; the widest-word
+        // waterfill over-expanded there, S1003's original bug). cap-at-preferred /
+        // subset-selection were refuted (large errors).
+        let cm_sum: f32 = content_min.iter().sum();
+        if cm_sum > available {
+            let mut w = vec![0.0f32; n];
+            let mut frozen = vec![false; n];
+            for _ in 0..(n + 2) {
+                let free: Vec<usize> = (0..n).filter(|&i| !frozen[i]).collect();
+                if free.is_empty() {
+                    break;
+                }
+                let used: f32 = (0..n).filter(|&i| frozen[i]).map(|i| w[i]).sum();
+                let share = ((available - used) / free.len() as f32).max(0.0);
+                let mut changed = false;
+                for &i in &free {
+                    if content_min[i] <= share {
+                        w[i] = content_min[i];
+                        frozen[i] = true;
+                        changed = true;
+                    } else {
+                        w[i] = share;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            return w;
+        }
         let mut w = preferred.clone();
         let mut frozen = vec![false; n];
         // pre-freeze columns whose content forces expansion beyond preferred.
