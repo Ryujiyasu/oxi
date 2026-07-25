@@ -6482,7 +6482,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let anchor_bottom = candidate_y_top;
                             let cb = start_y + content_height;
                             let avail = cb - anchor_bottom;
-                            let cw_est = self.resolve_table_col_widths(table, content_width);
+                            let cw_est = self.resolve_table_col_widths_n(table, content_width, false);
                             let dp = table.style.default_cell_margins.as_ref();
                             let (pl, pr, pt, pb) = (
                                 dp.and_then(|m| m.left).unwrap_or(5.4),
@@ -6547,7 +6547,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && std::env::var("OXI_S878_DISABLE").is_err()
                     {
                         let cb = start_y + content_height;
-                        let cw_est = self.resolve_table_col_widths(table, content_width);
+                        let cw_est = self.resolve_table_col_widths_n(table, content_width, false);
                         let dp = table.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
                             dp.and_then(|m| m.left).unwrap_or(5.4),
@@ -9061,7 +9061,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // the rows' natural heights (trHeight floor per row).
                     // Corpus-safe: 0 corpus docs have tables in headers.
                     if std::env::var("OXI_S731_DISABLE").is_err() {
-                        let col_widths = self.resolve_table_col_widths(t, hdr_cw);
+                        let col_widths = self.resolve_table_col_widths_n(t, hdr_cw, false);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
                             dp.and_then(|m| m.left).unwrap_or(5.4),
@@ -9510,7 +9510,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // 1.5pt/side). forms' footer row closes: cell line 9.77 +
                     // double sz4 1.5×2 = 12.77 ≈ Word 12.72.
                     if std::env::var("OXI_S868_DISABLE").is_err() {
-                        let col_widths = self.resolve_table_col_widths(t, cw);
+                        let col_widths = self.resolve_table_col_widths_n(t, cw, false);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
                             dp.and_then(|m| m.left).unwrap_or(5.4),
@@ -19826,7 +19826,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let mut s740_pending_commit: Option<usize> = None;
 
         // Resolve column widths from grid_columns, cell widths, or equal split
-        let col_widths = self.resolve_table_col_widths(table, content_width);
+        // S1003: thread is_nested so a DIRECT BODY autofit table waterfills all
+        // columns while a NESTED overflow keeps the last-column-only clamp.
+        let col_widths = self.resolve_table_col_widths_n(table, content_width, is_nested);
         let table_width: f32 = col_widths.iter().sum();
 
         // Table positioning: tblpPr horizontal or inline alignment
@@ -25912,9 +25914,156 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         elements
     }
 
-    /// Resolve column widths for a table.
-    /// Priority: grid_columns > cell widths > equal split.
-    fn resolve_table_col_widths(&self, table: &Table, content_width: f32) -> Vec<f32> {
+    /// S1003: content_min[col] = the widest UNBREAKABLE run in any cell of that
+    /// column + left/right cellMar (the minimum a column can shrink to). Uses the
+    /// same char widths + break opportunities as the line breaker; gridSpan>1 cells
+    /// are skipped (they constrain the span collectively, not one column).
+    /// ★INCOMPLETE (report §10.2 wall, measured 2026-07-25 on reports__001f1397
+    /// table 3): when a column's widest word exceeds its preferred AND the sum of
+    /// content_mins > available, Word FORCE-BREAKS the long words (col2
+    /// "recommendation" → "recommendat", col2 stays 83.9 < preferred 88.25) rather
+    /// than expand. This widest-word content_min over-estimates there → the
+    /// waterfill freezes over-wide → the table overflows (490 vs 430) → reports
+    /// 0.9117 → 0.7780 (WORSE). The probe W1 expanded (M×14, single wide column
+    /// with room); real docs with multiple over-long words break. The force-break
+    /// rule (which words Word breaks under pressure) is un-derived — Stage 2 waits
+    /// on it. Hence OXI_S1003 is opt-in / default byte-identical.
+    fn column_content_mins(&self, table: &Table) -> Vec<f32> {
+        let ncols = table.grid_columns.len();
+        let mut mins = vec![0.0f32; ncols];
+        let (def_l, def_r) = table
+            .style
+            .default_cell_margins
+            .as_ref()
+            .map(|m| (m.left.unwrap_or(5.4), m.right.unwrap_or(5.4)))
+            .unwrap_or((5.4, 5.4));
+        for row in &table.rows {
+            let mut col = 0usize;
+            for cell in &row.cells {
+                let span = (cell.grid_span.max(1)) as usize;
+                if col >= ncols {
+                    break;
+                }
+                if span == 1 {
+                    let (ml, mr) = cell
+                        .margins
+                        .as_ref()
+                        .map(|m| (m.left.unwrap_or(def_l), m.right.unwrap_or(def_r)))
+                        .unwrap_or((def_l, def_r));
+                    let mut cell_max = 0.0f32;
+                    for block in &cell.blocks {
+                        if let Block::Paragraph(p) = block {
+                            let mut seg = 0.0f32;
+                            for run in &p.runs {
+                                let fs = self.resolve_font_size(&run.style, &p.style);
+                                let metrics =
+                                    self.metrics_for_text(&run.text, &run.style, &p.style);
+                                for ch in run.text.chars() {
+                                    let bw = self
+                                        .registry
+                                        .char_width_pt_with_fallback(ch, fs, metrics);
+                                    if ch.is_whitespace() {
+                                        cell_max = cell_max.max(seg);
+                                        seg = 0.0;
+                                    } else if is_break_after(ch) {
+                                        seg += bw;
+                                        cell_max = cell_max.max(seg);
+                                        seg = 0.0;
+                                    } else {
+                                        seg += bw;
+                                    }
+                                }
+                            }
+                            cell_max = cell_max.max(seg);
+                        }
+                    }
+                    mins[col] = mins[col].max(cell_max + ml + mr);
+                }
+                col += span;
+            }
+        }
+        mins
+    }
+
+    /// S1003: excess-proportional waterfill (Probe W). Each column shrinks its
+    /// (preferred − content_min) proportionally to the collective deficit, clamped
+    /// to content_min; a column hitting content_min freezes and its share
+    /// redistributes; a column whose content_min exceeds preferred expands.
+    fn waterfill_autofit_columns(&self, table: &Table, available: f32) -> Vec<f32> {
+        let preferred = table.grid_columns.clone();
+        let content_min = self.column_content_mins(table);
+        // Probe W: a constrained autofit table's width = available + ONE leading
+        // cell margin (~5.4pt / 108tw) — the lead cell's left border outsets the
+        // content region (S496/S621 lead-cell absorption). Distribute over that.
+        let lead_l = table
+            .style
+            .default_cell_margins
+            .as_ref()
+            .and_then(|m| m.left)
+            .unwrap_or(5.4);
+        let available = available + lead_l;
+        let n = preferred.len();
+        let mut w = preferred.clone();
+        let mut frozen = vec![false; n];
+        // pre-freeze columns whose content forces expansion beyond preferred.
+        for i in 0..n {
+            if content_min[i] >= preferred[i] {
+                w[i] = content_min[i];
+                frozen[i] = true;
+            }
+        }
+        for _ in 0..(n + 2) {
+            let free: Vec<usize> = (0..n).filter(|&i| !frozen[i]).collect();
+            if free.is_empty() {
+                break;
+            }
+            let used: f32 = (0..n).filter(|&i| frozen[i]).map(|i| w[i]).sum();
+            let rem = available - used;
+            let pref_sum: f32 = free.iter().map(|&i| preferred[i]).sum();
+            let deficit = pref_sum - rem;
+            if deficit <= 0.0 {
+                for &i in &free {
+                    w[i] = preferred[i];
+                }
+                break;
+            }
+            let total_excess: f32 = free
+                .iter()
+                .map(|&i| (preferred[i] - content_min[i]).max(0.0))
+                .sum();
+            let mut changed = false;
+            for &i in &free {
+                let exc = (preferred[i] - content_min[i]).max(0.0);
+                let share = if total_excess > 0.0 {
+                    deficit * exc / total_excess
+                } else {
+                    0.0
+                };
+                let nv = preferred[i] - share;
+                if nv <= content_min[i] + 1e-4 {
+                    w[i] = content_min[i];
+                    frozen[i] = true;
+                    changed = true;
+                } else {
+                    w[i] = nv;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        w
+    }
+
+    /// S1003 (2026-07-25, opt-in OXI_S1003): the R7.24 last-column-only clamp is
+    /// Word's NESTED-table overflow rule; a DIRECT BODY autofit table that
+    /// overflows redistributes ALL columns via an excess-proportional waterfill
+    /// (Probe W: each column shrinks its (preferred − content_min) proportionally,
+    /// clamped to content_min = widest unbreakable run + cellMar; content_min >
+    /// preferred columns expand — verified max 0.18pt over 24 controlled renders).
+    /// `is_nested` distinguishes the nested-recursion call (last-column, unchanged)
+    /// from body/header/footer calls. Default (flag unset) is byte-identical.
+    fn resolve_table_col_widths_n(&self, table: &Table, content_width: f32, is_nested: bool) -> Vec<f32> {
         // 1. Use grid_columns if available
         // When nested table overflows parent cell, Word keeps earlier columns
         // at their specified width and shrinks only the last column to fit.
@@ -25947,6 +26096,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let is_dxa_fixed = std::env::var("OXI_S593_DISABLE").is_err()
                 && table.style.width_type.as_deref() == Some("dxa");
             if !is_floating && !is_fixed && !is_dxa_fixed && total > available && table.grid_columns.len() > 1 {
+                // S1003: a DIRECT BODY autofit table waterfills all columns; the
+                // last-column-only clamp is the nested-table rule (report §14.2).
+                if std::env::var("OXI_S1003").is_ok() && !is_nested {
+                    return self.waterfill_autofit_columns(table, available);
+                }
                 let mut cols = table.grid_columns.clone();
                 let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
                 let last = (available - prefix_sum).max(0.0);
