@@ -1479,9 +1479,23 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
     }
 
     // Remaining blocks form the last section
+    // S1002 (opt-in OXI_S1002): a SECTIONLESS doc (no w:sectPr anywhere) inherits
+    // the rendering environment's Normal-template page setup. Probe M (COM,
+    // 2026-07-25) confirmed reports__001f1397's applied margins = a fresh blank
+    // doc's Normal.dotm EXACTLY (top 99.25 / bottom·left·right 85.05pt = 35mm/30mm
+    // = the Japanese-Word A4 default), NOT the American 1-inch Margin::default().
+    // Oxi already defaults PageSize to A4, so the A4-consistent margins match.
+    // Held opt-in (the value is environment/locale-dependent = S600 class; the
+    // 72pt default stays byte-identical). Scoped to the sectionless branch only
+    // (1/669 corpus docs). Layout column-width redistribute (Stage 2) is separate.
+    let sectionless_margin = if std::env::var("OXI_S1002").is_ok() {
+        Margin { top: 99.25, bottom: 85.05, left: 85.05, right: 85.05 }
+    } else {
+        Margin::default()
+    };
     let last_sp = final_sect_pr.unwrap_or(SectionProperties {
         page_size: PageSize::default(),
-        margin: Margin::default(),
+        margin: sectionless_margin,
         grid_line_pitch: None,
         grid_char_pitch: None,
         grid_char_space_raw: None,
