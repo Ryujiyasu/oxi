@@ -5468,6 +5468,17 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut margin_left: f32 = 0.0;
     let mut margin_top: f32 = 0.0;
     let mut is_absolute = false;
+    // S1006 (2026-07-26): a VML shape's mso-position alignment / relative frame
+    // / z-index, captured so an absolute ZERO-OFFSET picture (a full-page
+    // letterhead: position:absolute;margin-left:0;margin-top:0;z-index<0) is
+    // classified FLOATING (not inline) — offset (0,0) is a VALID position, not
+    // "no position". Without this the letterhead's 792pt height inflated the
+    // header reservation → the body pushed to p2 AND the image dropped.
+    let mut vml_h_align: Option<String> = None;
+    let mut vml_v_align: Option<String> = None;
+    let mut vml_h_relative: Option<String> = None;
+    let mut vml_v_relative: Option<String> = None;
+    let mut vml_negative_z = false;
     let mut escapes_cell = false; // o:allowincell="f" (S711b)
     // VML drawing canvas (<v:group editas="canvas">). Word reserves the
     // group's DECLARED height (style height:Npt) in the inline text flow; the
@@ -5616,6 +5627,16 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                             if !in_grp { margin_top = parse_css_length(mt.trim()); }
                                         } else if part.starts_with("position:absolute") {
                                             if !in_grp { is_absolute = true; }
+                                        } else if let Some(r) = part.strip_prefix("mso-position-horizontal-relative:") {
+                                            if !in_grp { vml_h_relative = Some(r.trim().to_string()); }
+                                        } else if let Some(a) = part.strip_prefix("mso-position-horizontal:") {
+                                            if !in_grp { vml_h_align = Some(a.trim().to_string()); }
+                                        } else if let Some(r) = part.strip_prefix("mso-position-vertical-relative:") {
+                                            if !in_grp { vml_v_relative = Some(r.trim().to_string()); }
+                                        } else if let Some(a) = part.strip_prefix("mso-position-vertical:") {
+                                            if !in_grp { vml_v_align = Some(a.trim().to_string()); }
+                                        } else if let Some(z) = part.strip_prefix("z-index:") {
+                                            if !in_grp { vml_negative_z = z.trim().parse::<i64>().is_ok_and(|z| z < 0); }
                                         }
                                     }
                                 }
@@ -5711,6 +5732,16 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                             if !in_grp { margin_top = parse_css_length(mt.trim()); }
                                         } else if part.starts_with("position:absolute") {
                                             if !in_grp { is_absolute = true; }
+                                        } else if let Some(r) = part.strip_prefix("mso-position-horizontal-relative:") {
+                                            if !in_grp { vml_h_relative = Some(r.trim().to_string()); }
+                                        } else if let Some(a) = part.strip_prefix("mso-position-horizontal:") {
+                                            if !in_grp { vml_h_align = Some(a.trim().to_string()); }
+                                        } else if let Some(r) = part.strip_prefix("mso-position-vertical-relative:") {
+                                            if !in_grp { vml_v_relative = Some(r.trim().to_string()); }
+                                        } else if let Some(a) = part.strip_prefix("mso-position-vertical:") {
+                                            if !in_grp { vml_v_align = Some(a.trim().to_string()); }
+                                        } else if let Some(z) = part.strip_prefix("z-index:") {
+                                            if !in_grp { vml_negative_z = z.trim().parse::<i64>().is_ok_and(|z| z < 0); }
                                         }
                                     }
                                 }
@@ -5787,6 +5818,16 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     // VML absolute-positioned shapes get a FloatingPosition. Computed BEFORE
     // the image (S566) so an absolutely-positioned VML picture carries it and
     // is classified as FLOATING by the IR builder, not inline.
+    // S1006: an absolute ZERO-OFFSET VML shape that carries alignment info
+    // (mso-position-horizontal AND -vertical) is a positioned float (a full-page
+    // letterhead), NOT inline. NARROW: requires BOTH align keys present so the
+    // existing S566 nonzero-offset case (correspondence__000ba7e6) is untouched;
+    // census (0 golden / 0 ja / 0 real_en, 1 docx_corpus/en = the target) →
+    // byte-identical everywhere else by construction. Opt-out OXI_S1006_DISABLE.
+    let s1006_zero_abs = is_absolute
+        && margin_left == 0.0 && margin_top == 0.0
+        && vml_h_align.is_some() && vml_v_align.is_some()
+        && std::env::var("OXI_S1006_DISABLE").is_err();
     let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
         Some(FloatingPosition {
             x: margin_left,
@@ -5795,6 +5836,15 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             v_relative: Some("text".to_string()),
             h_align: None,
             v_align: None,
+            dist_l: None, dist_r: None })
+    } else if s1006_zero_abs {
+        Some(FloatingPosition {
+            x: margin_left,
+            y: margin_top,
+            h_relative: vml_h_relative.clone(),
+            v_relative: vml_v_relative.clone(),
+            h_align: vml_h_align.clone(),
+            v_align: vml_v_align.clone(),
             dist_l: None, dist_r: None })
     } else {
         None
@@ -5829,7 +5879,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             crop: None,
             anchor_block_index: 0,
             relative_height: 0,
-            behind_doc: false,
+            // S1006: a zero-offset absolute letterhead with z-index<0 renders
+            // BEHIND the body text (S918 behindDoc path), not over it.
+            behind_doc: s1006_zero_abs && vml_negative_z,
         })
     } else {
         None
