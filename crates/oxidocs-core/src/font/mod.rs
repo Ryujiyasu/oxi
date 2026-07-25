@@ -900,6 +900,16 @@ impl FontMetricsRegistry {
         })
     }
 
+    /// S1008: true when `family` resolves to a REAL registry entry (exact /
+    /// normalized / base) rather than the default Calibri fallback. Used to
+    /// decide whether a fontTable `w:altName` substitution should fire (source
+    /// unsupported → alternate supported).
+    pub(crate) fn supports_family(&self, family: &str) -> bool {
+        self.fonts.contains_key(family)
+            || self.fonts.contains_key(&normalize_family_name(family))
+            || self.fonts.contains_key(&base_family_name(family))
+    }
+
     /// Get the default font metrics (Calibri).
     pub fn default_metrics(&self) -> &FontMetrics {
         self.get(&self.default_family)

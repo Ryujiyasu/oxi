@@ -1893,6 +1893,10 @@ pub struct DocumentMetadata {
 /// Font information from fontTable.xml
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FontInfo {
+    /// Alternate family declared by word/fontTable.xml (w:altName) — the font
+    /// Word substitutes when the primary family is unavailable (S1008).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_name: Option<String>,
     /// PANOSE-1 classification (10 bytes as hex string, e.g. "020B0604020202020204")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panose1: Option<String>,

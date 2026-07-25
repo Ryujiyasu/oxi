@@ -474,7 +474,7 @@ impl OoxmlParser {
         // changes. Color index = position in this Vec.
         let authors = build_author_palette(&people, &all_comments, &pages);
 
-        Ok(Document {
+        let mut document = Document {
             pages,
             styles,
             metadata,
@@ -491,7 +491,12 @@ impl OoxmlParser {
             wp_justification,
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
-        })
+        };
+        // S1008 (2026-07-26): resolve fontTable w:altName substitutions
+        // (source unsupported → alternate supported). No-op for the vast
+        // majority of docs (empty alias map → byte-identical).
+        apply_font_table_aliases(&mut document);
+        Ok(document)
     }
 
     /// S833: settings.xml `<w:footnotePr>` with at least one `<w:footnote>`
@@ -781,6 +786,16 @@ impl OoxmlParser {
                 Ok(Event::Empty(e)) => {
                     let local = local_name(e.name().as_ref());
                     match local.as_str() {
+                        // S1008 (2026-07-26): w:altName = the family Word substitutes
+                        // when the primary font is unavailable (e.g. Myriad Pro Light
+                        // → Segoe UI Light). Consumed by resolve_declared_font_alias.
+                        "altName" => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    current_info.alt_name = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
                         "panose1" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
@@ -9154,6 +9169,108 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
 /// 3. Each `Run.tracked_change.author` (walked in document order, plus
 ///    rpr_change.author, ppr_change.author, paragraph_mark_revision.author)
 ///
+/// S1008 (2026-07-26): resolve fontTable `w:altName` font substitutions.
+/// A DOCX declares (in word/fontTable.xml) an alternate family for each font
+/// (`Myriad Pro Light -> Segoe UI Light`); Word uses the alternate when the
+/// primary is unavailable. Oxi previously ignored altName, so an unsupported
+/// primary (Myriad Pro Light) fell to the Calibri fallback instead of the
+/// declared Segoe UI Light. This rewrites each run's `font_family` /
+/// `font_family_east_asia` from source→alt ONLY when the source resolves to no
+/// real registry entry AND the alternate does (the report's discriminator).
+/// The alias map is empty for the vast majority of docs (source-supported or
+/// no altName), so this is a no-op → byte-identical, everywhere except the few
+/// docs that genuinely use an unsupported primary with a supported alternate.
+fn apply_font_table_aliases(document: &mut crate::ir::Document) {
+    if std::env::var("OXI_S1008_DISABLE").is_ok() {
+        return;
+    }
+    let registry = crate::font::FontMetricsRegistry::load();
+    let mut alias: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (name, info) in &document.styles.font_table {
+        if let Some(alt) = &info.alt_name {
+            // Fire only for a pure LATIN substitution (source unsupported, alt
+            // supported AND the alt resolves to a non-CJK face). CJK fonts have
+            // their own resolution (normalize_family_name); an altName like
+            // ＭＳ → 游ゴシック would otherwise change a JP mark's line height on
+            // the tuned Phase-3 canaries (3a4f/model/ikujikaigo). The report's
+            // target (Myriad Pro Light → Segoe UI Light) is Latin→Latin.
+            if !registry.supports_family(name)
+                && registry.supports_family(alt)
+                && !registry.get(alt).is_cjk_83_64_font()
+            {
+                alias.insert(name.clone(), alt.clone());
+            }
+        }
+    }
+    if alias.is_empty() {
+        return;
+    }
+    for page in &mut document.pages {
+        resolve_alias_blocks(&mut page.blocks, &alias);
+        resolve_alias_blocks(&mut page.header, &alias);
+        resolve_alias_blocks(&mut page.footer, &alias);
+        resolve_alias_blocks(&mut page.header_first, &alias);
+        resolve_alias_blocks(&mut page.footer_first, &alias);
+        resolve_alias_blocks(&mut page.header_even, &alias);
+        resolve_alias_blocks(&mut page.footer_even, &alias);
+        for fnote in &mut page.footnotes {
+            resolve_alias_blocks(&mut fnote.blocks, &alias);
+        }
+        for enote in &mut page.endnotes {
+            resolve_alias_blocks(&mut enote.blocks, &alias);
+        }
+        for tb in &mut page.text_boxes {
+            resolve_alias_blocks(&mut tb.blocks, &alias);
+        }
+        for sh in &mut page.shapes {
+            resolve_alias_blocks(&mut sh.text_blocks, &alias);
+        }
+    }
+}
+
+fn resolve_alias_blocks(blocks: &mut [crate::ir::Block], alias: &std::collections::HashMap<String, String>) {
+    use crate::ir::Block;
+    for block in blocks {
+        match block {
+            Block::Paragraph(p) => {
+                for run in &mut p.runs {
+                    resolve_alias_run_style(&mut run.style, alias);
+                }
+                if let Some(rs) = p.style.default_run_style.as_mut() {
+                    resolve_alias_run_style(rs, alias);
+                }
+                if let Some(rs) = p.style.ppr_rpr.as_mut() {
+                    resolve_alias_run_style(rs, alias);
+                }
+                for sh in &mut p.shapes {
+                    resolve_alias_blocks(&mut sh.text_blocks, alias);
+                }
+            }
+            Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        resolve_alias_blocks(&mut cell.blocks, alias);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn resolve_alias_run_style(rs: &mut crate::ir::RunStyle, alias: &std::collections::HashMap<String, String>) {
+    if let Some(ff) = rs.font_family.as_ref() {
+        if let Some(a) = alias.get(ff) {
+            rs.font_family = Some(a.clone());
+        }
+    }
+    if let Some(ff) = rs.font_family_east_asia.as_ref() {
+        if let Some(a) = alias.get(ff) {
+            rs.font_family_east_asia = Some(a.clone());
+        }
+    }
+}
+
 /// Authors that already appear earlier in the list are skipped, so a single
 /// reviewer always gets the same `color_index` regardless of how many times
 /// they appear.
