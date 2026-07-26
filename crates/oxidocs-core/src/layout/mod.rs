@@ -22815,6 +22815,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         && cm.char_widths.contains_key(&ch)
                                     {
                                         cw = cm.char_width_em(ch) * font_size;
+                                    } else if kern_active
+                                        // S1017 (2026-07-26, opt-out
+                                        // OXI_S1017_DISABLE): KERNBREAK for the
+                                        // CELL wrapper — a kern-active Latin run
+                                        // (w:kern <= font size, e.g.
+                                        // forms__0011786c docDefaults kern=2 →
+                                        // Arial 12pt) breaks at the em advance +
+                                        // legacy kern-pair adjustment (the body
+                                        // break_into_lines model, mod.rs:15993),
+                                        // not the 10tw-rounded fallback.
+                                        // "Marks/Scars/Tattoos:" fits ONE line in
+                                        // Word (112.116pt via the T,a −1.330pt
+                                        // pair) but Oxi's cell wrapper (unrounded
+                                        // em 113.446 > wrap 112.70) wrapped 2
+                                        // lines → +13.799pt → +1. The estimate
+                                        // mirror (count_cell_lines) MUST match.
+                                        && std::env::var("OXI_S1017_DISABLE").is_err()
+                                        && !self.doc_body_has_real_cjk
+                                        && !kinsoku::is_cjk(ch)
+                                        && cm.char_widths.contains_key(&ch)
+                                    {
+                                        cw = cm.char_width_em(ch) * font_size;
+                                        if let Some(&next) = s586_run_chars.get(s586_ci + 1) {
+                                            if !kinsoku::is_cjk(next) {
+                                                cw += self.registry.latin_kern_em(
+                                                    &cm.family, cm.units_per_em, ch, next,
+                                                ) * font_size;
+                                            }
+                                        }
                                     }
                                 }
                                 // S691 (2026-06-29) FALSIFIED: forcing full-width digits (U+FF1x)
@@ -26437,7 +26466,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             };
             // S123: per-char trial-line for jc=both wrap-decision lookahead.
             let mut buf_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
-            for ch in run.text.chars() {
+            // S1017 (2026-07-26): indexed so the KERNBREAK next-char lookup
+            // (below) matches the render loop's s586_run_chars.get(ci+1).
+            let s1017_chars: Vec<char> = run.text.chars().collect();
+            for (s1017_i, ch) in s1017_chars.iter().copied().enumerate() {
                 // Session 109 (2026-05-19): mirror the cell renderer's soft-line-
                 // break handling so the line-count estimate matches what the
                 // renderer actually produces. Otherwise estimate < render →
@@ -26498,6 +26530,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && cm.char_widths.contains_key(&ch)
                     {
                         cw = cm.char_width_em(ch) * font_size;
+                    } else if kern_active
+                        // S1017 estimate mirror (see the render-loop comment):
+                        // count_cell_lines MUST measure identically to the
+                        // render or the row height diverges (the S716/S751
+                        // three-pass lesson).
+                        && std::env::var("OXI_S1017_DISABLE").is_err()
+                        && !self.doc_body_has_real_cjk
+                        && !kinsoku::is_cjk(ch)
+                        && cm.char_widths.contains_key(&ch)
+                    {
+                        cw = cm.char_width_em(ch) * font_size;
+                        if let Some(&next) = s1017_chars.get(s1017_i + 1) {
+                            if !kinsoku::is_cjk(next) {
+                                cw += self.registry.latin_kern_em(
+                                    &cm.family, cm.units_per_em, ch, next,
+                                ) * font_size;
+                            }
+                        }
                     }
                 }
                 // S342 (2026-05-27): see effective_char_pitch at line 4073 for
