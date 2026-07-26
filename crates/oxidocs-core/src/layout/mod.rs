@@ -11319,6 +11319,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 _ => true,
             };
         let use_cumulative_basis = is_multiple_spacing || is_single_lm0;
+        // REPORT_administrative__0010e437 (2026-07-26, opt-out OXI_NTMULT_DISABLE):
+        // a NO-TYPE docGrid Latin AUTO-MULTIPLE-spacing paragraph decides its
+        // page-bottom keep/push with the S576 INK box, NOT the win/hhea spacing
+        // box that S779 (normal break) and the natural widow arm apply. The two
+        // consumers share no threshold, so BOTH must switch to ink — fixing only
+        // one leaves the 3-line target either 1 line on p11 (widow off) or all 3
+        // on p11 (S779 off). Derived by _pb_notypemult_gen.py (Word PDF, Calibri
+        // + TNR × L 240..480 × cb sweep): Word flips at the line's fitz-bbox
+        // (ink) bottom at EVERY factor 1.06-2.0× (d_ink 0.1-0.7pt vs d_win
+        // 1.6-16.6pt), both fonts, both widow=0 (split) and widow=1 (whole-move).
+        // The ink model is thus UNIFORM across L (the report's `<1.15` was an
+        // unverified S695-boundary borrow, refuted here); OXI_NTMULT_ALL removes
+        // the <1.15 canary scope to apply the full physics. Default keeps <1.15
+        // (excludes uklocal/nyserda's 276×many + nyserda's 360/480×13 = frozen
+        // PASS canaries with no PASS benefit from the change). Scope: no-type
+        // docGrid (true no-grid keeps S827; typed grid keeps its snap rules) +
+        // Latin (CJK keeps S608 MS-Gothic natural) + multiple (singles keep S779).
+        let no_type_multiple_ink = page.doc_grid_no_type
+            && is_multiple_spacing
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_NTMULT_DISABLE").is_err()
+            && (std::env::var("OXI_NTMULT_ALL").is_ok()
+                || para.style.line_spacing.unwrap_or(1.0) < 1.15);
         let raw_spaced_tw: f32 = if use_cumulative_basis && !lines.is_empty() {
             let first_line = &lines[0];
             let base = {
@@ -12062,7 +12085,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let on_slot = phase < 1.0 || phase > pitch - 1.0;
                     if on_slot { (effective_lh + natural_lh) / 2.0 } else { 0.0 }
                 } else { 0.0 };
-                let s779_floor = if s779_latin {
+                let s779_floor = if s779_latin && !no_type_multiple_ink {
                     s779_win_heights.get(line_idx).copied().unwrap_or(0.0)
                 } else { 0.0 };
                 (ink_lh + tgink_k).max(atleast_floor).max(s739_centered).max(s779_floor).min(effective_lh)
@@ -12478,6 +12501,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // to 5 pages, losing Word's page 6 — the −0.985 in the first A/B.)
             let last_line_fit_h = |idx: usize| -> f32 {
                 let full = line_heights.get(idx).copied().unwrap_or(0.0);
+                if no_type_multiple_ink {
+                    return ink_line_heights.get(idx).copied().unwrap_or(full).min(full);
+                }
                 if !s608 {
                     return full;
                 }
