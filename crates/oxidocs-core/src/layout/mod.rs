@@ -8951,6 +8951,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let header_y = page.header_distance.unwrap_or(36.0);
             let hdr_cw = page.size.width - page.margin.left - page.margin.right;
             let mut hdr_h = 0.0_f32;
+            // S1010 (2026-07-26, opt-out OXI_S1010_DISABLE): a PAGE-relative
+            // wrapTopAndBottom image in the header forms a physical band; the
+            // header text flow resumes BELOW its bottom (like a body
+            // TopAndBottom float), so the body start = band_bottom + host lines.
+            // forms__0010349d: a 140.6pt letterhead picture (v_rel=page, y=1.15)
+            // → Word body start ~157.5, but Oxi (a) excludes floating images
+            // from the header height (S759) AND (b) reads the anchor's
+            // drawing-only run (sz=80) as the empty-mark formatting → 42.55 +
+            // Arial-Bold-40 hhea 45.996 = 88.5 → 5 extra 15pt lines on p1.
+            // Both must be fixed together (compensating pair): the band without
+            // the mark fix over-reserves ~31pt, the mark fix without the band
+            // under-reserves. Census: this shape (header + page-relative
+            // TopAndBottom image) is target-ONLY across 677 corpus paths, and
+            // does not overlap S734's paragraph-relative body band.
+            let s1010 = std::env::var("OXI_S1010_DISABLE").is_err();
+            let band_bottom = if s1010 {
+                blocks.iter().filter_map(|b| match b {
+                    Block::Image(img)
+                        if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                            && img.position.as_ref().is_some_and(|p| {
+                                p.v_relative.as_deref() == Some("page")
+                            }) =>
+                    {
+                        img.position.as_ref().map(|p| p.y + img.height)
+                    }
+                    _ => None,
+                }).fold(header_y, f32::max)
+            } else {
+                header_y
+            };
             // S813 (2026-07-13, default ON, opt-out OXI_S813_DISABLE): the header
             // stack includes the FIRST paragraph's style space_before and
             // COLLAPSES inter-para gaps — the S806 footer-stack model applied to
@@ -8976,14 +9006,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // lines and can push the body down by tens of points.
                     let fallback_style = RunStyle::default();
                     let s862 = std::env::var("OXI_S862_DISABLE").is_err();
-                    let mark_style = para
-                        .runs
-                        .first()
+                    // S1010 (Stage B): skip DRAWING-ONLY runs (an anchored image
+                    // leaves an empty run whose rPr [sz=80 in forms__0010349d]
+                    // must NOT be read as the empty-paragraph mark formatting) —
+                    // use the first run with visible text, else the ¶-mark rPr.
+                    let visible_run = if s1010 {
+                        para.runs.iter().find(|r| !r.text.is_empty())
+                    } else {
+                        para.runs.first()
+                    };
+                    let mark_style = visible_run
                         .map(|r| &r.style)
                         .or_else(|| if s862 { para.style.ppr_rpr.as_ref() } else { None })
                         .unwrap_or(&fallback_style);
                     let fs = self.resolve_font_size(mark_style, &para.style);
-                    let metrics = if let Some(run) = para.runs.first() {
+                    let metrics = if let Some(run) = visible_run {
                         self.metrics_for(&run.style, &para.style)
                     } else if let Some(mark) = para.style.ppr_rpr.as_ref().filter(|_| s862) {
                         self.metrics_for_para_mark(mark, &para.style)
@@ -9011,7 +9048,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     };
                     if std::env::var("OXI_DBG_HDR").is_ok() {
                         let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(12).collect();
-                        eprintln!("[DBG_HDR] fs={:.1} lh={:.3} word_lh={:.3} hhea={:.3} fam={:?} text={:?}",
+                        eprintln!("[DBG_HDR] para nruns={} rule={:?} ls={:?} fs={:.1} lh={:.3} word_lh={:.3} hhea={:.3} fam={:?} text={:?}",
+                            para.runs.len(), para.style.line_spacing_rule, para.style.line_spacing,
                             fs, lh, metrics.word_line_height(fs, 96.0), metrics.natural_line_height_hhea(fs), metrics.family, txt);
                     }
                     hdr_h += lh;
@@ -9101,7 +9139,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             if let Some(last) = s813_prev_sa {
                 hdr_h += last;
             }
-            header_y + hdr_h
+            // S1010: the header text flow resumes below the page-relative
+            // TopAndBottom band (band_bottom == header_y when there is none).
+            if std::env::var("OXI_DBG_HDR").is_ok() {
+                eprintln!("[DBG_HDR] header_y={:.3} band_bottom={:.3} hdr_h={:.3} -> {:.3}",
+                    header_y, band_bottom, hdr_h, band_bottom.max(header_y) + hdr_h);
+            }
+            band_bottom.max(header_y) + hdr_h
         } else {
             0.0
         }
