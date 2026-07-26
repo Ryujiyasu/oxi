@@ -18618,7 +18618,48 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 max_descent = max_descent.max(font_size * 288.0 / 1000.0);
             }
         } else {
-            for frag in &line.fragments {
+            // S1015 (2026-07-26, opt-out OXI_S1015_DISABLE): a trailing
+            // OVERSIZED WHITE ASCII-space fragment (after the last visible
+            // fragment) does NOT drive the line height — Word collapses a
+            // trailing space at line end, so educational__00116bbe para 83's
+            // white 24pt ASCII space after 12pt "Assignment 5." text must not
+            // fold into the line box (Oxi pushed the next line ~16.3pt → +1).
+            // SCOPE (the report's safe first-ship shape — the general
+            // "any trailing collapsible space" is 97 docs and needs a probe,
+            // and operates on post-wrap fragments that a raw-run census cannot
+            // bound): a WHITE (color FFFFFF) ASCII-space-only fragment AFTER the
+            // last visible fragment whose fs >= 2x the line's visible max fs, in
+            // a Latin line. This oversized-white shape is target-only (a normal
+            // trailing space is not white / not 2x-oversized → byte-identical).
+            let s1015 = !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1015_DISABLE").is_err();
+            let s1015_last_vis = if s1015 {
+                line.fragments.iter().rposition(|f| {
+                    !f.text.is_empty() && !f.text.chars().all(|c| c == ' ')
+                })
+            } else {
+                None
+            };
+            let s1015_vis_max_fs = if s1015_last_vis.is_some() {
+                line.fragments.iter().filter(|f| {
+                    !f.text.is_empty() && !f.text.chars().all(|c| c == ' ')
+                }).map(|f| f.style.font_size.unwrap_or(para_font_size))
+                  .fold(0.0f32, f32::max)
+            } else {
+                0.0
+            };
+            for (s1015_fi, frag) in line.fragments.iter().enumerate() {
+                if let Some(lv) = s1015_last_vis {
+                    if s1015_fi > lv
+                        && !frag.text.is_empty()
+                        && frag.text.chars().all(|c| c == ' ')
+                        && frag.style.color.as_deref() == Some("FFFFFF")
+                        && frag.style.font_size.unwrap_or(para_font_size)
+                            >= 2.0 * s1015_vis_max_fs
+                    {
+                        continue;
+                    }
+                }
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let (mut asc, mut des) = if use_standard {
