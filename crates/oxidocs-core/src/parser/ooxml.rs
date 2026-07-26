@@ -82,12 +82,36 @@ impl OoxmlParser {
         let mut prev_footer_refs: Vec<HdrFtrRef> = Vec::new();
         // S755: doc-level even/odd header flag (settings.xml).
         let even_odd_hf = self.parse_even_odd_headers();
+        let s1014 = std::env::var("OXI_S1014_DISABLE").is_err();
         for mut section in sections {
-            let effective_header_refs = if section.properties.header_refs.is_empty() {
-                &prev_header_refs
+            // S1014 Stage A (2026-07-26): per-type HEADER inheritance. Word
+            // inherits default/first/even SEPARATELY — a section that declares
+            // one type (e.g. reference__00215c section 2 = first-only) inherits
+            // the PREVIOUS default header on its continuation pages. The old
+            // all-or-nothing (`is_empty() ? prev : section`) dropped the whole
+            // inherited default when the section declared any type. Merge the
+            // section's declared types OVER the inherited slots (section wins
+            // per type). FOOTER stays all-or-nothing: the ukframework
+            // page-anchored-frame footer needs style-level framePr parsing
+            // first (S913), so per-type footer inheritance is deliberately NOT
+            // bundled. Census: header per-type fires on target + legal__001410a8
+            // only. Opt-out OXI_S1014_DISABLE.
+            let merged_header_refs: Vec<HdrFtrRef> = if s1014 {
+                let mut out = prev_header_refs.clone();
+                for r in &section.properties.header_refs {
+                    if let Some(slot) = out.iter_mut().find(|p| p.ref_type == r.ref_type) {
+                        *slot = r.clone();
+                    } else {
+                        out.push(r.clone());
+                    }
+                }
+                out
+            } else if section.properties.header_refs.is_empty() {
+                prev_header_refs.clone()
             } else {
-                &section.properties.header_refs
+                section.properties.header_refs.clone()
             };
+            let effective_header_refs = &merged_header_refs;
             let effective_footer_refs = if section.properties.footer_refs.is_empty() {
                 &prev_footer_refs
             } else {
@@ -370,7 +394,11 @@ impl OoxmlParser {
                 });
             }
             // Update previous refs for inheritance
-            if !section.properties.header_refs.is_empty() {
+            if s1014 {
+                // S1014: persist the per-type merged set (each type's last
+                // declared-or-inherited value) so the next section inherits it.
+                prev_header_refs = merged_header_refs;
+            } else if !section.properties.header_refs.is_empty() {
                 prev_header_refs = section.properties.header_refs;
             }
             if !section.properties.footer_refs.is_empty() {

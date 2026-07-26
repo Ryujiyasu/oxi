@@ -8940,8 +8940,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // header. Corpus scan: ink-free headers = framework h2-4 /
             // risk h1 / nyserda h1-3 ONLY (0 JP docs; no drawing-only
             // headers exist) → JP byte-identical by construction.
+            // S1014 (2026-07-26): a paragraph BORDER (pBdr) is visible ink — a
+            // border-only header (reference__00215c's bordered rule paragraph)
+            // reserves space and must NOT be treated as ink-free (which returned
+            // 0 → the body started at the top margin). The S843 canaries
+            // (framework/risk/nyserda ink-free headers) have ZERO pBdr, so this
+            // is byte-identical for them. Gated with the rest of S1014.
+            let s1014_ink = std::env::var("OXI_S1014_DISABLE").is_err();
             let s843_has_ink = blocks.iter().any(|b| match b {
-                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty()),
+                Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty())
+                    || (s1014_ink && p.style.borders.is_some()),
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
@@ -9053,7 +9061,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             fs, lh, metrics.word_line_height(fs, 96.0), metrics.natural_line_height_hhea(fs), metrics.family, txt);
                     }
                     hdr_h += lh;
-                    if s813 && !para.style.has_direct_spacing {
+                    // S1014 Stage B (2026-07-26, opt-out OXI_S1014_DISABLE): the
+                    // s813 before/after collapse also applies to DIRECT-spacing
+                    // header paragraphs. reference__00215c's inherited default
+                    // header opens with a bordered paragraph carrying a DIRECT
+                    // before=1000tw (50pt); the old `!has_direct_spacing` gate
+                    // dropped it (fell to `else`, which adds only space_after=0)
+                    // → the header reserved ~50pt too little → every section-2
+                    // continuation page started at the top margin (92pt) instead
+                    // of 105pt → the last body line overflowed → whole-para
+                    // widow-push (+1 ×5). space_before/space_after hold the
+                    // effective value whether direct or style, so the collapse
+                    // model is identical.
+                    let s1014_hdr = std::env::var("OXI_S1014_DISABLE").is_err();
+                    if s813 && (s1014_hdr || !para.style.has_direct_spacing) {
                         let sb = para.style.space_before.unwrap_or(0.0);
                         let sa = para.style.space_after.unwrap_or(0.0);
                         if s813_first {
