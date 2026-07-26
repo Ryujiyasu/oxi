@@ -18118,6 +18118,63 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         self.rowbox2_border_pad(table, cell)
     }
 
+    /// S1016 (2026-07-26): the "long unstyled 3-column sparse-rule atLeast
+    /// table" shape — interior rows carry nil tcBorders and section
+    /// separators are MIRRORED (prev row bottom == next row top, physically
+    /// ONE shared line). For the atLeast row pitch, count only the REAL TOP
+    /// edge (consuming the shared separator once); the bottom stays for border
+    /// DRAWING but is NOT re-added to the atLeast cursor. reports__000d173d:
+    /// a 41-row 17pt table whose 40 nil interior rows got the 0.5pt fallback
+    /// (17.5pt each) + the mirrored separators double-counted → the last row
+    /// spilled to p3. Census (§5.2, Word-PDF-truth): golden 0 / real_en 2
+    /// (this doc + reports__00156, both supported by the same producer shape)
+    /// / JA 0 — a blanket top-only is 36 docs / 894 rows and NOT shippable.
+    fn sparse_mirrored_uniform_atleast_3col(&self, table: &Table) -> bool {
+        if self.doc_body_has_real_cjk {
+            return false;
+        }
+        if table.style.style_id.is_some() {
+            return false;
+        }
+        if table.style.border || table.style.has_inside_h {
+            return false;
+        }
+        if table.rows.len() < 20 {
+            return false;
+        }
+        let mut trh: Option<f32> = None;
+        let mut has_real = false;
+        let mut has_nil = false;
+        for row in &table.rows {
+            if row.cells.len() != 3 {
+                return false;
+            }
+            match (trh, row.height) {
+                (_, None) => return false,
+                (None, Some(v)) => trh = Some(v),
+                (Some(a), Some(v)) if (a - v).abs() < 0.01 => {}
+                _ => return false,
+            }
+            if row.height_rule.as_deref() == Some("exact") {
+                return false;
+            }
+            for cell in &row.cells {
+                if let Some(b) = &cell.borders {
+                    for edge in [b.top.as_ref(), b.bottom.as_ref()] {
+                        if let Some(d) = edge {
+                            if d.style == "none" {
+                                has_nil = true;
+                            } else {
+                                has_real = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        has_real && has_nil
+    }
+
     /// ROWBOX2: the border width added to a BINDING atLeast trHeight
     /// (row pitch = trH + bw; hRule=exact stays trH exactly — the derived
     /// border-box model, _rowbox_sweep.py). Row-level: table border /
@@ -18130,6 +18187,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         }
         if table.style.border || table.style.has_inside_h {
             return table.style.border_width.unwrap_or(0.5);
+        }
+        // S1016 (opt-out OXI_S1016_DISABLE): for the sparse-mirrored 3-col
+        // atLeast table, the row's atLeast contribution is only its REAL
+        // (non-nil) TOP edge — the shared section separator is recorded on
+        // both the prev row's bottom AND this row's top, so counting the TOP
+        // consumes it once. A nil/none sentinel (S482, width 0) is not a real
+        // border and yields NO 0.5 fallback.
+        if std::env::var("OXI_S1016_DISABLE").is_err()
+            && self.sparse_mirrored_uniform_atleast_3col(table)
+        {
+            return row
+                .cells
+                .iter()
+                .filter_map(|cell| cell.borders.as_ref())
+                .filter_map(|b| b.top.as_ref())
+                .filter(|d| d.style != "none")
+                .map(|d| d.width)
+                .fold(0.0f32, f32::max);
         }
         let mut w: f32 = 0.0;
         let mut any = false;
