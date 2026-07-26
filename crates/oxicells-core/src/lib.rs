@@ -8,8 +8,10 @@ pub mod ir;
 pub mod parser;
 
 pub use editor::XlsxEditor;
-pub use formula::evaluate_sheet_formulas;
-pub use parser::parse_xlsx;
+pub use formula::{
+    evaluate_sheet_formulas, evaluate_workbook_formulas, fill_missing_formula_values,
+};
+pub use parser::{parse_xlsx, parse_xlsx_preserving_values};
 
 #[cfg(test)]
 mod tests {

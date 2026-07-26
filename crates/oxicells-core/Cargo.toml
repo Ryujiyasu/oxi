@@ -7,6 +7,7 @@ description = "Core spreadsheet processing engine for OxiCells (.xlsx)"
 
 [dependencies]
 oxidocs-common = { path = "../oxidocs-common" }
+oxicells-calc = { path = "../oxicells-calc" }
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }

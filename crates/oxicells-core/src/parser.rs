@@ -72,6 +72,11 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
     let mut current_string = String::new();
     let mut in_si = false;
     let mut in_t = false;
+    // A phonetic guide (furigana) is stored as an <rPh> element containing its
+    // own <t>. It is not part of the cell's text: Excel shows "区分", not
+    // "区分クブン". Japanese workbooks carry these on names and addresses
+    // constantly, so failing to skip them corrupts a large share of real files.
+    let mut in_phonetic = false;
 
     loop {
         match reader.read_event()? {
@@ -80,7 +85,11 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
                 match name.as_str() {
                     "si" => {
                         in_si = true;
+                        in_phonetic = false;
                         current_string.clear();
+                    }
+                    "rPh" => {
+                        in_phonetic = true;
                     }
                     "t" if in_si => {
                         in_t = true;
@@ -95,6 +104,9 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
                         in_si = false;
                         strings.push(std::mem::take(&mut current_string));
                     }
+                    "rPh" => {
+                        in_phonetic = false;
+                    }
                     "t" => {
                         in_t = false;
                     }
@@ -102,7 +114,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
                 }
             }
             Event::Text(e) => {
-                if in_t && in_si {
+                if in_t && in_si && !in_phonetic {
                     let text = e.unescape()?.to_string();
                     current_string.push_str(&text);
                 }
@@ -807,7 +819,25 @@ fn resolve_cell_value(
 }
 
 /// Parse an .xlsx file from raw bytes into a Workbook IR.
+///
+/// The values Excel cached in the file are **kept**. For display they are the
+/// correct answer — recalculating a freshly loaded workbook can only introduce
+/// divergence from what the user sees in Excel. Only formula cells that arrive
+/// without a cached value are computed.
+///
+/// Use [`crate::formula::evaluate_workbook_formulas`] after editing a workbook,
+/// and [`parse_xlsx_preserving_values`] when even the gap filling is unwanted.
 pub fn parse_xlsx(data: &[u8]) -> Result<Workbook, XlsxError> {
+    let mut workbook = parse_xlsx_preserving_values(data)?;
+    crate::formula::fill_missing_formula_values(&mut workbook);
+    Ok(workbook)
+}
+
+/// Parse an .xlsx file without recalculating anything.
+///
+/// Every formula cell keeps the value Excel last computed for it, alongside its
+/// formula text. That pair is what makes a workbook usable as a test oracle.
+pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> {
     let mut archive = OoxmlArchive::new(data)?;
 
     // 1. Parse shared strings (optional — some xlsx files have none)
@@ -871,11 +901,6 @@ pub fn parse_xlsx(data: &[u8]) -> Result<Workbook, XlsxError> {
         }
     }
 
-    // 6. Evaluate formulas in each sheet
-    for sheet in &mut sheets {
-        crate::formula::evaluate_sheet_formulas(sheet);
-    }
-
     Ok(Workbook { sheets })
 }
 
@@ -888,6 +913,22 @@ mod tests {
         assert_eq!(parse_cell_ref("A1"), (0, 0));
         assert_eq!(parse_cell_ref("B2"), (1, 1));
         assert_eq!(parse_cell_ref("Z1"), (25, 0));
+    }
+
+    /// Furigana lives in `<rPh>` and is not part of the cell's text. Excel shows
+    /// "区分"; appending the reading would give "区分クブン" and silently corrupt
+    /// most Japanese workbooks, which carry phonetic guides on names and
+    /// addresses as a matter of course.
+    #[test]
+    fn shared_strings_exclude_phonetic_guides() {
+        let xml = r#"<?xml version="1.0"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3">
+  <si><t>区分</t><rPh sb="0" eb="2"><t>クブン</t></rPh><phoneticPr fontId="1"/></si>
+  <si><r><t>山田</t></r><r><t>太郎</t></r><rPh sb="0" eb="2"><t>ヤマダ</t></rPh><rPh sb="2" eb="4"><t>タロウ</t></rPh></si>
+  <si><t>plain</t></si>
+</sst>"#;
+        let strings = parse_shared_strings(xml).expect("should parse");
+        assert_eq!(strings, vec!["区分", "山田太郎", "plain"]);
     }
 
     #[test]

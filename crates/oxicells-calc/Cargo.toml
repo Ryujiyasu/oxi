@@ -1,0 +1,23 @@
+[package]
+name = "oxicells-calc"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Excel-compatible formula recalculation engine: tokenizer, AST, dependency graph, topological recalc"
+
+# Zero dependencies by design.
+#
+# 1. This crate must stay usable from wasm32 and from a VBA interpreter, so it
+#    holds no I/O, no serde, and no host types.
+# 2. Dependency direction is oxicells-core -> oxicells-calc, never the reverse.
+#    The calc engine must not know about the renderer's IR.
+# 3. BTreeMap is used throughout instead of HashMap: iteration order must be
+#    deterministic so that recalculation is reproducible run-to-run, which is a
+#    precondition for comparing results against Excel via COM.
+[dependencies]
+
+# Only the oracle harness (examples/xlsx_oracle.rs) needs an xlsx reader. Keeping
+# it a dev-dependency preserves the rule above: the shipped library has no deps,
+# and the dependency direction stays oxicells-core -> oxicells-calc.
+[dev-dependencies]
+oxicells-core = { path = "../oxicells-core" }
