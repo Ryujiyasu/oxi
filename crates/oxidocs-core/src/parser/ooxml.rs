@@ -2485,11 +2485,48 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // Resolve list marker from numbering definitions
     if let Some(npr) = num_pr_ref {
         if !npr.num_id.is_empty() && npr.num_id != "0" {
-            let resolved = ctx.numbering.resolve_marker_full(
-                &npr.num_id,
-                npr.ilvl,
-                &mut ctx.list_counters.borrow_mut(),
-            );
+            // S1011 (2026-07-26, opt-out OXI_S1011_DISABLE): a DANGLING numId
+            // (a direct <w:numPr> whose numId has no matching <w:num> in
+            // numbering.xml) is invalid OOXML; Word RECOVERS it with its
+            // default automatic-numbering format — a DECIMAL "N." marker at
+            // the margin and the body at margin + 36pt (left=36, hanging=36,
+            // 720tw = Word's default list-level-0). Oxi fell back to a bullet
+            // with hanging=18 and NO body indent → the list body was 36pt too
+            // wide → reference__002040a2's items 2,3 (2 lines in Word) became
+            // 1 line → the keepNext «Memberships» pair Word puts on p2 fit p1.
+            // DERIVED by _pb_danglingnum_gen.py (Word PDF): the 36pt body-left
+            // is FIXED across defaultTabStop {480,720,960} and numId/pStyle
+            // (the report's "= defaultTabStop" was coincidence — the target's
+            // tabstop is 720=36). Scope = direct numPr, ilvl=0, num_id NOT in
+            // num_map (an abstract that EXISTS but lacks the level is a
+            // different contract — num_map still has the id, so this excludes
+            // it). Census: dangling numId = this doc's 7 sites only (677 paths).
+            let dangling = std::env::var("OXI_S1011_DISABLE").is_err()
+                && num_pr_is_direct
+                && npr.ilvl == 0
+                && !ctx.numbering.num_map.contains_key(&npr.num_id);
+            let resolved = if dangling {
+                let count = {
+                    let mut c = ctx.list_counters.borrow_mut();
+                    let e = c.entry((npr.num_id.clone(), 0)).or_insert(0);
+                    *e += 1;
+                    *e
+                };
+                crate::parser::numbering::ResolvedMarker {
+                    text: format!("{}.", count),
+                    marker_size: None,
+                    hanging: Some(36.0),
+                    level_left: Some(36.0),
+                    suff: "tab".to_string(),
+                    tab_stop: Some(36.0),
+                }
+            } else {
+                ctx.numbering.resolve_marker_full(
+                    &npr.num_id,
+                    npr.ilvl,
+                    &mut ctx.list_counters.borrow_mut(),
+                )
+            };
             // S777: an EMPTY resolved marker (numFmt=none) sets no marker
             // element; keep suff/indent resolution unchanged.
             if !resolved.text.is_empty() {
@@ -2517,7 +2554,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     style.list_indent = Some(ind);
                 }
                 if style.indent_left.is_none() {
-                    if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
+                    // S1011: a dangling numId has no level_indent to look up;
+                    // use the recovered level_left (36pt) so the body indents.
+                    let left = if dangling {
+                        resolved.level_left
+                    } else {
+                        ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl)
+                    };
+                    if let Some(left) = left {
                         style.indent_left = Some(left);
                     }
                 }
