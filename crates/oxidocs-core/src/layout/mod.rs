@@ -12798,6 +12798,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 s842_apply(cursor);
                 // S637: a real page push lands on column 0 of the new page.
                 cur_col = 0;
+                // S1013 (2026-07-26, opt-out OXI_S1013_DISABLE): a NATURAL
+                // page break inside a paragraph reset cur_col=0 but left start_x
+                // at the previous column's x — so a column-0 continuation drew
+                // at column 1's x (reports__0013bcb8: para_idx=18's p2 top
+                // continuation rendered at x=306.4 overlapping para_idx=22).
+                // cur_col and start_x are two views of the same column state;
+                // the explicit page/column-break sibling (S733) already resets
+                // BOTH — this is the missing half on the natural-break path.
+                if num_columns > 1 && std::env::var("OXI_S1013_DISABLE").is_err() {
+                    start_x = col_x_positions[0];
+                }
                 // Session 107 (2026-05-18): apply half-leading at page top for
                 // grid-snapped lines that are CONTINUATIONS of a paragraph
                 // spilling across page breaks. Word's continuation first line
