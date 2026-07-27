@@ -15012,12 +15012,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // first probe round mis-read "no hang" because a hand-summed natural
         // was −3.25 off (Oxi's own width sum matches Word within 0.19) — the
         // measured-natural lesson (S825b) again.
+        // S1018 (2026-07-26, opt-out OXI_S1018_DISABLE): S953's trailing
+        // '.'/',' hang does NOT apply to a DECIMAL close-paren numbered list
+        // item (`1)`, `5)`, …). reports__0013aa1d p4 «5) TAS North … benchmark
+        // of 85%.»: Word wraps to 3 lines, but Oxi's S953 hangs the terminal
+        // '.' and over-packs `85%.` onto line 2 (natural 8543 > avail+S825 8516
+        // by 27tw, closed by the full period width) → the empty para + Figure 8
+        // shift a page → −1×2. S825 space-compression stays; only the S953
+        // over-hang is removed. Census (compat15 + justified + resolved decimal-
+        // close-paren marker): golden 0 / real_en 45-paras-in-target / JP 0.
+        // The legacy compat<15 s809_hang arm is a separate rule — untouched.
+        let s1018_decimal_paren_list = std::env::var("OXI_S1018_DISABLE").is_err()
+            && para_style.list_marker.as_deref().map_or(false, |m| {
+                m.trim().strip_suffix(')').map_or(false, |digits| {
+                    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+                })
+            });
         let s953_hang = s809_hang
             || (!self.doc_body_has_real_cjk
                 && self.compat_mode >= 15
                 && self.compat_mode_explicit
                 && s799_space_shrink
                 && !s929_right_fence
+                && !s1018_decimal_paren_list
                 && std::env::var("OXI_S953_DISABLE").is_err());
         let s809_hang = s953_hang;
         // S799 cap: the no-kern justified shrink is SMALLER than KERNBREAK's 0.25
