@@ -5793,18 +5793,17 @@ impl LayoutEngine {
                             // table / cell footnote / anchored drawing (bail otherwise);
                             // fresh-one-page ONLY (the T > fresh cutoff is untested — the
                             // §7 Word-COM probe). Latin scope.
-                            // HELD OPT-IN (OXI_S1024=1): the report's stated
-                            // discriminator (current_splits && fresh_one_page)
-                            // OVER-FIRES — it moves the 5-row wp56 "Table" (rem
-                            // 70.6, style keepNext) which Word SPLITS, as well as
-                            // the intended 14-row Form 22 (rem 178.3, direct
-                            // keepNext) which Word MOVES. The 2 real-doc points
-                            // differ in R/T/row-count/keepNext-directness at once,
-                            // so the cutoff needs the §7 Word probe (candidate:
-                            // table height > ~half page). Default OFF =
-                            // byte-identical until pinned; the actual-geometry
-                            // probe + S963b push below is the reusable machinery.
-                            let s1024 = std::env::var("OXI_S1024").is_ok()
+                            // The discriminator (row_chain, below) was PINNED by a
+                            // 152-arm Word-COM probe (REPORT_S1024_keepNext_table_
+                            // chain_probe): Word whole-moves iff the table carries an
+                            // internal row-chain (every non-final row's leftmost
+                            // cell first paragraph keepNext=1). Table height / row
+                            // count / remainder / direct-vs-style keepNext were ALL
+                            // falsified. Census: golden 0 / JP 0 chain candidates →
+                            // the change set is {target, technical__002c1ffa}, both
+                            // verified (target 0.9463→0.9563 +15/0-new; the other
+                            // byte-safe). Default ON, opt-out OXI_S1024_DISABLE.
+                            let s1024 = std::env::var("OXI_S1024_DISABLE").is_err()
                                 && !self.doc_body_has_real_cjk
                                 && !para.style.page_break_before
                                 && next_table.style.position.is_none()
@@ -5823,6 +5822,30 @@ impl LayoutEngine {
                                 let this_h = self.estimate_para_height(
                                     para, content_width, grid_pitch, None, false, None, None);
                                 let remaining = start_y + content_height - cursor.cursor_y;
+                                // S1024 discriminator (REPORT_S1024_keepNext_table_chain_probe,
+                                // 152-arm Word-COM probe): Word whole-moves heading+table iff
+                                // the table carries an INTERNAL ROW-CHAIN — every NON-FINAL
+                                // row's LEFTMOST cell's FIRST paragraph has keepNext=1. Form 22
+                                // (rows 0-12 all keepNext) → chain → whole-move; wp56 "Table"
+                                // (all cell paras keepNext=0) → no chain → Word splits. Table
+                                // height / row count / remainder / direct-vs-style keepNext were
+                                // ALL falsified by the probe. NOT the S970 terminal-cell rule
+                                // (that is the last cell's terminal paragraph; this is the
+                                // leftmost cell's FIRST paragraph of each non-final row).
+                                let row_chain = next_table.rows.len() >= 2
+                                    && next_table.rows[..next_table.rows.len() - 1]
+                                        .iter()
+                                        .all(|row| {
+                                            row.cells
+                                                .first()
+                                                .and_then(|cell| {
+                                                    cell.blocks.iter().find_map(|block| match block {
+                                                        Block::Paragraph(p) => Some(p.style.keep_next),
+                                                        _ => None,
+                                                    })
+                                                })
+                                                .unwrap_or(false)
+                                        });
                                 // ACTUAL probe: lay the table out on a FRESH page in
                                 // throwaway state (&self is immutable — no mutation of the
                                 // committed layout). pages.is_empty() ⇒ the table fits one
@@ -5846,15 +5869,18 @@ impl LayoutEngine {
                                 let current_splits =
                                     cursor.cursor_y + this_h + e > start_y + content_height + 0.5;
                                 let both_fit_fresh = this_h + e <= content_height + 0.5;
-                                if fresh_one_page && current_splits && both_fit_fresh
+                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                    let t: String = para.runs.iter()
+                                        .flat_map(|r| r.text.chars()).take(16).collect();
+                                    eprintln!("[KN635-TBL] {:?} this_h={:.1} tbl_e={:.1} rem={:.1} row_chain={} chain_rows={} fresh1={} splits={} bothfit={} push={}",
+                                        t, this_h, e, remaining, row_chain,
+                                        next_table.rows.len().saturating_sub(1), fresh_one_page,
+                                        current_splits, both_fit_fresh,
+                                        row_chain && fresh_one_page && current_splits && both_fit_fresh && this_h <= remaining);
+                                }
+                                if row_chain && fresh_one_page && current_splits && both_fit_fresh
                                     && this_h <= remaining
                                 {
-                                    if std::env::var("OXI_DBG_KN635").is_ok() {
-                                        let t: String = para.runs.iter()
-                                            .flat_map(|r| r.text.chars()).take(16).collect();
-                                        eprintln!("[KN635-TBL] {:?} this_h={:.1} tbl_e={:.1} rem={:.1} push=true",
-                                            t, this_h, e, remaining);
-                                    }
                                     // Same S963b transitive back-pull + push as the image
                                     // arm (the push is follower-agnostic).
                                     let s963b = !self.doc_body_has_real_cjk
