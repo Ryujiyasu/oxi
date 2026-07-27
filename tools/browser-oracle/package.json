@@ -11,7 +11,11 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@betteroffice/docx": "^0.0.4",
+    "@betteroffice/docx-react": "^0.0.4",
     "@silurus/ooxml": "^0.72.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "vite": "^8.1.4"
   }
 }
