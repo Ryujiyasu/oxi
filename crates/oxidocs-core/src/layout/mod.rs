@@ -21493,8 +21493,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // mis-split), so it ships with the S935/S936/S940 set. Binding
             // rows (row_height == trh) keep the S754 whole-push (tokyoshugyo
             // trH 474 free 296 pushes — JP is excluded by scope anyway).
+            // S1025 (2026-07-27, default ON, opt-out OXI_S1025_DISABLE): the
+            // local-recompute for Origin A (REPORT_legal__001410a8_forms_keepNext_
+            // table §6.3) — decouple S941+S942 (the non-binding atLeast row split
+            // + continuation) from the OXI_S940T bundle, WITHOUT its piece-1 cell
+            // estimate (the hhea line height, mod.rs:27906, which is what regresses
+            // the gen2 word_png family via device-snap). legal__001410a8 Form 21
+            // row 15 (trH 1097tw non-binding atLeast, 15-para right cell) SPLITS
+            // correctly at the DEFAULT cell heights (the piece-1 hhea estimate is
+            // NOT needed for THIS target — verified 0.9563→0.9655 = the full A+B).
+            // Full golden scan (369 docs): ONLY uklocalspending changes; every
+            // word_png doc is byte-identical (piece-1 not applied). This is A, on
+            // top of the shipped B (S1024) — together A+B = the forms p63-65 fix.
             let s941_nonbinding_trh = std::env::var("OXI_S941_DISABLE").is_err()
-                && std::env::var("OXI_S940T").is_ok()
+                && (std::env::var("OXI_S940T").is_ok() || std::env::var("OXI_S1025_DISABLE").is_err())
                 && !self.doc_body_has_real_cjk
                 && row.height_rule.as_deref() != Some("exact")
                 && row.height.map_or(false, |trh| {
@@ -25592,7 +25604,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // S942: the continuation band honors the atLeast trHeight
                     // (band = max(content, trH + bw); see the cursor branch).
                     let s817_close = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && std::env::var("OXI_S940T").is_ok()
+                        && (std::env::var("OXI_S940T").is_ok() || std::env::var("OXI_S1025_DISABLE").is_err())
                         && !self.doc_body_has_real_cjk
                         && row.height_rule.as_deref() != Some("exact")
                     {
@@ -26185,7 +26197,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // content-anchored band (27.2) started the next row 37pt
                     // early and cascaded the whole template (+the S941 flip).
                     let s942_floor = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && std::env::var("OXI_S940T").is_ok()
+                        && (std::env::var("OXI_S940T").is_ok() || std::env::var("OXI_S1025_DISABLE").is_err())
                         && !self.doc_body_has_real_cjk
                         && row.height_rule.as_deref() != Some("exact")
                     {
@@ -26237,7 +26249,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // non-painting empty tail to the page top (administrative__
                 // 0001ce58 — clamping it to trH broke its PASS).
                 if std::env::var("OXI_S942_DISABLE").is_err()
-                    && std::env::var("OXI_S940T").is_ok()
+                    && (std::env::var("OXI_S940T").is_ok() || std::env::var("OXI_S1025_DISABLE").is_err())
                     && !self.doc_body_has_real_cjk
                     && !s864_empty_tail_split
                     && row.height_rule.as_deref() != Some("exact")
