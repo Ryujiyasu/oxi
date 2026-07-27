@@ -15445,6 +15445,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         && slack < 0.0
                                         && slack >= -(c14_space_tw as f32)
                                         && cap_fits)
+                                } else if std::env::var("OXI_S1026_W").ok().as_deref()
+                                    == Some("1") {
+                                    // ★S1026 WIDTH-PENALTY badness (REPORT_S1026_broad_per_
+                                    // line_badness §7, HELD OPT-IN OXI_S1026_W=1). The scoped
+                                    // B3/B4/B5 model was FALSIFIED; with proper origin
+                                    // alignment (compare only the FIRST r-sensitive boundary
+                                    // where Word / r=0.55 / r=0.28 agree before it) the two-
+                                    // twin surface is EXACT: width ≥5 chars = 13/13 Word KEEP,
+                                    // width ==2 = 11/11 WRAP (24/24, all line ordinals). The
+                                    // current r=0.55 test assigns NO cost to ejecting a LONG
+                                    // candidate; add it: wrap when 0.55·comp² > slack² +
+                                    // β·long_excess², long_excess = max(0, width − 2·space).
+                                    // 2-char → long_excess=0 = EXACTLY r=0.55 (all 11 short
+                                    // wraps preserved); 5/7/11-char get a wrap penalty → KEEP.
+                                    // SUBSUMES R4 + Part B (both positive-slack r adjustments)
+                                    // → they are bypassed here (no double-application). β >
+                                    // 0.4617 (measured lower bound on the 13 KEEP origins);
+                                    // 0.50 is the TRIAL value, NOT a shipping constant — the
+                                    // §9 length probe must supply the upper bound. NO line
+                                    // ordinal (§10); negative-slack path (A2/A3) unchanged.
+                                    let long_excess =
+                                        (word_width_tw - 2 * c14_space_tw).max(0) as f32;
+                                    let beta: f32 = std::env::var("OXI_S1026_BETA").ok()
+                                        .and_then(|v| v.parse().ok()).unwrap_or(0.50);
+                                    0.55 * comp * comp
+                                        > slack * slack + beta * long_excess * long_excess
                                 } else {
                                     // ★S1026 Part B (Origin A, §7): a paragraph's FINAL
                                     // token of ≥6 monospace chars uses r_terminal=0.05
