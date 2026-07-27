@@ -5775,6 +5775,179 @@ impl LayoutEngine {
                                     }
                                 }
                             }
+                        } else if let Some(Block::Table(next_table)) = page.blocks.get(block_idx + 1) {
+                            // S1024 (2026-07-27, opt-out OXI_S1024_DISABLE): the follower
+                            // is a TABLE. The keepNext lookahead only matched a Paragraph
+                            // (and Image via S959) — a table follower was ignored, so a
+                            // keepNext heading followed by a table that overflows the
+                            // remaining space split the table across the page boundary.
+                            // legal__001410a8 Form 22 (keepNext) → 14-row table: Word
+                            // whole-moves heading+table to a fresh page; Oxi kept the
+                            // heading on p64 and split the table p64/p65. Word applies the
+                            // heading's keepNext to the table follower: when the table
+                            // would SPLIT on the current page but fits ONE fresh page, move
+                            // the heading + table to the fresh page. DECIDED BY ACTUAL
+                            // GEOMETRY — a throwaway layout_table probe on a fresh page
+                            // (estimate is FORBIDDEN, S970: estimate_table_row_natural_h is
+                            // 4× off). v1 scope: plain, non-floating table with no nested
+                            // table / cell footnote / anchored drawing (bail otherwise);
+                            // fresh-one-page ONLY (the T > fresh cutoff is untested — the
+                            // §7 Word-COM probe). Latin scope.
+                            // HELD OPT-IN (OXI_S1024=1): the report's stated
+                            // discriminator (current_splits && fresh_one_page)
+                            // OVER-FIRES — it moves the 5-row wp56 "Table" (rem
+                            // 70.6, style keepNext) which Word SPLITS, as well as
+                            // the intended 14-row Form 22 (rem 178.3, direct
+                            // keepNext) which Word MOVES. The 2 real-doc points
+                            // differ in R/T/row-count/keepNext-directness at once,
+                            // so the cutoff needs the §7 Word probe (candidate:
+                            // table height > ~half page). Default OFF =
+                            // byte-identical until pinned; the actual-geometry
+                            // probe + S963b push below is the reusable machinery.
+                            let s1024 = std::env::var("OXI_S1024").is_ok()
+                                && !self.doc_body_has_real_cjk
+                                && !para.style.page_break_before
+                                && next_table.style.position.is_none()
+                                && next_table.rows.iter().all(|row| {
+                                    row.cells.iter().all(|cell| {
+                                        cell.blocks.iter().all(|b| match b {
+                                            Block::Table(_) => false, // no nested table
+                                            Block::Paragraph(p) => {
+                                                p.runs.iter().all(|r| r.footnote_ref.is_none())
+                                            }
+                                            _ => true,
+                                        })
+                                    })
+                                });
+                            if s1024 {
+                                let this_h = self.estimate_para_height(
+                                    para, content_width, grid_pitch, None, false, None, None);
+                                let remaining = start_y + content_height - cursor.cursor_y;
+                                // ACTUAL probe: lay the table out on a FRESH page in
+                                // throwaway state (&self is immutable — no mutation of the
+                                // committed layout). pages.is_empty() ⇒ the table fits one
+                                // page; the max element bottom is its extent.
+                                let mut probe_pages: Vec<LayoutPage> = Vec::new();
+                                let mut probe_elements: Vec<LayoutElement> = Vec::new();
+                                let mut probe_cursor = LayoutCursor::new(start_y);
+                                let probe_els = self.layout_table(
+                                    next_table, start_x, &mut probe_cursor, content_width,
+                                    grid_pitch, page.grid_char_pitch, page.grid_char_cw_ratio,
+                                    start_y, content_height, page.size.width, page.size.height,
+                                    &mut probe_pages, &mut probe_elements,
+                                    Some(block_idx + 1), page, false, None, None, 0.0, 0.0, false);
+                                let fresh_one_page = probe_pages.is_empty();
+                                let e = probe_els.iter().chain(probe_elements.iter())
+                                    .map(|el| el.y + el.height)
+                                    .fold(start_y, f32::max) - start_y;
+                                // current_splits: after the heading is placed the table
+                                // overflows the current page. both_fit_fresh: heading +
+                                // table fit one fresh page.
+                                let current_splits =
+                                    cursor.cursor_y + this_h + e > start_y + content_height + 0.5;
+                                let both_fit_fresh = this_h + e <= content_height + 0.5;
+                                if fresh_one_page && current_splits && both_fit_fresh
+                                    && this_h <= remaining
+                                {
+                                    if std::env::var("OXI_DBG_KN635").is_ok() {
+                                        let t: String = para.runs.iter()
+                                            .flat_map(|r| r.text.chars()).take(16).collect();
+                                        eprintln!("[KN635-TBL] {:?} this_h={:.1} tbl_e={:.1} rem={:.1} push=true",
+                                            t, this_h, e, remaining);
+                                    }
+                                    // Same S963b transitive back-pull + push as the image
+                                    // arm (the push is follower-agnostic).
+                                    let s963b = !self.doc_body_has_real_cjk
+                                        && std::env::var("OXI_S802B_DISABLE").is_err()
+                                        && std::env::var("OXI_S963_DISABLE").is_err();
+                                    let mut pull_from = block_idx;
+                                    if s963b && !(num_columns > 1 && current_column + 1 < num_columns) {
+                                        while pull_from > 0 {
+                                            if let Some(Block::Paragraph(pp)) = page.blocks.get(pull_from - 1) {
+                                                if pp.style.keep_next
+                                                    && block_page_indices.get(pull_from - 1)
+                                                        == Some(&current_page_idx)
+                                                {
+                                                    pull_from -= 1;
+                                                    continue;
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    let pulled: Vec<LayoutElement> = if pull_from < block_idx {
+                                        let y0 = block_y_positions[pull_from] - 0.1;
+                                        let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
+                                            elements.drain(..).partition(|e| e.y < y0);
+                                        elements = keep;
+                                        moved
+                                    } else { Vec::new() };
+                                    let chain_end_old = cursor.cursor_y;
+                                    if num_columns > 1 && current_column + 1 < num_columns {
+                                        current_column += 1;
+                                        start_x = col_x_positions[current_column];
+                                        content_width = col_widths[current_column];
+                                        cursor.set(col_band_top);
+                                    } else {
+                                        dbg_page_push(pages.len(), 0);
+                                        pages.push(LayoutPage {
+                                            width: page.size.width,
+                                            height: page.size.height,
+                                            elements: std::mem::take(&mut elements),
+                                        });
+                                        if let Some(g) = s755_geom.as_ref() {
+                                            start_y = g.top(pages.len() + 1);
+                                            content_height = g.ch(pages.len() + 1);
+                                        }
+                                        cursor.set(start_y);
+                                        if std::env::var("OXI_S963_DISABLE").is_err() {
+                                            current_column = 0;
+                                            start_x = col_x_positions[0];
+                                            content_width = col_widths[0];
+                                            lm2_cells = 0;
+                                            current_page_idx += 1;
+                                            footnote_reserve_current = 0.0;
+                                            footnote_ids_current_page.clear();
+                                            s900_fold(&mut footnote_reserve_current,
+                                                &mut footnote_ids_current_page,
+                                                &mut s900_pending_deferred, current_page_idx);
+                                            commit_para_footnotes(&mut footnote_reserve_current,
+                                                &mut footnote_ids_current_page,
+                                                current_page_idx, block_idx);
+                                            if !pulled.is_empty() {
+                                                let min_y = pulled.iter().map(|e| e.y)
+                                                    .fold(f32::MAX, f32::min);
+                                                let dy = cursor.cursor_y - min_y;
+                                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                                    eprintln!("[S963B-TBL] pull {} blocks ({} els) dy={:.1}",
+                                                        block_idx - pull_from, pulled.len(), dy);
+                                                }
+                                                for mut e in pulled {
+                                                    e.y += dy;
+                                                    if let LayoutContent::TableBorder {
+                                                        ref mut y1, ref mut y2, .. } = e.content
+                                                    {
+                                                        *y1 += dy;
+                                                        *y2 += dy;
+                                                    }
+                                                    elements.push(e);
+                                                }
+                                                cursor.set(chain_end_old + dy);
+                                                for bi in pull_from..block_idx {
+                                                    if let Some(p) = block_page_indices.get_mut(bi) {
+                                                        *p = current_page_idx;
+                                                    }
+                                                    if let Some(y) = block_y_positions.get_mut(bi) {
+                                                        *y += dy;
+                                                    }
+                                                }
+                                            }
+                                            *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                            *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
