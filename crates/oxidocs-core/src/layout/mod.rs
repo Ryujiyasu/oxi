@@ -15332,6 +15332,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let mut word_seg_meta: Vec<(usize, usize, usize)> = Vec::new();
         let mut seg_pending = false;
 
+        // S1026 (Origin A, 2026-07-28): total / running non-whitespace char count.
+        // The c14 badness "long final token" test (Part B, r_terminal=0.05) needs to
+        // know if the candidate is the paragraph's FINAL non-whitespace token — true
+        // iff every non-whitespace char has been consumed (pushed to `word`) by the
+        // time it is flushed. Defined BEFORE the flush_word macro so the macro's
+        // definition-site hygiene can see it; incremented at the two `word.push`
+        // sites; read ONLY inside the c14-scoped badness → non-c14 byte-identical.
+        let s1026_total_nonws: usize = fragments.iter()
+            .map(|(t, _, _, _, _)| t.chars().filter(|c| !c.is_whitespace()).count())
+            .sum();
+        let mut s1026_nonws_consumed: usize = 0;
         // Helper: flush the accumulated word into current_line, breaking if needed.
         let dbg_flush: bool = std::env::var("OXI_DBGFLUSH").ok().map_or(false, |needle|
             !needle.is_empty() && fragments.iter().any(|&(t, _, _, _, _)| t.contains(&needle)));
@@ -15368,6 +15379,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // that branch ORs this decision (it previously used capacity-only, so
                     // legal__0011b198 para 147 «…required for:» packed onto a full line Word
                     // wraps). false ⇒ byte-identical; non-c14 docs are always false.
+                    // S1026 (Origin A, 2026-07-28, HELD OPT-IN OXI_S1026=1, default OFF
+                    // = byte-identical). REPORT_S1022_originA_bounded_probe: the two
+                    // narrow discriminators (Part A first-line-2char, Part B long-final-
+                    // token r=0.05) are 25/25 on the probe and per-site Word-correct
+                    // (A 21/21, B 4/4), BUT the real-doc net regresses — §11 gate #9
+                    // (S559): Part A is pagination-NEUTRAL (its 14 dcc fires compensate)
+                    // and Part B's 2 decision-changing fits (partner./11.055.) create an
+                    // uncompensated −1×18 cascade (0011dcc 0.9825→0.9606, 0011b198
+                    // 0.9917→0.9876). Held until the compensating residuals (§9: paras
+                    // 96/119/133/214/261) are co-derived. s1026_final_token = is this
+                    // word the paragraph's FINAL non-whitespace token? (Part B).
+                    let s1026_on = std::env::var("OXI_S1026").ok().as_deref() == Some("1");
+                    let s1026_final_token = s1026_total_nonws > 0
+                        && s1026_nonws_consumed == s1026_total_nonws;
                     let s1022_badness_wrap = c14_active && c14_space_tw > 0
                         && std::env::var("OXI_S1022_DISABLE").is_err()
                         && !current_line.fragments.is_empty()
@@ -15381,22 +15406,47 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // at the line end, add it back).
                                 let slack = (available_tw - current_width_tw
                                     + c14_space_tw) as f32;
+                                // ordinary accumulated compression capacity — read by
+                                // BOTH Origin A parts (does the candidate still fit?).
+                                let cap_fits = current_width_tw + word_width_tw
+                                    <= available_tw + latin_space_credit_tw;
                                 if slack <= 0.0 {
-                                    false // oikomi region: line already full/over → fit
+                                    // ★S1026 Part A (Origin A, §6): first-line two-char
+                                    // shallow oikomi. Word WRAPS a 2-monospace-char
+                                    // candidate on the FIRST line when it is < one c14
+                                    // space into the post-trailing-space oikomi region
+                                    // and the accumulated capacity still fits — the M=0
+                                    // hole between the positive-slack badness (M=-1) and
+                                    // capacity overflow (M=+1). 21/21 Word-correct on the
+                                    // twins; GEOMETRIC, not a «to» lexical case (the sites
+                                    // include to/by/or/is/of/be/up/on). Otherwise the
+                                    // existing slack≤0 hard-fit (false) is preserved.
+                                    s1026_on
+                                        && lines.is_empty()
+                                        && word_width_tw == 2 * c14_space_tw
+                                        && slack < 0.0
+                                        && slack >= -(c14_space_tw as f32)
+                                        && cap_fits
                                 } else {
-                                    // Default 0.55 = mid of the JOINT twins plateau
-                                    // [0.45, 0.60] AFTER Origin B (2026-07-27): closing
-                                    // the internal-break branch gap enlarged the badness
-                                    // footprint, so the pre-Origin-B [0.7,1.0] plateau
-                                    // shifted down. Both twins peak here (0011dcc 0.9825,
-                                    // 0011b198 0.9917); r ≥ 0.62 drops 0011b198 (0.9917→
-                                    // 0.9421), r ≤ 0.40 drops 0011dcc. Well above Origin A's
-                                    // 0.173 «years.»-fit boundary → para 71 stays broken
-                                    // (its +1 is a SEPARATE bounded-lookahead defect).
-                                    let r: f32 = std::env::var("OXI_S1022_R")
-                                        .ok()
-                                        .and_then(|v| v.parse().ok())
-                                        .unwrap_or(0.55);
+                                    // ★S1026 Part B (Origin A, §7): a paragraph's FINAL
+                                    // token of ≥6 monospace chars uses r_terminal=0.05
+                                    // (not the normal 0.55) — Word is lenient on a long
+                                    // terminal token, FITTING it where r=0.55 would wrap
+                                    // (years./state./partner./11.055.). 4/4 Word-correct;
+                                    // NARROW (final-token + ≥6 chars + cap-fit): the broad
+                                    // terminal-r blanket is falsified (would undo the
+                                    // S1022b «for:» Origin B fix). r_terminal ∈ (0.0315,
+                                    // 0.0816); 0.05 is mid-interval. Otherwise the normal
+                                    // joint-plateau default 0.55 (S1022b).
+                                    let use_terminal = s1026_on && s1026_final_token
+                                        && word_width_tw >= 6 * c14_space_tw && cap_fits;
+                                    let r: f32 = if use_terminal {
+                                        std::env::var("OXI_S1026_RT").ok()
+                                            .and_then(|v| v.parse().ok()).unwrap_or(0.05)
+                                    } else {
+                                        std::env::var("OXI_S1022_R").ok()
+                                            .and_then(|v| v.parse().ok()).unwrap_or(0.55)
+                                    };
                                     r * comp * comp > slack * slack
                                 }
                             }
@@ -16943,6 +16993,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         seg_pending = false;
                     }
                     word.push(ch);
+                    if !ch.is_whitespace() { s1026_nonws_consumed += 1; } // S1026 final-token
                     word_width += char_width;
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
@@ -17841,6 +17892,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         seg_pending = false;
                     }
                     word.push(ch);
+                    if !ch.is_whitespace() { s1026_nonws_consumed += 1; } // S1026 final-token
                     word_width += char_width;
                     // S1022 (2026-07-27, opt-in OXI_S1022): credit an NBSP (U+00A0) as a
                     // fully-equal compressible gap (Word compresses the marker NBSP
