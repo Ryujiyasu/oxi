@@ -15380,16 +15380,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // legal__0011b198 para 147 «…required for:» packed onto a full line Word
                     // wraps). false ⇒ byte-identical; non-c14 docs are always false.
                     // S1026 (Origin A, 2026-07-28, HELD OPT-IN OXI_S1026=1, default OFF
-                    // = byte-identical). REPORT_S1022_originA_bounded_probe: the two
-                    // narrow discriminators (Part A first-line-2char, Part B long-final-
-                    // token r=0.05) are 25/25 on the probe and per-site Word-correct
-                    // (A 21/21, B 4/4), BUT the real-doc net regresses — §11 gate #9
-                    // (S559): Part A is pagination-NEUTRAL (its 14 dcc fires compensate)
-                    // and Part B's 2 decision-changing fits (partner./11.055.) create an
-                    // uncompensated −1×18 cascade (0011dcc 0.9825→0.9606, 0011b198
-                    // 0.9917→0.9876). Held until the compensating residuals (§9: paras
-                    // 96/119/133/214/261) are co-derived. s1026_final_token = is this
-                    // word the paragraph's FINAL non-whitespace token? (Part B).
+                    // = byte-identical). REPORT_S1022_originA_bounded_probe (Part B) +
+                    // REPORT_S1026_compensation_residual (the dcc compensation set). Part
+                    // B (long-final-token r=0.05) is the RIGHT model — it removes 2 real
+                    // Oxi over-counts (partner./11.055.) but EXPOSES a pre-existing dcc
+                    // compensation set. Stages A2 (§6.1 first-line 1-3char, slack ∈
+                    // [-3sp,0]), A3 (§6.3 later-line ≥2 shallow 2-char), R4 (§7 4-char
+                    // positive-slack r=0.40) fix that set: with all 4 the FULL model is
+                    // dcc 0.9825→0.9839 (each partial subset is WORSE — the stages
+                    // compensate). BUT 0011b198 has its OWN compensation set the dcc-
+                    // derived stages don't cover → b198 0.9917→0.9876 in EVERY variant.
+                    // §11 gate #5 (don't ship a stage that makes either twin worse) →
+                    // held until b198's compensation residuals are co-derived. Tunes:
+                    // OXI_S1026_RT (Part B r), OXI_S1026_R4 (R4 r). s1026_final_token =
+                    // is this word the paragraph's FINAL non-whitespace token? (Part B).
                     let s1026_on = std::env::var("OXI_S1026").ok().as_deref() == Some("1");
                     let s1026_final_token = s1026_total_nonws > 0
                         && s1026_nonws_consumed == s1026_total_nonws;
@@ -15411,22 +15415,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 let cap_fits = current_width_tw + word_width_tw
                                     <= available_tw + latin_space_credit_tw;
                                 if slack <= 0.0 {
-                                    // ★S1026 Part A (Origin A, §6): first-line two-char
-                                    // shallow oikomi. Word WRAPS a 2-monospace-char
-                                    // candidate on the FIRST line when it is < one c14
-                                    // space into the post-trailing-space oikomi region
-                                    // and the accumulated capacity still fits — the M=0
-                                    // hole between the positive-slack badness (M=-1) and
-                                    // capacity overflow (M=+1). 21/21 Word-correct on the
-                                    // twins; GEOMETRIC, not a «to» lexical case (the sites
-                                    // include to/by/or/is/of/be/up/on). Otherwise the
-                                    // existing slack≤0 hard-fit (false) is preserved.
-                                    s1026_on
+                                    // ★S1026 Stage A2 (Origin A, §6.1): first-line SHORT-
+                                    // candidate (1..3 monospace chars) shallow oikomi, slack
+                                    // ∈ [-3 c14 spaces, 0]. Word WRAPS such a candidate on the
+                                    // FIRST line when it is ≤3 spaces into the post-trailing-
+                                    // space oikomi region and the accumulated capacity still
+                                    // fits — the M=0 hole between the positive-slack badness
+                                    // and capacity overflow. 81/81 Word-correct on both twins;
+                                    // GEOMETRIC (to/by/or/is/of/be/up/on/not…), not a lexical
+                                    // case. The -3*space lower bound is LOAD-BEARING (negative
+                                    // controls dcc 341 / b198 252 «a» at slack -564/-712 Word
+                                    // KEEPS). line-0 ONLY (§6.2: an any-line blanket is
+                                    // falsified 110/118 → wraps ≠ keeps). Widens the original
+                                    // exact-2char/-1space Part A (§6). ★A3 (§6.3): a LATER
+                                    // line (ordinal ≥2) shallow 2-char oikomi, slack ∈
+                                    // [-c14_space, 0). 7/7 Word-correct (fixes p353 «be»);
+                                    // bounded, NOT permission to widen all later-line slack.
+                                    // Otherwise the existing slack≤0 hard-fit (false).
+                                    (s1026_on
                                         && lines.is_empty()
+                                        && word_width_tw >= c14_space_tw
+                                        && word_width_tw <= 3 * c14_space_tw
+                                        && slack <= 0.0
+                                        && slack >= -3.0 * (c14_space_tw as f32)
+                                        && cap_fits)
+                                    || (s1026_on
+                                        && lines.len() >= 2
                                         && word_width_tw == 2 * c14_space_tw
                                         && slack < 0.0
                                         && slack >= -(c14_space_tw as f32)
-                                        && cap_fits
+                                        && cap_fits)
                                 } else {
                                     // ★S1026 Part B (Origin A, §7): a paragraph's FINAL
                                     // token of ≥6 monospace chars uses r_terminal=0.05
@@ -15440,9 +15458,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     // joint-plateau default 0.55 (S1022b).
                                     let use_terminal = s1026_on && s1026_final_token
                                         && word_width_tw >= 6 * c14_space_tw && cap_fits;
+                                    // ★S1026 Stage R4 (Origin A, §7): a 4-monospace-char
+                                    // candidate in the positive-slack branch uses r=0.40
+                                    // (not 0.55) — Word FITS a 4-char token where r=0.55
+                                    // wraps (dcc 320 «only» rcrit 0.4444 / 730 «has:», b198
+                                    // 96 «land» rcrit 0.4874). A GLOBAL r=0.40 changes only
+                                    // those 2 dcc paras (§7 diagnostic), so scoping to 4
+                                    // chars is the narrow form; does NOT change the global r.
+                                    let use_r4_4char = s1026_on
+                                        && word_width_tw == 4 * c14_space_tw && cap_fits;
                                     let r: f32 = if use_terminal {
                                         std::env::var("OXI_S1026_RT").ok()
                                             .and_then(|v| v.parse().ok()).unwrap_or(0.05)
+                                    } else if use_r4_4char {
+                                        std::env::var("OXI_S1026_R4").ok()
+                                            .and_then(|v| v.parse().ok()).unwrap_or(0.40)
                                     } else {
                                         std::env::var("OXI_S1022_R").ok()
                                             .and_then(|v| v.parse().ok()).unwrap_or(0.55)
