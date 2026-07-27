@@ -18740,7 +18740,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 0.0
             };
+            // S1019 (2026-07-27, opt-out OXI_S1019_DISABLE): a glyphless run (a bare
+            // <w:tab/> tab run, or an empty run) does NOT raise the line height above
+            // the visible-glyph runs — Word sizes the line by its rendered glyphs. A
+            // Word-generated TOC leader tab run often carries an artifact size (this
+            // doc, technical__0056b52f: sz=22 / 11pt on a 10pt TOC line); Oxi folded
+            // it in (+~1.1pt/line → the TOC page under-filled by ~5 lines → the front
+            // matter shifted +1 page). Skip tab/empty fragments in the height fold when
+            // the line has a visible-glyph fragment (a tab-only line still uses its own
+            // font — the S902 fallback). Latin/CJK agnostic (glyphless is glyphless).
+            let s1019 = std::env::var("OXI_S1019_DISABLE").is_err();
+            let s1019_has_visible = s1019 && line.fragments.iter().any(|f| {
+                f.tab_alignment.is_none()
+                    && !f.text.is_empty()
+                    && !f.text.chars().all(|c| c == ' ' || c == '\t')
+            });
             for (s1015_fi, frag) in line.fragments.iter().enumerate() {
+                if s1019_has_visible
+                    && (frag.tab_alignment.is_some()
+                        || frag.text == TAB_STRING
+                        || frag.text.is_empty())
+                {
+                    continue;
+                }
                 if let Some(lv) = s1015_last_vis {
                     if s1015_fi > lv
                         && !frag.text.is_empty()
