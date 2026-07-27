@@ -15213,8 +15213,48 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         word_width = 0.0;
                         word_natural_width = 0.0;
                     } else {
+                    // S1022 (2026-07-27, opt-in OXI_S1022, char-budget badness breaker):
+                    // the c14 monospace break is GREEDY oikomi (Word packs aggressively —
+                    // 750/760 lines are oikomi; the global slack²-DP over-packs 0.96→0.35).
+                    // Word wraps despite half-em capacity ONLY when the line has GENUINE
+                    // ROOM (natural content < available) AND the compression to fit the
+                    // next word is "worse" than the slack of wrapping: r·comp² > slack²,
+                    // r = w_comp/w_slack (default 0.4; calibration pair p1[fit]/(6)vary
+                    // [wrap] pins r ∈ (0.04, 1.045)). KEY: when slack ≤ 0 the line is
+                    // already FULL/over at natural (the oikomi region) → NEVER wrap by
+                    // badness (an earlier version clamped slack to 0 and wrapped every
+                    // oikomi line, +120). Paired with the NBSP compression credit below.
+                    let s1022_badness_wrap = c14_active && c14_space_tw > 0
+                        && std::env::var("OXI_S1022_DISABLE").is_err()
+                        && !current_line.fragments.is_empty()
+                        && {
+                            let comp =
+                                (current_width_tw + word_width_tw - available_tw) as f32;
+                            if comp <= 0.0 {
+                                false // fits at natural width: no compression, keep
+                            } else {
+                                // slack if we WRAP (trailing inter-word space is dropped
+                                // at the line end, add it back).
+                                let slack = (available_tw - current_width_tw
+                                    + c14_space_tw) as f32;
+                                if slack <= 0.0 {
+                                    false // oikomi region: line already full/over → fit
+                                } else {
+                                    // r = w_comp/w_slack. The calibration pair pins the
+                                    // fit/wrap window r ∈ (0.04, 1.045); both twins are on
+                                    // a stable plateau (0011dcc 0.9737 / 0011b198 0.9628)
+                                    // for r ∈ [0.7, 1.0] (identical). Default 0.8 (mid-
+                                    // plateau, robust). r ≥ 1.1 flips p1 «…event|specified».
+                                    let r: f32 = std::env::var("OXI_S1022_R")
+                                        .ok()
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0.8);
+                                    r * comp * comp > slack * slack
+                                }
+                            }
+                        };
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
-                    if current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -17576,6 +17616,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     word.push(ch);
                     word_width += char_width;
+                    // S1022 (2026-07-27, opt-in OXI_S1022): credit an NBSP (U+00A0) as a
+                    // fully-equal compressible gap (Word compresses the marker NBSP
+                    // proportionally-identically to regular spaces, marker-gap ==
+                    // reg-min-space across 3.6..11.76). Oxi glued it into the non-
+                    // breaking word token with no compression credit. Includes the
+                    // line-START marker NBSPs (before any regular space) by using the
+                    // monospace check directly + setting c14_space_tw. Paired with the
+                    // corrected s1022_badness_wrap (which wraps the lines Word wraps).
+                    if ch == '\u{00A0}'
+                        && is_justified
+                        && c14_active
+                        && (char_metrics.char_width_em('i')
+                            - char_metrics.char_width_em('M'))
+                            .abs()
+                            < 0.001
+                        && std::env::var("OXI_S1022_DISABLE").is_err()
+                    {
+                        latin_space_credit_tw += pt_to_tw(char_width * 0.5);
+                        if c14_space_tw == 0 {
+                            c14_space_tw = pt_to_tw(char_width);
+                        }
+                    }
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
                         word_trail_hang_w = if matches!(ch, '.' | ',') { char_width } else { 0.0 };
