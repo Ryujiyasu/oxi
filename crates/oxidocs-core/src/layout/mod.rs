@@ -15351,6 +15351,56 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
                     let word_width_tw = pt_to_tw(word_width);
+                    // S1022 (2026-07-27, char-budget badness breaker) — SHARED decision.
+                    // The c14 monospace break is GREEDY oikomi (Word packs aggressively —
+                    // 750/760 lines are oikomi; the global slack²-DP over-packs 0.96→0.35).
+                    // Word wraps despite half-em capacity ONLY when the line has GENUINE
+                    // ROOM (natural content < available) AND the compression to fit the
+                    // next word is "worse" than the slack of wrapping: r·comp² > slack²,
+                    // r = w_comp/w_slack (default 0.55, joint plateau [0.45,0.60] AFTER
+                    // Origin B; calibration pair p1[fit]/(6)vary[wrap] pins r ∈ (0.04,
+                    // 1.045)). KEY: when slack ≤ 0 the
+                    // line is already FULL/over at natural (the oikomi region) → NEVER wrap
+                    // by badness. Paired with the NBSP compression credit.
+                    // ★Origin B (2026-07-27): computed HERE, before the latin_wordwrap
+                    // branch, so a token with an INTERNAL Latin break opportunity (e.g. the
+                    // ':' in «for:») does NOT bypass the badness — the whole-token wrap in
+                    // that branch ORs this decision (it previously used capacity-only, so
+                    // legal__0011b198 para 147 «…required for:» packed onto a full line Word
+                    // wraps). false ⇒ byte-identical; non-c14 docs are always false.
+                    let s1022_badness_wrap = c14_active && c14_space_tw > 0
+                        && std::env::var("OXI_S1022_DISABLE").is_err()
+                        && !current_line.fragments.is_empty()
+                        && {
+                            let comp =
+                                (current_width_tw + word_width_tw - available_tw) as f32;
+                            if comp <= 0.0 {
+                                false // fits at natural width: no compression, keep
+                            } else {
+                                // slack if we WRAP (trailing inter-word space is dropped
+                                // at the line end, add it back).
+                                let slack = (available_tw - current_width_tw
+                                    + c14_space_tw) as f32;
+                                if slack <= 0.0 {
+                                    false // oikomi region: line already full/over → fit
+                                } else {
+                                    // Default 0.55 = mid of the JOINT twins plateau
+                                    // [0.45, 0.60] AFTER Origin B (2026-07-27): closing
+                                    // the internal-break branch gap enlarged the badness
+                                    // footprint, so the pre-Origin-B [0.7,1.0] plateau
+                                    // shifted down. Both twins peak here (0011dcc 0.9825,
+                                    // 0011b198 0.9917); r ≥ 0.62 drops 0011b198 (0.9917→
+                                    // 0.9421), r ≤ 0.40 drops 0011dcc. Well above Origin A's
+                                    // 0.173 «years.»-fit boundary → para 71 stays broken
+                                    // (its +1 is a SEPARATE bounded-lookahead defect).
+                                    let r: f32 = std::env::var("OXI_S1022_R")
+                                        .ok()
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0.55);
+                                    r * comp * comp > slack * slack
+                                }
+                            }
+                        };
                     if latin_wordwrap && !word_breaks.is_empty() {
                         // LATIN-WORDWRAP split: the token is a maximal Latin run with
                         // internal break opportunities. (1) wrap the WHOLE token to a
@@ -15374,8 +15424,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // loop below pack the line to the last fitting char.
                         let s745_char_wrap = !para_style.word_wrap
                             && std::env::var("OXI_S745_DISABLE").is_err();
+                        // ★Origin B: OR the SHARED S1022 badness into the whole-token
+                        // wrap — a c14 token with an internal Latin break (e.g. «for:»)
+                        // must not bypass the badness. false for non-c14 → byte-identical.
                         if !preceded_by_open && !s745_char_wrap
-                            && current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w })
+                            && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             lines.push(std::mem::take(&mut current_line));
                             current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
@@ -15424,46 +15477,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         word_width = 0.0;
                         word_natural_width = 0.0;
                     } else {
-                    // S1022 (2026-07-27, opt-in OXI_S1022, char-budget badness breaker):
-                    // the c14 monospace break is GREEDY oikomi (Word packs aggressively —
-                    // 750/760 lines are oikomi; the global slack²-DP over-packs 0.96→0.35).
-                    // Word wraps despite half-em capacity ONLY when the line has GENUINE
-                    // ROOM (natural content < available) AND the compression to fit the
-                    // next word is "worse" than the slack of wrapping: r·comp² > slack²,
-                    // r = w_comp/w_slack (default 0.4; calibration pair p1[fit]/(6)vary
-                    // [wrap] pins r ∈ (0.04, 1.045)). KEY: when slack ≤ 0 the line is
-                    // already FULL/over at natural (the oikomi region) → NEVER wrap by
-                    // badness (an earlier version clamped slack to 0 and wrapped every
-                    // oikomi line, +120). Paired with the NBSP compression credit below.
-                    let s1022_badness_wrap = c14_active && c14_space_tw > 0
-                        && std::env::var("OXI_S1022_DISABLE").is_err()
-                        && !current_line.fragments.is_empty()
-                        && {
-                            let comp =
-                                (current_width_tw + word_width_tw - available_tw) as f32;
-                            if comp <= 0.0 {
-                                false // fits at natural width: no compression, keep
-                            } else {
-                                // slack if we WRAP (trailing inter-word space is dropped
-                                // at the line end, add it back).
-                                let slack = (available_tw - current_width_tw
-                                    + c14_space_tw) as f32;
-                                if slack <= 0.0 {
-                                    false // oikomi region: line already full/over → fit
-                                } else {
-                                    // r = w_comp/w_slack. The calibration pair pins the
-                                    // fit/wrap window r ∈ (0.04, 1.045); both twins are on
-                                    // a stable plateau (0011dcc 0.9737 / 0011b198 0.9628)
-                                    // for r ∈ [0.7, 1.0] (identical). Default 0.8 (mid-
-                                    // plateau, robust). r ≥ 1.1 flips p1 «…event|specified».
-                                    let r: f32 = std::env::var("OXI_S1022_R")
-                                        .ok()
-                                        .and_then(|v| v.parse().ok())
-                                        .unwrap_or(0.8);
-                                    r * comp * comp > slack * slack
-                                }
-                            }
-                        };
+                    // S1022 badness (the whole-word branch) uses the SHARED
+                    // s1022_badness_wrap computed before the latin_wordwrap branch above.
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
                     if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
