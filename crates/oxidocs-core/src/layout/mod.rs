@@ -5515,7 +5515,19 @@ impl LayoutEngine {
                                     .round() as usize)
                                     .max(1);
                                 let eff_lines = if s978 { para_lines_exact } else { para_lines };
-                                if eff_lines >= 4 {
+                                // S1023 (2026-07-27, opt-out OXI_S1023_DISABLE): neither
+                                // S916 (Case B) nor S978 (Case A) may SPLIT a keepLines
+                                // paragraph — Word whole-moves a keepNext+keepLines para.
+                                // legal__001410a8 wi=528 (direct keepNext+keepLines, 4-line
+                                // body): Word puts all 4 lines on p39; S916 Case-B split it
+                                // 3+1 (do_push=false + s916_split). keepLines cohesion
+                                // outranks the S916 split. Uses the RESOLVED keep_lines
+                                // (style-inherited keepLines is the same OOXML contract).
+                                // The S916 canary (legal__0001482d Indenti paras) is
+                                // keepLines=false → still splits (orthogonal).
+                                let s1023_kl = para.style.keep_lines
+                                    && std::env::var("OXI_S1023_DISABLE").is_err();
+                                if eff_lines >= 4 && !s1023_kl {
                                     // S978: in case A the page-bottom break already
                                     // splits the paragraph — no forced split point.
                                     s916_split = !s978;
