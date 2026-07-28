@@ -2713,7 +2713,29 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         eprintln!("[S984] in_cell=1 n={} visual_only={} image_w={:.3} tc_w={:?} eligible=1",
             inline_img_runs.len(), s984_visual_only as u8, s984_inline_w, cell_inline_flow_width);
     }
-    if (allow_inline_flow || s984_cell_flow) && inline_img_runs.len() >= 2 {
+    // S1034 (2026-07-29, default ON, opt-out OXI_S1034_DISABLE): a SINGLE inline
+    // image in a paragraph that ALSO has text flows on the text's line — Word
+    // treats it as an inline object, not a block. S854 kept 0/1 on the block
+    // path to stay byte-identical, but that path gives the image its OWN line.
+    // reference__0042471c "Corresponding Author:" (11.25×11.25pt inline icon):
+    // Word puts the next paragraph one line below (309.19 → 320.95 = 11.76),
+    // Oxi emitted text 311.86 / image 323.59 / next 334.84 = TWO lines → +11.2pt
+    // there and ~+28pt over the title block, costing 3 rows on page 1 and
+    // cascading to +1 by page 7. The image-only case (all runs empty) keeps the
+    // S537/S854 block path — that is where the calibrated whole-line reservation
+    // lives. S971 sizes the resulting line as max(host line, extent).
+    // ★The S537b/S741 flow-reservation PLACEHOLDER (a data-less Image standing in
+    // for a canvas / inline wps textbox) must keep the BLOCK path: it exists to
+    // reserve a whole line-block, and the textbox itself renders as an overlay.
+    // probeqwps regressed 1.0 → 0.925 when the placeholder was routed inline.
+    let s1034_single_inline = std::env::var("OXI_S1034_DISABLE").is_err()
+        && allow_inline_flow
+        && inline_img_runs.len() == 1
+        && !s984_visual_only
+        && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty());
+    if (allow_inline_flow || s984_cell_flow) && inline_img_runs.len() >= 2
+        || s1034_single_inline
+    {
         for (ridx, image) in inline_img_runs {
             if let Some(run) = runs.get_mut(ridx) {
                 run.style.inline_object_extent = Some((image.width, image.height));
