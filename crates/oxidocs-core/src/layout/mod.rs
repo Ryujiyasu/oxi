@@ -7083,13 +7083,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             && is_body_floating && wide_table;
                         // S864: an edge-aligned float leaving <100pt beside it has
                         // no usable text band; Word flows following body below it.
+                        // S1031 (2026-07-29, default ON, opt-out OXI_S1031_DISABLE):
+                        // the S864-A lane minimum is ~44pt, not 100pt. Word DOES
+                        // wrap the following body into a narrow side lane — the
+                        // 100pt cutoff sent lane-wrapping docs below the float.
+                        //   MEASURED: probe s1031_pbcollapse V5/V6 (lane 47.4pt) —
+                        //   Word puts the following VISIBLE text at x0=477.46, i.e.
+                        //   INSIDE the lane beside a float ending at ~470, at the
+                        //   anchor's y (92.42), NOT below it; reports__00156ad9
+                        //   (lane 49.5pt) — its post-float empties flow at the
+                        //   anchor (Word 5 pages; forcing them below made 2 phantom
+                        //   pages) and its visible footnotes land at 713-766 only
+                        //   because 30 empties already carried the cursor past the
+                        //   float bottom 692.9; administrative__0001ce58 (lane
+                        //   40.25pt) — Word DOES push its visible bullets below
+                        //   (y 614.44 > table bottom 614.1). So the cutoff lies in
+                        //   (40.25, 47.4]; 44.0 is mid-interval. Oxi has no lane
+                        //   narrowing for this float class, so ≥44 falls to the
+                        //   "floats don't advance text flow" branch — the same
+                        //   approximation Word's lane produces for empty content.
+                        let lane_min = if std::env::var("OXI_S1031_DISABLE").is_err()
+                            && !self.doc_body_has_real_cjk { 41.5 } else { 100.0 };
                         let edge_narrow = s864_part("A")
                             && v_anchor_text
                             && pos_x_zero
                             && table_w_pt <= content_width + 0.5
                             && table.style.position.as_ref().map_or(false, |p| {
                                 content_width - table_w_pt
-                                    - p.left_from_text.max(p.right_from_text) < 100.0
+                                    - p.left_from_text.max(p.right_from_text) < lane_min
                             });
                         let needs_wrap_below = (v_anchor_text
                             && wide_table
