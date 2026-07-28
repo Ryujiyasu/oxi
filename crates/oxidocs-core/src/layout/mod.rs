@@ -10984,7 +10984,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // break_into_lines calls (first pass + S721 retry) with this paragraph's
         // index so the trace joins to the first-divergence dataset. Behaviour-neutral.
         S1026_REPLAY_PARA.with(|c| c.set(body_para_index));
-        let mut lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
+        let mut lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                || (matches!(para.alignment, Alignment::Center)
+                    && std::env::var("OXI_S1028_CT_DISABLE").is_err()
+                    && self.compat_mode == 14 && self.compat_mode_explicit
+                    && !self.doc_body_has_real_cjk), page.doc_grid_no_type, para_has_lrpb, caps_active);
         let s1026_replay_first_nlines = lines.len();
         // S721 body arm (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
         // PARAGRAPH-TAIL ORPHAN ELIMINATION via a two-pass re-break. Word accepts
@@ -11013,7 +11017,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && self.compat_mode < 15
             {
                 S721_ORPHAN_RETRY.with(|f| f.set(true));
-                let retry = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
+                let retry = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                || (matches!(para.alignment, Alignment::Center)
+                    && std::env::var("OXI_S1028_CT_DISABLE").is_err()
+                    && self.compat_mode == 14 && self.compat_mode_explicit
+                    && !self.doc_body_has_real_cjk), page.doc_grid_no_type, para_has_lrpb, caps_active);
                 S721_ORPHAN_RETRY.with(|f| f.set(false));
                 if retry.len() < lines.len() { retry } else { lines }
             } else { lines }
@@ -15388,7 +15396,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // space) → ONE interval β ∈ [0.6375, 1.175) fits every measured specimen.
         // Pairs with OXI_S1026_W (width penalty) on the corrected runtime tuples.
         // Scope: c14 monospace (the 2 Courier twins; JP CJK-gated out).
-        let s1027_on = std::env::var("OXI_S1027").ok().as_deref() == Some("1");
+        let s1027_on = std::env::var("OXI_S1027_DISABLE").is_err();
         macro_rules! wrap_and_seed {
             ($sty:expr) => {{
                 let n_trail = if s1027_on && c14_active && c14_space_tw > 0 {
@@ -15488,7 +15496,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // BOTH Origin A parts (does the candidate still fit?).
                                 let cap_fits = current_width_tw + word_width_tw
                                     <= available_tw + latin_space_credit_tw;
-                                if slack <= 0.0 {
+                                if std::env::var("OXI_S1028_DISABLE").is_err() {
+                                    // ★S1028 UNIFIED SLACK-WINDOW rule (2026-07-28, OPT-IN,
+                                    // pairs with OXI_S1027 leading-space correction). The
+                                    // full-doc Word-truth census (scratchpad/s1028_census.py:
+                                    // every trace candidate labeled by Word's PDF line-start
+                                    // offsets — the non-ws offset space is arm-independent)
+                                    // shows the baseline's misses concentrate in the
+                                    // NEGATIVE-slack region the old rule froze ("slack<=0
+                                    // never wraps"): Word WRAPS short candidates down to
+                                    // slack=-432 (any line ordinal — A2's line-0/2-char
+                                    // limits were needless narrowings), KEEPS at slack<=-564
+                                    // (A2's negative controls) and KEEPS at slack>=288
+                                    // (wrapping would leave a >=1-cell hole; Word prefers
+                                    // compressing the candidate in over stretching). WRAP
+                                    // window: T_LO <= slack <= T_HI, defaults -510 (between
+                                    // -432 and -564) and 216 (between 156 and 288).
+                                    // Capacity stays the main fit test. first-divergence
+                                    // count: baseline 184 paras -> 139 (positive-only form).
+                                    let t_hi: f32 = std::env::var("OXI_S1028_T").ok()
+                                        .and_then(|v| v.parse().ok()).unwrap_or(216.0);
+                                    let t_lo: f32 = std::env::var("OXI_S1028_LO").ok()
+                                        .and_then(|v| v.parse().ok()).unwrap_or(-510.0);
+                                    slack <= t_hi && slack >= t_lo
+                                } else if slack <= 0.0 {
                                     // ★S1026 Stage A2 (Origin A, §6.1): first-line SHORT-
                                     // candidate (1..3 monospace chars) shallow oikomi, slack
                                     // ∈ [-3 c14 spaces, 0]. Word WRAPS such a candidate on the
@@ -15610,7 +15641,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if s1026_replay_on && c14_active {
                             let cn = word.chars().filter(|c| !c.is_whitespace()).count();
                             let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
-                            let hg = pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w });
+                            let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
                             let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
                             let cap = current_width_tw + word_width_tw > available_tw + cr + ts + hg;
                             let wr = !preceded_by_open && !s745_char_wrap && (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
@@ -15618,7 +15649,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap)
+                            && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             wrap_and_seed!(ws);
                         }
@@ -15642,7 +15673,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
                             let seg_w_tw = pt_to_tw(seg_w);
+                            // ★S1028_HG: the whole-token decision above includes the
+                            // trailing-punct hang, but this SEGMENT placement re-tests
+                            // WITHOUT it — a token whose only internal opportunity is its
+                            // final ','/'.' (one segment) then wraps here despite the KEEP
+                            // decision («revenues,»: decision KEEP, segment wrapped).
+                            // Apply the same exclusive-boundary hang to the LAST segment.
                             if current_width_tw + seg_w_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                                + (if cc == total_chars && c14_active && c14_space_tw > 0
+                                     && !s1026_final_token
+                                     && std::env::var("OXI_S1028_HG_DISABLE").is_err()
+                                   { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 })
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
                                 wrap_and_seed!(ws);
                             }
@@ -15671,14 +15712,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if s1026_replay_on && c14_active {
                         let cn = word.chars().filter(|c| !c.is_whitespace()).count();
                         let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
-                        let hg = pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w });
+                        let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
                         let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
                         let cap = current_width_tw + word_width_tw > available_tw + cr + ts + hg;
                         let wr = (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
                         eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=whole_word badness={} cap={} dec={}",
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
-                    if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         wrap_and_seed!(ws);
                     }
@@ -17154,9 +17195,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // CJK text, where Word wraps the WHOLE token first) stays
                     // for '/'':' etc. and for CJK docs — hyphens there keep the
                     // URL behavior (JP byte-identical by construction).
+                    // ★S1028 census (dcc, 2026-07-28): in the c14 MONOSPACE
+                    // context Word does NOT fill up to the '-' of a compound —
+                    // «majority-in-interest» / «152.201-152.206» wrap WHOLE
+                    // (10/10 of the unified-rule misses were hyphen segments
+                    // placed at the line end where Word wraps the compound).
+                    // S783's fill-to-hyphen stays for the proportional class
+                    // it was derived on (nyserda 'Other Co-'/'funding').
                     let s783_hyphen_flush = ch == '-'
                         && !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_S783_DISABLE").is_err();
+                        && std::env::var("OXI_S783_DISABLE").is_err()
+                        && !(c14_active && c14_space_tw > 0
+                             && std::env::var("OXI_S1028_HY_DISABLE").is_err());
                     if latin_wordwrap && !s783_hyphen_flush {
                         // Record a break OPPORTUNITY (after this char) instead of forcing
                         // a flush — the maximal Latin token is kept together and only split
