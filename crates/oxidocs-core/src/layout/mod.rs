@@ -21734,9 +21734,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // decision may still be imperfect (the intent-mismatch the note
             // flags remains, so it is Latin-scoped rather than universal), but
             // within the Latin corpus it is a clean +1 doc with 0 regressions.
+            // S1029 (2026-07-28, default ON, opt-out OXI_S1029_DISABLE): the
+            // empty-tail split applies to a SINGLE-cell row of a MULTI-row
+            // table too. forms__00160757 Member-address row (1 cell, trHeight
+            // 499tw atLeast non-binding, text para + 2 run-less empties whose
+            // after=160/line=259 fall to docDefaults): Word KEEPS the
+            // docDefaults spacing (the s1029_cellsp probe: every variant
+            // incl. multi-empty tails keeps FULL docDefaults — V9 80.40 vs
+            // model 80.26, V11 103.78/103.68, so the row IS ~59pt tall), and
+            // at the page bottom (free 46 < the S941 window 58) Word SPLITS
+            // after the first empty (PDF row box 703.1→739.8 = 13.8 text +
+            // 14.89 line259 + 8 after EXACTLY) and COLLAPSES the empties-only
+            // continuation (p2 opens directly with the City row at the
+            // margin). The `cells.len() > 1` gate whole-pushed it → Member
+            // address +1 and a phantom p3. 1×1 tables (is_single_cell_row)
+            // keep their dedicated split machinery (harassbun class).
             let s864_empty_tail_split = s864_part("B")
                 && !self.doc_body_has_real_cjk
-                && row.cells.len() > 1
+                && (row.cells.len() > 1
+                    || (row.cells.len() == 1 && !is_single_cell_row
+                        && std::env::var("OXI_S1029_DISABLE").is_err()))
                 && row.height_rule.as_deref() != Some("exact")
                 && row.cells.iter().any(|cell| cell.blocks.iter().rev()
                     .take_while(|b| matches!(b, Block::Paragraph(p)
