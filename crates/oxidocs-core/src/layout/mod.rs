@@ -1987,6 +1987,12 @@ thread_local! {
     /// (see the caller near break_into_lines) so the cap computation inside
     /// break_into_lines escalates the 約物 caps for the retry pass only.
     static S721_ORPHAN_RETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// S1026 replay diagnostic (2026-07-28): the body paragraph index, set by
+    /// layout_paragraph around its body break_into_lines calls so the DIAGNOSTIC
+    /// `[S1026-REPLAY]` trace (OXI_DBG_REPLAY, default off) can tag each break
+    /// decision with the source paragraph. None for estimate/cell/header calls
+    /// (they never emit). Behaviour-neutral: only the gated eprintln reads it.
+    static S1026_REPLAY_PARA: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// SG0RAW footnote scope-out (2026-07-07): the raw-natural sg0 line
     /// height is a BODY-flow convention (border-bracketed derivation);
     /// FOOTNOTE-area sg0 lines follow the separately-derived footnote
@@ -10974,7 +10980,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         }
         let para_has_lrpb = para.runs.iter().any(|r| r.has_last_rendered_page_break);
+        // ★S1026-REPLAY diagnostic (OXI_DBG_REPLAY, default OFF): tag the two body
+        // break_into_lines calls (first pass + S721 retry) with this paragraph's
+        // index so the trace joins to the first-divergence dataset. Behaviour-neutral.
+        S1026_REPLAY_PARA.with(|c| c.set(body_para_index));
         let mut lines = self.break_into_lines(&fragments, wrap_width, effective_first_indent, &para.style, effective_char_pitch, effective_cw_ratio, page.doc_grid_lines_and_chars, true, matches!(para.alignment, Alignment::Justify | Alignment::Distribute), page.doc_grid_no_type, para_has_lrpb, caps_active);
+        let s1026_replay_first_nlines = lines.len();
         // S721 body arm (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
         // PARAGRAPH-TAIL ORPHAN ELIMINATION via a two-pass re-break. Word accepts
         // ABOVE-normal 約物 compression (~3.9/約物 vs the s590 break cap 1.5) when
@@ -11007,6 +11018,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 if retry.len() < lines.len() { retry } else { lines }
             } else { lines }
         };
+        // ★S1026-REPLAY: emit the paragraph END marker (used pass + final nlines) so
+        // the analysis unit can select the pass that produced the final render
+        // (used_pass=1 iff the S721 retry saved a line). Then clear the para tag so
+        // subsequent (non-body) break_into_lines calls never emit.
+        if body_para_index.is_some() && std::env::var("OXI_DBG_REPLAY").is_ok() {
+            let used_pass: u8 = if lines.len() < s1026_replay_first_nlines { 1 } else { 0 };
+            eprintln!("[S1026-REPLAY-END] para={} used_pass={} nlines={}",
+                body_para_index.unwrap(), used_pass, lines.len());
+        }
+        S1026_REPLAY_PARA.with(|c| c.set(None));
 
         // S168 Phase B-2 holistic bundle (b): per-line fn cumul delta.
         // S834 (2026-07-14, opt-out OXI_S834_DISABLE): the SEPARATOR allocation
@@ -15343,6 +15364,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             .map(|(t, _, _, _, _)| t.chars().filter(|c| !c.is_whitespace()).count())
             .sum();
         let mut s1026_nonws_consumed: usize = 0;
+        // ★S1026-REPLAY diagnostic (2026-07-28, OXI_DBG_REPLAY, default OFF =
+        // byte-identical). Emits per-candidate break geometry at the decision point
+        // so the analysis unit can join the 165-record first-divergence dataset to
+        // actual geometry (REPORT_S1026_sequential_replay_dataset §6/§9). Read ONCE
+        // before the macro (definition-site hygiene). Only body calls carry a para
+        // index; the pass (0=first, 1=S721 retry) lets the join pick the final pass.
+        let s1026_replay: bool = std::env::var("OXI_DBG_REPLAY").is_ok();
+        let s1026_replay_para: Option<usize> = S1026_REPLAY_PARA.with(|c| c.get());
+        let s1026_replay_pass: u8 = if S721_ORPHAN_RETRY.with(|f| f.get()) { 1 } else { 0 };
+        let s1026_replay_on = s1026_replay && s1026_replay_para.is_some();
         // Helper: flush the accumulated word into current_line, breaking if needed.
         let dbg_flush: bool = std::env::var("OXI_DBGFLUSH").ok().map_or(false, |needle|
             !needle.is_empty() && fragments.iter().any(|&(t, _, _, _, _)| t.contains(&needle)));
@@ -15533,6 +15564,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // ★Origin B: OR the SHARED S1022 badness into the whole-token
                         // wrap — a c14 token with an internal Latin break (e.g. «for:»)
                         // must not bypass the badness. false for non-c14 → byte-identical.
+                        if s1026_replay_on && c14_active {
+                            let cn = word.chars().filter(|c| !c.is_whitespace()).count();
+                            let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
+                            let hg = pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w });
+                            let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
+                            let cap = current_width_tw + word_width_tw > available_tw + cr + ts + hg;
+                            let wr = !preceded_by_open && !s745_char_wrap && (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
+                            eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=latin_wordwrap badness={} cap={} dec={}",
+                                s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
+                        }
                         if !preceded_by_open && !s745_char_wrap
                             && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
@@ -15586,6 +15627,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // S1022 badness (the whole-word branch) uses the SHARED
                     // s1022_badness_wrap computed before the latin_wordwrap branch above.
                     // Day 33 part 19: skip wrap break for all-whitespace paragraphs.
+                    if s1026_replay_on && c14_active {
+                        let cn = word.chars().filter(|c| !c.is_whitespace()).count();
+                        let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
+                        let hg = pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w });
+                        let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
+                        let cap = current_width_tw + word_width_tw > available_tw + cr + ts + hg;
+                        let wr = (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
+                        eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=whole_word badness={} cap={} dec={}",
+                            s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
+                    }
                     if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         lines.push(std::mem::take(&mut current_line));
