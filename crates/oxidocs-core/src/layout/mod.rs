@@ -15374,6 +15374,49 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let s1026_replay_para: Option<usize> = S1026_REPLAY_PARA.with(|c| c.get());
         let s1026_replay_pass: u8 = if S721_ORPHAN_RETRY.with(|f| f.get()) { 1 } else { 0 };
         let s1026_replay_on = s1026_replay && s1026_replay_para.is_some();
+        // S1027 (2026-07-28, OPT-IN OXI_S1027=1, default OFF = byte-identical):
+        // LEADING-SPACE-at-wrap-boundary. Word breaks a run of N U+0020 spaces by
+        // consuming ONE at the break; the remaining N−1 LEAD the next line (a fixed
+        // Courier cell, justify-invariant — REPORT_S1026_leadspace_rule_probe v50,
+        // 32-arm Word probe: N=1→0 / 2→1 / 3→2 / 16→15, predecessor-independent).
+        // Oxi collapses all N → the next line's curw is (N−1)·space short. Alone it
+        // is pagination-neutral on the twins (the 17 corrected lines have slack) BUT
+        // it CORRECTS the badness-geometry tuples: with it, the v46 "expressiveness
+        // proof" collapses — the 2003.×7 WRAP lines lead (`2003.  Amended`), moving
+        // their β bound 0.5333→1.4167, and the verbal collision leads (`REQUIRED.
+        // (a)` → β<1.175) while partner./state./years./person/before don't (single
+        // space) → ONE interval β ∈ [0.6375, 1.175) fits every measured specimen.
+        // Pairs with OXI_S1026_W (width penalty) on the corrected runtime tuples.
+        // Scope: c14 monospace (the 2 Courier twins; JP CJK-gated out).
+        let s1027_on = std::env::var("OXI_S1027").ok().as_deref() == Some("1");
+        macro_rules! wrap_and_seed {
+            ($sty:expr) => {{
+                let n_trail = if s1027_on && c14_active && c14_space_tw > 0 {
+                    current_line.fragments.iter().rev()
+                        .take_while(|f| f.text == SPACE_STRING).count()
+                } else { 0 };
+                if n_trail >= 2 {
+                    let keep = current_line.fragments.len() - (n_trail - 1);
+                    current_line.fragments.truncate(keep);
+                }
+                lines.push(std::mem::take(&mut current_line));
+                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
+                if n_trail >= 2 {
+                    let sp_w = (c14_space_tw as f32) / 20.0;
+                    let seed_tw = c14_space_tw * (n_trail as i32 - 1);
+                    for _ in 0..(n_trail - 1) {
+                        current_line.fragments.push(LineFragment {
+                            text: SPACE_STRING.to_owned(), width: sp_w, natural_width: sp_w,
+                            style: $sty.clone(), tab_alignment: None, tab_position: None,
+                            field_type: None, run_index: 0, char_offset: 0,
+                        });
+                    }
+                    current_width += sp_w * (n_trail - 1) as f32;
+                    current_width_tw += seed_tw;
+                    current_capw_tw += seed_tw;
+                }
+            }};
+        }
         // Helper: flush the accumulated word into current_line, breaking if needed.
         let dbg_flush: bool = std::env::var("OXI_DBGFLUSH").ok().map_or(false, |needle|
             !needle.is_empty() && fragments.iter().any(|&(t, _, _, _, _)| t.contains(&needle)));
@@ -15577,8 +15620,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if !preceded_by_open && !s745_char_wrap
                             && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
-                            lines.push(std::mem::take(&mut current_line));
-                            current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
+                            wrap_and_seed!(ws);
                         }
                         // Place the token as SEGMENTS split at the recorded break
                         // opportunities — IDENTICAL fragmentation to the default path (which
@@ -15602,8 +15644,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let seg_w_tw = pt_to_tw(seg_w);
                             if current_width_tw + seg_w_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw)
                                 && !current_line.fragments.is_empty() && !para_all_whitespace {
-                                lines.push(std::mem::take(&mut current_line));
-                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
+                                wrap_and_seed!(ws);
                             }
                             // Exact run metadata for this segment (matches the default
                             // per-«/» fragmentation), so DWrite shapes it identically.
@@ -15639,8 +15680,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + pt_to_tw(if c14_active && c14_space_tw > 0 { 0.0 } else { word_trail_hang_w }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
-                        lines.push(std::mem::take(&mut current_line));
-                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
+                        wrap_and_seed!(ws);
                     }
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
