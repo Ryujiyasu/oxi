@@ -2731,7 +2731,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     let s1034_single_inline = std::env::var("OXI_S1034_DISABLE").is_err()
         && allow_inline_flow
         && inline_img_runs.len() == 1
-        && !s984_visual_only
+        // ★VISIBLE text, not merely non-empty: a paragraph whose only runs are
+        // WHITESPACE is effectively image-only and keeps the calibrated block
+        // path (legal__001410a8's 2 figure paragraphs carry a space run — with
+        // `!text.is_empty()` they flowed inline and cost it 0.9655 → 0.9616).
+        && runs.iter().any(|run| !run.text.trim().is_empty())
         && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty());
     if (allow_inline_flow || s984_cell_flow) && inline_img_runs.len() >= 2
         || s1034_single_inline
