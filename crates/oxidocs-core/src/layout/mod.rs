@@ -18542,7 +18542,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                 }
             }
+            // S1030 (2026-07-28, default ON, opt-out OXI_S1030_DISABLE): a cell
+            // that declares its OWN real top border pads by THAT width, not the
+            // table's. ECMA: a cell border overrides the table border — S911
+            // already honours the nil case (kill the pad), but a NARROWER
+            // declared border still charged the table width.
+            // reports__00156ad9 Table S2 (tblBorders top/bottom sz=12 = 1.5pt,
+            // NO insideH; every gene's first row declares `tcBorders top single
+            // sz=2` = 0.25pt, its second row nils): Word's row pitch alternates
+            // 11.25 / 11.0 (= line 11.0 + the cell's own 0.25 on the bordered
+            // row) while Oxi charged 1.5 → +1.25 per gene pair → ~3 rows/page →
+            // the +1 cascade from wp3 and a phantom near-empty page.
             let width = table.style.border_width.unwrap_or(0.5);
+            let width = if std::env::var("OXI_S1030_DISABLE").is_err() {
+                cell.borders.as_ref()
+                    .and_then(|b| b.top.as_ref())
+                    .filter(|d| d.style != "none" && d.width > 0.0)
+                    .map_or(width, |d| d.width)
+            } else {
+                width
+            };
             // S865: a thick border does not pad the cell content top in a
             // FIXED-layout table. Full-width ROWBOX2 padding accumulated
             // +16.5pt in 0009d767 and pushed its revision line.
@@ -18634,6 +18653,39 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         {
             return self.s870_row_top_border(table, row_idx);
         }
+        // S1030 (2026-07-28, default ON, opt-out OXI_S1030_DISABLE): an
+        // OUTER-ONLY `tblBorders` (top/bottom declared, NO insideH) states no
+        // rule BETWEEN rows — an interior row's rule comes only from the cells'
+        // own declared horizontal borders (ECMA: the table supplies insideH;
+        // the outer edges bound the table). The `table.style.border` arm below
+        // charged the OUTER width to every interior row.
+        //   reports__00156ad9 Table S2 (tblBorders top/bottom sz=12 = 1.5pt, no
+        //   insideH; each gene's first row declares `tcBorders top single sz=2`
+        //   = 0.25pt, its second row nils): Word's interior pitch alternates
+        //   11.25 / 11.0 (= line 11.0 + the declared 0.25) while Oxi charged
+        //   1.5 on every rule-alive row → ~+40pt/page → the wp3+ cascade.
+        //   The S911-v2 all-nil test also missed those rows (their vMerged
+        //   gene-name cell declares no tcBorders at all, so "row alive" held).
+        // Row 0 keeps the table path: its rule IS the outer top border.
+        if std::env::var("OXI_S1030_DISABLE").is_err()
+            && !self.doc_body_has_real_cjk
+            && table.style.border
+            && !table.style.has_inside_h
+            && row_idx > 0
+        {
+            let real = |d: &Option<BorderDef>| d.as_ref()
+                .filter(|x| x.style != "none" && x.width > 0.0)
+                .map(|x| x.width);
+            let horiz = |row: &TableRow, bottom: bool| -> f32 {
+                row.cells.iter()
+                    .filter_map(|c| c.borders.as_ref())
+                    .filter_map(|b| real(if bottom { &b.bottom } else { &b.top }))
+                    .fold(0.0f32, f32::max)
+            };
+            let above = table.rows.get(row_idx - 1).map_or(0.0, |p| horiz(p, true));
+            let own = table.rows.get(row_idx).map_or(0.0, |r| horiz(r, false));
+            return above.max(own);
+        }
         // S911 v2 (2026-07-17, opt-out OXI_S911_DISABLE): the pad is a
         // ROW-level quantity (the rule ABOVE the row). Cell-level EXPLICIT
         // nils (the S482 {style:"none"} sentinel) kill the table insideH
@@ -18663,7 +18715,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     return 0.0;
                 }
             }
+            // S1030 (2026-07-28, default ON, opt-out OXI_S1030_DISABLE): the
+            // ROW-alive rule above pads by the DECLARED cell width when the
+            // row's own cells declare one — ECMA: a cell border overrides the
+            // table border, and S911 already honours the nil extreme. Take the
+            // widest REAL top border the row declares (uniform across the row,
+            // so the siblings stay aligned = the S911-v2 contract); fall back
+            // to the table width when the row declares none (inheritance).
             let width = table.style.border_width.unwrap_or(0.5);
+            let width = if std::env::var("OXI_S1030_DISABLE").is_err() {
+                let declared = table.rows.get(row_idx).map_or(0.0, |r| {
+                    r.cells.iter()
+                        .filter_map(|c| c.borders.as_ref())
+                        .filter_map(|b| b.top.as_ref())
+                        .filter(|d| d.style != "none" && d.width > 0.0)
+                        .map(|d| d.width)
+                        .fold(0.0f32, f32::max)
+                });
+                if declared > 0.0 { declared } else { width }
+            } else {
+                width
+            };
             let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
                 && width > 1.0
                 && table.style.layout.as_deref() == Some("fixed");
