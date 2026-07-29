@@ -4903,6 +4903,21 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         }
                                     }
                                 }
+                                // S1043 (2026-07-29, opt-out OXI_S1043_DISABLE): a
+                                // SELF-CLOSING `<w:p/>` is an empty paragraph, not an
+                                // absent one - it carries a paragraph mark and Word gives
+                                // it a full line. quick-xml reports it as Event::Empty, so
+                                // this loop (Start-only) dropped it and the box's text
+                                // started one line too high. forms__002a64445e58ed78's
+                                // signature box leads with `<w:p/>`: Word puts its text at
+                                // 741.1, Oxi at 716.0, and 13.98 of that 25.1 gap is the
+                                // missing line.
+                                Ok(Event::Empty(se))
+                                    if local_name(se.name().as_ref()) == "p"
+                                        && std::env::var("OXI_S1043_DISABLE").is_err() =>
+                                {
+                                    shape_text_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
+                                }
                                 Ok(Event::End(se)) => {
                                     if local_name(se.name().as_ref()) == "txbxContent" {
                                         break;
@@ -5669,6 +5684,13 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                             text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
+                                }
+                                // S1043: the VML twin of the DML arm above.
+                                Ok(Event::Empty(se))
+                                    if local_name(se.name().as_ref()) == "p"
+                                        && std::env::var("OXI_S1043_DISABLE").is_err() =>
+                                {
+                                    text_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
                                 }
                                 Ok(Event::End(se)) => {
                                     if local_name(se.name().as_ref()) == "txbxContent" {
