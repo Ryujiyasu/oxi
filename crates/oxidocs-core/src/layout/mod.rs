@@ -2188,6 +2188,13 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
+        // S1036 (2026-07-29): enter the document's font-substitution context
+        // for the whole layout. Word picks Arial Unicode MS's substitute per
+        // DOCUMENT (CJK body -> MS Mincho, Latin body -> AUM metrics + Calibri
+        // glyphs); the guard restores the previous value on drop.
+        let _s1036_font_ctx =
+            crate::font::LatinDocFontContext::enter(!self.doc_body_has_real_cjk);
+
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
         for page in &mut doc_resolved.pages {

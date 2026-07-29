@@ -1270,6 +1270,37 @@ pub fn render_family_name(name: &str) -> &str {
     }
 }
 
+thread_local! {
+    /// S1036: set by the layout engine for the duration of a document layout.
+    /// `true` only for a document whose BODY has no real CJK - the axis Word
+    /// uses to pick Arial Unicode MS's substitute (see normalize_family_name).
+    /// Default `false` keeps the historical MS Mincho alias, so every path that
+    /// never sets it is byte-identical.
+    static LATIN_DOC_FONT_CONTEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// S1036: enter a Latin-document font context; the returned guard restores the
+/// previous value on drop (nested/parallel layouts stay correct).
+pub struct LatinDocFontContext(bool);
+
+impl LatinDocFontContext {
+    pub fn enter(latin: bool) -> Self {
+        let prev = LATIN_DOC_FONT_CONTEXT.with(|c| c.replace(latin));
+        LatinDocFontContext(prev)
+    }
+}
+
+impl Drop for LatinDocFontContext {
+    fn drop(&mut self) {
+        LATIN_DOC_FONT_CONTEXT.with(|c| c.set(self.0));
+    }
+}
+
+fn latin_doc_font_context() -> bool {
+    std::env::var("OXI_S1036_DISABLE").is_err()
+        && LATIN_DOC_FONT_CONTEXT.with(|c| c.get())
+}
+
 fn normalize_family_name(name: &str) -> String {
     // Comma-separated font lists (e.g. "MS明朝,Times New Roman"): use the first font.
     // Word picks the first available font; we use the same approach.
@@ -1350,6 +1381,21 @@ fn normalize_family_name(name: &str) -> String {
         // P1..P300 of 0e7af1ae8f21 — Font.Name reports ＭＳ 明朝 for every
         // run. Fallback path mismatch caused |dy|=26.24pt drift; aliasing
         // to MS Mincho aligns Oxi metrics with Word.
+        // S1036 (2026-07-29, opt-out OXI_S1036_DISABLE): the substitution is
+        // per-DOCUMENT, not per-character. Word probes (16-cell fontTable
+        // matrix + 4 real docs): a CJK-body document renders AUM as MS Mincho
+        // for EVERY character (mysignaiguide's ASCII "AI"/"SEO"/"HTML" lines
+        // measure 1.491 = 1.15 x 83/64, not 1.742); a LATIN-body document
+        // keeps AUM's own vertical identity (hhea 2728/-840/0 = 1.7421875)
+        // and draws Calibri glyphs (policies__0021ede1's TOC "4": Word box
+        // advance 15.75 = 9pt x 1.742). The fontTable shape (altName/charset)
+        // is NOT a discriminator - all four shapes measured identically.
+        "Arial Unicode MS" if latin_doc_font_context() => {
+            // Keyed under a DISTINCT name so a direct registry lookup of the
+            // raw "Arial Unicode MS" (which is tried before the normalized
+            // name) cannot reach the Latin profile from a CJK document.
+            "Arial Unicode MS Latin".to_string()
+        }
         "Arial Unicode MS" => "MS Mincho".to_string(),
         // S858 (2026-07-15): 宋体 / SimSun (Simplified-Chinese) is a upm-256 CJK
         // font, STRUCTURALLY IDENTICAL to MS Mincho for metrics — win 220/36
