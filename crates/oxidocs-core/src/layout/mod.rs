@@ -12428,8 +12428,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && !s548b_exact_full && !s603_typed_fullbox && !s605_line0_2
                 && !s_tgfull && !s651_multicell_head && !footer_tight
                 && std::env::var("OXI_S736_DISABLE").is_err();
+            // S1041 (2026-07-29, opt-out OXI_S1041_DISABLE): the S736 tolerance
+            // must not be clamped to ink_lh on an EMPTY line. An empty paragraph
+            // paints no glyphs, so ink_lh there is a font-derived fiction, and
+            // for a 11.724pt empty line (ink_lh 10.0) the clamp cut the
+            // configured 2.5pt tolerance down to 1.724pt - which is why the
+            // OXI_S736_TOL sweep is inert above 2.5 (the clamp dominates).
+            // reference__0042471c's p4-terminal empty paragraph overflows its
+            // full box by 2.513pt: Word keeps it on p4, the clamp pushed it, and
+            // that single break supplied a p5-p8 cascade that ended as a 35pt
+            // shift on p7 (two of six pre-figure empties spilling onto the page).
+            // Without the clamp the residual is +0.013pt, inside S967's half-twip
+            // tolerance, and the paragraph stays where Word puts it.
             let break_threshold = if s736_empty_tol {
-                (effective_lh - s736_tol).max(ink_lh)
+                if std::env::var("OXI_S1041_DISABLE").is_err() {
+                    (effective_lh - s736_tol).max(0.0)
+                } else {
+                    (effective_lh - s736_tol).max(ink_lh)
+                }
             } else if s548b_exact_full || s562b_empty_full
                 || s603_typed_fullbox || s605_line0_2 || s_tgfull || s651_multicell_head
                 // S726: footer-constrained bottom → full box (the leniency's
