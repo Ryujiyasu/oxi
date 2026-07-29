@@ -14176,7 +14176,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else {
                             emit_y + line_height
                         };
-                        let oy = baseline - oh;
+                        // S1040 (2026-07-29, opt-out OXI_S1040_DISABLE): an object
+                        // TALLER than the text ascent must not render ABOVE its own
+                        // line. S851 grows the line to obj + text descent, so the
+                        // object occupies [line_top, baseline] - but the baseline
+                        // here is the TEXT's (centred in the grown line), which for
+                        // a 340pt screenshot on a 10.5pt line put the image at
+                        // y=-65.6, off the top of the page (JA blind
+                        // policies__03a9dca2, SSIM 0.928 -> 0.854 after S1034 first
+                        // routed such images inline). Clamping the top to the line
+                        // top is exactly the S851 height model, and is inert when
+                        // the object is shorter than the text ascent (the EN
+                        // reference__0042471c 11.25pt icon is unchanged).
+                        let oy = if std::env::var("OXI_S1040_DISABLE").is_err() {
+                            (baseline - oh).max(emit_y)
+                        } else { baseline - oh };
                         let mut e = LayoutElement::new(el_x, oy, ow, oh, LayoutContent::Image {
                             data: img.data.clone(),
                             content_type: img.content_type.clone(),
@@ -16075,6 +16089,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // shifts the segment to stop − w/2 and Word fits it
                     // ([330.5..497.2] < 538). The corpus-scope objects always
                     // fit their host line in Word.
+                    // S1040 (2026-07-29, opt-out OXI_S1040_DISABLE): ...except an
+                    // inline PICTURE routed by S1034/S854, which Word DOES wrap.
+                    // JA blind policies__03a9dca2 has a 425.2pt screenshot after a
+                    // heading on a 425.2pt column: Word puts the heading on line 1
+                    // and the picture on line 2; without a wrap the picture shared
+                    // the heading's line and (being taller than the text ascent)
+                    // rendered off the top of the page, SSIM 0.928 -> 0.854. Scoped
+                    // to inline_object_image (a real picture) and to lines with NO
+                    // tab fragment, which is exactly the exclusion the note above
+                    // documents (hmrc's strips ride CENTER tabs and are re-placed
+                    // by the post-pass, so a raw-width test would wrap them wrongly).
+                    if std::env::var("OXI_S1040_DISABLE").is_err()
+                        && style.inline_object_image.is_some()
+                        && !current_line.fragments.is_empty()
+                        && current_line.fragments.iter().all(|f| f.tab_alignment.is_none())
+                        && current_width_tw + ow_tw > available_tw
+                    {
+                        lines.push(std::mem::take(&mut current_line));
+                        current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
+                    }
                     current_line.fragments.push(LineFragment {
                         text: "\u{FFFC}".to_string(), width: ow, natural_width: ow,
                         style: style.clone(), tab_alignment: None, tab_position: None,
