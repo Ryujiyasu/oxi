@@ -77,3 +77,14 @@ AGENTS_STATE.json
 /INSTRUCTIONS_FOR_GPT.md
 /REPORT_*.md
 /scratchpad/
+
+# Local probe/measurement working area (per-report artifact sets; regenerable
+# from the docx corpus + Word, so never tracked and safe to prune)
+/tmp/
+
+# Renderer scratch output dropped at the repository root. The renderer writes
+# <prefix>_p<N>.png, so an ad-hoc `... x 96` run leaves x_p1.png.. behind;
+# compare_*.png / oxi_*.png / test_*.pdf etc. are covered further up.
+/x_p*.png
+/p_p*.png
+*.tmp
