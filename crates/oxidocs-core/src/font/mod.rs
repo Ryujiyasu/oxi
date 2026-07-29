@@ -1270,47 +1270,6 @@ pub fn render_family_name(name: &str) -> &str {
     }
 }
 
-thread_local! {
-    /// S1036: set by the layout engine for the duration of a document layout.
-    /// `true` only for a document whose BODY has no real CJK - the axis Word
-    /// uses to pick Arial Unicode MS's substitute (see normalize_family_name).
-    /// Default `false` keeps the historical MS Mincho alias, so every path that
-    /// never sets it is byte-identical.
-    static LATIN_DOC_FONT_CONTEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// S1036: enter a Latin-document font context; the returned guard restores the
-/// previous value on drop (nested/parallel layouts stay correct).
-pub struct LatinDocFontContext(bool);
-
-impl LatinDocFontContext {
-    pub fn enter(latin: bool) -> Self {
-        let prev = LATIN_DOC_FONT_CONTEXT.with(|c| c.replace(latin));
-        LatinDocFontContext(prev)
-    }
-}
-
-impl Drop for LatinDocFontContext {
-    fn drop(&mut self) {
-        LATIN_DOC_FONT_CONTEXT.with(|c| c.set(self.0));
-    }
-}
-
-fn latin_doc_font_context() -> bool {
-    // HELD OPT-IN (2026-07-29): the document-context rule is Word-correct for a
-    // Latin document whose AUM sits in the ASCII/hAnsi slot (policies__0021ede1:
-    // Word box advance 15.75 = 9pt x 1.742), but `normalize_family_name` only
-    // sees a family NAME, so it also fires when AUM arrives through the
-    // EAST-ASIA slot - creative__00d0925f (ascii/hAnsi = Avenir Book,
-    // eastAsia = AUM, no CJK text) then grew its lines and went PASS -> FAIL
-    // (1.0 -> 0.9643 on blind50). Word never applies AUM there: the Latin text
-    // resolves through ascii. Shipping this needs the slot-aware
-    // `resolve_metric_family(FontResolutionContext)` the v62 report specifies,
-    // so the profile stays behind OXI_S1036=1 until then.
-    std::env::var("OXI_S1036").is_ok()
-        && LATIN_DOC_FONT_CONTEXT.with(|c| c.get())
-}
-
 fn normalize_family_name(name: &str) -> String {
     // Comma-separated font lists (e.g. "MS明朝,Times New Roman"): use the first font.
     // Word picks the first available font; we use the same approach.
@@ -1400,12 +1359,6 @@ fn normalize_family_name(name: &str) -> String {
         // and draws Calibri glyphs (policies__0021ede1's TOC "4": Word box
         // advance 15.75 = 9pt x 1.742). The fontTable shape (altName/charset)
         // is NOT a discriminator - all four shapes measured identically.
-        "Arial Unicode MS" if latin_doc_font_context() => {
-            // Keyed under a DISTINCT name so a direct registry lookup of the
-            // raw "Arial Unicode MS" (which is tried before the normalized
-            // name) cannot reach the Latin profile from a CJK document.
-            "Arial Unicode MS Latin".to_string()
-        }
         "Arial Unicode MS" => "MS Mincho".to_string(),
         // S858 (2026-07-15): 宋体 / SimSun (Simplified-Chinese) is a upm-256 CJK
         // font, STRUCTURALLY IDENTICAL to MS Mincho for metrics — win 220/36

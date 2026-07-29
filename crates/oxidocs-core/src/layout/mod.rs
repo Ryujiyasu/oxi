@@ -2202,13 +2202,6 @@ impl LayoutEngine {
     }
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
-        // S1036 (2026-07-29): enter the document's font-substitution context
-        // for the whole layout. Word picks Arial Unicode MS's substitute per
-        // DOCUMENT (CJK body -> MS Mincho, Latin body -> AUM metrics + Calibri
-        // glyphs); the guard restores the previous value on drop.
-        let _s1036_font_ctx =
-            crate::font::LatinDocFontContext::enter(!self.doc_body_has_real_cjk);
-
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
         for page in &mut doc_resolved.pages {
@@ -2632,10 +2625,41 @@ impl LayoutEngine {
 
     /// Get font metrics for a run (uses registry with font-family resolution).
     /// Considers bold to look up Bold variant when applicable.
+    /// S1036 (2026-07-29, opt-out OXI_S1036_DISABLE): Word picks Arial Unicode
+    /// MS's substitute per DOCUMENT and per SLOT. A CJK-body document renders
+    /// AUM as MS Mincho for every character (mysignaiguide's ASCII "AI"/"SEO"
+    /// lines measure 1.15 x 83/64, not 1.742); a LATIN-body document keeps AUM's
+    /// own vertical identity (hhea 2728/-840/0 = 1.742) - policies__0021ede1's
+    /// TOC marker run advances 15.75 = 9pt x 1.742 in Word. The fontTable shape
+    /// (altName/charset) is NOT a discriminator: all four shapes measured
+    /// identically in the 16-cell probe.
+    ///
+    /// SLOT-AWARE: only a family that the ASCII/hAnsi resolution picked may take
+    /// the Latin profile. creative__00d0925f declares AUM in eastAsia ONLY
+    /// (ascii/hAnsi = Avenir Book, no CJK text); Word resolves its Latin text
+    /// through ascii, so AUM never applies - a name-only rule grew those lines
+    /// and took the doc PASS -> FAIL.
+    fn s1036_metric_family<'a>(
+        &self,
+        run_style: &RunStyle,
+        para_style: &ParagraphStyle,
+        family: &'a str,
+    ) -> &'a str {
+        if family == "Arial Unicode MS"
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1036_DISABLE").is_err()
+            && self.resolve_font_family(run_style, para_style) == Some("Arial Unicode MS")
+        {
+            "Arial Unicode MS Latin"
+        } else {
+            family
+        }
+    }
+
     fn metrics_for(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> &FontMetrics {
         match self.resolve_font_family(run_style, para_style) {
             Some(family) => self.registry.get_with_style(
-                family,
+                self.s1036_metric_family(run_style, para_style, family),
                 self.resolve_bold(run_style, para_style),
                 self.resolve_italic(run_style, para_style),
             ),
@@ -2657,7 +2681,7 @@ impl LayoutEngine {
         let quote_latin = std::env::var("OXI_S763M_DISABLE").is_err();
         match self.resolve_font_family_for_text_g(text, run_style, para_style, quote_latin) {
             Some(family) => self.registry.get_with_style(
-                family,
+                self.s1036_metric_family(run_style, para_style, family),
                 self.resolve_bold(run_style, para_style),
                 self.resolve_italic(run_style, para_style),
             ),
