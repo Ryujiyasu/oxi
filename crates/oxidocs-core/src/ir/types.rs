@@ -1460,6 +1460,11 @@ pub struct ParagraphStyle {
     /// Numbering indent level from style definition (w:numPr/w:ilvl)
     #[serde(default)]
     pub num_ilvl: u8,
+    /// S1035: the style DECLARED its own `w:ilvl` (as opposed to defaulting to
+    /// 0). A style whose numPr carries only `w:ilvl` inherits `w:numId` from
+    /// basedOn but keeps ITS OWN level — the merge must not overwrite it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_explicit_num_ilvl: bool,
 }
 
 /// Paragraph border definitions
@@ -1559,6 +1564,7 @@ impl Default for ParagraphStyle {
             bidi: false,
             num_id: None,
             num_ilvl: 0,
+            has_explicit_num_ilvl: false,
         }
     }
 }

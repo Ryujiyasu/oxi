@@ -254,7 +254,18 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     }
     if child.num_id.is_none() {
         child.num_id = parent.num_id.clone();
-        if child.num_id.is_some() {
+        // S1035 (2026-07-29, default ON, opt-out OXI_S1035_DISABLE): numPr
+        // merges PER FIELD. A style whose numPr declares only `w:ilvl` (no
+        // `w:numId`) inherits the LIST from basedOn but keeps ITS OWN level —
+        // overwriting it with the parent's level renders every nested style at
+        // the parent's format. policies__0021ede1: `SecondLevel` (basedOn
+        // FirstLevel, numPr = ilvl 2 only) rendered "(68)" = level 1's
+        // `decimal (%2)` with a doc-wide counter, where Word renders "(a)" =
+        // level 2's `lowerLetter (%3)`; the wrong marker also carries the wrong
+        // level indent (Word text x=155.9 / marker 127.6), so the paragraph
+        // wrapped one line SHORT and the body crept forward page after page.
+        let s1035 = std::env::var("OXI_S1035_DISABLE").is_err();
+        if child.num_id.is_some() && !(s1035 && child.has_explicit_num_ilvl) {
             child.num_ilvl = parent.num_ilvl;
         }
     }
@@ -1242,6 +1253,7 @@ fn parse_style_definition(
                                 if local_name(attr.key.as_ref()) == "val" {
                                     let val = String::from_utf8_lossy(&attr.value);
                                     style.num_ilvl = val.parse().unwrap_or(0);
+                                    style.has_explicit_num_ilvl = true;
                                 }
                             }
                         }
