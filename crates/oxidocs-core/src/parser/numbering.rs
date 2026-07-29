@@ -44,6 +44,15 @@ pub struct NumberingLevel {
     /// present (ukframework bullet levels carry Symbol + sz=20 → the 10pt marker
     /// does NOT grow an 11pt Calibri line; S795 at para size wrongly grew it).
     pub marker_size: Option<f32>,
+    /// S1037: the level rPr's FONT identity (w:rFonts ascii/hAnsi, and eastAsia).
+    /// Word draws the numbering symbol with the level rPr when present - it is
+    /// the TOP of the marker-formatting priority (Word probe, 22 arms:
+    /// level rPr > direct paragraph-mark rPr > paragraph style rPr).
+    pub marker_font: Option<String>,
+    pub marker_font_east_asia: Option<String>,
+    /// S1037: level rPr w:b / w:i (CT_OnOff, `val="0"` honoured).
+    pub marker_bold: Option<bool>,
+    pub marker_italic: Option<bool>,
 }
 
 /// An abstract numbering definition containing levels
@@ -85,6 +94,11 @@ pub struct ResolvedMarker {
     pub text: String,
     /// S801b: level rPr w:sz in points (marker glyph size), if declared.
     pub marker_size: Option<f32>,
+    /// S1037: level rPr font identity (top priority for the marker's glyph).
+    pub marker_font: Option<String>,
+    pub marker_font_east_asia: Option<String>,
+    pub marker_bold: Option<bool>,
+    pub marker_italic: Option<bool>,
     pub hanging: Option<f32>,
     pub suff: String,
     pub tab_stop: Option<f32>,
@@ -119,6 +133,10 @@ impl NumberingDefinitions {
         let fallback = ResolvedMarker {
             text: "\u{2022}".to_string(),
             marker_size: None,
+            marker_font: None,
+            marker_font_east_asia: None,
+            marker_bold: None,
+            marker_italic: None,
             hanging: Some(18.0),
             level_left: None,
             suff: "tab".to_string(),
@@ -151,7 +169,7 @@ impl NumberingDefinitions {
                 // Map Symbol font private use area characters to standard Unicode
                 map_symbol_bullets(&level.lvl_text)
             };
-            return ResolvedMarker { text: marker, marker_size: level.marker_size, hanging, suff, tab_stop, level_left: level.indent_left };
+            return ResolvedMarker { text: marker, marker_size: level.marker_size, marker_font: level.marker_font.clone(), marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left };
         }
 
         // Numbered list: increment counter
@@ -259,7 +277,7 @@ impl NumberingDefinitions {
             text
         };
 
-        ResolvedMarker { text: marker, marker_size: level.marker_size, hanging, suff, tab_stop, level_left: level.indent_left }
+        ResolvedMarker { text: marker, marker_size: level.marker_size, marker_font: level.marker_font.clone(), marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left }
     }
 
     /// S988B: the EFFECTIVE level for (numId, ilvl) — the `<w:lvlOverride>`'s
@@ -567,6 +585,10 @@ fn parse_numbering_level(
     let mut suff = "tab".to_string();
     let mut tab_stop = None;
     let mut marker_size: Option<f32> = None;
+    let mut marker_font: Option<String> = None;
+    let mut marker_font_east_asia: Option<String> = None;
+    let mut marker_bold: Option<bool> = None;
+    let mut marker_italic: Option<bool> = None;
     let mut lvl_restart: Option<u32> = None;
     let mut depth = 0;
 
@@ -622,6 +644,33 @@ fn parse_numbering_level(
                                     .parse().ok();
                             }
                         }
+                    }
+                    "rFonts" => {
+                        // S1037: level rPr font. ascii/hAnsi give the Latin
+                        // identity, eastAsia the CJK one.
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            if val.is_empty() { continue; }
+                            match key.as_str() {
+                                "ascii" | "hAnsi" => {
+                                    if marker_font.is_none() { marker_font = Some(val); }
+                                }
+                                "eastAsia" => marker_font_east_asia = Some(val),
+                                _ => {}
+                            }
+                        }
+                    }
+                    "b" | "i" => {
+                        // S1037: CT_OnOff - a missing val means true.
+                        let mut on = true;
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                on = !matches!(v.as_ref(), "0" | "false" | "off");
+                            }
+                        }
+                        if local == "b" { marker_bold = Some(on); } else { marker_italic = Some(on); }
                     }
                     "sz" => {
                         // S801b: level rPr marker size (half-points).
@@ -691,6 +740,10 @@ fn parse_numbering_level(
         suff,
         tab_stop,
         marker_size,
+        marker_font,
+        marker_font_east_asia,
+        marker_bold,
+        marker_italic,
         lvl_restart,
     })
 }

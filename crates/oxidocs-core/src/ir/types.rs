@@ -1339,6 +1339,13 @@ pub struct ParagraphStyle {
     pub list_tab_stop: Option<f32>,
     /// S801b: the numbering level rPr's marker font size (pt), if declared.
     pub list_marker_size: Option<f32>,
+    /// S1037: the marker's RESOLVED run style. Word draws the numbering symbol
+    /// with `w:lvl/w:rPr` > the paragraph's direct `w:pPr/w:rPr` (the paragraph
+    /// mark) > the paragraph style's rPr - NOT with the first body run, which is
+    /// what layout used to assume. Set only when a marker is actually emitted
+    /// (an empty lvlText contributes no width, no glyph and no line height).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_marker_style: Option<Box<RunStyle>>,
     /// S778: the numbering LEVEL's ind left (pt) — the marker suffix-tab stop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_level_left: Option<f32>,
@@ -1532,6 +1539,7 @@ impl Default for ParagraphStyle {
             list_suff: None,
             list_tab_stop: None,
             list_marker_size: None,
+            list_marker_style: None,
             list_level_left: None,
             snap_to_grid: true,
             has_explicit_snap_to_grid: false,

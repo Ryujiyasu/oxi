@@ -2543,6 +2543,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 crate::parser::numbering::ResolvedMarker {
                     text: format!("{}.", count),
                     marker_size: None,
+                    marker_font: None,
+                    marker_font_east_asia: None,
+                    marker_bold: None,
+                    marker_italic: None,
                     hanging: Some(36.0),
                     level_left: Some(36.0),
                     suff: "tab".to_string(),
@@ -2558,6 +2562,30 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // S777: an EMPTY resolved marker (numFmt=none) sets no marker
             // element; keep suff/indent resolution unchanged.
             if !resolved.text.is_empty() {
+                // S1037 (2026-07-29, opt-out OXI_S1037_DISABLE): resolve the
+                // marker's run style ONCE, here, so every layout consumer
+                // (width, glyph, line height, page fit) shares one truth.
+                // Priority measured in Word (22-arm probe): level rPr beats the
+                // direct paragraph-mark rPr, which beats the paragraph style.
+                // Only a marker that is actually emitted carries a style - an
+                // empty lvlText contributes nothing (probe: dUp = dDown = 0).
+                if std::env::var("OXI_S1037_DISABLE").is_err() {
+                    // Base layer = the paragraph mark's rPr (already merged
+                    // with the paragraph style by the style resolver); the
+                    // level rPr then overlays it.
+                    let mut ms = style.ppr_rpr.clone().unwrap_or_default();
+                    if let Some(ref f) = resolved.marker_font {
+                        ms.font_family = Some(f.clone());
+                    }
+                    if let Some(ref f) = resolved.marker_font_east_asia {
+                        ms.font_family_east_asia = Some(f.clone());
+                        ms.has_explicit_east_asia = true;
+                    }
+                    if let Some(b) = resolved.marker_bold { ms.bold = b; }
+                    if let Some(i) = resolved.marker_italic { ms.italic = i; }
+                    if let Some(sz) = resolved.marker_size { ms.font_size = Some(sz); }
+                    style.list_marker_style = Some(Box::new(ms));
+                }
                 style.list_marker = Some(resolved.text);
             }
             style.list_suff = Some(resolved.suff);

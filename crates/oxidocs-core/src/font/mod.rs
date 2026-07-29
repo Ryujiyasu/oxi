@@ -1297,7 +1297,17 @@ impl Drop for LatinDocFontContext {
 }
 
 fn latin_doc_font_context() -> bool {
-    std::env::var("OXI_S1036_DISABLE").is_err()
+    // HELD OPT-IN (2026-07-29): the document-context rule is Word-correct for a
+    // Latin document whose AUM sits in the ASCII/hAnsi slot (policies__0021ede1:
+    // Word box advance 15.75 = 9pt x 1.742), but `normalize_family_name` only
+    // sees a family NAME, so it also fires when AUM arrives through the
+    // EAST-ASIA slot - creative__00d0925f (ascii/hAnsi = Avenir Book,
+    // eastAsia = AUM, no CJK text) then grew its lines and went PASS -> FAIL
+    // (1.0 -> 0.9643 on blind50). Word never applies AUM there: the Latin text
+    // resolves through ascii. Shipping this needs the slot-aware
+    // `resolve_metric_family(FontResolutionContext)` the v62 report specifies,
+    // so the profile stays behind OXI_S1036=1 until then.
+    std::env::var("OXI_S1036").is_ok()
         && LATIN_DOC_FONT_CONTEXT.with(|c| c.get())
 }
 

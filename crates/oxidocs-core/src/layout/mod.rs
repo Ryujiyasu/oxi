@@ -2038,6 +2038,20 @@ fn snap_character_spacing(cs_pt: f32) -> f32 {
     (cs_pt * 20.0).round() / 20.0
 }
 
+/// S1037 (2026-07-29, opt-out OXI_S1037_DISABLE): the numbering marker's
+/// RESOLVED run style (level rPr > direct paragraph-mark rPr > paragraph
+/// style), computed once in the parser. Word draws the marker with that style,
+/// NOT with the paragraph's first body run - a 22-arm Word probe identified the
+/// priority, and a tall marker grows the line's ASCENT only. Returns None when
+/// the paragraph has no emitted marker, so every caller keeps its old
+/// first-run behaviour by construction.
+fn s1037_marker_style(para: &Paragraph) -> Option<&RunStyle> {
+    if std::env::var("OXI_S1037_DISABLE").is_ok() {
+        return None;
+    }
+    para.style.list_marker_style.as_deref()
+}
+
 impl LayoutEngine {
     pub fn new() -> Self {
         Self {
@@ -10604,7 +10618,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         } else { 0.0 };
         if let Some(ref marker) = para.style.list_marker {
             let default_style = RunStyle::default();
-            let marker_style = para.runs.first().map(|r| &r.style).unwrap_or(&default_style);
+            let marker_style = s1037_marker_style(para)
+                .unwrap_or_else(|| para.runs.first().map(|r| &r.style).unwrap_or(&default_style));
             let marker_font_size = self.resolve_font_size(marker_style, &para.style);
             // Symbol font bullets (•/●) have large glyphs relative to em-square.
             // No font size adjustment needed — use the paragraph's font size directly.
@@ -11456,7 +11471,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             && !lines.is_empty()
             && !lines[0].fragments.is_empty()
             && !matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"))
-            && para.style.list_marker.as_deref().map_or(false, |m| m.contains('\u{F0B7}'))
+            && (para.style.list_marker.as_deref().map_or(false, |m| m.contains('\u{F0B7}'))
+                || (std::env::var("OXI_S1037_DISABLE").is_err()
+                    && s1037_marker_style(para).is_some()))
         {
             let mut asc: f32 = 0.0;
             let mut desc: f32 = 0.0;
@@ -11472,6 +11489,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // 13.95 ≈ 14.02 device) where max(ext) gave 14.26.
             let mut best_sum: f32 = 0.0;
             let mut ext: f32 = 0.0;
+            let mut marker_growth_ok = true;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
                 let m = self.metrics_for_text(&f.text, &f.style, &para.style);
@@ -11502,16 +11520,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // asc + ARIAL desc (Symbol's own winDesc 450 NOT used; win-sum
             // max gave 13.476, max(ext) 13.84 = the old wp6/7/15 drift).
             // fw_probe2 Calibri+Symbol 14.02 = 11.10 + Calibri desc 2.90 ✓.
-            let marker_asc = SYM_ASC * marker_fs;
+            // S1037 (2026-07-29): a NON-Symbol marker takes its ascent from
+            // its own RESOLVED style (level rPr > direct paragraph-mark rPr >
+            // paragraph style) - the source the 22-arm Word probe identified.
+            // Same ascent-only topology as S820b/S821: a tall marker grows the
+            // pitch INTO the line (dUp +10.44 for Courier-24 over Arial-10) and
+            // leaves the outgoing pitch untouched (dDown +0.00), for every
+            // suffix (tab/space/nothing) and both hanging/firstLine.
+            let is_symbol_marker = para.style.list_marker.as_deref()
+                .map_or(false, |m| m.contains('\u{F0B7}'));
+            let marker_asc = if is_symbol_marker {
+                SYM_ASC * marker_fs
+            } else {
+                match s1037_marker_style(para) {
+                    Some(ms) => {
+                        let mfs = ms.font_size.unwrap_or(marker_fs);
+                        self.metrics_for(ms, &para.style).win_ascent * mfs
+                    }
+                    None => 0.0,
+                }
+            };
             let _ = SYM_DESC;
             let _ = best_sum;
             if marker_asc > asc {
                 ext = 0.0;
             }
+            // Self-limiting: a marker no taller than the body contributes
+            // nothing, so an ordinary list whose marker shares the body font
+            // stays byte-identical.
+            if !is_symbol_marker && marker_asc <= asc {
+                marker_growth_ok = false;
+            }
             let target_nat = asc.max(marker_asc) + desc + ext;
             let factor = para.style.line_spacing.unwrap_or(1.0);
             let target = target_nat * if factor > 0.0 { factor } else { 1.0 };
-            if target > line_heights[0] {
+            if target > line_heights[0] && marker_growth_ok {
                 // S821 (2026-07-13, opt-out OXI_S821_DISABLE): the marker
                 // growth belongs to the pitch INTO the bullet line, not out
                 // of it — junction probe matrix (pk_, real F0B7 markers):
@@ -23163,7 +23206,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Body renders at mod.rs:1939; cells previously skipped it.
                         // b35 p1 "事務処理体制を整備" row: numId=5 ilvl=0 → □ marker.
                         let list_marker_info: Option<(String, f32, f32)> = para.style.list_marker.as_ref().map(|marker| {
-                            let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                            let marker_style = s1037_marker_style(para).cloned().unwrap_or_else(|| para.runs.first().map(|r| r.style.clone()).unwrap_or_default());
                             let marker_fs = self.resolve_font_size(&marker_style, &para.style);
                             let marker_metrics = self.metrics_for(&marker_style, &para.style);
                             // S692 (2026-06-29, SHIPPED default ON, opt-out OXI_MARKERCJK_DISABLE): a CELL numbered-list
@@ -24832,7 +24875,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if line_idx == 0 {
                                 if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
                                     let list_indent = para.style.list_indent.unwrap_or(18.0);
-                                    let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                                    let marker_style = s1037_marker_style(para).cloned().unwrap_or_else(|| para.runs.first().map(|r| r.style.clone()).unwrap_or_default());
                                     // Session 75 Phase D: y is LINE BOX TOP; renderer adds cell_text_y_off.
                                     // S592: place a space-suffix number at cell-left (no outdent).
                                     let marker_x = if s592_cell_space {
@@ -28197,7 +28240,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // fullwidth-marker rule as list_marker_info/S692).
                 let first_line_wrap_w = if est_list_consumes_hanging
                     && !matches!(para.style.list_suff.as_deref(), Some("space")) {
-                    let marker_style = para.runs.first().map(|r| &r.style).cloned().unwrap_or_default();
+                    let marker_style = s1037_marker_style(para).cloned().unwrap_or_else(|| para.runs.first().map(|r| r.style.clone()).unwrap_or_default());
                     let mk_fs = self.resolve_font_size(&marker_style, &para.style);
                     let mk_metrics = self.metrics_for(&marker_style, &para.style);
                     let mk_w: f32 = para.style.list_marker.as_ref().map(|m| m.chars()
