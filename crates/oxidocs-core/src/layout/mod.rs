@@ -15160,6 +15160,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // between must be a real border. The duplicate overlapping bottom is
             // skipped below; the between draw stays UNCONDITIONAL so a CJK doc's
             // between line is never lost. Opt-out OXI_S990A_DISABLE.
+            // S1042 (2026-07-29, opt-out OXI_S1042_DISABLE): Word draws ONE outer
+            // box around a run of consecutive paragraphs whose effective pBdr is
+            // identical - the interior top/bottom edges are not painted at all
+            // (a `between` border, when declared, is what draws them). Oxi has
+            // merged the vertical RESERVATION since S658/S903 but kept painting
+            // every paragraph's own top and bottom, so a bordered form grew a
+            // horizontal rule at every interior boundary. forms__002a64445e58ed78
+            // has three such groups (7 + 13 + 9 paragraphs) and 26 spurious rules;
+            // dropping them lifts its SSIM 0.576 -> 0.681 (an Oxi-position raster
+            // lower bound; the pure no-shading arm reaches 0.694). Reuses the same
+            // two facts S658/S903 already thread in - no new discriminator.
+            let s1042 = std::env::var("OXI_S1042_DISABLE").is_err();
+            let s1042_has_between = borders.between.as_ref()
+                .map_or(false, |b| b.style != "none" && b.style != "nil");
+            // interior TOP: the previous paragraph carries the same box
+            let s1042_skip_top = s1042 && !s1042_has_between
+                && prev_para_borders.map_or(false, |pb| pb == borders);
+            // interior BOTTOM: the next paragraph carries the same box
+            let s1042_skip_bottom = s1042 && !s1042_has_between
+                && s903_next_borders.map_or(false, |nb| nb == borders);
             let s990a_between = std::env::var("OXI_S990A_DISABLE").is_err()
                 && !self.doc_body_has_real_cjk
                 && s903_next_borders.map_or(false, |nb| nb == borders)
@@ -15172,7 +15192,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let border_y = para_bottom + bottom.space;
                 // S990A: the interior `between` element below draws this line;
                 // skip the duplicate overlapping bottom shading.
-                if !s990a_between {
+                if !s990a_between && !s1042_skip_bottom {
                     elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
                         color: format!("#{}", color),
                     }));
@@ -15209,12 +15229,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             }
             if let Some(ref top) = borders.top {
-                let bw = top.width;
-                let color = top.color.clone().unwrap_or_else(|| "000000".to_string());
-                let border_y = para_top - top.space - bw;
-                elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
-                        color: format!("#{}", color),
-                }));
+                if !s1042_skip_top {
+                    let bw = top.width;
+                    let color = top.color.clone().unwrap_or_else(|| "000000".to_string());
+                    let border_y = para_top - top.space - bw;
+                    elements.push(LayoutElement::new(border_x, border_y, border_width, bw.max(0.5), LayoutContent::CellShading {
+                            color: format!("#{}", color),
+                    }));
+                }
             }
             // Between border (horizontal line between consecutive bordered paragraphs)
             if let Some(ref between) = borders.between {
