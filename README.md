@@ -50,23 +50,27 @@ Everything below is measured against **Microsoft Word's own render** of the same
 |--------|-----------------------------|-------------------------|
 | ONLYOFFICE 9.3.1.8 | 0.902 | 41 / 50 |
 | LibreOffice 26.2.1.2 | 0.876 | 43 / 50 |
-| **Oxi** (2026-07-20) | **0.807** | 38 / 50 |
+| **Oxi** (2026-07-29) | **0.825** | **48 / 50** |
 | SILURUS @silurus/ooxml 0.72.2 | 0.776 | 35 / 50 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.739 | 33 / 50 |
+| BetterOffice @betteroffice/docx 0.0.4 | 0.734 | 25 / 50 |
 
-Oxi is ahead of SILURUS — the closest architectural peer, also a Rust + WebAssembly canvas renderer — on **32 of the 50** documents, and behind the two mature native suites (ahead of LibreOffice on 12, of ONLYOFFICE on 12). This is first-sight generalization on wild English documents, published as-is: **the gap is the current English work queue**, and the set is re-measured as the engine improves rather than being fixed against.
+**Oxi places the page breaks better than any engine measured — 48 of the 50 documents match Word's page count, against ONLYOFFICE's 41 and LibreOffice's 43 — while still losing on within-page pixel placement.** That split is the honest state of the English work: pagination is ahead, the remaining gap is where the ink lands inside each page. On SSIM Oxi is ahead of SILURUS — the closest architectural peer, also a Rust + WebAssembly canvas renderer — on **36 of the 50** documents, and behind the two mature native suites (ahead of LibreOffice on 13, of ONLYOFFICE on 12). This is first-sight generalization on wild English documents, published as-is, and the set is re-measured as the engine improves rather than being fixed against: **0.800** at its first measurement (2026-07-19), **0.807** on 2026-07-20, **0.825** now, with the page-count match moving 38 → 48 over the same period.
 
 ### Japanese blind set — 50 never-seen documents
 
 | Engine | mean SSIM vs Word (per doc) | page count matches Word |
 |--------|-----------------------------|-------------------------|
-| **Oxi** (2026-07-21) | **0.828** | 44 / 50 |
+| **Oxi** (2026-07-29) | **0.828** | 44 / 50 |
 | LibreOffice 26.2.1.2 | 0.816 | 41 / 50 |
 | SILURUS @silurus/ooxml 0.72.2 | 0.804 | 32 / 50 |
 | ONLYOFFICE 9.3.1.8 | 0.772 | 38 / 50 |
+| BetterOffice @betteroffice/docx 0.0.4 | 0.766 | 29 / 49 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.744 | 36 / 50 |
 
-At its first measurement Oxi leads all three on the same documents — ahead of LibreOffice on 33 of 50, of SILURUS on 33, of ONLYOFFICE on 40. Pagination on the same set: **41 of the 48 measurable documents place every paragraph on Word's page** (mean per-paragraph page-match score 0.883; 2 of the 50 are poster-style files whose text lives entirely inside images and text boxes, so no paragraph can be matched at all and they are excluded rather than counted as passes).
+Oxi is top of the table on the same documents — ahead of SILURUS on 33 of 50, of ONLYOFFICE on 40, of BetterOffice on 38 of the 49 both engines open (BetterOffice's parser rejects `nextColumn`, a standard OOXML section-start type), of eigenpal on 43. **One honest qualifier: the lead over LibreOffice is not resolvable at this sample size.** The paired difference is +0.012 with a standard error of 0.011 (|t| = 1.2) — at n = 50 anything under roughly ±0.02 is inside the noise, so Oxi and LibreOffice should be read as tied in Japanese. Every other gap in both tables is separable (|t| = 2.6 to 8.1). Pagination on the same set: **41 of the 48 measurable documents place every paragraph on Word's page** (mean per-paragraph page-match score 0.883; 2 of the 50 are poster-style files whose text lives entirely inside images and text boxes, so no paragraph can be matched at all and they are excluded rather than counted as passes). ★Re-measured on 2026-07-29 against the same frozen ground truth: the pagination result is **identical on every one of the 50 documents** (no page assignment moved at all), and the SSIM mean moved by +0.0001 — 9 documents shifted slightly, 7 up and 2 down. The English fixes shipped since are scoped to non-CJK documents, and this re-measurement is the check that proves it rather than assuming it.
 
-Two honest caveats about the two tables together: (1) the English and Japanese sets are different documents, so the numbers are not directly comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes last in Japanese), which is exactly why blind sets per language exist.
+Two honest caveats about the two tables together: (1) the English and Japanese sets are different documents, so the numbers are not directly comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes second-to-last in Japanese), which is exactly why blind sets per language exist.
 
 ![Word vs Oxi vs LibreOffice vs @silurus/ooxml — same page, same ground truth](docs/img/vert-3way.png)
 
@@ -165,7 +169,7 @@ Most Word-compatible renderers treat Japanese layout as an afterthought. For Oxi
 
 **Oxi's unique combination:** OSS (MPL-2.0 core + permissive bindings — embeddable in proprietary products, unlike AGPL) + Rust/WASM client-side + a format-agnostic IR (no proprietary "Oxi format") + externally-gated Word fidelity + zero server cost. No other project occupies this intersection.
 
-The comparative claims are measured, not asserted — see the blind-set tables above, where ONLYOFFICE and LibreOffice currently beat Oxi in English.
+The comparative claims are measured, not asserted — see the blind-set tables above, where ONLYOFFICE and LibreOffice currently beat Oxi on English pixel similarity (Oxi leads both on English page-count accuracy).
 
 LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). Microsoft Word inverts that. Oxi's IR is format-agnostic from the start — neither format owns it, so neither degrades on round-trip.
 
@@ -298,7 +302,7 @@ Oxi treats every document as untrusted input. A hostile file can render wrong �
 ## Roadmap
 
 - **v1 — Foundation (current):** Word-compatible .docx rendering; the measurement loop (dev gates + rotating blind benchmarks); .xlsx/.pptx/PDF parsing and basic rendering; round-trip editing; WASM + Canvas editor
-- **v1.x — Word parity:** close the English blind-set gap (0.807 → ahead of the mature suites), lift the Japanese blind set toward 0.9+, IME (Japanese/CJK input) and editor polish, .xlsx/.pptx layout engines
+- **v1.x — Word parity:** close the English blind-set gap (0.825 → ahead of the mature suites; page counts already lead, the residual is within-page pixel placement), lift the Japanese blind set toward 0.9+, IME (Japanese/CJK input) and editor polish, .xlsx/.pptx layout engines
 - **v2 — Format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level
 
 The measurement loop (deterministic reference output, falsifiable hypotheses, external merge gate, blind holdout) transfers to ODF once the v2 baseline lands — only the reference renderer changes.
