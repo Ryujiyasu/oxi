@@ -17202,6 +17202,82 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             } else {
                                 next_pos
                             };
+                            // S1044 (2026-07-30, default ON, opt-out OXI_S1044_DISABLE):
+                            // a LEFT tab whose
+                            // resolved stop lies BEYOND the line's right boundary does
+                            // not fit — Word breaks the line AT that tab and re-resolves
+                            // it from the next line's start. Oxi placed every left tab
+                            // unconditionally (S883 clamps only RIGHT tabs), so trailing
+                            // tabs never wrapped and a whole line went missing.
+                            // ★DERIVED (tab_overflow_probe, Word PDF, 10 arms; tabs paint
+                            // a 3pt space glyph at their START so the landing of each tab
+                            // is readable): 70-underscore arms end at 527.41 with the
+                            // boundary at 540 and a 36pt default grid — 1 tab → the tab
+                            // itself wraps (its stop 540 is placeable but the following
+                            // text no longer fits, so the greedy break lands on the tab);
+                            // 2 tabs → tab1 stays at 540 and tab2 (stop 576 > 540) wraps,
+                            // landing at 108 on line 2; 4 tabs → tabs 2-4 land at
+                            // 108/144/180. Identical for jc=left/both and with the target's
+                            // pBdr. forms__002a64445e58ed78 para 26 (4 trailing tabs,
+                            // text ending 522.7) reproduces exactly: tab1 → 540, tab2 →
+                            // 576 overflows → line 2 holds only tab whitespace at x0=72,
+                            // which is the 12pt line Word renders at bl=449.590 and Oxi
+                            // omitted (the paragraph's −13.816pt junction error).
+                            // ★A tab always ADVANCES TO AT LEAST THE BOUNDARY; it wraps
+                            // only when it cannot advance at all, i.e. the line is
+                            // already AT the boundary. Measured discriminator (both
+                            // sides Word truth):
+                            //   target para 26        cw 468.00 == avail 468.00, stop 504 → WRAP
+                            //   forms__00042714       cw 529.20 <  avail 558.00, stop 562.50
+                            //                         → Word CLAMPS (its line ends at
+                            //                           571.61 ≈ the 571.5 boundary), no wrap
+                            // and every probe arm agrees: L2/L4/E4 wrap because tab1 already
+                            // landed exactly ON the boundary, while S1/S4 (room left) and L1
+                            // (room left) do not wrap AT THE TAB. Without the at-boundary
+                            // guard the rule fires on a tab that still has room and costs
+                            // forms__00042714 its PASS (+1 page).
+                            // Latin scope, like the sibling tab rules S881/S883/S885/TABTW.
+                            let mut next_pos = next_pos;
+                            let mut next_relative = next_relative;
+                            let mut tab_align = tab_align;
+                            if std::env::var("OXI_S1044_DISABLE").is_err()
+                                && !self.doc_body_has_real_cjk
+                                && !s883_nowrap
+                                && tab_align == TabStopAlignment::Left
+                                && !current_line.fragments.is_empty()
+                                && next_relative > available_tw as f32 / 20.0 + 0.01
+                                && current_width >= available_tw as f32 / 20.0 - 0.01
+                            {
+                                if std::env::var("OXI_DBG1044").is_ok() {
+                                    let head: String = current_line.fragments.iter()
+                                        .map(|f| f.text.as_str()).collect::<String>()
+                                        .chars().take(40).collect();
+                                    eprintln!("[S1044] cw={:.2} next_rel={:.2} avail={:.2} \
+indent_l={:.2} fli={:.2} stops={} | {:?}",
+                                        current_width, next_relative,
+                                        available_tw as f32 / 20.0, indent_left,
+                                        first_line_indent, para_style.tab_stops.len(), head);
+                                }
+                                lines.push(std::mem::take(&mut current_line));
+                                current_width = 0.0; current_width_tw = 0; current_capw_tw = 0; latin_space_credit_tw = 0; right_tab_slack_tw = 0; center_tab_stop_tw = None; compress_used = false;
+                                rc_prev_tab = None;
+                                // Re-resolve from the fresh line start (current_width 0).
+                                // The S881 implied hanging stop is line-1 only and its
+                                // `indent_left > abs_pos` guard excludes it here.
+                                let abs2 = line_start_abs;
+                                let (np, ta) = match para_style.tab_stops.iter()
+                                    .find(|ts| ts.position > abs2 + 0.01)
+                                {
+                                    Some(ts) => (ts.position, ts.alignment),
+                                    None => {
+                                        let t = self.default_tab_stop;
+                                        (((abs2 / t).floor() + 1.0) * t, TabStopAlignment::Left)
+                                    }
+                                };
+                                next_pos = np;
+                                tab_align = ta;
+                                next_relative = np - line_start_abs;
+                            }
                             let w = (next_relative - current_width).max(char_width);
                             current_line.fragments.push(LineFragment {
                                 text: TAB_STRING.to_owned(),
