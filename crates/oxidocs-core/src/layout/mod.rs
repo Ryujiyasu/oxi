@@ -5384,8 +5384,23 @@ impl LayoutEngine {
                             };
                             let follower_orphans =
                                 s914 && (one_line_h + line_h_next) > (remaining - this_h - s934_gap);
-                            let follower_moves_wholly = next_para.style.widow_control
-                                && (next_lines <= 3 || follower_orphans);
+                            // S1039 (2026-07-29, opt-out OXI_S1039_DISABLE): a follower
+                            // that declares <w:keepLines/> cannot be split at all, so it
+                            // ALWAYS moves wholly - the keepNext heading above it must
+                            // follow. S635 derived "moves wholly" from widowControl only
+                            // (its ailitguide specimen had no keepLines), so a keepLines
+                            // follower with widowControl=0 read as splittable and the
+                            // heading was stranded at the page bottom. This is the mirror
+                            // of S1023, which stopped S916/S978 from SPLITTING a keepLines
+                            // paragraph; here the same cohesion is applied to the pair
+                            // decision. policies__0021ede1's "7 Research data" /
+                            // "8 Metadata and documentation" headings (keepNext+keepLines,
+                            // widowControl=0) head keepLines FirstLevel clauses: Word
+                            // pushes heading+clause together, Oxi left the heading behind.
+                            let follower_moves_wholly = (next_para.style.widow_control
+                                && (next_lines <= 3 || follower_orphans))
+                                || (next_para.style.keep_lines
+                                    && std::env::var("OXI_S1039_DISABLE").is_err());
                             // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
                             // when the follower is ITSELF keepNext (H1→H2), the keep unit
                             // extends transitively to H2's follower (Word keeps the whole
@@ -5920,6 +5935,49 @@ impl LayoutEngine {
                                 let current_splits =
                                     cursor.cursor_y + this_h + e > start_y + content_height + 0.5;
                                 let both_fit_fresh = this_h + e <= content_height + 0.5;
+                                // S1038 (2026-07-29, opt-out OXI_S1038_DISABLE):
+                                // keepNext with a TABLE follower means the heading must
+                                // sit with the table's FIRST ROW - not with the whole
+                                // table (S1024's whole-move, which needs the table to fit
+                                // one fresh page). policies__0021ede1's "6 Definitions"
+                                // heads a 13-row definition table whose first row is
+                                // ~210pt; Word leaves ~86pt of p2 empty and pushes the
+                                // heading, because the row cannot follow it. Oxi kept the
+                                // heading and started the table on the next page - a plain
+                                // keepNext violation that no pairwise check sees, since
+                                // the "follower" it measured was the whole table.
+                                // Row height from the same throwaway probe (never an
+                                // estimate: S970's estimate_table_row_natural_h is 4x off).
+                                let first_row_h = if std::env::var("OXI_S1038_DISABLE").is_ok()
+                                    || self.doc_body_has_real_cjk
+                                    || next_table.rows.is_empty()
+                                {
+                                    0.0
+                                } else {
+                                    let mut one = next_table.clone();
+                                    one.rows.truncate(1);
+                                    let mut rp: Vec<LayoutPage> = Vec::new();
+                                    let mut re: Vec<LayoutElement> = Vec::new();
+                                    let mut rc = LayoutCursor::new(start_y);
+                                    let rels = self.layout_table(
+                                        &one, start_x, &mut rc, content_width,
+                                        grid_pitch, page.grid_char_pitch, page.grid_char_cw_ratio,
+                                        start_y, content_height, page.size.width, page.size.height,
+                                        &mut rp, &mut re,
+                                        Some(block_idx + 1), page, false, None, None, 0.0, 0.0, false);
+                                    if rp.is_empty() {
+                                        rels.iter().chain(re.iter())
+                                            .map(|el| el.y + el.height)
+                                            .fold(start_y, f32::max) - start_y
+                                    } else { 0.0 }
+                                };
+                                let s1038_row_orphan = std::env::var("OXI_S1038_DISABLE").is_err()
+                                    && !self.doc_body_has_real_cjk
+                                    && !fresh_one_page
+                                    && this_h <= remaining
+                                    && first_row_h > 0.0
+                                    && this_h + first_row_h > remaining + 0.5
+                                    && this_h + first_row_h <= content_height + 0.5;
                                 if std::env::var("OXI_DBG_KN635").is_ok() {
                                     let t: String = para.runs.iter()
                                         .flat_map(|r| r.text.chars()).take(16).collect();
@@ -5928,9 +5986,12 @@ impl LayoutEngine {
                                         next_table.rows.len().saturating_sub(1), fresh_one_page,
                                         current_splits, both_fit_fresh,
                                         row_chain && fresh_one_page && current_splits && both_fit_fresh && this_h <= remaining);
+                                    eprintln!("[KN635-TBL2] first_row_h={:.1} s1038={}",
+                                        first_row_h, s1038_row_orphan);
                                 }
-                                if row_chain && fresh_one_page && current_splits && both_fit_fresh
-                                    && this_h <= remaining
+                                if (row_chain && fresh_one_page && current_splits && both_fit_fresh
+                                    && this_h <= remaining)
+                                    || s1038_row_orphan
                                 {
                                     // Same S963b transitive back-pull + push as the image
                                     // arm (the push is follower-agnostic).
