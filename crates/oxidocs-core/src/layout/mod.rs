@@ -20378,6 +20378,76 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // which under-places LARGE CJK glyphs. See the grid branch.
         doc_grid_no_type: bool,
     ) -> f32 {
+        // S1047 (2026-07-30, default ON, opt-out OXI_S1047_DISABLE, tune
+        // OXI_S1047_COMP): a LATIN auto/single-spaced line places its glyph
+        // BASELINE at `box_top + A×fs`, where A is the ascent part of whichever
+        // metric set gives the taller line (tie ⇒ the win set, which carries no
+        // lineGap) — the same "taller set wins" choice `natural_line_height_hhea`
+        // already makes for the line HEIGHT (S950). DERIVED from a 180-arm Word
+        // probe (font {TNR, Arial, Calibri, Cambria, Georgia} × size {8,10,11,12,
+        // 14,18} × auto factor {1.0, 1.15, 1.5} × regime {no docGrid, no-type
+        // docGrid}, one uniquely-labelled line per page, Word PDF span origins):
+        //   * REGIME-invariant: 90/90 font/size/factor triples differ by 0.0000pt
+        //     between true LM0 and no-type docGrid ⇒ ONE law covers both.
+        //   * FACTOR-invariant: max span over the 3 factors is 0.1201pt = exactly
+        //     one 600-DPI device quantum ⇒ the baseline does NOT move with the
+        //     line-spacing multiplier (the extra leading goes BELOW it).
+        //   * `hhea_ascent + lineGap` alone: MAE 0.070 but Calibri is
+        //     systematically +0.15..+0.25 too LOW (it is the only probe font with
+        //     win ≠ hhea and a large gap). The taller-set rule removes that: MAE
+        //     0.045 / max 0.161pt / 170 of 180 arms within one quantum, and no
+        //     per-font bias (every font's mean within ±0.05pt) — so this is a
+        //     unified law, not a per-font carve-out.
+        // The DWrite/GDI renderers draw `baseline = box + text_y_off − 1.0 + A×fs`
+        // with exactly this A (verified against the probe's own layout+glyph dumps:
+        // 0 of 180 arms mismatch, max residual 0.0005pt) ⇒ the Word law is reached
+        // with the CONSTANT text_y_off = 1.0, which simply cancels the renderer's
+        // −1.0 origin shift. This supersedes three approximations of the same
+        // quantity: S695's frozen ×1.15 centering reference (a factor-invariance
+        // approximation that only matched Calibri 11pt), S670's
+        // `fs×(1−win_ascent)` large-title offset, and the LM0 GDI-cell centering
+        // (which grows with the line height: the probe's true-LM0 arms currently
+        // range 0.0 … 14.0pt where the law wants 1.0).
+        // Render-only (text_y_off) → element.y / pagination byte-identical.
+        // SCOPE: LATIN DOCUMENTS (`!doc_body_has_real_cjk`) — the probe measured
+        // Latin documents only, and an all-Latin LINE inside a Japanese document
+        // (a URL, a year) sits in the CJK vertical stack whose placement is
+        // separately calibrated (S455/S457/S459/S614/S629); applying the law there
+        // would extrapolate past the measurement. Same document-level gate as the
+        // sibling Latin rules S1044/S1045/S1046 ⇒ the JP corpus and every CJK
+        // word_png doc are byte-identical BY CONSTRUCTION.
+        // Also: all-Latin lines (a CJK 83/64 fragment keeps S455/S457/S459/S614),
+        // auto/None line rule (exact/atLeast bottom-align via S495/S504), body flow
+        // (not shape/textbox), no-type docGrid or no grid at all (a TYPED grid snaps
+        // to whole cells and DOES centre the natural cell — verify_lm2_multicell),
+        // and NOT a Symbol-bullet line (S689/S821 grow line 0 for the marker and
+        // their placement is separately calibrated), and NOT a pPrDefault
+        // textAlignment=baseline/top document (S459's own law).
+        if std::env::var("OXI_S1047_DISABLE").is_err()
+            && !self.doc_body_has_real_cjk
+            && !in_shape_context
+            && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
+            && !para_style.list_marker.as_deref()
+                .map_or(false, |m| m.contains('\u{F0B7}'))
+            && !(matches!(para_style.text_alignment.as_deref(), Some("baseline") | Some("top"))
+                && para_style.text_alignment_from_pprdefault)
+            && (doc_grid_no_type
+                || !(grid_pitch.map_or(false, |p| p > 0.0) && para_style.snap_to_grid))
+        {
+            let all_latin = if !line.fragments.is_empty() {
+                line.fragments.iter().all(|f| {
+                    !self.metrics_for_text(&f.text, &f.style, para_style)
+                        .is_cjk_83_64_font()
+                })
+            } else {
+                let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                !self.metrics_for_para_mark(&rpr_ref, para_style).is_cjk_83_64_font()
+            };
+            if all_latin {
+                return std::env::var("OXI_S1047_COMP")
+                    .ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+            }
+        }
         // S670 (2026-06-25, default ON, opt-out OXI_S670_DISABLE): LATIN analog of S614.
         // A no-type docGrid LARGE LATIN title/heading (gen2_054 "Audit Report"
         // Cambria 26pt) is placed at its line-box top (text_y_off≈0) where Word
