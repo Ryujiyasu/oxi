@@ -15235,7 +15235,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // is per-doc inconsistent (the gen2 drift is fragmented), so the title fix
                 // can only ship together with the body line-height fix. Kept gated for
                 // when that lands. Default OFF = byte-identical baseline.
-                let pbdr_full = std::env::var("OXI_S467_PBDR_ENABLE").is_ok();
+                // S1048 (2026-07-30, default ON for LATIN documents, opt-out
+                // OXI_S1048_DISABLE; OXI_S467_PBDR_ENABLE still forces it everywhere):
+                // the full width IS Word's rule, now measured font- and size-independently
+                // on a 76-arm controlled probe (26/11/12/13/14pt × Calibri/TNR × border
+                // sz 8/16 × space 0/4 × after 0..30 × follower before 0/24 × shading):
+                // Word's paired bottom-border increment is +0.9600 (sz8 space0),
+                // +5.0400 (sz8 space4) and +6.0000 (sz16 space4) = **space + FULL width**
+                // (half would be 0.500 / 4.500 / 5.000 — refuted at every arm). Over all
+                // 76 arms the residual vs Word is MAE 0.305 / max 1.088 with bw/2 and
+                // MAE 0.071 / max 0.196 with bw. Paragraph shading contributes 0.0000pt
+                // (drawn only, no advance) and the spacing max-collapse slope already
+                // matches Word, so the border width was the sole deficit.
+                // ★The S467 note above concluded "NOT separable by language" — that was
+                // measured against the CACHED word_png refs. Against the FRESH refs
+                // (pipeline_data/word_png_new, regenerated 2026-06-27) the NET separates
+                // cleanly: LATIN 49 docs net +0.4237 in favour of the full width (32 up /
+                // 16 down), CJK 46 docs net −0.2847 against it (18 up / 28 down). Per-DOC
+                // it is still mixed inside each language (gen2_054 EN stays down 0.049),
+                // so the honest claim is that the NET is language-separable, not every doc.
+                // Latin scope also matches the sibling S903 (whose own note keeps the JP
+                // 3a4f 6-box stack on its calibration).
+                let pbdr_full = std::env::var("OXI_S467_PBDR_ENABLE").is_ok()
+                    || (!self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1048_DISABLE").is_err());
                 // S903: an INTERIOR paragraph of a merged identical-pBdr group
                 // reserves NO bottom overhead (Word: pure line pitch between
                 // merged boxes; the space+bw belongs to the group's LAST para).
