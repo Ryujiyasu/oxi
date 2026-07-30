@@ -17444,6 +17444,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     let em_part = char_width - cs;
                                     latin_space_credit_tw +=
                                         pt_to_tw(em_part * 0.25 + cs.max(0.0) * 0.24);
+                                } else if self.compat_mode_explicit
+                                    && self.compat_mode <= 14
+                                    && std::env::var("OXI_S1046_DISABLE").is_err()
+                                {
+                                    // S1046 (2026-07-30, default ON, opt-out
+                                    // OXI_S1046_DISABLE): a doc that EXPLICITLY declares
+                                    // a LEGACY compatibilityMode (<=14) and uses a
+                                    // PROPORTIONAL font gets ~ZERO justify-shrink
+                                    // allowance — the same as the settings-without-compat
+                                    // class below. Such a doc previously fell through to
+                                    // the S933 fs/4 arm, whose flat fs/4 was measured on
+                                    // NO-SETTINGS hosts (the S825 booster-hunt probes had
+                                    // no settings.xml at all); compat<=14-explicit was
+                                    // never derived and only borrowed that value.
+                                    // ★DERIVED on the real-doc population
+                                    // (administrative__0021fbead5c6467d — a compat14
+                                    // A4 justified TNR-12 report, 163 body lines):
+                                    // comparing Oxi's line BREAKS to Word's PDF lines,
+                                    //   fs/4 credit  ->  15 / 163 lines identical
+                                    //   zero credit  -> 158 / 163 lines identical
+                                    // and the line counts become [47,47,48,21] = Word
+                                    // EXACTLY on all four pages. Traced boundary
+                                    // (OXI_DBGFLUSH): «...Brussels on 28 | &» needs
+                                    // 8169+187 = 8356 tw against avail 8300, and the
+                                    // fs/4 credit of 60tw (3.0pt) wrongly absorbed the
+                                    // 56tw overflow that Word wraps.
+                                    // MONOSPACE compat14 keeps the C14JUST capacity rule
+                                    // (that arm is earlier in this chain); compat>=15
+                                    // keeps the S825 quarter-space.
+                                    // credit: none.
                                 } else if self.settings_part_exists
                                     && !self.compat_mode_explicit
                                     && std::env::var("OXI_S933_DISABLE").is_err()
