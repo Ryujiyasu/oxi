@@ -11825,7 +11825,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, s949_ascii);
                     ma = m.word_ascent_pt(font_size); md = m.word_descent_pt(font_size);
                 } else {
-                    for frag in &first_line.fragments {
+                    // S1045: skip an OVERSIZED EDGE whitespace-only fragment — it does
+                    // not drive the height (Word A/B: baselines invariant at +0.000pt).
+                    // forms__002a64445e58ed78 para 11: 75 leading spaces at 9pt over 8pt
+                    // visible text made this basis 15.524 instead of 13.799 (+1.725).
+                    let s1045 = self.s1045_height_drivers(&first_line.fragments, para_font_size);
+                    for (fi, frag) in first_line.fragments.iter().enumerate() {
+                        if Self::s1045_skip(s1045, fi, frag, para_font_size) {
+                            continue;
+                        }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
                         if m.word_ascent_pt(fs) > ma { ma = m.word_ascent_pt(fs); }
@@ -11836,8 +11844,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     // COM-confirmed (2026-04-07): Latin text on a line causes Word to also
                     // consider the ASCII font's CJK 83/64 height for the base.
+                    // S1045: take the first fragment that DRIVES the height, so a skipped
+                    // leading space run does not stand in for the visible text here.
                     if has_latin {
-                        if let Some(frag) = first_line.fragments.first() {
+                        if let Some(frag) = first_line.fragments.iter().enumerate()
+                            .find(|(fi, f)| !Self::s1045_skip(s1045, *fi, f, para_font_size))
+                            .map(|(_, f)| f)
+                        {
                             let fs = frag.style.font_size.unwrap_or(para_font_size);
                             let latin_m = self.metrics_for(&frag.style, &para.style);
                             if latin_m.is_cjk_83_64_font() {
@@ -13915,7 +13928,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // COM-confirmed: empty lines use paragraph font (East Asian in CJK docs)
                 self.metrics_for_para_mark(&RunStyle::default(), &para.style).word_ascent_pt(para_font_size)
             } else {
-                line.fragments.iter().map(|f| {
+                // S1045: an oversized edge whitespace-only fragment must not lower the
+                // visible baseline either (para 18's 11pt trailing spaces pushed line 2's
+                // baseline down; Word keeps the 9pt visible pitch, 10.320pt measured).
+                let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                line.fragments.iter().enumerate()
+                    .filter(|(fi, f)| !Self::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .map(|(_, f)| {
                     let fs = f.style.font_size.unwrap_or(para_font_size);
                     let a = self.metrics_for_text(&f.text, &f.style, &para.style).word_ascent_pt(fs);
                     // S655: a w:position-raised run extends the line ascent so the
@@ -19407,6 +19426,65 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// Oxi rejects lines whose grid-pitch bottom exceeds pgBot by even a
     /// few points (db9ca18 +2pt), while Word fits them (db9ca18 i=37
     /// extends 5.25pt past pgBot in Word).
+    /// S1045 (2026-07-30, default ON, opt-out OXI_S1045_DISABLE): an OVERSIZED
+    /// EDGE whitespace-only fragment does NOT drive a line's height. Word sizes
+    /// a line by its VISIBLE glyphs; a leading or trailing space-only run whose
+    /// font is larger than every visible run on the line is collapsed at the
+    /// line edge and contributes no height.
+    /// ★DERIVED (Word A/B, 4 arms of the target's exact context —
+    /// `edge_ws_{00_control,10_leading,01_trailing,11_both}.docx`): changing
+    /// such a run's size leaves EVERY Word baseline unchanged at **+0.000pt**
+    /// on all 5 landmarks (only the line's ink TOP moves, a width/box effect).
+    /// The trailing case is additionally proven directly on the target:
+    /// para 18's two visible baselines are 318.050 → 328.370 = **10.320pt** =
+    /// the 9pt TNR pitch, NOT the 11pt of its 3 trailing spaces.
+    /// forms__002a64445e58ed78 had two such fragments — para 11's 75 leading
+    /// spaces at 9pt over 8pt visible text (fold 15.524 vs the correct 13.799 =
+    /// +1.725) and para 18's 3 trailing spaces at 11pt over 9pt visible text
+    /// (12.649 vs 10.349 = +2.300) — together the +4.024pt phase error that ran
+    /// through the whole page.
+    /// SCOPE (the report's safe first-ship shape): Latin document, an
+    /// ASCII-space-only fragment OUTSIDE the visible-fragment bounds whose font
+    /// size is strictly LARGER than the line's visible maximum. A same-or-
+    /// smaller edge space cannot raise a max() fold anyway, so requiring
+    /// "oversized" keeps every ordinary trailing space byte-identical (it also
+    /// keeps the one non-max consumer — the Latin CJK-83/64 `.first()` check in
+    /// the cumulative basis — from moving in the ordinary case).
+    /// Generalizes S1015 (which required the space to be WHITE and ≥2× as big).
+    /// Tabs keep S1019 semantics; whitespace-only LINES keep S902/¶-mark
+    /// semantics; NBSP/U+3000 are not affected.
+    fn s1045_height_drivers(&self, fragments: &[LineFragment], para_font_size: f32)
+        -> Option<(usize, usize, f32)>
+    {
+        if self.doc_body_has_real_cjk || std::env::var("OXI_S1045_DISABLE").is_ok() {
+            return None;
+        }
+        let visible = |f: &LineFragment| {
+            !f.text.is_empty() && !f.text.chars().all(|c| c == ' ') && f.tab_alignment.is_none()
+        };
+        let first = fragments.iter().position(|f| visible(f))?;
+        let last = fragments.iter().rposition(|f| visible(f))?;
+        let vis_max_fs = fragments[first..=last].iter().filter(|f| visible(f))
+            .map(|f| f.style.font_size.unwrap_or(para_font_size))
+            .fold(0.0f32, f32::max);
+        Some((first, last, vis_max_fs))
+    }
+
+    /// True when fragment `i` must be excluded from a line-height fold under
+    /// S1045 (see `s1045_height_drivers`).
+    fn s1045_skip(bounds: Option<(usize, usize, f32)>, i: usize, frag: &LineFragment,
+                  para_font_size: f32) -> bool {
+        match bounds {
+            Some((first, last, vis_max_fs)) => {
+                (i < first || i > last)
+                    && !frag.text.is_empty()
+                    && frag.text.chars().all(|c| c == ' ')
+                    && frag.style.font_size.unwrap_or(para_font_size) > vis_max_fs + 0.01
+            }
+            None => false,
+        }
+    }
+
     /// S656 (2026-06-24): line-height growth (pt) for a fragment's emphasis
     /// mark (圏点, `w:em`). Marks sit ABOVE the char (dot/comma/circle →
     /// positive = grow ascent) or BELOW (underDot → negative = grow descent).
@@ -19668,12 +19746,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && !f.text.is_empty()
                     && !f.text.chars().all(|c| c == ' ' || c == '\t')
             });
+            // S1045: an OVERSIZED EDGE whitespace-only fragment does not drive the
+            // height (Word A/B: every baseline invariant at +0.000pt). Generalizes
+            // S1015 to both edges and to any colour.
+            let s1045 = self.s1045_height_drivers(&line.fragments, para_font_size);
             for (s1015_fi, frag) in line.fragments.iter().enumerate() {
                 if s1019_has_visible
                     && (frag.tab_alignment.is_some()
                         || frag.text == TAB_STRING
                         || frag.text.is_empty())
                 {
+                    continue;
+                }
+                if Self::s1045_skip(s1045, s1015_fi, frag, para_font_size) {
                     continue;
                 }
                 if let Some(lv) = s1015_last_vis {
