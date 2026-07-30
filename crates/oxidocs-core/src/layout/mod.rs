@@ -9291,9 +9291,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // (framework/risk/nyserda ink-free headers) have ZERO pBdr, so this
             // is byte-identical for them. Gated with the rest of S1014.
             let s1014_ink = std::env::var("OXI_S1014_DISABLE").is_err();
+            // S1050 (2026-07-31, opt-out OXI_S1050_DISABLE): a header paragraph
+            // that HOSTS A WATERMARK is visible ink. Its runs carry no text (the
+            // VML `v:textpath` string is lifted into `Page.watermark`), so the
+            // predicate above returned false and `header_bottom` collapsed to 0
+            // → the body started at the top margin on EVERY page.
+            // Word's rule for this shape (7-arm controlled edit of the target,
+            // cached-Word-PDF readout): `body_top = max(page top margin,
+            // header_distance + the HOST PARAGRAPH's line height)` — it reserves
+            // the host LINE, not the 99.25pt shape:
+            //   original (top 36 / header 36)      body 50.1  = 36 + 13.44
+            //   `w:pict` deleted, paragraph kept   body 36.7  ⇒ an empty header
+            //                                                   para reserves 0
+            //   header 18 / 30 / 48                36.7 / 44.1 / 62.2
+            //                                      = max(36, header + 13.44)
+            //   paragraph mark forced to 1pt       37.9 ⇒ it IS the mark's line
+            // A producer A/B (a zero-width U+200B added to the host, routing it
+            // through the existing text arm) moves Oxi's first black raster row
+            // 84→112 / 81→109 = exactly Word's, so every downstream geometry the
+            // fix needs already exists — only this classification was missing.
+            // SCOPE: `page.watermark.is_some()` AND a positioned VML shape in the
+            // same header blocks. A blanket `p.shapes` gate is refused (census:
+            // header VML shapes exist in golden 1 / real_en 11 / JP 1 docs, most
+            // of them non-watermark drawings).
+            let s1050_ink = std::env::var("OXI_S1050_DISABLE").is_err()
+                && page.watermark.is_some();
             let s843_has_ink = blocks.iter().any(|b| match b {
                 Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty())
-                    || (s1014_ink && p.style.borders.is_some()),
+                    || (s1014_ink && p.style.borders.is_some())
+                    || (s1050_ink
+                        && p.shapes.iter().any(|s| s.is_vml && s.position.is_some())),
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
