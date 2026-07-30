@@ -223,6 +223,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <div class="wrap">
       <h2>再現度は「主張」ではなく「実測」</h2>
       <p class="sub">ここに並ぶ数値はすべて、リポジトリで公開している測定パイプラインで誰でも再現できます。</p>
+      <p><strong>技術記事:</strong> <a href="../articles/word-pagination-gdi-rounding.ja.html">Wordの改ページ位置は、GDIの整数丸めで決まっている</a> — Wordの量子化規則を実測し、Rustで再現した方法。</p>
       <h3>英語ブラインドセット — 初見の 50 文書</h3>
       <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から凍結した<strong>ブラインドベンチマーク 50 文書</strong>。修正対象には一切使わないので、出てくる数字はすべて「初見の実力」で、テストに合わせた調整が入り込む余地がありません。<strong>2026-07-29</strong> の再測定で文書平均 <strong>Oxi 0.825</strong>（初回測定 2026-07-19 は 0.800、2026-07-20 は 0.807）。さらに <strong>Word とのページ数一致が 50 文書中 48 と、測定した 6 エンジン中で最多</strong>になりました（ONLYOFFICE 41、LibreOffice 43）。ピクセル一致では ONLYOFFICE（<strong>0.902</strong>）と LibreOffice（<strong>0.876</strong>）にまだ及びませんが、アーキテクチャが最も近い競合 — Rust + WebAssembly で Canvas に描く SILURUS（<strong>0.776</strong>）— は上回っており、50 文書中 36 文書で Oxi が勝っています。残る差が英語側の作業キューで、エンジンの改善に合わせて再測定していきます。比較対象: 正解は Microsoft Word（Microsoft 365 16.0.20131.20154）、ONLYOFFICE 9.3.1.8、LibreOffice 26.2.1.2、SILURUS @silurus/ooxml 0.72.2 — すべて 150 DPI でレンダリング。2026-07-27 には同じ凍結グラウンドトゥルースに対して 5 番目のエンジンを追加: BetterOffice（@betteroffice/docx 0.0.4、2026-07-18 初公開の新しい Rust + WebAssembly エディタスイート）は <strong>0.734</strong> で、50 文書中 45 文書で Oxi 優位。同日に 6 番目のエンジンも追加: eigenpal（@eigenpal/docx-editor-react 1.9.0、ProseMirror ベースで DOM ページを組む Apache-2.0 の WYSIWYG エディタ）は 50 文書すべてを開けて <strong>0.739</strong>。50 文書中 44 文書で Oxi 優位。</p>
 
@@ -1182,7 +1183,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>Word とどれくらい同じ見た目になりますか？</summary>
-        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマーク（各言語 50 文書）で、Word とピクセル単位の SSIM を測定しています。日本語は文書平均 0.828 — 同じ文書での LibreOffice・SILURUS・ONLYOFFICE を上回りました（2026-07-21）。英語は 0.807 — アーキテクチャが最も近い SILURUS を上回り、LibreOffice・ONLYOFFICE にはまだ及びません（2026-07-20、そのまま公開）。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
+        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマーク（各言語 50 文書）で、Word とピクセル単位の SSIM を測定しています。日本語は文書平均 0.828・Word とのページ数一致 44/50。英語は文書平均 0.825・ページ数一致 48/50で、ページ数は測定したエンジン中最多ですが、ピクセル一致では LibreOffice・ONLYOFFICE にまだ及びません（2026-07-29）。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
       </details>
       <details>
         <summary>対応している形式は？</summary>

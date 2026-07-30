@@ -25,4 +25,22 @@
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>
+  <url>
+    <loc>https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.html</loc>
+    <lastmod>2026-07-30</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en" href="https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.html"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.ja.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.html"/>
+  </url>
+  <url>
+    <loc>https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.ja.html</loc>
+    <lastmod>2026-07-30</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en" href="https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.html"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.ja.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://oxi-dd65f4.gitlab.io/articles/word-pagination-gdi-rounding.html"/>
+  </url>
 </urlset>
