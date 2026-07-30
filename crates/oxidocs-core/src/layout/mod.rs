@@ -12001,6 +12001,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // for empties under the S876 !cjk gate. The factor is
                         // applied downstream (basis semantics unchanged).
                         s805_hhea_max
+                    } else if is_multiple_spacing
+                        && !first_line.fragments.is_empty()
+                        && !s902_all_ws
+                        && s805_hhea_max > 0.0
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1049_DISABLE").is_err()
+                    {
+                        // S1049 (2026-07-31): the LM0 MULTIPLE-spacing cumulative basis
+                        // is the exact hhea natural, like its S805 single-spacing sibling
+                        // two arms below — NOT the GDI/win componentwise `run_base`.
+                        // Word's pitch is `hhea_natural(font, size) × (w:line / 240)`
+                        // accumulated exactly and device-snapped only at render.
+                        // DERIVED (6-arm Word probe, no docGrid, line=259 auto, the same
+                        // effective spacing given via docDefaults AND via direct pPr):
+                        //   TNR 12     Word 14.8959  hhea×f 14.8912  Oxi 14.5588
+                        //   Calibri 11 Word 14.4935  hhea×f 14.4908  Oxi 14.5588
+                        //   Cambria 12 Word 15.1853  hhea×f 15.1821  Oxi 15.3824
+                        // hhea explains all three within ±0.005pt; Oxi's error REVERSES
+                        // sign by font (TNR short, Calibri/Cambria long) so no constant
+                        // or ratio can fix it. docDefaults and direct pPr give byte-equal
+                        // Word pitches ⇒ the spacing SOURCE is not a discriminator.
+                        // EMPTY / whitespace-only lines are deliberately excluded: their
+                        // multiple-spacing basis is S910's (held opt-in — default-ON there
+                        // regressed ukframework), so they keep the raw-max arm below.
+                        s805_hhea_max
                     } else if is_multiple_spacing && no_grid_raw_max > 0.0 {
                         run_base.max(no_grid_raw_max)
                     } else if !is_multiple_spacing && s805_hhea_max > 0.0
