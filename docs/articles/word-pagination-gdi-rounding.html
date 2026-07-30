@@ -45,6 +45,12 @@ article{max-width:820px;margin:auto;padding:64px 24px 80px}h1{font-size:clamp(2.
 <h3>Word PDF: render truth</h3>
 <p>COM coordinates can use surprising reference frames in complex tables. I therefore exported each probe with Word&#39;s <code>ExportAsFixedFormat</code> and extracted span baselines, bounding boxes, and page numbers with PyMuPDF. COM is the structural oracle; the PDF is the final render oracle.</p>
 <p>The generator expands font, size, character, body/cell context, and document-grid settings from a manifest. Results are stored as JSON or TSV and joined against the Rust predictions. The width study cited below—13 font/size configurations and 181 characters—is the output of that matrix, not a hand-picked sample.</p>
+<p>The implementation and measurement pipeline are public:</p>
+<ul>
+<li><a href="https://gitlab.com/Ryujiyasu/oxi">Oxi source repository</a></li>
+<li><a href="https://gitlab.com/Ryujiyasu/oxi/-/blob/main/README.md#layout-accuracy-vs-microsoft-word">Benchmark results and methodology</a></li>
+<li><a href="https://gitlab.com/Ryujiyasu/oxi/-/blob/main/docs/layout_accuracy.md">Layout-accuracy notes</a></li>
+</ul>
 <h2>Quantize the font size to ppem first</h2>
 <p>At 96 DPI, the first quantization is:</p>
 <pre><code class="language-text">ppem = round(font_size_pt × 96 / 72)
@@ -192,7 +198,7 @@ tmDescent = 3px
 <h2>96-DPI layout versus 150-DPI evaluation</h2>
 <p>The 96 DPI in these formulas is the compatibility quantization that decides wrapping and pagination. Oxi&#39;s benchmark images are rasterized at 150 DPI. That is an evaluation resolution after layout, not a replacement for 96 in the layout formula.</p>
 <h2>Is <code>f32</code> safe at a rounding boundary?</h2>
-<p>Oxi&#39;s IR and layout coordinates use <code>f32</code>. The 83/64 path is a case where safety is concrete: the coefficient and half-point inputs are dyadic, so even the 8pt-multiple integer boundaries remain exact.</p>
+<p>Oxi&#39;s IR and layout coordinates use <code>f32</code>. The 83/64 path is a case where safety is concrete: for MS Gothic and MS Mincho the metric factor is <code>(winAscent + winDescent) / UPM = 256/256 = 1</code>; that factor, the coefficient, and half-point inputs are all exactly representable. Even the 8pt-multiple integer boundaries therefore remain exact.</p>
 <p>That does not make arbitrary decimal sizes and coefficients safe. Where tie behavior is itself the specification, retaining integer OpenType metrics and using a <code>MulDiv</code>-style operation is stronger. Rust&#39;s <code>f32::round()</code> rounds halfway cases away from zero; if Word uses another rule in a context, the function name and boundary tests must say so.</p>
 <h2>Four rules that survived the implementation</h2>
 <ol>
@@ -201,7 +207,7 @@ tmDescent = 3px
 <li>Treat <code>round</code>, <code>floor</code>, <code>ceil</code>, and half-up as contextual layout rules, not interchangeable approximations.</li>
 <li>When hinting cannot be expressed by a stable formula, use a narrowly scoped, reproducible measurement table.</li>
 </ol>
-<p>As of July 29, 2026, Oxi&#39;s frozen 50-document blind sets score 0.828 SSIM with Word and 44/50 page-count matches in Japanese, and 0.825 with 48/50 page-count matches in English. English page-count fidelity is the highest among the engines measured, although Oxi still trails mature native suites in within-page pixel placement.</p>
+<p>As of July 29, 2026, Oxi&#39;s frozen 50-document blind sets score 0.828 SSIM with Word and 44/50 page-count matches in Japanese, and 0.825 with 48/50 page-count matches in English. In the <a href="https://oxi-dd65f4.gitlab.io/#accuracy">published comparison table</a>, English page-count fidelity is the highest among the six engines measured: Microsoft Word (Microsoft 365 16.0.20131.20154) is the ground truth, and the comparison renders Oxi, ONLYOFFICE 9.3.1.8, LibreOffice 26.2.1.2, SILURUS 0.72.2, BetterOffice 0.0.4, and eigenpal 1.9.0 at 150 DPI. Oxi still trails the mature native suites in within-page pixel placement.</p>
 <p>The English and Japanese sets contain different documents, and page-count equality is a discrete metric while SSIM also measures glyph placement and rasterization. The higher English page-count result alongside lower SSIM is therefore not a contradiction or a direct ranking between languages.</p>
 <p>Eliminate enough integer-pixel errors, and eventually a whole page of error disappears.</p>
 

@@ -30,6 +30,12 @@ COM coordinates can use surprising reference frames in complex tables. I therefo
 
 The generator expands font, size, character, body/cell context, and document-grid settings from a manifest. Results are stored as JSON or TSV and joined against the Rust predictions. The width study cited below—13 font/size configurations and 181 characters—is the output of that matrix, not a hand-picked sample.
 
+The implementation and measurement pipeline are public:
+
+- [Oxi source repository](https://gitlab.com/Ryujiyasu/oxi)
+- [Benchmark results and methodology](https://gitlab.com/Ryujiyasu/oxi/-/blob/main/README.md#layout-accuracy-vs-microsoft-word)
+- [Layout-accuracy notes](https://gitlab.com/Ryujiyasu/oxi/-/blob/main/docs/layout_accuracy.md)
+
 ## Quantize the font size to ppem first
 
 At 96 DPI, the first quantization is:
@@ -231,7 +237,7 @@ The 96 DPI in these formulas is the compatibility quantization that decides wrap
 
 ## Is `f32` safe at a rounding boundary?
 
-Oxi's IR and layout coordinates use `f32`. The 83/64 path is a case where safety is concrete: the coefficient and half-point inputs are dyadic, so even the 8pt-multiple integer boundaries remain exact.
+Oxi's IR and layout coordinates use `f32`. The 83/64 path is a case where safety is concrete: for MS Gothic and MS Mincho the metric factor is `(winAscent + winDescent) / UPM = 256/256 = 1`; that factor, the coefficient, and half-point inputs are all exactly representable. Even the 8pt-multiple integer boundaries therefore remain exact.
 
 That does not make arbitrary decimal sizes and coefficients safe. Where tie behavior is itself the specification, retaining integer OpenType metrics and using a `MulDiv`-style operation is stronger. Rust's `f32::round()` rounds halfway cases away from zero; if Word uses another rule in a context, the function name and boundary tests must say so.
 
@@ -242,7 +248,7 @@ That does not make arbitrary decimal sizes and coefficients safe. Where tie beha
 3. Treat `round`, `floor`, `ceil`, and half-up as contextual layout rules, not interchangeable approximations.
 4. When hinting cannot be expressed by a stable formula, use a narrowly scoped, reproducible measurement table.
 
-As of July 29, 2026, Oxi's frozen 50-document blind sets score 0.828 SSIM with Word and 44/50 page-count matches in Japanese, and 0.825 with 48/50 page-count matches in English. English page-count fidelity is the highest among the engines measured, although Oxi still trails mature native suites in within-page pixel placement.
+As of July 29, 2026, Oxi's frozen 50-document blind sets score 0.828 SSIM with Word and 44/50 page-count matches in Japanese, and 0.825 with 48/50 page-count matches in English. In the [published comparison table](https://oxi-dd65f4.gitlab.io/#accuracy), English page-count fidelity is the highest among the six engines measured: Microsoft Word (Microsoft 365 16.0.20131.20154) is the ground truth, and the comparison renders Oxi, ONLYOFFICE 9.3.1.8, LibreOffice 26.2.1.2, SILURUS 0.72.2, BetterOffice 0.0.4, and eigenpal 1.9.0 at 150 DPI. Oxi still trails the mature native suites in within-page pixel placement.
 
 The English and Japanese sets contain different documents, and page-count equality is a discrete metric while SSIM also measures glyph placement and rasterization. The higher English page-count result alongside lower SSIM is therefore not a contradiction or a direct ranking between languages.
 
