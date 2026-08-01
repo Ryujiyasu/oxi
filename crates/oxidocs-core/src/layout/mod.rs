@@ -21865,8 +21865,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     _ => img_line,
                                 }
                             } else { img_line };
-                            cell_content_h += img_h_eff;
-                            cell_content_h_visual += img_h_eff;
+                            // S1053: a page-relative float reserves nothing.
+                            if !Self::s1053_cell_float_no_reserve(img) {
+                                cell_content_h += img_h_eff;
+                                cell_content_h_visual += img_h_eff;
+                            }
                         }
                         _ => {}
                     }
@@ -25778,7 +25781,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             _ => img_line,
                         }
                     } else { img_line };
-                    content_h += img_h_eff;
+                    // S1053: a page-relative float still DRAWS (the element is
+                    // pushed above) but reserves no flow height.
+                    if !Self::s1053_cell_float_no_reserve(img) {
+                        content_h += img_h_eff;
+                    }
                     prev_cell_sa = None;
                     s939_prev_r = None;
                 }
@@ -28341,6 +28348,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// descent` are all rejected by the same three points. Only images SHORTER
     /// than their host line change, so the S536 calibration on 3a4f's 321.75pt
     /// calendar is untouched.
+    /// S1053 (2026-08-02, default ON, opt-out OXI_S1053_DISABLE): a PAGE-relative
+    /// floating drawing in a table cell reserves NO flow height.
+    ///
+    /// S331b forwards every in-cell `wp:anchor` as a flow `Block::Image` so the
+    /// cell height accounts for it, calling that "a reasonable approximation"
+    /// because a cell anchor is usually wrapTopAndBottom-like. That holds for a
+    /// PARAGRAPH-relative anchor, which has a defined flow position — and every
+    /// in-cell wrapNone anchor in golden (17 docs / 135), docx_corpus/ja (5 / 23)
+    /// and the rest of docx_corpus/en is exactly that, so their calibration
+    /// (tokumei / order / 3a4f / model form family) is untouched.
+    ///
+    /// A `positionV relativeFrom="page"` anchor is by definition detached from
+    /// the flow, so folding its extent into the cell's content height is
+    /// meaningless. Word render-truth (technical__00a54bff p2, PDF vector
+    /// borders): the TLP row's border box is 345.290..595.990 = 250.700pt =
+    /// its `trHeight` 4999tw (249.95) + border, i.e. the 166.4x80.15pt GREEN
+    /// sign contributes NOTHING; Word still draws it inside the row (bbox
+    /// 374.950..455.100). Oxi folded the 80.15pt extent in, making the row
+    /// 311.02pt (+60.3), which pushed the table tail down ~38pt, spilled the two
+    /// trailing empty body paragraphs Word keeps on p2, and produced a phantom
+    /// page (Oxi 5 / Word 4).
+    fn s1053_cell_float_no_reserve(img: &crate::ir::Image) -> bool {
+        std::env::var("OXI_S1053_DISABLE").is_err()
+            && img.position.as_ref().map_or(false, |p| {
+                p.v_relative.as_deref() == Some("page")
+            })
+    }
+
     fn s971_image_line_h(&self, img: &crate::ir::Image, width: f32,
                          grid_pitch: Option<f32>) -> f32 {
         let ext = img.height;
@@ -28535,7 +28570,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 _ => img.height,
                             }
                         } else { img.height };
-                        cell_content_h += img_h_eff;
+                        // S1053 estimate mirror — the three passes (pre-pass,
+                        // placement, this natural-height estimate) must agree or
+                        // the row height diverges from the placed lines
+                        // (the S716/S751 three-pass lesson).
+                        if !Self::s1053_cell_float_no_reserve(img) {
+                            cell_content_h += img_h_eff;
+                        }
                         prev_sa = None;
                     }
                     _ => {}
