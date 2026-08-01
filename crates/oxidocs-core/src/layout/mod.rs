@@ -19618,10 +19618,41 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                   para_font_size: f32) -> bool {
         match bounds {
             Some((first, last, vis_max_fs)) => {
-                (i < first || i > last)
-                    && !frag.text.is_empty()
+                let oversized_ws = !frag.text.is_empty()
                     && frag.text.chars().all(|c| c == ' ')
-                    && frag.style.font_size.unwrap_or(para_font_size) > vis_max_fs + 0.01
+                    && frag.style.font_size.unwrap_or(para_font_size) > vis_max_fs + 0.01;
+                if !oversized_ws {
+                    return false;
+                }
+                // S1054 (2026-08-02, HELD OPT-IN `OXI_S1054=1`, default OFF =
+                // byte-identical): the same exclusion for an INTERIOR oversized
+                // space run.
+                // S1045 measured Word collapsing an oversized space at a line's
+                // EDGE; legal__001a2c7f shows the rule is not about position.
+                // Its title line «for the use of[28pt space]GP Practice data»
+                // (18pt Arial Bold + a lone sz=56 ASCII space between «of» and
+                // «GP») renders in Word as ONE line whose baseline advance is
+                // 20.76pt = the 18pt line — the 28pt space does NOT drive the
+                // height — while the space still takes its own 28pt ADVANCE
+                // (Word PDF per-char: «of» ends x=275.13, «GP» starts 282.89 =
+                // a 7.76pt gap = 28 x Arial's 0.2778em space). Oxi folded the
+                // 28pt run into the height (eff_lh 32.197 = 28 x 1.15), pushing
+                // p1 over by ~11.4pt, spilling one empty paragraph to p2 and
+                // making «1 Introduction» start p3 instead of p2 — a phantom
+                // page that carried +1 through i=315.
+                //
+                // ★HELD: the fix fires on EXACTLY that one line and puts
+                // «1 Introduction» on Word's p2, but the document then runs one
+                // page SHORT (0.7571 -> 0.3863, pcd 0 -> -1): i=4..200 becomes
+                // delta 0 (the +1 cascade is gone) and i=201.. becomes -1. The
+                // doc carries a SECOND, independent error — Oxi packs i=201..315
+                // into one page fewer than Word — and the two cancelled in the
+                // page count (the +1 was absorbed at i=316's explicit break).
+                // The EN A/B over all 248 frozen docs changes ONLY this document,
+                // so there is no corpus-wide gain to offset it. Ships when the
+                // i=201..315 body packing deficit is found (S559 pair).
+                (i < first || i > last)
+                    || std::env::var("OXI_S1054").is_ok()
             }
             None => false,
         }
