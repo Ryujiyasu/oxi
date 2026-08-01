@@ -4105,6 +4105,27 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
             text = "#".to_string();
             field_type = Some(FieldType::NumPages);
+        } else if field.split_whitespace().next()
+            .map_or(false, |name| name.eq_ignore_ascii_case("SEQ"))
+            && std::env::var("OXI_S1051_DISABLE").is_err()
+        {
+            // S1051 (2026-08-01, default ON, opt-out OXI_S1051_DISABLE): a SEQ field
+            // (`SEQ Figure \* ARABIC`) is a caption NUMBER Oxi cannot recompute, so it
+            // belongs to the S708 Cached class — keep the run Word wrote between
+            // `fldChar separate` and `end`. Without an arm here `current_field_type`
+            // stayed None through the result region and the suppression pass CLEARED
+            // the cached digit, rendering «Figure 1 Main Landing Page» as «Figure Main
+            // Landing Page» (a caption-text loss, the S685/S708 class).
+            // VERIFIED on all 5 corpus docs (parser A/B vs a TITLE-substituted
+            // producer): page counts 4/5/17/34/2 UNCHANGED, every affected caption
+            // stays on the same page/y and on ONE line — only the missing digit and
+            // the horizontal position of the runs after it change (emitted digit width
+            // 4.562pt @9pt / 5.562 @10pt / 6.117 @11pt; the widest, reports' «Table 2»,
+            // still ends at 339.457pt inside its line).
+            // ★The first token is matched case-insensitively rather than
+            // `field.contains("SEQ")` so an instruction ARGUMENT or another field name
+            // containing those letters cannot be captured.
+            field_type = Some(FieldType::Cached);
         } else if field.contains("TOC") || field.contains("HYPERLINK") {
             // Table of contents / hyperlink fields — Oxi can't regenerate them, so
             // KEEP the cached result (Word's rendered ToC / link text). Marking the

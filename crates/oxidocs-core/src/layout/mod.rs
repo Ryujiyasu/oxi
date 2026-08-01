@@ -2796,6 +2796,43 @@ impl LayoutEngine {
         self.metrics_for(run_style, para_style)
     }
 
+    /// S1052 (2026-08-01, default ON, opt-out OXI_S1052_DISABLE): the CELL
+    /// breaker's LATINQUOTE classification.
+    ///
+    /// The cell wrapper is a SEPARATE greedy breaker from break_into_lines and
+    /// it calls `metrics_for_char_in(ch, /*run_has_real_cjk=*/true, ..)`, which
+    /// forces an ambiguous curly quote down the eastAsia chain. There is no
+    /// measured U+2019 advance there, so the fallback prices it at fs/2
+    /// (5.000pt at 10pt) where Word paints Times New Roman's measured
+    /// 682/2048 em = 3.330pt — the same ambiguous-class defect S801/S888/S951/
+    /// S966 fixed on the body path, in the cell path.
+    ///
+    /// reports__00253cd's p4 cell overran its 237.950pt budget by 0.029pt
+    /// (accumulator 237.979 = 236.309 emitted + 1.670 of phantom quote width)
+    /// and CELLWORD pulled «graduation.» to a third line; the corrected width
+    /// leaves 1.641pt of room = Word's two-line row.
+    ///
+    /// A glued non-space ASCII neighbour makes the quote Latin (the body rule).
+    /// Latin-document scope like the sibling cell rules S869/S1017 → JP
+    /// byte-identical by construction.
+    fn s1052_cell_latin_quote(&self, chars: &[char], i: usize) -> bool {
+        if self.doc_body_has_real_cjk
+            || std::env::var("OXI_S1052_DISABLE").is_ok()
+            || std::env::var("OXI_LATINQUOTE_DISABLE").is_ok()
+        {
+            return false;
+        }
+        if !matches!(
+            chars.get(i),
+            Some('\u{2018}') | Some('\u{2019}') | Some('\u{201C}') | Some('\u{201D}')
+        ) {
+            return false;
+        }
+        let latin_side =
+            |c: Option<&char>| c.map_or(false, |c| c.is_ascii() && !c.is_ascii_whitespace());
+        latin_side(i.checked_sub(1).and_then(|p| chars.get(p))) || latin_side(chars.get(i + 1))
+    }
+
     /// Get East Asian font metrics if an east-asia font family is specified.
     /// Returns None if no east-asia font is set (caller should fall back to latin metrics).
     /// S634: an EXPLICIT Latin-only East Asian font (Cambria etc.) has no CJK
@@ -24022,7 +24059,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     prev_char_emitted = Some(ch);
                                     continue;
                                 }
-                                let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
+                                // S763: metrics keep the legacy quote class, EXCEPT for
+                                // S1052 (a curly quote glued to ASCII text = Latin).
+                                let cm = self.metrics_for_char_in(
+                                    ch,
+                                    !self.s1052_cell_latin_quote(&s586_run_chars, s586_ci),
+                                    &run.style,
+                                    &para.style,
+                                );
                                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                                 // S869 (2026-07-16, default ON, opt-out OXI_S869_DISABLE):
                                 // LATINEM for the CELL wrapper. The cell
@@ -27753,7 +27797,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     prev_char_emitted = Some(ch);
                     continue;
                 }
-                let cm = self.metrics_for_char_in(ch, true, &run.style, &para.style); // S763: metrics keep legacy quote class
+                // S763 + S1052 estimate mirror — the classification MUST match
+                // the placement loop or the row height diverges from the placed
+                // lines (the S716/S751 three-pass lesson).
+                let cm = self.metrics_for_char_in(
+                    ch,
+                    !self.s1052_cell_latin_quote(&s1017_chars, s1017_i),
+                    &run.style,
+                    &para.style,
+                );
                 let mut cw = self.registry.char_width_pt_with_fallback(ch, font_size, cm);
                 // S869 estimate mirror (see the render-loop comment at the
                 // cell wrapper): count_cell_lines MUST measure identically to
