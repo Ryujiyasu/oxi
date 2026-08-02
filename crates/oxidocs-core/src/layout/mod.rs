@@ -9835,7 +9835,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .and_then(|r| r.font_size)
                             .unwrap_or_else(|| self.resolve_font_size(&RunStyle::default(), &p.style));
                         let rpr_ref = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let metrics = self.metrics_for_para_mark(&rpr_ref, &p.style);
+                        // S1057 (2026-08-02, opt-out OXI_S1057_DISABLE): in a LATIN
+                        // document an EMPTY footer paragraph's ¶ mark is governed by
+                        // the ASCII font, like every other empty-paragraph line
+                        // (S583/S707/S876/S989). Without it the mark resolves through
+                        // the eastAsia chain and the line becomes the CJK 83/64 box:
+                        // reports__0020157f's second (empty) footer paragraph measured
+                        // 14.266 = 11pt x 83/64 where its own font gives Calibri hhea
+                        // 13.428 — 0.838pt of phantom footer stack. That is what put
+                        // Oxi's content bottom at 728.307 while Word keeps a br-page
+                        // stub at 715.50 + 13.0 = 728.5 on the same page (COM
+                        // Information(6)). The S806(b) arm below already wants hhea;
+                        // it was unreachable because `is_cjk_83_64_font()` was true.
+                        let s1057_ascii = !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S1057_DISABLE").is_err();
+                        let metrics = self.metrics_for_para_mark_g(&rpr_ref, &p.style, s1057_ascii);
                         // S806 (a): an empty footer paragraph honors its style's
                         // line=exact value (Footer style line=260 → 13.0).
                         if s806_latin
@@ -22590,7 +22604,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 && !widow_break_needed
                 && !image_atomic_push;
 
-            if (row_overflows || lrpb_row_should_break || widow_break_needed) && has_content && !needs_row_split {
+            // S1058 (2026-08-02, default ON, opt-out OXI_S1058_DISABLE): the
+            // "row fits but a saved LRPB says break" whole-push
+            // (`lrpb_row_should_break`, R7.47/R7.48) must not fire when the row's
+            // LRPB evidence is MID-ROW. R7.58's own semantics: an LRPB at cell 0 /
+            // first paragraph / run 0 means Word PUSHED the row whole; an LRPB
+            // anywhere else means Word SPLIT it. `row_has_lrpb_at_cell_start`
+            // accepts ANY cell's first paragraph, so a marker on cell 1 satisfies
+            // BOTH predicates and the push branch wins — replaying a whole-row
+            // push on evidence of a split. Shipped with S1057: the extra footer
+            // room made technical__008ae1fa's row fit by 0.5pt, which turned off
+            // the overflow-split path and let this stale whole-push through.
+            let s1058_midrow_lrpb_no_push = has_lrpb_mid_row
+                && std::env::var("OXI_S1058_DISABLE").is_err();
+            if (row_overflows || (lrpb_row_should_break && !s1058_midrow_lrpb_no_push)
+                || widow_break_needed) && has_content && !needs_row_split {
                 if std::env::var("OXI_DBG_ROWPUSH").is_ok() {
                     let txt: String = row.cells.iter().flat_map(|c| c.blocks.iter()).find_map(|b| match b {
                         Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.is_empty()) =>
