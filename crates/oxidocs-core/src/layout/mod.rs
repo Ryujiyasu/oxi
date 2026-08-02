@@ -12526,9 +12526,42 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // footer-tight etc. keep the strict box).
             let s736_tol: f32 = std::env::var("OXI_S736_TOL").ok()
                 .and_then(|v| v.parse().ok()).unwrap_or(2.5);
+            // S1055 (2026-08-02, HELD OPT-IN `OXI_S1055=1`, default OFF =
+            // byte-identical): a br-page STUB (an empty paragraph whose only
+            // content was <w:br w:type="page"/>, parsed to page_break_after) is
+            // NOT a spacer empty — it gets no S736 keep tolerance and moves to
+            // the next page like any other line when its full box overflows.
+            // MEASURED on Word (legal__001a2c7f, ExportAsFixedFormat): the stub
+            // overflows p11 by +1.805pt, Word moves it to p12 — and because its
+            // break then sends the following content one page further, Word's
+            // p12 holds header + footer only (0 body lines, verified). Two Word
+            // variants pin the mechanism: removing the FOLLOWING paragraph's
+            // lastRenderedPageBreak leaves 28 pages with the same blank p12 (the
+            // LRPB is inert), while removing the br drops to 27 pages with 16.2
+            // at p12 y=132.50 — one 10pt line below the page top, i.e. the same
+            // paragraph landing on p12 as a plain empty.
+            //
+            // ★HELD: the rule is Word-correct but Oxi's CURSOR at a stub is not
+            // trustworthy yet. Three frozen PASS docs flip (pcd 0 -> +1) because
+            // their page is over-full where the stub sits, so the stub overflows
+            // in Oxi and fits in Word — measured against Word PDFs:
+            //   policies__000f7115    Oxi cursor 764.5 vs Word ~751.1  (-13.4)
+            //   reports__0020157f     Oxi cursor 715.5 vs Word ~691    (-24)
+            //   educational__00161422 Oxi cursor 553.4 vs Word ~520.5  (-33)
+            // (legal__001a2c7f agrees with Word to 0.5pt, which is why it works
+            // there). Pagination cannot see that over-fill because those pages
+            // all end at an explicit break — the stub's fit is the only place it
+            // surfaces, and the d77a phantom-skip below hides it. Ships when
+            // those page heights are right; the over-fill is ~one line each and
+            // two of the three sit right after a TABLE.
+            let s1055_br_stub = std::env::var("OXI_S1055").is_ok()
+                && !self.doc_body_has_real_cjk
+                && para.style.page_break_after
+                && para.runs.iter().all(|r| r.text.is_empty());
             let s736_empty_tol = s562b_empty_full
                 && !s548b_exact_full && !s603_typed_fullbox && !s605_line0_2
                 && !s_tgfull && !s651_multicell_head && !footer_tight
+                && !s1055_br_stub
                 && std::env::var("OXI_S736_DISABLE").is_err();
             // S1041 (2026-07-29, opt-out OXI_S1041_DISABLE): the S736 tolerance
             // must not be clamped to ink_lh on an EMPTY line. An empty paragraph
@@ -13306,7 +13339,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // so the next block renders on the fresh page directly.
                 // d77a p.11 case: block 127 is just <w:br w:type="page"/>.
                 // See project_d77a_phantom_page_11.md.
-                if para.runs.is_empty() && para.style.page_break_after {
+                // S1055 (opt-in `OXI_S1055=1`): a LATIN doc's stub is a normal
+                // line — it moves to the next page and its break then sends the
+                // following block one page further, which is exactly Word's
+                // blank page. Held: this skip is currently compensating a
+                // within-page over-fill (see the S1055 note above), so removing
+                // it flips three frozen PASS docs to +1.
+                if para.runs.is_empty() && para.style.page_break_after
+                    && (self.doc_body_has_real_cjk
+                        || std::env::var("OXI_S1055").is_err()) {
                     current_elements.extend(std::mem::take(&mut elements));
                     dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
@@ -19641,16 +19682,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // making «1 Introduction» start p3 instead of p2 — a phantom
                 // page that carried +1 through i=315.
                 //
-                // ★HELD: the fix fires on EXACTLY that one line and puts
-                // «1 Introduction» on Word's p2, but the document then runs one
-                // page SHORT (0.7571 -> 0.3863, pcd 0 -> -1): i=4..200 becomes
-                // delta 0 (the +1 cascade is gone) and i=201.. becomes -1. The
-                // doc carries a SECOND, independent error — Oxi packs i=201..315
-                // into one page fewer than Word — and the two cancelled in the
-                // page count (the +1 was absorbed at i=316's explicit break).
-                // The EN A/B over all 248 frozen docs changes ONLY this document,
-                // so there is no corpus-wide gain to offset it. Ships when the
-                // i=201..315 body packing deficit is found (S559 pair).
+                // ★HELD, paired with S1055 (S559): alone it fires on exactly
+                // that one line and puts «1 Introduction» on Word's p2, but the
+                // document then runs one page SHORT (0.7571 -> 0.3863) because a
+                // SECOND, independent error — the br-page stub Oxi kept on p11
+                // instead of moving to p12 — was cancelling this one in the page
+                // count. With BOTH (`OXI_S1054=1 OXI_S1055=1`) the document is
+                // 0.9947 with 28 pages = Word, but S1055 itself is blocked (see
+                // its note). The two ship together when it is unblocked.
                 (i < first || i > last)
                     || std::env::var("OXI_S1054").is_ok()
             }
