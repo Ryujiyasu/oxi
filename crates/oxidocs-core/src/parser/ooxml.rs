@@ -1175,6 +1175,11 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                 || s997_single_ascii_space_host)
                             && pr.math_blocks.is_empty()
                             && std::env::var("OXI_S537_DISABLE").is_err();
+                        // S1056: capture the leading-page-break flag before
+                        // `pr.paragraph` moves (same reason as S965/S898a below).
+                        let s1056_page_break = image_only
+                            && pr.paragraph.style.page_break_after
+                            && std::env::var("OXI_S1056_DISABLE").is_err();
                         // S965: capture the host paragraph's spacing before
                         // pr.paragraph may move (same reason as S898a below).
                         // S971: the host paragraph itself (runs dropped — only the
@@ -1307,6 +1312,23 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                         img.host_paragraph =
                                             s971_host.clone().map(Box::new);
                                     }
+                                }
+                            }
+                        }
+                        // S1056 (2026-08-02, opt-out OXI_S1056_DISABLE): carry an
+                        // image-only paragraph's LEADING `<w:br w:type="page"/>` onto
+                        // the image. The br-only classifier below calls `[br][pict]`
+                        // "br-only" — a picture run holds no TEXT — so it sets
+                        // page_break_after on a paragraph that S537 then drops, and the
+                        // break vanished. The br PRECEDES the picture, so the image
+                        // starts the new page: page_break_before on the first image.
+                        // Word truth (technical__00a2d61f, ExportAsFixedFormat): Fig
+                        // S3/S4/S5 each open their own page (7 pages, one figure per
+                        // page after p2); Oxi packed two per page and rendered 6.
+                        if s1056_page_break {
+                            if let Some(first) = pr.inline_images.first_mut() {
+                                if let Block::Image(img) = first {
+                                    img.page_break_before = true;
                                 }
                             }
                         }
@@ -5445,6 +5467,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
             data,
             width,
             height,
@@ -5610,6 +5633,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
             data: Vec::new(),
             width,
             height,
@@ -5982,6 +6006,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
                 data: Vec::new(),
                 width: group_width,
                 height: group_height,
@@ -6053,6 +6078,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
             data,
             width,
             height,
@@ -6120,6 +6146,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
             data: Vec::new(),
             width,
             height,
@@ -6279,6 +6306,7 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
             data,
             width,
             height,
@@ -7815,6 +7843,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,
                     host_paragraph: None,
+            page_break_before: false,
                                 data: Vec::new(),
                                 width: s838_cx,
                                 height: s838_cy,

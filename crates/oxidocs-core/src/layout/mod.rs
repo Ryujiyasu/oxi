@@ -7473,6 +7473,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     prev_space_after = 0.0;
                 }
                 Block::Image(img) => {
+                    // S1056: the image-only host paragraph led with
+                    // `<w:br w:type="page"/>` — the image starts a new page. Mirrors
+                    // the paragraph `pageBreakBefore` handler's page transition.
+                    if img.page_break_before && !elements.is_empty()
+                        && std::env::var("OXI_S1056_DISABLE").is_err()
+                    {
+                        dbg_page_push(pages.len(), 0);
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        if let Some(g) = s755_geom.as_ref() { start_y = g.top(pages.len() + 1); content_height = g.ch(pages.len() + 1); }
+                        cursor.set(start_y);
+                        current_column = 0;
+                        start_x = col_x_positions[0];
+                        content_width = col_widths[0];
+                        lm2_cells = 0;
+                        current_page_idx += 1;
+                        footnote_reserve_current = 0.0;
+                        footnote_ids_current_page.clear();
+                        s900_fold(&mut footnote_reserve_current, &mut footnote_ids_current_page, &mut s900_pending_deferred, current_page_idx);
+                        *block_page_indices.last_mut().unwrap() = current_page_idx;
+                        *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                    }
                     // S549 (2026-06-12, opt-out OXI_S549_DISABLE): in a docGrid
                     // lines section the image-only paragraph's line occupies a
                     // WHOLE number of grid cells — ceil(extent/pitch)×pitch.

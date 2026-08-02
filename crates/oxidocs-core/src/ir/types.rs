@@ -742,6 +742,14 @@ pub struct Image {
     /// cannot compute a line height because it has no font metrics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_paragraph: Option<Box<Paragraph>>,
+    /// S1056: the image-only HOST paragraph led with `<w:br w:type="page"/>`, so
+    /// the image starts a new page. S537 drops that paragraph, and the parser's
+    /// br-only classifier calls a `[br][pict]` run pair "br-only" (a picture run
+    /// carries no TEXT), so the flag it sets would be lost with the paragraph.
+    /// Layout's `Block::Image` arm consumes this the way the paragraph
+    /// `pageBreakBefore` handler does.
+    #[serde(default)]
+    pub page_break_before: bool,
 }
 
 /// Image crop rectangle (percentages from each edge)
