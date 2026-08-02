@@ -15771,6 +15771,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // body bottom from 639.3 to 630.10 -> a 4-line paragraph widow-split.
         let mut center_tab_stop_tw: Option<i32> = None;
         let mut word_breaks: Vec<(usize, f32)> = Vec::new();
+        // S1059 (2026-08-02): cumulative width after each char of the pending
+        // token, so an over-long SEGMENT can be split at the character level.
+        // Kept parallel to `word` rather than pushed into `word_breaks` — a
+        // bound there becomes its own LineFragment (that is what S745 accepts
+        // for wordWrap=0), and per-char fragments would change DWrite shaping
+        // for every Latin document.
+        let mut word_char_ws: Vec<f32> = Vec::new();
         // Per-SEGMENT (run_idx, char_offset) so a split token keeps the EXACT run
         // metadata of the default per-«/» fragmentation (DWrite re-derives glyph
         // positions from run_idx/char_offset; a merged multi-run token with the first
@@ -16088,6 +16095,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let seg_meta = std::mem::take(&mut word_seg_meta);
                         let mut seg_start = 0usize;
                         let mut seg_start_w = 0.0f32;
+                        // S1059: a token LONGER THAN A FULL LINE packs character by
+                        // character — wrapping a segment to a fresh line cannot make it
+                        // fit, and Word does not do it (probe `SL000`: line 2 runs to
+                        // 521.43 inside a c-run; policies__000f7115: Word's line 1 ends
+                        // at «…/1856/travel_», 522.1 against a 523.3 margin, where Oxi
+                        // moved the whole «travel_…send/» segment down and left 36pt
+                        // empty). Shorter tokens keep the per-segment wrap.
+                        let s1059_overlong = !self.doc_body_has_real_cjk
+                            && word_char_ws.len() >= total_chars
+                            && word_width_tw > available_tw
+                            && std::env::var("OXI_S1059_DISABLE").is_err();
                         for &(cc, cw) in bounds.iter() {
                             if cc <= seg_start || cc > total_chars { continue; }
                             let seg_w = cw - seg_start_w;
@@ -16103,7 +16121,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                      && !s1026_final_token
                                      && std::env::var("OXI_S1028_HG_DISABLE").is_err()
                                    { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 })
-                                && !current_line.fragments.is_empty() && !para_all_whitespace {
+                                && !current_line.fragments.is_empty() && !para_all_whitespace
+                                && !s1059_overlong {
                                 wrap_and_seed!(ws);
                             }
                             // Exact run metadata for this segment (matches the default
@@ -16112,16 +16131,80 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 .find(|m| m.0 == seg_start)
                                 .map(|m| (m.1, m.2))
                                 .unwrap_or((word_run_index, word_char_offset + seg_start));
-                            let seg: String = wchars[seg_start..cc].iter().collect();
-                            current_line.fragments.push(LineFragment {
-                                text: seg, width: seg_w, natural_width: seg_w, style: ws.clone(),
-                                tab_alignment: None, tab_position: None, field_type: wft,
-                                run_index: ridx, char_offset: choff,
-                            });
-                            current_width += seg_w; current_width_tw += seg_w_tw; current_capw_tw += seg_w_tw;
+                            // S1059 (2026-08-02, default ON, opt-out OXI_S1059_DISABLE):
+                            // a segment that still does not fit after the wrap above is
+                            // split at the CHARACTER level. Word truth (probe
+                            // `scratchpad/urlwrap/`, 26 arms): an over-long token is
+                            // packed to the last fitting character — 13/13 split arms
+                            // break mid-segment, none backtracks to the preceding '/'
+                            // (`SL000` line 2 ends inside a c-run, `UN080` inside «end»),
+                            // and '_' is not a break class. Oxi placed such a segment
+                            // whole and let it run past the margin, costing an extra
+                            // line (policies__000f7115 p5: Word 2 lines, Oxi 3).
+                            // Segments that fit are untouched → byte-identical.
+                            let s1059 = !self.doc_body_has_real_cjk
+                                && word_char_ws.len() >= total_chars
+                                && std::env::var("OXI_S1059_DISABLE").is_err();
+                            let mut piece_start = seg_start;
+                            let mut piece_start_w = seg_start_w;
+                            loop {
+                                let piece_w = cw - piece_start_w;
+                                let piece_w_tw = pt_to_tw(piece_w);
+                                let limit = available_tw
+                                    + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) })
+                                    + right_tab_slack_tw
+                                    + s958_center_slack(center_tab_stop_tw, current_width_tw)
+                                    + (if cc == total_chars && c14_active && c14_space_tw > 0
+                                         && !s1026_final_token
+                                         && std::env::var("OXI_S1028_HG_DISABLE").is_err()
+                                       { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 });
+                                let overflows = current_width_tw + piece_w_tw > limit;
+                                if !s1059 || !overflows || piece_start >= cc {
+                                    let seg: String = wchars[piece_start..cc].iter().collect();
+                                    current_line.fragments.push(LineFragment {
+                                        text: seg, width: piece_w, natural_width: piece_w, style: ws.clone(),
+                                        tab_alignment: None, tab_position: None, field_type: wft,
+                                        run_index: ridx, char_offset: choff + (piece_start - seg_start),
+                                    });
+                                    current_width += piece_w;
+                                    current_width_tw += pt_to_tw(piece_w);
+                                    current_capw_tw += pt_to_tw(piece_w);
+                                    break;
+                                }
+                                // Longest prefix of [piece_start, cc) that fits.
+                                let mut k = piece_start;
+                                while k < cc {
+                                    let w = word_char_ws[k] - piece_start_w;
+                                    if current_width_tw + pt_to_tw(w) > limit { break; }
+                                    k += 1;
+                                }
+                                if k <= piece_start {
+                                    if !current_line.fragments.is_empty() && !para_all_whitespace {
+                                        wrap_and_seed!(ws);
+                                        continue; // retry on the fresh line
+                                    }
+                                    k = piece_start + 1; // an empty line takes one char
+                                }
+                                let pw = word_char_ws[k - 1] - piece_start_w;
+                                let seg: String = wchars[piece_start..k].iter().collect();
+                                current_line.fragments.push(LineFragment {
+                                    text: seg, width: pw, natural_width: pw, style: ws.clone(),
+                                    tab_alignment: None, tab_position: None, field_type: wft,
+                                    run_index: ridx, char_offset: choff + (piece_start - seg_start),
+                                });
+                                current_width += pw;
+                                current_width_tw += pt_to_tw(pw);
+                                current_capw_tw += pt_to_tw(pw);
+                                piece_start_w = word_char_ws[k - 1];
+                                piece_start = k;
+                                if piece_start >= cc { break; }
+                                wrap_and_seed!(ws);
+                            }
+                            let _ = seg_w_tw;
                             seg_start = cc; seg_start_w = cw;
                         }
                         word.clear();
+                        word_char_ws.clear(); // S1059
                         word_width = 0.0;
                         word_natural_width = 0.0;
                     } else {
@@ -16158,7 +16241,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     current_capw_tw += word_width_tw; // S475: words have no punct capacity
                     word_width = 0.0;
                     word_natural_width = 0.0;
-                    if latin_wordwrap { word_seg_meta.clear(); }
+                    if latin_wordwrap { word_seg_meta.clear(); word_char_ws.clear(); }
                     }
                     if latin_wordwrap { seg_pending = false; }
                 }
@@ -17728,6 +17811,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     word.push(ch);
                     if !ch.is_whitespace() { s1026_nonws_consumed += 1; } // S1026 final-token
                     word_width += char_width;
+                    if latin_wordwrap { word_char_ws.push(word_width); } // S1059
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
                         word_trail_hang_w = if matches!(ch, '.' | ',') { char_width } else { 0.0 };
@@ -18636,6 +18720,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     word.push(ch);
                     if !ch.is_whitespace() { s1026_nonws_consumed += 1; } // S1026 final-token
                     word_width += char_width;
+                    if latin_wordwrap { word_char_ws.push(word_width); } // S1059
                     // S1022 (2026-07-27, opt-in OXI_S1022): credit an NBSP (U+00A0) as a
                     // fully-equal compressible gap (Word compresses the marker NBSP
                     // proportionally-identically to regular spaces, marker-gap ==
