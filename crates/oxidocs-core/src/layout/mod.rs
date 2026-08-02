@@ -15869,7 +15869,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // break. Word wraps based on natural char widths (fontSize for
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
-                    let word_width_tw = pt_to_tw(word_width);
+                    // S1061 (2026-08-02, HELD OPT-IN OXI_S1061=1, default byte-identical):
+                    // the fit test rounds the PENDING WORD to twips and adds it to an
+                    // accumulator that was itself rounded per word/char, so a line
+                    // measures up to ~1tw narrower than its true advance and Oxi keeps a
+                    // word Word wraps. Word's rule is exactly "the line content EXCLUDING
+                    // the trailing space fits (text_right - ind_right)" — derived at 1pt
+                    // resolution in scratchpad/rightedge (42 arms: keep at limit 534.00,
+                    // wrap at 533.00, for content measuring 533.22; a justified line
+                    // instead overruns by a constant 2.8pt). policies__003ccc95's two
+                    // divider pages come from exactly this: internal 9218 vs a true
+                    // 9220.6 against 9220. The exact float accumulator `current_width`
+                    // already runs in parallel, so measuring against IT is the fix.
+                    // ★HELD: exact widths shift every Latin break by up to 1tw, and the
+                    // S1028 char-budget windows (LO/HI, half-em cap, exclusive hang) were
+                    // calibrated ON the rounded widths — legal__0011b198 1.0000→0.9793 and
+                    // legal__0011dcc 1.0000→0.9048 (both PASS only since S1028), plus
+                    // ukhealthform 1.0000→0.9953. Ships with an S1028 re-derivation.
+                    let word_width_tw = if std::env::var("OXI_S1061").is_ok() {
+                        pt_to_tw(current_width + word_width) - current_width_tw
+                    } else {
+                        pt_to_tw(word_width)
+                    };
                     // S1022 (2026-07-27, char-budget badness breaker) — SHARED decision.
                     // The c14 monospace break is GREEDY oikomi (Word packs aggressively —
                     // 750/760 lines are oikomi; the global slack²-DP over-packs 0.96→0.35).
