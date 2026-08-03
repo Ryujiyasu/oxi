@@ -32,7 +32,11 @@ from collections import defaultdict
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DOCS_DIR = os.path.join(REPO_ROOT, "tools", "golden-test", "documents", "docx")
-RENDERER = os.path.join(REPO_ROOT, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
+# OXI_GDI_EXE lets a gate run against a SNAPSHOT of the renderer so a
+# concurrent `cargo build --release` cannot swap the binary mid-run (the
+# stale/partial-binary trap). Unset = the normal build output.
+RENDERER = os.environ.get("OXI_GDI_EXE") or os.path.join(
+    REPO_ROOT, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
 OUT_DIR = os.path.join(REPO_ROOT, "pipeline_data", "pagination_oxi")
 
 

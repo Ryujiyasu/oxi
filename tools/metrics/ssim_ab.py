@@ -26,7 +26,9 @@ from pipeline.ssim_calculator import _load_rgb, _resize_to_match
 from skimage.metrics import structural_similarity as ssim
 sys.stdout.reconfigure(encoding="utf-8")
 REPO=str(_REPO)
-DW=os.path.join(REPO,"tools","oxi-dwrite-renderer","target","release","oxi-dwrite-renderer.exe")
+# OXI_DWRITE_EXE lets a gate run against a SNAPSHOT of the renderer so a
+# concurrent `cargo build --release` cannot swap the binary mid-run.
+DW=os.environ.get("OXI_DWRITE_EXE") or os.path.join(REPO,"tools","oxi-dwrite-renderer","target","release","oxi-dwrite-renderer.exe")
 DOCS=os.path.join(REPO,"tools","golden-test","documents","docx")
 ARG=sys.argv[1] if len(sys.argv)>1 else "OXI_S609_DISABLE"
 # "VAR" -> A sets VAR=1, B unsets. "VAR=VAL" -> A sets VAR=VAL, B unsets.
