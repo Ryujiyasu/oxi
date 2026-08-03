@@ -9392,11 +9392,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // of them non-watermark drawings).
             let s1050_ink = std::env::var("OXI_S1050_DISABLE").is_err()
                 && page.watermark.is_some();
+            // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): a BARE EMPTY
+            // header paragraph (NO pStyle at all) is VISIBLE INK — Word
+            // reserves its line. Word-COM probe (V2/V5/V6,
+            // scratchpad/deepseek_s1064): a pStyle-set EMPTY header paragraph
+            // COLLAPSES (V2 body = the top margin, 36.0), but a BARE empty
+            // paragraph RESERVES its line — bare1 = 13.5pt (hhea), bare2+ =
+            // 22.5pt each (hhea 13.428 x 1.0792 auto multiple + after 8): V6
+            // (bare1) body 53.25, V5 (bare2) body 84.75, V1 (bare2) 51.0.
+            // administrative__00304fc5's header2 = 2 BARE empties → Word
+            // body top 51.0 (~45pt reserved), but the old S843 predicate
+            // returned ink-free → 0 → Oxi started at the top margin → the
+            // body over-packed → +1 page (pcd +1).
+            // ukrisk/nyserda/framework headers = pStyle="Header" empties →
+            // ink-free (unchanged). legal__00081e80fae2e9be's header2 =
+            // pStyle="En-tte" (the French built-in Header style id) empty →
+            // also COLLAPSES like "Header" (it is a Header-style empty, not
+            // a bare one) — first50 A/B caught the original `!= "Header"`
+            // gate over-reserving it by 13.5pt and +1 page. S1050's
+            // watermark-host paragraphs stay ink (their VML textpath runs
+            // are empty).
+            let s1064 = !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1064_DISABLE").is_err();
             let s843_has_ink = blocks.iter().any(|b| match b {
                 Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty())
                     || (s1014_ink && p.style.borders.is_some())
                     || (s1050_ink
-                        && p.shapes.iter().any(|s| s.is_vml && s.position.is_some())),
+                        && p.shapes.iter().any(|s| s.is_vml && s.position.is_some()))
+                    || (s1064
+                        && p.runs.iter().all(|r| r.text.trim().is_empty())
+                        && p.style.style_id.is_none()),
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
@@ -9507,7 +9532,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             para.runs.len(), para.style.line_spacing_rule, para.style.line_spacing,
                             fs, lh, metrics.word_line_height(fs, 96.0), metrics.natural_line_height_hhea(fs), metrics.family, txt);
                     }
-                    hdr_h += lh;
+                    // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): a BARE
+                    // empty header paragraph's line is the hhea box x the AUTO
+                    // multiple. The V6 probe measures bare2+ at 22.5pt/line =
+                    // hhea 13.428 x 1.0792 (line=259) + after 8 (the after is
+                    // added by the S813 collapse below). The S979 hhea base
+                    // alone (13.428) left admin ~2.5pt short of Word's 45.35
+                    // (2 x 22.675). Scope: BARE (pStyle=None) EMPTY paragraphs
+                    // only — pStyle-set empties ("Header"/"En-tte") collapse
+                    // and text header lines keep the S979 hhea base
+                    // (uklocal's landscape-Annex header calibration).
+                    let s1064_empty = s1064
+                        && para.runs.iter().all(|r| r.text.trim().is_empty())
+                        && para.style.style_id.is_none()
+                        && matches!(
+                            para.style.line_spacing_rule.as_deref(),
+                            Some("auto") | None
+                        );
+                    let lh_used = if s1064_empty {
+                        let factor = para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0);
+                        lh * factor
+                    } else {
+                        lh
+                    };
+                    hdr_h += lh_used;
                     // S1014 Stage B (2026-07-26, opt-out OXI_S1014_DISABLE): the
                     // s813 before/after collapse also applies to DIRECT-spacing
                     // header paragraphs. reference__00215c's inherited default
