@@ -1851,6 +1851,13 @@ pub struct LayoutEngine {
     doc_body_has_real_cjk: bool,
     /// S811: saved-LRPB distrust for metric-incompatible-substitution docs.
     doc_lrpb_distrust: bool,
+    /// S1062: document-level "every gridded page is a NO-TYPE docGrid".
+    /// The cell line-height path (`line_height_inner`) has no `page`, and the
+    /// SHARED estimator has none either (threading a per-page flag there would
+    /// desync estimate from render — the S716/S751 three-pass trap). A doc-level
+    /// AND is conservative: one typed-grid page anywhere leaves the flag false
+    /// and the whole document keeps its calibrated behaviour.
+    doc_grid_all_no_type: bool,
 }
 
 /// S463: recursive CJK scan over a block (paragraph runs + nested table cells).
@@ -2078,6 +2085,7 @@ impl LayoutEngine {
             doc_body_has_cjk: false,
             doc_body_has_real_cjk: false,
             doc_lrpb_distrust: false,
+            doc_grid_all_no_type: false,
         }
     }
 
@@ -2185,6 +2193,12 @@ impl LayoutEngine {
             show_revisions: ShowRevisions::All,
             doc_body_has_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_cjk)),
             doc_body_has_real_cjk: doc.pages.iter().any(|pg| pg.blocks.iter().any(block_has_real_cjk)),
+            // S1062: true only when EVERY page that declares a grid pitch is a
+            // no-type docGrid (see the field doc comment for why this is
+            // document-level rather than threaded).
+            doc_grid_all_no_type: doc.pages.iter()
+                .filter(|pg| pg.grid_line_pitch.is_some())
+                .all(|pg| pg.doc_grid_no_type),
             // S811 (2026-07-13, default ON, opt-out OXI_S811_DISABLE): distrust
             // saved lastRenderedPageBreak marks when the document's fonts
             // required a metrically-INCOMPATIBLE substitution — the authoring
@@ -19627,6 +19641,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 //   L8 (mixed  line=0 atLeast): each para uses its OWN natural
                 // Only 2 baseline docs use line=0 atLeast: e201 + d1e8 (both
                 // Phase 2 bottom-band with accumulating Y drift, Phase 1 PASS).
+                // S1062 (2026-08-03, default ON, opt-out OXI_S1062_DISABLE):
+                // the CELL counterpart of S887 — a LATIN atLeast cell line is
+                // max(hhea natural, val) with NO grid snap. The three branches of
+                // this match were asymmetric: `auto` gates its grid snap on
+                // `cell_snap_allowed` (= adjustLineHeightInTable, the V70 repro),
+                // `exact` returns val, but `atLeast` snapped unconditionally.
+                // reference__0061531a (Tabletext: atLeast 12pt / TNR 10pt, no-type
+                // docGrid linePitch=299): Word renders 12.00/line (measured over
+                // the fee table's continuation rows), Oxi snapped to 14.95 (=299/20)
+                // -> the table split one row early -> item 5 + '(a) by preferred
+                // means $400' fell to p60 where Word keeps them on p59.
+                // Scope mirrors S887 exactly: Latin doc, non-CJK font, and the
+                // document declares no typed grid (`doc_grid_all_no_type`) — so a
+                // typed grid still snaps whole cells and every CJK document is
+                // excluded by construction.
+                if val != 0.0
+                    && in_table_cell
+                    && !self.doc_body_has_real_cjk
+                    && !metrics.is_cjk_83_64_font()
+                    && (grid_pitch.is_none() || self.doc_grid_all_no_type)
+                    && std::env::var("OXI_S1062_DISABLE").is_err()
+                {
+                    return base.max(val);
+                }
                 if val == 0.0 {
                     return base;
                 }
