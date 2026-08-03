@@ -9392,36 +9392,46 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // of them non-watermark drawings).
             let s1050_ink = std::env::var("OXI_S1050_DISABLE").is_err()
                 && page.watermark.is_some();
-            // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): a BARE EMPTY
-            // header paragraph (NO pStyle at all) is VISIBLE INK — Word
-            // reserves its line. Word-COM probe (V2/V5/V6,
-            // scratchpad/deepseek_s1064): a pStyle-set EMPTY header paragraph
-            // COLLAPSES (V2 body = the top margin, 36.0), but a BARE empty
-            // paragraph RESERVES its line — bare1 = 13.5pt (hhea), bare2+ =
-            // 22.5pt each (hhea 13.428 x 1.0792 auto multiple + after 8): V6
-            // (bare1) body 53.25, V5 (bare2) body 84.75, V1 (bare2) 51.0.
-            // administrative__00304fc5's header2 = 2 BARE empties → Word
-            // body top 51.0 (~45pt reserved), but the old S843 predicate
-            // returned ink-free → 0 → Oxi started at the top margin → the
-            // body over-packed → +1 page (pcd +1).
-            // ukrisk/nyserda/framework headers = pStyle="Header" empties →
-            // ink-free (unchanged). legal__00081e80fae2e9be's header2 =
-            // pStyle="En-tte" (the French built-in Header style id) empty →
-            // also COLLAPSES like "Header" (it is a Header-style empty, not
-            // a bare one) — first50 A/B caught the original `!= "Header"`
-            // gate over-reserving it by 13.5pt and +1 page. S1050's
-            // watermark-host paragraphs stay ink (their VML textpath runs
-            // are empty).
+            // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): an EMPTY header
+            // paragraph reserves its line + after like any other paragraph —
+            // EXCEPT that a header whose whole content is ONE empty paragraph
+            // is the DEGENERATE "no header" case and collapses entirely.
+            // Word-COM count ladder (scratchpad/deepseek_s1064/admin_variants,
+            // header distance 800tw = 39.75pt, top margin 36pt so that
+            // `dist + stack` BINDS for every reserving arm):
+            //   bare (Normal: line=259 auto, after=8)   n=1 36.00 (= margin!)
+            //     n=2 84.75  n=3 107.25  n=4 129.75  → 22.50/para
+            //   pStyle="Header" (line=240, after=0)     n=1 36.00 (= margin!)
+            //     n=2 66.75  n=3  80.25              → 13.50/para
+            //   1 bare + 1 Header                       75.75 = 22.50 + 13.50
+            // Every arm is EXACT at `39.75 + Σ(line×factor + after)`.
+            // ★The discriminator is the paragraph COUNT, not the pStyle: a
+            // 2-paragraph pStyle="Header" header DOES reserve (66.75), and a
+            // 1-paragraph BARE header does NOT (36.00 with dist 39.75 > margin
+            // 36 — even the header distance stops pushing). The first cut used
+            // `style_id.is_none()`, which separates the two live specimens by
+            // coincidence (ukrisk = 1 Header-style empty, admin = 2 bare) but
+            // over-reserves a bare n=1 header (ukframework's header4) and
+            // collapses the very common `[Header][Header]` empty pair.
+            // administrative__00304fc5's header2 = 2 bare empties → Word body
+            // top 51.0 (~45pt reserved) where the old S843 predicate returned
+            // ink-free → 0 → the body over-packed → +1 page.
+            // ukrisk / legal__00081e80 (each 1 empty) stay collapsed; S1050's
+            // watermark-host paragraphs stay ink (their VML runs are empty).
             let s1064 = !self.doc_body_has_real_cjk
                 && std::env::var("OXI_S1064_DISABLE").is_err();
+            let s1064_multi = s1064
+                && blocks
+                    .iter()
+                    .filter(|b| matches!(b, Block::Paragraph(_)))
+                    .count()
+                    >= 2;
             let s843_has_ink = blocks.iter().any(|b| match b {
                 Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty())
                     || (s1014_ink && p.style.borders.is_some())
                     || (s1050_ink
                         && p.shapes.iter().any(|s| s.is_vml && s.position.is_some()))
-                    || (s1064
-                        && p.runs.iter().all(|r| r.text.trim().is_empty())
-                        && p.style.style_id.is_none()),
+                    || (s1064_multi && p.runs.iter().all(|r| r.text.trim().is_empty())),
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
@@ -9532,19 +9542,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             para.runs.len(), para.style.line_spacing_rule, para.style.line_spacing,
                             fs, lh, metrics.word_line_height(fs, 96.0), metrics.natural_line_height_hhea(fs), metrics.family, txt);
                     }
-                    // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): a BARE
-                    // empty header paragraph's line is the hhea box x the AUTO
-                    // multiple. The V6 probe measures bare2+ at 22.5pt/line =
-                    // hhea 13.428 x 1.0792 (line=259) + after 8 (the after is
-                    // added by the S813 collapse below). The S979 hhea base
-                    // alone (13.428) left admin ~2.5pt short of Word's 45.35
-                    // (2 x 22.675). Scope: BARE (pStyle=None) EMPTY paragraphs
-                    // only — pStyle-set empties ("Header"/"En-tte") collapse
-                    // and text header lines keep the S979 hhea base
-                    // (uklocal's landscape-Annex header calibration).
+                    // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): an EMPTY
+                    // header paragraph's line is the hhea box x its AUTO
+                    // multiple. The count ladder gives 22.50/para for a bare
+                    // (Normal line=259 after=8) empty and 13.50/para for a
+                    // pStyle="Header" (line=240 after=0) empty — i.e. one
+                    // formula, `line x factor + after`, with the after added by
+                    // the S813 collapse below. The S979 hhea base alone
+                    // (13.428) left admin ~2.5pt short of Word's 45.35.
+                    // Scope: EMPTY paragraphs only — a header TEXT line keeps
+                    // the S979 hhea base (uklocal's landscape-Annex header
+                    // calibration).
                     let s1064_empty = s1064
                         && para.runs.iter().all(|r| r.text.trim().is_empty())
-                        && para.style.style_id.is_none()
                         && matches!(
                             para.style.line_spacing_rule.as_deref(),
                             Some("auto") | None
