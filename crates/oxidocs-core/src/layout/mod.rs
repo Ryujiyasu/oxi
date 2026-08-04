@@ -22375,7 +22375,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // row_eff_vmar (max over non-merged cells); content-
                         // driven rows keep cell_content_h which already
                         // includes its own pad_t/pad_b.
-                        let s1065_vmar = if std::env::var("OXI_S983_DISABLE").is_err() {
+                        // OXI_S1065_DISABLE is accepted as a synonym: S983's narrow rule was
+                        // REPLACED by this one, so either name means "no vmar floor".
+                        let s1065_vmar = if std::env::var("OXI_S983_DISABLE").is_err()
+                            && std::env::var("OXI_S1065_DISABLE").is_err()
+                        {
                             row_eff_vmar
                         } else {
                             0.0
