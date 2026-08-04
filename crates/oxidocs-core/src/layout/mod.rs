@@ -21805,6 +21805,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // ROWBOX2: max cell-level horizontal border width seen in the row
             // (for the border-box overhead when the table has no insideH).
             let mut row_cell_hborder_w: f32 = 0.0;
+            // S1065 (2026-08-03): the row's EFFECTIVE vertical cell margin
+            // (max over non-merged cells of resolved top+bottom, direct cell
+            // tcMar winning over the table-style default). Used as the extra
+            // floor on BINDING atLeast rows (see the _ => atLeast branch).
+            let mut row_eff_vmar: f32 = 0.0;
             // S503 (2026-06-08): centering-only row height using the ACTUAL GDI render
             // line-height (line_height_inner ~13.5) instead of the estimate's
             // word_line_height_table_cell (~12.625). visual_row_h under-counts when the
@@ -21878,6 +21883,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let _pad_r = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(default_pad_r);
                 let mut pad_t = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(default_pad_t);
                 let pad_b = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(default_pad_b);
+                // S1065: accumulate the EFFECTIVE vertical cell margin (resolved
+                // direct-else-table-style top+bottom) for the binding-atLeast
+                // row floor. NOTE pad_t is mutated below by the ROWBOX2 border
+                // pad, so capture the margin-only value here before that.
+                let cell_eff_vmar = pad_t + pad_b;
+                if cell_eff_vmar > row_eff_vmar {
+                    row_eff_vmar = cell_eff_vmar;
+                }
                 // Round 30: implicit border padding (matches second pass)
                 // S359 (2026-05-27): test confirmed Round 30 is load-bearing
                 // (OXI_S359_NO_ROUND30=1 caused -0.0186 corpus regression).
@@ -22334,37 +22347,40 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // 25.5) — the flips are compensating-error exposures,
                         // not model errors. Cell tcBorders ≡ table insideH.)
                         let rb2_bw = self.rowbox2_trh_bw(table, row);
-                        // Task T / S983 (2026-07-22, default ON, opt-out
-                        // OXI_S983_DISABLE): a COMPACT
-                        // fixed 3-cell form row uses the declared atLeast trHeight
-                        // as a CONTENT floor — Word then adds the table-wide
-                        // vertical cell margins + border on top. forms__0020466f
-                        // table 13 (Ethnic origin): Word row = trHeight + top
-                        // cellMar 5 + bottom cellMar 5 + border 1 = 21/22/24 +11 =
-                        // 32/33/35pt (PDF border truth, max error 0.08pt); Oxi's
-                        // `trH + bw` (22/23/25) loses to the natural 25.648, so 13
-                        // single-line rows lost ~6.4pt each (91pt total) and the
-                        // table did not split like Word (9pg vs Word 10). The
-                        // discriminator is deliberately NARROWER than the general
-                        // atLeast envelope: a blanket "atLeast + all cellMar" over-
-                        // counts uklocalspending T5R3 (6 cells, trH 51 -> ~62pt),
-                        // so it is falsified. Census (1,739 artifacts): only this
-                        // table's 18 rows match; frozen/real_en/JP = 0.
-                        let s983_vmar = if std::env::var("OXI_S983_DISABLE").is_err()
-                            && table.style.layout.as_deref() == Some("fixed")
-                            && table.style.has_inside_h
-                            && row.cells.len() == 3
-                            && (20.0..=24.0).contains(&h)
-                        {
-                            let top = table.style.default_cell_margins.as_ref()
-                                .and_then(|m| m.top).unwrap_or(0.0);
-                            let bottom = table.style.default_cell_margins.as_ref()
-                                .and_then(|m| m.bottom).unwrap_or(0.0);
-                            if top >= 5.0 && bottom >= 5.0 { top + bottom } else { 0.0 }
+                        // Task T / S983 (2026-07-22) + S1065 (2026-08-03):
+                        // Word adds the cell margins + border on top of a
+                        // BINDING atLeast trHeight floor. Original S983
+                        // narrow discriminator (fixed + insideH + 3 cells +
+                        // trH in [20,24] + table-style cellMar>=5) shipped for
+                        // forms__0020466f table 13 (Word = trHeight + 5 + 5 +
+                        // 1), because a BLANKET "atLeast + table-style all
+                        // cellMar" over-counted uklocalspending T5R3. But
+                        // that blanket used the TABLE-STYLE default; the
+                        // controlled probe (atleast_tcmar, 8 arms, Word PDF
+                        // border truth) proves Word adds the EFFECTIVE cell
+                        // margin — DIRECT cell tcMar wins, table-style is the
+                        // fallback: c1_nom (no tcMar) = trH+bw 100.58, c1_57
+                        // (direct 2.85x2) = 106.22, c1_100 (5x2) = 110.54,
+                        // c1_toponly = trH+2.85+bw 103.46, c3_57 (3 cells,
+                        // same tcMar) = 106.22, c1_400 (trH 20 binding) =
+                        // 26.28, c1_small (trH<content) = content+tcMar+bw
+                        // 18.84, c1_exact (hRule=exact) = 102.86 (separate
+                        // rule). uklocalspending T5R3 declares DIRECT tcMar
+                        // top/bottom = 0/0, so its EFFECTIVE vmar = 0 -> 51.5
+                        // = unchanged, and the S983 over-count disappears.
+                        // administrative__003381e4 table 1 (Job Details):
+                        // binding trH 106.9 + direct vmar 5.7 + bw 0.5 =
+                        // 113.1 = Word border truth 113.19 (Oxi was 107.4 ->
+                        // body 6.2pt low -> heading to p2). The floor uses
+                        // row_eff_vmar (max over non-merged cells); content-
+                        // driven rows keep cell_content_h which already
+                        // includes its own pad_t/pad_b.
+                        let s1065_vmar = if std::env::var("OXI_S983_DISABLE").is_err() {
+                            row_eff_vmar
                         } else {
                             0.0
                         };
-                        row_height = row_height.max(h + rb2_bw + s983_vmar);
+                        row_height = row_height.max(h + rb2_bw + s1065_vmar);
                     }
                 }
             }
