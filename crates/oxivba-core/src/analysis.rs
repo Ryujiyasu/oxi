@@ -503,7 +503,10 @@ impl Walker {
                 ModuleItem::Option(ModuleOption::Explicit, _) => self.has_option_explicit = true,
                 ModuleItem::Option(..) => {}
                 ModuleItem::DefType(_) => {}
-                ModuleItem::Attribute { .. } | ModuleItem::Implements { .. } => {}
+                ModuleItem::Attribute { .. } => {}
+                ModuleItem::Implements { interface, span } => {
+                    self.record_type_name(interface, span.line);
+                }
                 ModuleItem::Unknown { .. } => self.metrics.unparsed += 1,
                 ModuleItem::ExternalProc(d) => {
                     self.external_declares.push(d.name.clone());
@@ -515,9 +518,13 @@ impl Walker {
                         line: d.span.line,
                     });
                     for param in &d.params {
+                        self.record_type_name(&param.type_name.name, d.span.line);
                         if let Some(default) = &param.default {
                             self.walk_expr(default);
                         }
+                    }
+                    if let Some(return_type) = &d.return_type {
+                        self.record_type_name(&return_type.name, d.span.line);
                     }
                 }
                 ModuleItem::Variables(v) => self.walk_var_decl(v),
@@ -533,8 +540,9 @@ impl Walker {
                         }
                     }
                 }
-                ModuleItem::Event { params, .. } => {
+                ModuleItem::Event { params, span, .. } => {
                     for param in params {
+                        self.record_type_name(&param.type_name.name, span.line);
                         if let Some(default) = &param.default {
                             self.walk_expr(default);
                         }
@@ -559,9 +567,13 @@ impl Walker {
         self.current_max_depth = 0;
 
         for param in &proc.params {
+            self.record_type_name(&param.type_name.name, proc.span.line);
             if let Some(default) = &param.default {
                 self.walk_expr(default);
             }
+        }
+        if let Some(return_type) = &proc.return_type {
+            self.record_type_name(&return_type.name, proc.span.line);
         }
         self.walk_body(&proc.body);
 
@@ -891,7 +903,14 @@ impl Walker {
         }
         // `Dim x As Scripting.FileSystemObject` is just as much a dependency as
         // calling `CreateObject`, and early binding is the common spelling.
-        self.record_name(&item.type_name.name, 0);
+        self.record_type_name(&item.type_name.name, 0);
+    }
+
+    fn record_type_name(&mut self, name: &str, line: u32) {
+        if is_intrinsic_type(name) {
+            return;
+        }
+        self.record_dependency_name(name, line, false);
     }
 
     fn walk_expr(&mut self, expr: &Expr) {
@@ -909,12 +928,21 @@ impl Walker {
         if !name.contains('.') && self.current_locals.contains(&name.to_ascii_lowercase()) {
             return;
         }
+        self.record_dependency_name(name, line, true);
+    }
+
+    fn record_dependency_name(&mut self, name: &str, line: u32, counts_as_call: bool) {
+        if name.is_empty() {
+            return;
+        }
         *self.api_names.entry(name.to_string()).or_default() += 1;
 
-        if let Some(root) = name.split('.').next() {
-            self.current_calls.insert(root.to_string());
+        if counts_as_call {
+            if let Some(root) = name.split('.').next() {
+                self.current_calls.insert(root.to_string());
+            }
+            self.current_calls.insert(name.to_string());
         }
-        self.current_calls.insert(name.to_string());
 
         if segments(name).any(|s| {
             FORMULA_ENGINE_MARKERS
@@ -1077,6 +1105,15 @@ fn match_rule(name: &str) -> Option<&'static Rule> {
     best
 }
 
+fn is_intrinsic_type(name: &str) -> bool {
+    [
+        "Any", "Boolean", "Byte", "Currency", "Date", "Decimal", "Double", "Integer", "Long",
+        "LongLong", "LongPtr", "Object", "Single", "String", "Variant",
+    ]
+    .iter()
+    .any(|intrinsic| name.eq_ignore_ascii_case(intrinsic))
+}
+
 /// Collect the longest dotted name of each member chain, so that
 /// `Application.WorksheetFunction.Sum` is recorded once rather than three times.
 fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
@@ -1209,6 +1246,37 @@ mod tests {
         let late = analyse_src("Sub B()\n  Set c = CreateObject(\"ADODB.Connection\")\nEnd Sub");
         assert_eq!(early.class, Some(Class::C));
         assert_eq!(late.class, Some(Class::C));
+    }
+
+    #[test]
+    fn declaration_signature_types_are_dependencies() {
+        let a = analyse_src(
+            "Implements ADODB.Connection\n\
+             Public Event Ready(ByVal rows As ADODB.Recordset)\n\
+             Private Function Export(ByVal fs As Scripting.FileSystemObject) As Outlook.MailItem\n\
+             End Function",
+        );
+        for name in [
+            "ADODB.Connection",
+            "ADODB.Recordset",
+            "Scripting.FileSystemObject",
+            "Outlook.MailItem",
+        ] {
+            assert_eq!(a.api_names.get(name), Some(&1), "missing {name}");
+        }
+        assert_eq!(a.class, Some(Class::C));
+        assert_eq!(a.metrics.unparsed, 0);
+    }
+
+    #[test]
+    fn intrinsic_declaration_types_are_not_api_dependencies() {
+        let a = analyse_src(
+            "Private Function Convert(ByVal number As Long) As String\n\
+               Dim ready As Boolean\n\
+             End Function",
+        );
+        assert!(a.api_names.is_empty(), "unexpected APIs: {:?}", a.api_names);
+        assert_eq!(a.metrics.unparsed, 0);
     }
 
     #[test]

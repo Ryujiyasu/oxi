@@ -12,6 +12,7 @@ $cliPath = Join-Path $repoRoot 'target\debug\oxidocs.exe'
 $excel = $null
 $workbook = $null
 $module = $null
+$sheet = $null
 
 try {
     New-Item -ItemType Directory -Path $probeRoot | Out-Null
@@ -24,7 +25,7 @@ try {
     $module.CodeModule.AddFromString(@'
 Option Explicit
 
-Public Sub BuildReport()
+Public Sub BuildReport(ByVal target As Worksheet)
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Worksheets(1)
     ws.Range("A1").Value = 42
@@ -35,6 +36,11 @@ Private Function HiddenHelper(ByVal value As Long) As Long
     HiddenHelper = value + 1
 End Function
 '@)
+    $sheet = $workbook.Worksheets.Item(1)
+    $excel.Run("'$($workbook.Name)'!AnalysisProbe.BuildReport", $sheet)
+    if ([long]$sheet.Range('A1').Value2 -ne 42 -or -not [bool]$sheet.Range('A1').Font.Bold) {
+        throw 'COM execution did not produce the expected worksheet value and formatting'
+    }
     $workbook.SaveAs($workbookPath, 52)
     $workbook.SaveCopyAs($workbookCopyPath)
     $module.CodeModule.ReplaceLine(11, '    HiddenHelper = value + 2')
@@ -124,6 +130,9 @@ End Function
     if (@($variantModule.external_declares) -notcontains 'SetTimer') {
         throw "AddressOf variant did not report its SetTimer declaration"
     }
+    if ($variantModule.api_names.Worksheet -ne 2) {
+        throw "Procedure and local declaration types were not both reported"
+    }
     if (@($jsonReport.errors).Count -ne 0) {
         throw "JSON inventory reported unexpected errors"
     }
@@ -137,7 +146,7 @@ finally {
     if ($null -ne $excel) {
         try { $excel.Quit() } catch {}
     }
-    foreach ($comObject in @($module, $workbook, $excel)) {
+    foreach ($comObject in @($sheet, $module, $workbook, $excel)) {
         if ($null -ne $comObject) {
             try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObject) } catch {}
         }
