@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +18,13 @@ pub struct Presentation {
     /// Theme major-font latin typeface (title placeholders). Default "Calibri".
     #[serde(default = "default_theme_font")]
     pub major_font: String,
+    /// Theme colour scheme (a:clrScheme from ppt/theme/themeN.xml): scheme slot
+    /// name (dk1/dk2/lt1/lt2/tx1/tx2/accent1..accent6/hlink/folHlink) -> RGB hex
+    /// (6-digit RRGGBB). `<a:schemeClr val="..."/>` references resolve through
+    /// this map first; the built-in Office table is only the fallback when the
+    /// theme part is absent (Spec #10).
+    #[serde(default)]
+    pub theme_colors: HashMap<String, String>,
     /// Slide master text styles (p:txStyles from slideMaster1.xml): the
     /// inherited marL/indent/bullet/spcBef per outline level for body / other
     /// (textbox) / title contexts (Spec #8). Placeholder body text uses

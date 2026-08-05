@@ -40,12 +40,23 @@ struct SlideInfo {
 /// font (body text / textboxes / body placeholders); a TITLE placeholder
 /// resolves to the theme MAJOR font. Falls back to "Calibri" (PowerPoint's
 /// default theme font) when the theme part is absent or has no latin face.
-fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
+/// Parse ppt/theme/themeN.xml: the minor/major latin typefaces plus the
+/// `<a:clrScheme>` colour map (Spec #10). Returns (minor_font, major_font,
+/// scheme_slot -> RGB-hex). A clrScheme entry carries a 6-digit hex in
+/// `<a:srgbClr w:val="RRGGBB"/>` (or `<a:sysClr w:lastClr="RRGGBB"/>` for the
+/// system slots dk1/lt1) under the slot element (dk1/dk2/lt1/lt2/tx1/tx2/
+/// accent1..accent6/hlink/folHlink).
+fn parse_theme(xml: &str) -> Result<(String, String, HashMap<String, String>), PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut minor = "Calibri".to_string();
     let mut major = "Calibri".to_string();
+    let mut colors: HashMap<String, String> = HashMap::new();
     let mut in_minor = false;
     let mut in_major = false;
+    // clrScheme slot tracking: the active slot name (e.g. "accent1") whose
+    // child srgbClr/sysClr supplies the hex.
+    let mut in_clr_scheme = false;
+    let mut cur_slot: Option<String> = None;
 
     loop {
         match reader.read_event()? {
@@ -54,6 +65,7 @@ fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
                 match name.as_str() {
                     "minorFont" => in_minor = true,
                     "majorFont" => in_major = true,
+                    "clrScheme" => in_clr_scheme = true,
                     "latin" if in_minor => {
                         if let Some(t) = get_attr(&e, "typeface") {
                             if !t.is_empty() {
@@ -68,6 +80,26 @@ fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
                             }
                         }
                     }
+                    "dk1" | "dk2" | "lt1" | "lt2" | "tx1" | "tx2" | "accent1" | "accent2"
+                    | "accent3" | "accent4" | "accent5" | "accent6" | "hlink" | "folHlink"
+                        if in_clr_scheme =>
+                    {
+                        cur_slot = Some(name);
+                    }
+                    "srgbClr" if in_clr_scheme && cur_slot.is_some() => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if !v.is_empty() {
+                                colors.insert(cur_slot.clone().unwrap(), v);
+                            }
+                        }
+                    }
+                    "sysClr" if in_clr_scheme && cur_slot.is_some() => {
+                        if let Some(v) = get_attr(&e, "lastClr") {
+                            if !v.is_empty() {
+                                colors.insert(cur_slot.clone().unwrap(), v);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -76,6 +108,13 @@ fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
                 match name.as_str() {
                     "minorFont" => in_minor = false,
                     "majorFont" => in_major = false,
+                    "clrScheme" => in_clr_scheme = false,
+                    "dk1" | "dk2" | "lt1" | "lt2" | "tx1" | "tx2" | "accent1" | "accent2"
+                    | "accent3" | "accent4" | "accent5" | "accent6" | "hlink" | "folHlink"
+                        if in_clr_scheme =>
+                    {
+                        cur_slot = None;
+                    }
                     _ => {}
                 }
             }
@@ -84,7 +123,7 @@ fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
         }
     }
 
-    Ok((minor, major))
+    Ok((minor, major, colors))
 }
 
 /// True for master outline-level property names: a:lvl1pPr .. a:lvl9pPr.
@@ -348,6 +387,7 @@ fn parse_slide(
     slide_rels_path: &str,
     master_ph_geoms: &HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
     master_ph_anchors: &HashMap<(Option<String>, Option<String>), String>,
+    theme_colors: &HashMap<String, String>,
 ) -> Result<Slide, PptxError> {
     // Parse slide relationships for image resolution
     let rels = if let Ok(Some(rels_xml)) = archive.try_read_part(slide_rels_path) {
@@ -786,7 +826,7 @@ fn parse_slide(
                     }
                     "schemeClr" => {
                         if let Some(val) = get_attr(&e, "val") {
-                            let hex = scheme_color_to_hex(&val);
+                            let hex = theme_colors.get(&val).cloned().unwrap_or_else(|| scheme_color_to_hex(&val));
                             if in_bg_pr {
                                 slide_background_color = Some(hex);
                             } else if in_ln && in_sp_pr {
@@ -1011,7 +1051,7 @@ fn parse_slide(
                     }
                     "schemeClr" => {
                         if let Some(val) = get_attr(&e, "val") {
-                            let hex = scheme_color_to_hex(&val);
+                            let hex = theme_colors.get(&val).cloned().unwrap_or_else(|| scheme_color_to_hex(&val));
                             if in_bg_pr {
                                 slide_background_color = Some(hex);
                             } else if in_ln && in_sp_pr {
@@ -1624,12 +1664,17 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         .map(|(id, rel)| (id, rel.target))
         .collect();
 
-    // 2.5. Parse the theme for minor/major latin typefaces.
-    // Standard path is ppt/theme/theme1.xml; a theme without a latin face or
-    // an absent theme part falls back to "Calibri".
-    let (minor_font, major_font) = match archive.try_read_part("ppt/theme/theme1.xml")? {
+    // 2.5. Parse the theme for minor/major latin typefaces and the clrScheme
+    // colour map (Spec #10). Standard path is ppt/theme/theme1.xml; a theme
+    // without a latin face or an absent theme part falls back to "Calibri",
+    // and the colour map falls back to the built-in table per slot.
+    let (minor_font, major_font, theme_colors) = match archive.try_read_part("ppt/theme/theme1.xml")? {
         Some(theme_xml) => parse_theme(&theme_xml)?,
-        None => ("Calibri".to_string(), "Calibri".to_string()),
+        None => (
+            "Calibri".to_string(),
+            "Calibri".to_string(),
+            HashMap::new(),
+        ),
     };
 
     // 2.7. Parse the slide master text styles (Spec #8): the inherited
@@ -1690,6 +1735,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
                     &slide_rels_path,
                     &master_ph_geoms,
                     &master_ph_anchors,
+                    &theme_colors,
                 )?;
                 slides.push(slide);
             }
@@ -1705,6 +1751,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         slide_height,
         minor_font,
         major_font,
+        theme_colors,
         master_styles,
     })
 }
