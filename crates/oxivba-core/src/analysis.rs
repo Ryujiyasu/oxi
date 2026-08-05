@@ -1,4 +1,4 @@
-﻿// This Source Code Form is subject to the terms of the Mozilla Public
+// This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
@@ -100,49 +100,297 @@ pub struct Rule {
 /// winner among several matches is chosen by [`Class::severity`].
 pub const RULES: &[Rule] = &[
     // -- D: has its own UI ------------------------------------------------
-    Rule { pattern: "UserForm",   how: Match::RootPrefix, class: Class::D, reason: "drives a UserForm; the target platform supplies its own UI" },
-    Rule { pattern: "MSForms",    how: Match::Root,       class: Class::D, reason: "uses MSForms controls" },
-    Rule { pattern: "Load",       how: Match::Exact,   class: Class::D, reason: "loads a form" },
-    Rule { pattern: "Unload",     how: Match::Exact,   class: Class::D, reason: "unloads a form" },
-
+    Rule {
+        pattern: "UserForm",
+        how: Match::RootPrefix,
+        class: Class::D,
+        reason: "drives a UserForm; the target platform supplies its own UI",
+    },
+    Rule {
+        pattern: "MSForms",
+        how: Match::Root,
+        class: Class::D,
+        reason: "uses MSForms controls",
+    },
+    Rule {
+        pattern: "Load",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "loads a form",
+    },
+    Rule {
+        pattern: "Unload",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "unloads a form",
+    },
     // -- C: leaves Excel ---------------------------------------------------
-    Rule { pattern: "Shell",           how: Match::Exact,   class: Class::C, reason: "starts an external process" },
-    Rule { pattern: "CreateObject",    how: Match::Exact,   class: Class::C, reason: "late-binds an external COM object; the target cannot be determined statically" },
-    Rule { pattern: "GetObject",       how: Match::Exact,   class: Class::C, reason: "attaches to an external COM object" },
-    Rule { pattern: "Scripting.FileSystemObject", how: Match::Exact, class: Class::C, reason: "manipulates the file system" },
-    Rule { pattern: "ADODB",           how: Match::Root,    class: Class::C, reason: "connects to a database" },
-    Rule { pattern: "DAO",             how: Match::Root,    class: Class::C, reason: "connects to a database" },
-    Rule { pattern: "Outlook",         how: Match::Root,    class: Class::C, reason: "drives another Office application" },
-    Rule { pattern: "Word",            how: Match::Root,    class: Class::C, reason: "drives another Office application" },
-    Rule { pattern: "PowerPoint",      how: Match::Root,    class: Class::C, reason: "drives another Office application" },
-    Rule { pattern: "WScript",         how: Match::Root,    class: Class::C, reason: "uses Windows Script Host" },
-    Rule { pattern: "SendKeys",        how: Match::Exact,   class: Class::C, reason: "synthesises keystrokes" },
-    Rule { pattern: "Kill",            how: Match::Exact,   class: Class::C, reason: "deletes a file" },
-    Rule { pattern: "MkDir",           how: Match::Exact,   class: Class::C, reason: "creates a directory" },
-    Rule { pattern: "RmDir",           how: Match::Exact,   class: Class::C, reason: "removes a directory" },
-    Rule { pattern: "FileCopy",        how: Match::Exact,   class: Class::C, reason: "copies a file" },
-    Rule { pattern: "Dir",             how: Match::Exact,   class: Class::C, reason: "enumerates the file system" },
-    Rule { pattern: "Environ",         how: Match::Exact,   class: Class::C, reason: "reads the process environment" },
-    Rule { pattern: "SaveAs",          how: Match::Segment, class: Class::C, reason: "writes a file to a path" },
-    Rule { pattern: "OpenText",        how: Match::Segment, class: Class::C, reason: "reads an external file" },
-    Rule { pattern: "QueryTables",     how: Match::Segment, class: Class::C, reason: "pulls data from an external source" },
-
+    Rule {
+        pattern: "Shell",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "starts an external process",
+    },
+    Rule {
+        pattern: "CreateObject",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "late-binds an external COM object; the target cannot be determined statically",
+    },
+    Rule {
+        pattern: "GetObject",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "attaches to an external COM object",
+    },
+    Rule {
+        pattern: "Scripting.FileSystemObject",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "manipulates the file system",
+    },
+    Rule {
+        pattern: "ADODB",
+        how: Match::Root,
+        class: Class::C,
+        reason: "connects to a database",
+    },
+    Rule {
+        pattern: "DAO",
+        how: Match::Root,
+        class: Class::C,
+        reason: "connects to a database",
+    },
+    Rule {
+        pattern: "Outlook",
+        how: Match::Root,
+        class: Class::C,
+        reason: "drives another Office application",
+    },
+    Rule {
+        pattern: "Word",
+        how: Match::Root,
+        class: Class::C,
+        reason: "drives another Office application",
+    },
+    Rule {
+        pattern: "PowerPoint",
+        how: Match::Root,
+        class: Class::C,
+        reason: "drives another Office application",
+    },
+    Rule {
+        pattern: "WScript",
+        how: Match::Root,
+        class: Class::C,
+        reason: "uses Windows Script Host",
+    },
+    Rule {
+        pattern: "SendKeys",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "synthesises keystrokes",
+    },
+    Rule {
+        pattern: "Kill",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "deletes a file",
+    },
+    Rule {
+        pattern: "MkDir",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "creates a directory",
+    },
+    Rule {
+        pattern: "RmDir",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "removes a directory",
+    },
+    Rule {
+        pattern: "FileCopy",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "copies a file",
+    },
+    Rule {
+        pattern: "ChDir",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "changes the process working directory",
+    },
+    Rule {
+        pattern: "ChDrive",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "changes the process working drive",
+    },
+    Rule {
+        pattern: "SetAttr",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "changes file attributes",
+    },
+    Rule {
+        pattern: "GetAttr",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "reads file attributes",
+    },
+    Rule {
+        pattern: "CurDir",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "reads the process working directory",
+    },
+    Rule {
+        pattern: "Dir",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "enumerates the file system",
+    },
+    Rule {
+        pattern: "EOF",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "queries an external file",
+    },
+    Rule {
+        pattern: "LOF",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "queries an external file length",
+    },
+    Rule {
+        pattern: "Loc",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "queries an external file position",
+    },
+    Rule {
+        pattern: "Seek",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "queries an external file position",
+    },
+    Rule {
+        pattern: "FileLen",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "queries an external file length",
+    },
+    Rule {
+        pattern: "FreeFile",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "allocates a native file number",
+    },
+    Rule {
+        pattern: "Environ",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "reads the process environment",
+    },
+    Rule {
+        pattern: "SaveAs",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "writes a file to a path",
+    },
+    Rule {
+        pattern: "OpenText",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "reads an external file",
+    },
+    Rule {
+        pattern: "QueryTables",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "pulls data from an external source",
+    },
     // -- A: report generation ---------------------------------------------
-    Rule { pattern: "PrintOut",      how: Match::Segment, class: Class::A, reason: "prints" },
-    Rule { pattern: "PageSetup",     how: Match::Segment, class: Class::A, reason: "configures a printed page" },
-    Rule { pattern: "Interior",      how: Match::Segment, class: Class::A, reason: "sets cell fill" },
-    Rule { pattern: "Font",          how: Match::Segment, class: Class::A, reason: "sets fonts" },
-    Rule { pattern: "Borders",       how: Match::Segment, class: Class::A, reason: "sets borders" },
-    Rule { pattern: "NumberFormat",  how: Match::Segment, class: Class::A, reason: "sets number formats" },
-    Rule { pattern: "MergeCells",    how: Match::Segment, class: Class::A, reason: "merges cells" },
-    Rule { pattern: "ColumnWidth",   how: Match::Segment, class: Class::A, reason: "adjusts layout" },
-    Rule { pattern: "RowHeight",     how: Match::Segment, class: Class::A, reason: "adjusts layout" },
-
+    Rule {
+        pattern: "PrintOut",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "prints",
+    },
+    Rule {
+        pattern: "PageSetup",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "configures a printed page",
+    },
+    Rule {
+        pattern: "Interior",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "sets cell fill",
+    },
+    Rule {
+        pattern: "Font",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "sets fonts",
+    },
+    Rule {
+        pattern: "Borders",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "sets borders",
+    },
+    Rule {
+        pattern: "NumberFormat",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "sets number formats",
+    },
+    Rule {
+        pattern: "MergeCells",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "merges cells",
+    },
+    Rule {
+        pattern: "ColumnWidth",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "adjusts layout",
+    },
+    Rule {
+        pattern: "RowHeight",
+        how: Match::Segment,
+        class: Class::A,
+        reason: "adjusts layout",
+    },
     // -- B: data transformation --------------------------------------------
-    Rule { pattern: "Range",   how: Match::Segment, class: Class::B, reason: "reads or writes cells" },
-    Rule { pattern: "Cells",   how: Match::Segment, class: Class::B, reason: "reads or writes cells" },
-    Rule { pattern: "Value",   how: Match::Segment, class: Class::B, reason: "reads or writes cell values" },
-    Rule { pattern: "Value2",  how: Match::Segment, class: Class::B, reason: "reads or writes cell values" },
+    Rule {
+        pattern: "Range",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "reads or writes cells",
+    },
+    Rule {
+        pattern: "Cells",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "reads or writes cells",
+    },
+    Rule {
+        pattern: "Value",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "reads or writes cell values",
+    },
+    Rule {
+        pattern: "Value2",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "reads or writes cell values",
+    },
 ];
 
 /// Names that indicate a dependency on Excel's calculation engine.
@@ -349,6 +597,140 @@ impl Walker {
                     self.walk_expr(t);
                 }
             }
+            Statement::Open(open) => {
+                self.walk_expr(&open.path);
+                self.walk_expr(&open.file_number);
+                if let Some(record_len) = &open.record_len {
+                    self.walk_expr(record_len);
+                }
+                self.record_file_io("Open", open.span.line, "opens an external file");
+            }
+            Statement::Close { files, span } => {
+                for file in files {
+                    self.walk_expr(file);
+                }
+                self.record_file_io("Close", span.line, "operates on external files");
+            }
+            Statement::FileOutput(output) => {
+                self.walk_expr(&output.file_number);
+                for item in &output.items {
+                    if let Some(value) = &item.value {
+                        self.walk_expr(value);
+                    }
+                }
+                let what = match output.kind {
+                    FileOutputKind::Print => "Print #",
+                    FileOutputKind::Write => "Write #",
+                };
+                self.record_file_io(what, output.span.line, "writes to an external file");
+            }
+            Statement::FileInput(input) => {
+                self.walk_expr(&input.file_number);
+                for target in &input.targets {
+                    self.walk_expr(target);
+                }
+                let what = if input.line {
+                    "Line Input #"
+                } else {
+                    "Input #"
+                };
+                self.record_file_io(what, input.span.line, "reads from an external file");
+            }
+            Statement::FileTransfer(transfer) => {
+                self.walk_expr(&transfer.file_number);
+                if let Some(record_number) = &transfer.record_number {
+                    self.walk_expr(record_number);
+                }
+                self.walk_expr(&transfer.value);
+                let (what, reason) = match transfer.kind {
+                    FileTransferKind::Get => ("Get #", "reads from an external file"),
+                    FileTransferKind::Put => ("Put #", "writes to an external file"),
+                };
+                self.record_file_io(what, transfer.span.line, reason);
+            }
+            Statement::FileSeek(seek) => {
+                self.walk_expr(&seek.file_number);
+                self.walk_expr(&seek.position);
+                self.record_file_io(
+                    "Seek #",
+                    seek.span.line,
+                    "changes an external file position",
+                );
+            }
+            Statement::FileSystem(operation) => match operation {
+                FileSystemStmt::Rename {
+                    source,
+                    destination,
+                    span,
+                } => {
+                    self.walk_expr(source);
+                    self.walk_expr(destination);
+                    self.record_file_io("Name", span.line, "renames an external file or directory");
+                }
+                FileSystemStmt::Copy {
+                    source,
+                    destination,
+                    span,
+                } => {
+                    self.walk_expr(source);
+                    self.walk_expr(destination);
+                    self.record_file_io("FileCopy", span.line, "copies an external file");
+                }
+                FileSystemStmt::Unary { kind, path, span } => {
+                    self.walk_expr(path);
+                    let (what, reason) = match kind {
+                        FileSystemUnaryKind::Kill => ("Kill", "deletes an external file"),
+                        FileSystemUnaryKind::MkDir => ("MkDir", "creates an external directory"),
+                        FileSystemUnaryKind::RmDir => ("RmDir", "removes an external directory"),
+                        FileSystemUnaryKind::ChDir => {
+                            ("ChDir", "changes the process working directory")
+                        }
+                        FileSystemUnaryKind::ChDrive => {
+                            ("ChDrive", "changes the process working drive")
+                        }
+                    };
+                    self.record_file_io(what, span.line, reason);
+                }
+                FileSystemStmt::SetAttr {
+                    path,
+                    attributes,
+                    span,
+                } => {
+                    self.walk_expr(path);
+                    self.walk_expr(attributes);
+                    self.record_file_io("SetAttr", span.line, "changes external file attributes");
+                }
+            },
+            Statement::FileRecordLock(lock) => {
+                self.walk_expr(&lock.file_number);
+                if let Some(start) = &lock.start {
+                    self.walk_expr(start);
+                }
+                if let Some(end) = &lock.end {
+                    self.walk_expr(end);
+                }
+                let what = match lock.kind {
+                    FileRecordLockKind::Lock => "Lock",
+                    FileRecordLockKind::Unlock => "Unlock",
+                };
+                self.record_file_io(
+                    what,
+                    lock.span.line,
+                    "controls external file record locking",
+                );
+            }
+            Statement::FileWidth {
+                file_number,
+                width,
+                span,
+            } => {
+                self.walk_expr(file_number);
+                self.walk_expr(width);
+                self.record_file_io("Width #", span.line, "configures external file output");
+            }
+            Statement::FileReset { span } => {
+                self.record_file_io("Reset", span.line, "closes every open external disk file");
+            }
             Statement::If(s) => {
                 self.walk_expr(&s.condition);
                 self.nested(&s.then_body);
@@ -504,6 +886,16 @@ impl Walker {
         }
     }
 
+    fn record_file_io(&mut self, name: &str, line: u32, reason: &str) {
+        *self.api_names.entry(name.to_string()).or_default() += 1;
+        self.findings.push(Finding {
+            what: name.to_string(),
+            reason: reason.to_string(),
+            class: Some(Class::C),
+            line,
+        });
+    }
+
     fn finish(mut self) -> Analysis {
         let class = self
             .findings
@@ -521,8 +913,7 @@ impl Walker {
             .defined_procedures
             .iter()
             .filter(|(name, visibility, kind)| {
-                !called.contains(name)
-                    && !is_externally_reachable(name, *visibility, *kind)
+                !called.contains(name) && !is_externally_reachable(name, *visibility, *kind)
             })
             .map(|(name, _, _)| name.clone())
             .collect();
@@ -574,8 +965,10 @@ fn match_rule(name: &str) -> Option<&'static Rule> {
         let hit = match rule.how {
             Match::Exact => name.eq_ignore_ascii_case(rule.pattern),
             Match::Root => root.eq_ignore_ascii_case(rule.pattern),
-            Match::RootPrefix => root.len() >= rule.pattern.len()
-                && root[..rule.pattern.len()].eq_ignore_ascii_case(rule.pattern),
+            Match::RootPrefix => {
+                root.len() >= rule.pattern.len()
+                    && root[..rule.pattern.len()].eq_ignore_ascii_case(rule.pattern)
+            }
             Match::Segment => segments(name).any(|s| s.eq_ignore_ascii_case(rule.pattern)),
         };
         if !hit {
@@ -685,9 +1078,8 @@ mod tests {
 
     #[test]
     fn plain_cell_arithmetic_is_class_b() {
-        let a = analyse_src(
-            "Sub Total()\n  Range(\"A1\").Value = Range(\"A2\").Value + 1\nEnd Sub",
-        );
+        let a =
+            analyse_src("Sub Total()\n  Range(\"A1\").Value = Range(\"A2\").Value + 1\nEnd Sub");
         assert_eq!(a.class, Some(Class::B));
         assert!(!a.needs_formula_engine);
     }
@@ -797,9 +1189,100 @@ mod tests {
 
     #[test]
     fn unparsed_lines_are_counted_not_hidden() {
-        let a = analyse_src("Sub T()\n  Open \"f.txt\" For Input As #1\n  x = 1\nEnd Sub");
+        let a = analyse_src("Sub T()\n  Get #1\n  x = 1\nEnd Sub");
         assert_eq!(a.metrics.unparsed, 1);
-        assert!(a.findings.iter().any(|f| f.reason.contains("not understood")));
+        assert!(a
+            .findings
+            .iter()
+            .any(|f| f.reason.contains("not understood")));
+    }
+
+    #[test]
+    fn native_file_io_is_parsed_and_classified_as_external() {
+        let a = analyse_src(
+            "Sub T()\n\
+             Open \"f.txt\" For Output As #1\n\
+             Print #1, Range(\"A1\").Value\n\
+             Close #1\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::C));
+        assert_eq!(a.api_names.get("Open"), Some(&1));
+        assert_eq!(a.api_names.get("Print #"), Some(&1));
+        assert_eq!(a.api_names.get("Close"), Some(&1));
+        assert!(a.findings.iter().any(|f| f.what == "Open" && f.line == 2));
+        assert!(a
+            .api_names
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("Range.Value")));
+    }
+
+    #[test]
+    fn binary_file_io_and_position_functions_are_class_c() {
+        let a = analyse_src(
+            "Sub T()\n\
+             Put #1, 1, value\n\
+             Seek #1, 1\n\
+             Get #1, , value\n\
+             n = LOF(1) + Loc(1) + Seek(1) + FileLen(path) + FreeFile\n\
+             done = EOF(1)\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::C));
+        for name in [
+            "Put #", "Seek #", "Get #", "LOF", "Loc", "Seek", "FileLen", "FreeFile", "EOF",
+        ] {
+            assert!(
+                a.api_names.contains_key(name),
+                "missing {name}: {:#?}",
+                a.api_names
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_statements_and_queries_are_class_c() {
+        let a = analyse_src(
+            "Sub T()\n\
+             FileCopy sourcePath, copyPath\n\
+             Name copyPath As renamedPath\n\
+             SetAttr renamedPath, vbHidden\n\
+             Kill renamedPath\n\
+             MkDir directoryPath\n\
+             ChDrive driveName\n\
+             ChDir directoryPath\n\
+             RmDir directoryPath\n\
+             attr = GetAttr(sourcePath)\n\
+             cwd = CurDir$\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::C));
+        for name in [
+            "FileCopy", "Name", "SetAttr", "Kill", "MkDir", "ChDrive", "ChDir", "RmDir", "GetAttr",
+            "CurDir",
+        ] {
+            assert!(a.api_names.contains_key(name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn lock_width_and_reset_are_class_c() {
+        let a = analyse_src(
+            "Sub T()\n\
+             Lock #1, 1 To 4\n\
+             Unlock #1, 1 To 4\n\
+             Width #1, 80\n\
+             Reset\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::C));
+        for name in ["Lock", "Unlock", "Width #", "Reset"] {
+            assert_eq!(a.api_names.get(name), Some(&1), "missing {name}");
+        }
     }
 
     #[test]

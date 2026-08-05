@@ -32,7 +32,7 @@ pub mod lexer;
 pub mod parser;
 
 pub use analysis::{analyse, Analysis, Class, Finding};
-pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity, Strength};
 pub use ast::{Expr, Module, ModuleItem, Procedure, Statement};
+pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity, Strength};
 pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 pub use parser::parse_module;

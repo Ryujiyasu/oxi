@@ -74,7 +74,10 @@ pub enum ModuleItem {
     Procedure(Procedure),
     /// A line the parser did not understand, kept verbatim so that nothing is
     /// silently dropped and the count of unparsed input can be reported.
-    Unknown { text: String, span: Span },
+    Unknown {
+        text: String,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +216,35 @@ pub enum Statement {
         targets: Vec<Expr>,
         span: Span,
     },
+    /// `Open path For Input As #1` and its other mode/access/lock variants.
+    Open(FileOpenStmt),
+    /// `Close`, optionally followed by one or more file numbers.
+    Close {
+        files: Vec<Expr>,
+        span: Span,
+    },
+    /// `Print #n, ...` or `Write #n, ...`.
+    FileOutput(FileOutputStmt),
+    /// `Input #n, ...` or `Line Input #n, ...`.
+    FileInput(FileInputStmt),
+    /// `Get #n, record, value` or `Put #n, record, value`.
+    FileTransfer(FileTransferStmt),
+    /// `Seek #n, position` (distinct from the `Seek(n)` function).
+    FileSeek(FileSeekStmt),
+    /// Native filesystem mutation and directory-navigation statements.
+    FileSystem(FileSystemStmt),
+    /// `Lock` and `Unlock` over an optional record/byte range.
+    FileRecordLock(FileRecordLockStmt),
+    /// `Width #n, columns` for sequential output files.
+    FileWidth {
+        file_number: Expr,
+        width: Expr,
+        span: Span,
+    },
+    /// `Reset`, which closes every open disk file.
+    FileReset {
+        span: Span,
+    },
     If(IfStmt),
     SelectCase(SelectCaseStmt),
     For(ForStmt),
@@ -279,6 +311,152 @@ pub enum Statement {
         text: String,
         span: Span,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileMode {
+    Append,
+    Binary,
+    Input,
+    Output,
+    Random,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAccess {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileLock {
+    Shared,
+    Read,
+    Write,
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileOpenStmt {
+    pub path: Expr,
+    pub mode: FileMode,
+    pub access: Option<FileAccess>,
+    pub lock: Option<FileLock>,
+    pub file_number: Expr,
+    /// `Len = n`, used by random-access files.
+    pub record_len: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileOutputKind {
+    Print,
+    Write,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileOutputStmt {
+    pub kind: FileOutputKind,
+    pub file_number: Expr,
+    /// The separator is semantically visible for `Print #`: comma advances to
+    /// a print zone while semicolon continues at the current position.
+    pub items: Vec<FileOutputItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileOutputSeparator {
+    Comma,
+    Semicolon,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileOutputItem {
+    pub separator: FileOutputSeparator,
+    /// `None` preserves a trailing or otherwise omitted output field.
+    pub value: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileInputStmt {
+    /// `true` for `Line Input`, whose destination receives the whole line.
+    pub line: bool,
+    pub file_number: Expr,
+    pub targets: Vec<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileTransferKind {
+    Get,
+    Put,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileTransferStmt {
+    pub kind: FileTransferKind,
+    pub file_number: Expr,
+    /// Omitted in `Get #n, , value` and `Put #n, , value`.
+    pub record_number: Option<Expr>,
+    pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileSeekStmt {
+    pub file_number: Expr,
+    pub position: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSystemUnaryKind {
+    Kill,
+    MkDir,
+    RmDir,
+    ChDir,
+    ChDrive,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileSystemStmt {
+    Rename {
+        source: Expr,
+        destination: Expr,
+        span: Span,
+    },
+    Copy {
+        source: Expr,
+        destination: Expr,
+        span: Span,
+    },
+    Unary {
+        kind: FileSystemUnaryKind,
+        path: Expr,
+        span: Span,
+    },
+    SetAttr {
+        path: Expr,
+        attributes: Expr,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileRecordLockKind {
+    Lock,
+    Unlock,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileRecordLockStmt {
+    pub kind: FileRecordLockKind,
+    pub file_number: Expr,
+    /// A single record uses `start` with `end = None`; `start To end` uses both.
+    pub start: Option<Expr>,
+    pub end: Option<Expr>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -378,10 +378,17 @@ impl<'a> Lexer<'a> {
         while let Some(&b) = self.bytes.get(i) {
             if b == b'#' {
                 let text = self.src[self.pos + 1..i].to_string();
-                self.push_here(TokenKind::DateLit(text), start, i + 1);
-                self.pos = i + 1;
-                self.at_line_start = false;
-                return Ok(());
+                // In `Close #1, #2` (and similar file-I/O statements), the
+                // second handle's opening hash is not the first handle's date
+                // terminator. A separator immediately before it distinguishes
+                // that shape without narrowing VBA's accepted date spellings.
+                if !text.trim_end().ends_with([',', ';']) {
+                    self.push_here(TokenKind::DateLit(text), start, i + 1);
+                    self.pos = i + 1;
+                    self.at_line_start = false;
+                    return Ok(());
+                }
+                break;
             }
             if b == b'\n' {
                 break;
@@ -447,7 +454,10 @@ impl<'a> Lexer<'a> {
             }
         }
         // Exponent, with `D` accepted alongside `E` for Double literals.
-        if matches!(self.bytes.get(self.pos), Some(b'e') | Some(b'E') | Some(b'd') | Some(b'D')) {
+        if matches!(
+            self.bytes.get(self.pos),
+            Some(b'e') | Some(b'E') | Some(b'd') | Some(b'D')
+        ) {
             let mut j = self.pos + 1;
             if matches!(self.bytes.get(j), Some(b'+') | Some(b'-')) {
                 j += 1;
@@ -572,10 +582,7 @@ mod tests {
 
     #[test]
     fn line_endings_are_tokens() {
-        assert_eq!(
-            kinds("a\nb"),
-            vec![ident("a"), TokenKind::Eol, ident("b")]
-        );
+        assert_eq!(kinds("a\nb"), vec![ident("a"), TokenKind::Eol, ident("b")]);
     }
 
     #[test]
@@ -676,6 +683,21 @@ mod tests {
     }
 
     #[test]
+    fn multiple_file_handles_do_not_merge_into_a_date_literal() {
+        assert_eq!(
+            kinds("Close #7, #8"),
+            vec![
+                ident("Close"),
+                TokenKind::Punct(Punct::Hash),
+                TokenKind::Number(7.0),
+                TokenKind::Punct(Punct::Comma),
+                TokenKind::Punct(Punct::Hash),
+                TokenKind::Number(8.0),
+            ]
+        );
+    }
+
+    #[test]
     fn colon_separates_statements_and_assign_is_distinct() {
         assert_eq!(
             kinds("a = 1: b = 2"),
@@ -689,10 +711,7 @@ mod tests {
                 TokenKind::Number(2.0),
             ]
         );
-        assert_eq!(
-            kinds("f a:=1")[2],
-            TokenKind::Punct(Punct::Assign)
-        );
+        assert_eq!(kinds("f a:=1")[2], TokenKind::Punct(Punct::Assign));
     }
 
     #[test]

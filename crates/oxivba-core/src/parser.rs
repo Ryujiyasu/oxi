@@ -72,14 +72,11 @@ impl<'a> Parser<'a> {
     }
 
     fn span(&self) -> Span {
-        self.tokens
-            .get(self.pos)
-            .map(|t| t.span)
-            .unwrap_or(Span {
-                line: 0,
-                start: self.src.len(),
-                end: self.src.len(),
-            })
+        self.tokens.get(self.pos).map(|t| t.span).unwrap_or(Span {
+            line: 0,
+            start: self.src.len(),
+            end: self.src.len(),
+        })
     }
 
     fn at_eof(&self) -> bool {
@@ -133,12 +130,12 @@ impl<'a> Parser<'a> {
     fn end_statement(&mut self) {
         self.terminated = matches!(
             self.kind(),
-            TokenKind::Eol | TokenKind::Punct(Punct::Colon) | TokenKind::Eof | TokenKind::Comment(_)
+            TokenKind::Eol
+                | TokenKind::Punct(Punct::Colon)
+                | TokenKind::Eof
+                | TokenKind::Comment(_)
         );
-        if matches!(
-            self.kind(),
-            TokenKind::Eol | TokenKind::Punct(Punct::Colon)
-        ) {
+        if matches!(self.kind(), TokenKind::Eol | TokenKind::Punct(Punct::Colon)) {
             self.pos += 1;
         }
     }
@@ -276,10 +273,7 @@ impl<'a> Parser<'a> {
             self.end_statement();
             return Some(ModuleItem::Event { name, params, span });
         }
-        if self.at_kw("sub")
-            || self.at_kw("function")
-            || self.at_kw("property")
-        {
+        if self.at_kw("sub") || self.at_kw("function") || self.at_kw("property") {
             return self
                 .parse_procedure(visibility, is_static, span)
                 .map(ModuleItem::Procedure);
@@ -791,6 +785,59 @@ impl<'a> Parser<'a> {
                 self.end_statement();
                 return Statement::Erase { targets, span };
             }
+            Some("open") => return self.parse_file_open(span),
+            Some("close") => return self.parse_file_close(span),
+            Some("print") if matches!(self.kind_at(1), TokenKind::Punct(Punct::Hash)) => {
+                return self.parse_file_output(span, FileOutputKind::Print);
+            }
+            Some("write") if matches!(self.kind_at(1), TokenKind::Punct(Punct::Hash)) => {
+                return self.parse_file_output(span, FileOutputKind::Write);
+            }
+            Some("input") if matches!(self.kind_at(1), TokenKind::Punct(Punct::Hash)) => {
+                return self.parse_file_input(span, false);
+            }
+            Some("line")
+                if self.word_at(1).as_deref() == Some("input")
+                    && matches!(self.kind_at(2), TokenKind::Punct(Punct::Hash)) =>
+            {
+                return self.parse_file_input(span, true);
+            }
+            Some("get") => return self.parse_file_transfer(span, FileTransferKind::Get),
+            Some("put") => return self.parse_file_transfer(span, FileTransferKind::Put),
+            Some("seek") if !matches!(self.kind_at(1), TokenKind::Punct(Punct::LParen)) => {
+                return self.parse_file_seek(span);
+            }
+            Some("name") => return self.parse_file_rename(span),
+            Some("filecopy") => return self.parse_file_copy(span),
+            Some("kill") => return self.parse_file_system_unary(span, FileSystemUnaryKind::Kill),
+            Some("mkdir") => {
+                return self.parse_file_system_unary(span, FileSystemUnaryKind::MkDir);
+            }
+            Some("rmdir") => {
+                return self.parse_file_system_unary(span, FileSystemUnaryKind::RmDir);
+            }
+            Some("chdir") => {
+                return self.parse_file_system_unary(span, FileSystemUnaryKind::ChDir);
+            }
+            Some("chdrive") => {
+                return self.parse_file_system_unary(span, FileSystemUnaryKind::ChDrive);
+            }
+            Some("setattr") => return self.parse_file_set_attr(span),
+            Some("lock") => return self.parse_file_record_lock(span, FileRecordLockKind::Lock),
+            Some("unlock") => {
+                return self.parse_file_record_lock(span, FileRecordLockKind::Unlock);
+            }
+            Some("width") if matches!(self.kind_at(1), TokenKind::Punct(Punct::Hash)) => {
+                return self.parse_file_width(span);
+            }
+            Some("reset") => {
+                self.pos += 1;
+                if !self.at_eol() && !self.at_punct(Punct::Colon) {
+                    return self.invalid_statement(span);
+                }
+                self.end_statement();
+                return Statement::FileReset { span };
+            }
             Some("if") => return self.parse_if(span),
             Some("select") => return self.parse_select_case(span),
             Some("for") => return self.parse_for(span),
@@ -958,12 +1005,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_bare_call_args(
-        &mut self,
-        callee: Expr,
-        args: &mut Vec<Argument>,
-        span: Span,
-    ) -> Expr {
+    fn parse_bare_call_args(&mut self, callee: Expr, args: &mut Vec<Argument>, span: Span) -> Expr {
         loop {
             if self.at_eol() || self.at_punct(Punct::Colon) {
                 break;
@@ -1016,9 +1058,389 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn invalid_statement(&mut self, start: Span) -> Statement {
+        let mut end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|token| token.span)
+            .filter(|span| span.line == start.line)
+            .unwrap_or(start);
+        while !self.at_eol() {
+            end = self.span();
+            self.pos += 1;
+        }
+        let span = Span {
+            line: start.line,
+            start: start.start,
+            end: end.end.max(start.end),
+        };
+        let text = self.text_of(span);
+        self.end_statement();
+        Statement::Unknown { text, span }
+    }
+
+    fn parse_required_file_number(&mut self) -> Option<Expr> {
+        self.eat_punct(Punct::Hash).then_some(())?;
+        self.parse_expr()
+    }
+
+    fn parse_optional_file_number(&mut self) -> Option<Expr> {
+        self.eat_punct(Punct::Hash);
+        self.parse_expr()
+    }
+
+    fn parse_file_open(&mut self, span: Span) -> Statement {
+        self.pos += 1; // Open
+        let Some(path) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_kw("for") {
+            return self.invalid_statement(span);
+        }
+        let mode = match self.word_at(0).as_deref() {
+            Some("append") => FileMode::Append,
+            Some("binary") => FileMode::Binary,
+            Some("input") => FileMode::Input,
+            Some("output") => FileMode::Output,
+            Some("random") => FileMode::Random,
+            _ => return self.invalid_statement(span),
+        };
+        self.pos += 1;
+
+        let access = if self.eat_kw("access") {
+            let first = self.word_at(0);
+            match first.as_deref() {
+                Some("read") => {
+                    self.pos += 1;
+                    if self.eat_kw("write") {
+                        Some(FileAccess::ReadWrite)
+                    } else {
+                        Some(FileAccess::Read)
+                    }
+                }
+                Some("write") => {
+                    self.pos += 1;
+                    Some(FileAccess::Write)
+                }
+                _ => return self.invalid_statement(span),
+            }
+        } else {
+            None
+        };
+
+        let lock = if self.eat_kw("shared") {
+            Some(FileLock::Shared)
+        } else if self.eat_kw("lock") {
+            match self.word_at(0).as_deref() {
+                Some("read") => {
+                    self.pos += 1;
+                    if self.eat_kw("write") {
+                        Some(FileLock::ReadWrite)
+                    } else {
+                        Some(FileLock::Read)
+                    }
+                }
+                Some("write") => {
+                    self.pos += 1;
+                    Some(FileLock::Write)
+                }
+                _ => return self.invalid_statement(span),
+            }
+        } else {
+            None
+        };
+
+        if !self.eat_kw("as") {
+            return self.invalid_statement(span);
+        }
+        let Some(file_number) = self.parse_optional_file_number() else {
+            return self.invalid_statement(span);
+        };
+        let record_len = if self.eat_kw("len") {
+            if !self.eat_punct(Punct::Eq) {
+                return self.invalid_statement(span);
+            }
+            match self.parse_expr() {
+                Some(expr) => Some(expr),
+                None => return self.invalid_statement(span),
+            }
+        } else {
+            None
+        };
+        self.end_statement();
+        Statement::Open(FileOpenStmt {
+            path,
+            mode,
+            access,
+            lock,
+            file_number,
+            record_len,
+            span,
+        })
+    }
+
+    fn parse_file_close(&mut self, span: Span) -> Statement {
+        self.pos += 1; // Close
+        let mut files = Vec::new();
+        while !self.at_eol() && !self.at_punct(Punct::Colon) {
+            let Some(file) = self.parse_optional_file_number() else {
+                return self.invalid_statement(span);
+            };
+            files.push(file);
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.end_statement();
+        Statement::Close { files, span }
+    }
+
+    fn parse_file_output(&mut self, span: Span, kind: FileOutputKind) -> Statement {
+        self.pos += 1; // Print / Write
+        let Some(file_number) = self.parse_required_file_number() else {
+            return self.invalid_statement(span);
+        };
+        let mut items = Vec::new();
+        while !self.at_eol() && !self.at_punct(Punct::Colon) {
+            let separator = if self.eat_punct(Punct::Comma) {
+                FileOutputSeparator::Comma
+            } else if self.eat_punct(Punct::Semicolon) {
+                FileOutputSeparator::Semicolon
+            } else {
+                return self.invalid_statement(span);
+            };
+            let value = if self.at_eol()
+                || self.at_punct(Punct::Colon)
+                || self.at_punct(Punct::Comma)
+                || self.at_punct(Punct::Semicolon)
+            {
+                None
+            } else {
+                match self.parse_expr() {
+                    Some(expr) => Some(expr),
+                    None => return self.invalid_statement(span),
+                }
+            };
+            items.push(FileOutputItem { separator, value });
+        }
+        self.end_statement();
+        Statement::FileOutput(FileOutputStmt {
+            kind,
+            file_number,
+            items,
+            span,
+        })
+    }
+
+    fn parse_file_input(&mut self, span: Span, line: bool) -> Statement {
+        self.pos += 1; // Input, or Line
+        if line && !self.eat_kw("input") {
+            return self.invalid_statement(span);
+        }
+        let Some(file_number) = self.parse_required_file_number() else {
+            return self.invalid_statement(span);
+        };
+        let mut targets = Vec::new();
+        while self.eat_punct(Punct::Comma) {
+            let Some(target) = self.parse_postfix() else {
+                return self.invalid_statement(span);
+            };
+            targets.push(target);
+        }
+        if targets.is_empty() || (line && targets.len() != 1) {
+            return self.invalid_statement(span);
+        }
+        self.end_statement();
+        Statement::FileInput(FileInputStmt {
+            line,
+            file_number,
+            targets,
+            span,
+        })
+    }
+
+    fn parse_file_transfer(&mut self, span: Span, kind: FileTransferKind) -> Statement {
+        self.pos += 1; // Get / Put
+        let Some(file_number) = self.parse_optional_file_number() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let record_number = if self.at_punct(Punct::Comma) {
+            None
+        } else {
+            match self.parse_expr() {
+                Some(record) => Some(record),
+                None => return self.invalid_statement(span),
+            }
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let Some(value) = self.parse_postfix() else {
+            return self.invalid_statement(span);
+        };
+        if !self.at_eol() && !self.at_punct(Punct::Colon) {
+            return self.invalid_statement(span);
+        }
+        self.end_statement();
+        Statement::FileTransfer(FileTransferStmt {
+            kind,
+            file_number,
+            record_number,
+            value,
+            span,
+        })
+    }
+
+    fn parse_file_seek(&mut self, span: Span) -> Statement {
+        self.pos += 1; // Seek
+        let Some(file_number) = self.parse_optional_file_number() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let Some(position) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::FileSeek(FileSeekStmt {
+            file_number,
+            position,
+            span,
+        })
+    }
+
+    fn parse_file_rename(&mut self, span: Span) -> Statement {
+        self.pos += 1; // Name
+        let Some(source) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_kw("as") {
+            return self.invalid_statement(span);
+        }
+        let Some(destination) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::FileSystem(FileSystemStmt::Rename {
+            source,
+            destination,
+            span,
+        })
+    }
+
+    fn parse_file_copy(&mut self, span: Span) -> Statement {
+        self.pos += 1; // FileCopy
+        let Some(source) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let Some(destination) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::FileSystem(FileSystemStmt::Copy {
+            source,
+            destination,
+            span,
+        })
+    }
+
+    fn parse_file_system_unary(&mut self, span: Span, kind: FileSystemUnaryKind) -> Statement {
+        self.pos += 1;
+        let Some(path) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::FileSystem(FileSystemStmt::Unary { kind, path, span })
+    }
+
+    fn parse_file_set_attr(&mut self, span: Span) -> Statement {
+        self.pos += 1; // SetAttr
+        let Some(path) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let Some(attributes) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::FileSystem(FileSystemStmt::SetAttr {
+            path,
+            attributes,
+            span,
+        })
+    }
+
+    fn parse_file_record_lock(&mut self, span: Span, kind: FileRecordLockKind) -> Statement {
+        self.pos += 1; // Lock / Unlock
+        let Some(file_number) = self.parse_optional_file_number() else {
+            return self.invalid_statement(span);
+        };
+        let (start, end) = if self.eat_punct(Punct::Comma) {
+            if self.eat_kw("to") {
+                let Some(end) = self.parse_expr() else {
+                    return self.invalid_statement(span);
+                };
+                (None, Some(end))
+            } else {
+                let Some(start) = self.parse_expr() else {
+                    return self.invalid_statement(span);
+                };
+                let end = if self.eat_kw("to") {
+                    match self.parse_expr() {
+                        Some(end) => Some(end),
+                        None => return self.invalid_statement(span),
+                    }
+                } else {
+                    None
+                };
+                (Some(start), end)
+            }
+        } else {
+            (None, None)
+        };
+        self.end_statement();
+        Statement::FileRecordLock(FileRecordLockStmt {
+            kind,
+            file_number,
+            start,
+            end,
+            span,
+        })
+    }
+
+    fn parse_file_width(&mut self, span: Span) -> Statement {
+        self.pos += 1; // Width
+        let Some(file_number) = self.parse_required_file_number() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let Some(width) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::FileWidth {
+            file_number,
+            width,
+            span,
+        }
+    }
+
     fn parse_if(&mut self, span: Span) -> Statement {
         self.pos += 1;
-        let condition = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let condition = self
+            .parse_expr()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.eat_kw("then");
 
         // A one-line `If` has its body on the same line and no `End If`.
@@ -1062,7 +1484,9 @@ impl<'a> Parser<'a> {
         loop {
             if self.at_kw("elseif") {
                 self.pos += 1;
-                let cond = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+                let cond = self
+                    .parse_expr()
+                    .unwrap_or(Expr::Literal(Literal::Empty, span));
                 self.eat_kw("then");
                 self.end_statement();
                 let body = self.parse_block(&["elseif", "else", "end if"]);
@@ -1091,7 +1515,9 @@ impl<'a> Parser<'a> {
 
     fn parse_select_case(&mut self, span: Span) -> Statement {
         self.pos += 2; // Select Case
-        let subject = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let subject = self
+            .parse_expr()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.end_statement();
 
         let mut cases = Vec::new();
@@ -1176,9 +1602,13 @@ impl<'a> Parser<'a> {
     fn parse_for(&mut self, span: Span) -> Statement {
         self.pos += 1;
         if self.eat_kw("each") {
-            let item = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+            let item = self
+                .parse_expr()
+                .unwrap_or(Expr::Literal(Literal::Empty, span));
             self.eat_kw("in");
-            let collection = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+            let collection = self
+                .parse_expr()
+                .unwrap_or(Expr::Literal(Literal::Empty, span));
             self.end_statement();
             let body = self.parse_block(&["next"]);
             self.consume_line();
@@ -1191,11 +1621,17 @@ impl<'a> Parser<'a> {
         }
 
         // Same reason as in an assignment: the counter must not eat the `=`.
-        let counter = self.parse_postfix().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let counter = self
+            .parse_postfix()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.eat_punct(Punct::Eq);
-        let from = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let from = self
+            .parse_expr()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.eat_kw("to");
-        let to = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let to = self
+            .parse_expr()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         let step = if self.eat_kw("step") {
             self.parse_expr()
         } else {
@@ -1245,7 +1681,9 @@ impl<'a> Parser<'a> {
 
     fn parse_while(&mut self, span: Span) -> Statement {
         self.pos += 1;
-        let condition = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let condition = self
+            .parse_expr()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.end_statement();
         let body = self.parse_block(&["wend"]);
         self.consume_line();
@@ -1258,7 +1696,9 @@ impl<'a> Parser<'a> {
 
     fn parse_with(&mut self, span: Span) -> Statement {
         self.pos += 1;
-        let subject = self.parse_expr().unwrap_or(Expr::Literal(Literal::Empty, span));
+        let subject = self
+            .parse_expr()
+            .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.end_statement();
         let body = self.parse_block(&["end with"]);
         self.consume_line();
@@ -1681,7 +2121,11 @@ mod tests {
 
     fn expr(src: &str) -> Expr {
         let proc = only_proc(&format!("Sub T()\nx = {src}\nEnd Sub"));
-        match proc.body.into_iter().find(|s| matches!(s, Statement::Assign { .. })) {
+        match proc
+            .body
+            .into_iter()
+            .find(|s| matches!(s, Statement::Assign { .. }))
+        {
             Some(Statement::Assign { value, .. }) => value,
             other => panic!("expected an assignment, got {other:?}"),
         }
@@ -1780,7 +2224,9 @@ mod tests {
 
     #[test]
     fn block_and_single_line_if_stay_distinguishable() {
-        let block = only_proc("Sub T()\nIf a Then\nb = 1\nElseIf c Then\nb = 2\nElse\nb = 3\nEnd If\nEnd Sub");
+        let block = only_proc(
+            "Sub T()\nIf a Then\nb = 1\nElseIf c Then\nb = 2\nElse\nb = 3\nEnd If\nEnd Sub",
+        );
         match &block.body[0] {
             Statement::If(s) => {
                 assert!(!s.single_line);
@@ -1915,14 +2361,20 @@ mod tests {
         }
         assert!(matches!(
             &p.body[1],
-            Statement::Call { explicit_call: true, .. }
+            Statement::Call {
+                explicit_call: true,
+                ..
+            }
         ));
     }
 
     #[test]
     fn labels_and_line_numbers_are_kept() {
         let p = only_proc("Sub T()\n10 x = 1\nHandler:\nResume Next\nEnd Sub");
-        assert!(matches!(&p.body[0], Statement::LineNumber { value: 10, .. }));
+        assert!(matches!(
+            &p.body[0],
+            Statement::LineNumber { value: 10, .. }
+        ));
         assert!(matches!(&p.body[2], Statement::Label { name, .. } if name == "Handler"));
         assert!(matches!(
             &p.body[3],
@@ -1994,7 +2446,10 @@ mod tests {
     #[test]
     fn redim_preserve_is_recorded() {
         let p = only_proc("Sub T()\nReDim Preserve a(1 To 10)\nEnd Sub");
-        assert!(matches!(&p.body[0], Statement::ReDim { preserve: true, .. }));
+        assert!(matches!(
+            &p.body[0],
+            Statement::ReDim { preserve: true, .. }
+        ));
     }
 
     #[test]
@@ -2010,9 +2465,215 @@ mod tests {
     }
 
     #[test]
-    fn unparsed_input_is_preserved_rather_than_dropped() {
-        let p = only_proc("Sub T()\nOpen \"f.txt\" For Input As #1\nx = 1\nEnd Sub");
-        // Whatever the first line becomes, the next statement still parses.
+    fn file_io_statements_are_structured() {
+        let p = only_proc(
+            "Sub T()\n\
+             Open path For Binary Access Read Write Lock Read Write As #7 Len = 128\n\
+             Print #7, \"name\"; value,\n\
+             Write #7, value\n\
+             Input #7, first, second\n\
+             Line Input #7, wholeLine\n\
+             Close #7, #8\n\
+             End Sub",
+        );
+        assert_eq!(p.body.len(), 6);
+        match &p.body[0] {
+            Statement::Open(open) => {
+                assert_eq!(open.mode, FileMode::Binary);
+                assert_eq!(open.access, Some(FileAccess::ReadWrite));
+                assert_eq!(open.lock, Some(FileLock::ReadWrite));
+                assert!(open.record_len.is_some());
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+        match &p.body[1] {
+            Statement::FileOutput(output) => {
+                assert_eq!(output.kind, FileOutputKind::Print);
+                assert_eq!(output.items.len(), 3);
+                assert_eq!(output.items[0].separator, FileOutputSeparator::Comma);
+                assert_eq!(output.items[1].separator, FileOutputSeparator::Semicolon);
+                assert!(
+                    output.items[2].value.is_none(),
+                    "trailing comma must survive"
+                );
+            }
+            other => panic!("expected Print #, got {other:?}"),
+        }
+        assert!(matches!(
+            &p.body[2],
+            Statement::FileOutput(FileOutputStmt {
+                kind: FileOutputKind::Write,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &p.body[3],
+            Statement::FileInput(FileInputStmt { line: false, targets, .. }) if targets.len() == 2
+        ));
+        assert!(matches!(
+            &p.body[4],
+            Statement::FileInput(FileInputStmt { line: true, targets, .. }) if targets.len() == 1
+        ));
+        match &p.body[5] {
+            Statement::Close { files, .. } => assert_eq!(files.len(), 2, "{:#?}", p.body[5]),
+            other => panic!("expected Close, got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn all_open_modes_and_lock_spellings_parse() {
+        for (mode, expected) in [
+            ("Append", FileMode::Append),
+            ("Binary", FileMode::Binary),
+            ("Input", FileMode::Input),
+            ("Output", FileMode::Output),
+            ("Random", FileMode::Random),
+        ] {
+            let p = only_proc(&format!(
+                "Sub T()\nOpen \"f\" For {mode} Shared As #1\nEnd Sub"
+            ));
+            assert!(matches!(&p.body[0], Statement::Open(open)
+                if open.mode == expected && open.lock == Some(FileLock::Shared)));
+        }
+    }
+
+    #[test]
+    fn random_access_file_statements_and_optional_hash_parse() {
+        let p = only_proc(
+            "Sub T()\n\
+             Open path For Binary As 7\n\
+             Put #7, 1, sourceValue\n\
+             Seek 7, position\n\
+             Get 7, , targetValue\n\
+             Close 7, 8\n\
+             End Sub",
+        );
+        assert_eq!(p.body.len(), 5);
+        assert!(matches!(&p.body[0], Statement::Open(_)));
+        assert!(matches!(
+            &p.body[1],
+            Statement::FileTransfer(FileTransferStmt {
+                kind: FileTransferKind::Put,
+                record_number: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(&p.body[2], Statement::FileSeek(_)));
+        assert!(matches!(
+            &p.body[3],
+            Statement::FileTransfer(FileTransferStmt {
+                kind: FileTransferKind::Get,
+                record_number: None,
+                ..
+            })
+        ));
+        assert!(matches!(&p.body[4], Statement::Close { files, .. } if files.len() == 2));
+    }
+
+    #[test]
+    fn filesystem_statements_are_structured() {
+        let p = only_proc(
+            "Sub T()\n\
+             FileCopy sourcePath, copyPath\n\
+             Name copyPath As renamedPath\n\
+             SetAttr renamedPath, vbHidden Or vbReadOnly\n\
+             Kill renamedPath\n\
+             MkDir directoryPath\n\
+             ChDrive driveName\n\
+             ChDir directoryPath\n\
+             RmDir directoryPath\n\
+             End Sub",
+        );
+        assert_eq!(p.body.len(), 8);
+        assert!(matches!(
+            &p.body[0],
+            Statement::FileSystem(FileSystemStmt::Copy { .. })
+        ));
+        assert!(matches!(
+            &p.body[1],
+            Statement::FileSystem(FileSystemStmt::Rename { .. })
+        ));
+        assert!(matches!(
+            &p.body[2],
+            Statement::FileSystem(FileSystemStmt::SetAttr { .. })
+        ));
+        for (statement, expected) in p.body[3..].iter().zip([
+            FileSystemUnaryKind::Kill,
+            FileSystemUnaryKind::MkDir,
+            FileSystemUnaryKind::ChDrive,
+            FileSystemUnaryKind::ChDir,
+            FileSystemUnaryKind::RmDir,
+        ]) {
+            assert!(matches!(
+                statement,
+                Statement::FileSystem(FileSystemStmt::Unary { kind, .. }) if *kind == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn file_lock_width_and_reset_statements_are_structured() {
+        let p = only_proc(
+            "Sub T()\n\
+             Lock 7\n\
+             Lock #7, 2\n\
+             Unlock 7, 1 To 4\n\
+             Lock #7, To 4\n\
+             Width #7, 12\n\
+             Reset\n\
+             End Sub",
+        );
+        assert_eq!(p.body.len(), 6);
+        assert!(matches!(
+            &p.body[0],
+            Statement::FileRecordLock(FileRecordLockStmt {
+                kind: FileRecordLockKind::Lock,
+                start: None,
+                end: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &p.body[1],
+            Statement::FileRecordLock(FileRecordLockStmt {
+                start: Some(_),
+                end: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &p.body[2],
+            Statement::FileRecordLock(FileRecordLockStmt {
+                kind: FileRecordLockKind::Unlock,
+                start: Some(_),
+                end: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            &p.body[3],
+            Statement::FileRecordLock(FileRecordLockStmt {
+                start: None,
+                end: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(&p.body[4], Statement::FileWidth { .. }));
+        assert!(matches!(&p.body[5], Statement::FileReset { .. }));
+    }
+
+    #[test]
+    fn malformed_file_io_is_preserved_and_does_not_swallow_the_next_line() {
+        let p = only_proc(
+            "Sub T()\nOpen \"f.txt\" As #1\nLine Input #1, first, second\nGet #1\nName sourcePath\nReset unexpected\nx = 1\nEnd Sub",
+        );
+        assert!(matches!(&p.body[0], Statement::Unknown { text, .. } if text.contains("Open")));
+        assert!(
+            matches!(&p.body[1], Statement::Unknown { text, .. } if text.contains("Line Input"))
+        );
+        assert!(matches!(&p.body[2], Statement::Unknown { text, .. } if text.contains("Get")));
+        assert!(matches!(&p.body[3], Statement::Unknown { text, .. } if text.contains("Name")));
+        assert!(matches!(&p.body[4], Statement::Unknown { text, .. } if text.contains("Reset")));
         assert!(p.body.iter().any(|s| matches!(s, Statement::Assign { .. })));
     }
 }

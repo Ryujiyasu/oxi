@@ -342,7 +342,12 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             let _ = write!(out, "dim{}", if decl.is_const { " const" } else { "" });
             for item in &decl.items {
                 let name = locals.render(&item.name);
-                let _ = write!(out, " {}:{}", name, item.type_name.name.to_ascii_lowercase());
+                let _ = write!(
+                    out,
+                    " {}:{}",
+                    name,
+                    item.type_name.name.to_ascii_lowercase()
+                );
                 if let Some(value) = &item.value {
                     out.push('=');
                     render_expr(value, locals, out);
@@ -365,6 +370,138 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
                 render_expr(t, locals, out);
             }
         }
+        Statement::Open(open) => {
+            out.push_str("open ");
+            render_expr(&open.path, locals, out);
+            let _ = write!(out, " for {:?}", open.mode);
+            if let Some(access) = open.access {
+                let _ = write!(out, " access {access:?}");
+            }
+            if let Some(lock) = open.lock {
+                let _ = write!(out, " lock {lock:?}");
+            }
+            out.push_str(" as #");
+            render_expr(&open.file_number, locals, out);
+            if let Some(record_len) = &open.record_len {
+                out.push_str(" len=");
+                render_expr(record_len, locals, out);
+            }
+        }
+        Statement::Close { files, .. } => {
+            out.push_str("close");
+            for file in files {
+                out.push_str(" #");
+                render_expr(file, locals, out);
+            }
+        }
+        Statement::FileOutput(output) => {
+            let keyword = match output.kind {
+                FileOutputKind::Print => "print",
+                FileOutputKind::Write => "write",
+            };
+            let _ = write!(out, "{keyword} #");
+            render_expr(&output.file_number, locals, out);
+            for item in &output.items {
+                out.push(match item.separator {
+                    FileOutputSeparator::Comma => ',',
+                    FileOutputSeparator::Semicolon => ';',
+                });
+                if let Some(value) = &item.value {
+                    render_expr(value, locals, out);
+                }
+            }
+        }
+        Statement::FileInput(input) => {
+            out.push_str(if input.line {
+                "line input #"
+            } else {
+                "input #"
+            });
+            render_expr(&input.file_number, locals, out);
+            for target in &input.targets {
+                out.push(',');
+                render_expr(target, locals, out);
+            }
+        }
+        Statement::FileTransfer(transfer) => {
+            out.push_str(match transfer.kind {
+                FileTransferKind::Get => "get #",
+                FileTransferKind::Put => "put #",
+            });
+            render_expr(&transfer.file_number, locals, out);
+            out.push(',');
+            if let Some(record_number) = &transfer.record_number {
+                render_expr(record_number, locals, out);
+            }
+            out.push(',');
+            render_expr(&transfer.value, locals, out);
+        }
+        Statement::FileSeek(seek) => {
+            out.push_str("seek #");
+            render_expr(&seek.file_number, locals, out);
+            out.push(',');
+            render_expr(&seek.position, locals, out);
+        }
+        Statement::FileSystem(operation) => match operation {
+            FileSystemStmt::Rename {
+                source,
+                destination,
+                ..
+            } => {
+                out.push_str("name ");
+                render_expr(source, locals, out);
+                out.push_str(" as ");
+                render_expr(destination, locals, out);
+            }
+            FileSystemStmt::Copy {
+                source,
+                destination,
+                ..
+            } => {
+                out.push_str("filecopy ");
+                render_expr(source, locals, out);
+                out.push(',');
+                render_expr(destination, locals, out);
+            }
+            FileSystemStmt::Unary { kind, path, .. } => {
+                let _ = write!(out, "{kind:?} ");
+                render_expr(path, locals, out);
+            }
+            FileSystemStmt::SetAttr {
+                path, attributes, ..
+            } => {
+                out.push_str("setattr ");
+                render_expr(path, locals, out);
+                out.push(',');
+                render_expr(attributes, locals, out);
+            }
+        },
+        Statement::FileRecordLock(lock) => {
+            out.push_str(match lock.kind {
+                FileRecordLockKind::Lock => "lock #",
+                FileRecordLockKind::Unlock => "unlock #",
+            });
+            render_expr(&lock.file_number, locals, out);
+            if lock.start.is_some() || lock.end.is_some() {
+                out.push(',');
+                if let Some(start) = &lock.start {
+                    render_expr(start, locals, out);
+                }
+                if let Some(end) = &lock.end {
+                    out.push_str(" to ");
+                    render_expr(end, locals, out);
+                }
+            }
+        }
+        Statement::FileWidth {
+            file_number, width, ..
+        } => {
+            out.push_str("width #");
+            render_expr(file_number, locals, out);
+            out.push(',');
+            render_expr(width, locals, out);
+        }
+        Statement::FileReset { .. } => out.push_str("reset"),
         Statement::If(s) => {
             out.push_str("if ");
             render_expr(&s.condition, locals, out);
@@ -448,7 +585,11 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             out.push_str("do");
             for (label, test) in [("pre", &s.pre), ("post", &s.post)] {
                 if let Some(test) = test {
-                    let _ = write!(out, " {label}{}", if test.until { "until" } else { "while" });
+                    let _ = write!(
+                        out,
+                        " {label}{}",
+                        if test.until { "until" } else { "while" }
+                    );
                     render_expr(&test.condition, locals, out);
                 }
             }
@@ -477,7 +618,9 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
         }
         Statement::OnError(kind) => {
             let text = match kind {
-                OnError::Goto { label, .. } => format!("onerror goto {}", label.to_ascii_lowercase()),
+                OnError::Goto { label, .. } => {
+                    format!("onerror goto {}", label.to_ascii_lowercase())
+                }
                 OnError::Disable { .. } => "onerror off".to_string(),
                 OnError::ResumeNext { .. } => "onerror resumenext".to_string(),
             };
@@ -709,7 +852,11 @@ End Sub";
 
     #[test]
     fn renaming_a_variable_is_invisible_at_standard_but_not_at_strict() {
-        let renamed = ORIGINAL.replace(" i ", " cnt ").replace("(i", "(cnt").replace("i *", "cnt *").replace("& i", "& cnt");
+        let renamed = ORIGINAL
+            .replace(" i ", " cnt ")
+            .replace("(i", "(cnt")
+            .replace("i *", "cnt *")
+            .replace("& i", "& cnt");
         assert_ne!(
             fp(ORIGINAL, Strength::Strict).combined,
             fp(&renamed, Strength::Strict).combined
@@ -789,7 +936,10 @@ Sub B()\nx = 99\nEnd Sub
 Sub C()\nx = 3\nEnd Sub
 Sub D()\nx = 4\nEnd Sub";
 
-        let s = compare(&fp(original, Strength::Standard), &fp(variant, Strength::Standard));
+        let s = compare(
+            &fp(original, Strength::Standard),
+            &fp(variant, Strength::Standard),
+        );
         assert_eq!(s.shared, 2);
         assert_eq!(s.only_a, 1);
         assert_eq!(s.only_b, 2);
@@ -807,7 +957,10 @@ Sub D()\nx = 4\nEnd Sub";
 
     #[test]
     fn identical_modules_compare_as_identical() {
-        let s = compare(&fp(ORIGINAL, Strength::Standard), &fp(ORIGINAL, Strength::Standard));
+        let s = compare(
+            &fp(ORIGINAL, Strength::Standard),
+            &fp(ORIGINAL, Strength::Standard),
+        );
         assert_eq!(s.jaccard, 1.0);
         assert!(s.diverged.is_empty());
         assert_eq!(s.only_a, 0);
@@ -834,10 +987,68 @@ Sub D()\nx = 4\nEnd Sub";
     #[test]
     fn unparsed_lines_still_count_as_a_difference() {
         let clean = "Sub T()\nx = 1\nEnd Sub";
-        let with_io = "Sub T()\nOpen \"f.txt\" For Input As #1\nx = 1\nEnd Sub";
+        let with_io = "Sub T()\nGet #1\nx = 1\nEnd Sub";
         assert_ne!(
             fp(clean, Strength::Loosest).combined,
             fp(with_io, Strength::Loosest).combined
         );
+    }
+
+    #[test]
+    fn file_io_shape_and_print_separators_are_fingerprinted() {
+        let comma = "Sub T()\nPrint #1, a, b\nEnd Sub";
+        let semicolon = "Sub T()\nPrint #1, a; b\nEnd Sub";
+        let write = "Sub T()\nWrite #1, a, b\nEnd Sub";
+        assert_ne!(
+            fp(comma, Strength::Loosest).combined,
+            fp(semicolon, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(comma, Strength::Loosest).combined,
+            fp(write, Strength::Loosest).combined
+        );
+
+        let get_next = "Sub T()\nGet #1, , value\nEnd Sub";
+        let get_at = "Sub T()\nGet #1, 10, value\nEnd Sub";
+        let put_at = "Sub T()\nPut #1, 10, value\nEnd Sub";
+        assert_ne!(
+            fp(get_next, Strength::Loosest).combined,
+            fp(get_at, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(get_at, Strength::Loosest).combined,
+            fp(put_at, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn filesystem_operation_kinds_are_fingerprinted() {
+        let rename = "Sub T()\nName sourcePath As destinationPath\nEnd Sub";
+        let copy = "Sub T()\nFileCopy sourcePath, destinationPath\nEnd Sub";
+        let kill = "Sub T()\nKill sourcePath\nEnd Sub";
+        let mkdir = "Sub T()\nMkDir sourcePath\nEnd Sub";
+        assert_ne!(
+            fp(rename, Strength::Loosest).combined,
+            fp(copy, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(kill, Strength::Loosest).combined,
+            fp(mkdir, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn file_lock_ranges_and_width_are_fingerprinted() {
+        let whole = "Sub T()\nLock #1\nEnd Sub";
+        let single = "Sub T()\nLock #1, 2\nEnd Sub";
+        let range = "Sub T()\nLock #1, 1 To 4\nEnd Sub";
+        let unlock = "Sub T()\nUnlock #1, 1 To 4\nEnd Sub";
+        let width = "Sub T()\nWidth #1, 4\nEnd Sub";
+        for different in [single, range, unlock, width] {
+            assert_ne!(
+                fp(whole, Strength::Loosest).combined,
+                fp(different, Strength::Loosest).combined
+            );
+        }
     }
 }
