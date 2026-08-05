@@ -7,8 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use oxidocs_common::archive::OoxmlArchive;
-use oxivba_core::fingerprint::{compare, fingerprint_module, ModuleFingerprint, Strength};
+use oxivba_core::fingerprint::{
+    compare, fingerprint_module, ModuleFingerprint, Similarity, Strength,
+};
 use oxivba_core::{analyse, parse_module, Analysis, Class};
+use serde_json::json;
 
 struct ModuleReport {
     name: String,
@@ -20,6 +23,12 @@ struct ProjectReport {
     path: PathBuf,
     container_part: String,
     modules: Vec<ModuleReport>,
+}
+
+struct RelatedModules {
+    left: String,
+    right: String,
+    similarity: Similarity,
 }
 
 pub(crate) fn analyze_file(input: &str) -> Result<(), String> {
@@ -127,6 +136,122 @@ pub(crate) fn inventory(input: &str) -> Result<(), String> {
     }
 }
 
+pub(crate) fn inventory_json(input: &str) -> Result<(), String> {
+    let root = Path::new(input);
+    let mut files = Vec::new();
+    collect_macro_files(root, &mut files)?;
+    files.sort();
+    if files.is_empty() {
+        return Err(format!("no macro-enabled Office files found under {input}"));
+    }
+
+    let mut reports = Vec::new();
+    let mut failures = Vec::new();
+    for path in files {
+        match inspect_project(&path) {
+            Ok(report) => reports.push(report),
+            Err(error) => failures.push((path, error)),
+        }
+    }
+
+    let projects: Vec<_> = reports
+        .iter()
+        .map(|report| {
+            let (procedures, statements, unparsed) = project_totals(report);
+            let modules: Vec<_> = report
+                .modules
+                .iter()
+                .map(|module| {
+                    let findings: Vec<_> = module
+                        .analysis
+                        .findings
+                        .iter()
+                        .map(|finding| {
+                            json!({
+                                "line": finding.line,
+                                "class": finding.class.map(Class::as_str),
+                                "what": finding.what,
+                                "reason": finding.reason,
+                            })
+                        })
+                        .collect();
+                    json!({
+                        "name": module.name,
+                        "class": module.analysis.class.map(Class::as_str),
+                        "verdict": module.analysis.verdict(),
+                        "metrics": {
+                            "procedures": module.analysis.metrics.procedures,
+                            "statements": module.analysis.metrics.statements,
+                            "max_nesting": module.analysis.metrics.max_nesting,
+                            "longest_procedure": module.analysis.metrics.longest_procedure,
+                            "unparsed": module.analysis.metrics.unparsed,
+                        },
+                        "needs_formula_engine": module.analysis.needs_formula_engine,
+                        "has_option_explicit": module.analysis.has_option_explicit,
+                        "blanket_error_handlers": module.analysis.blanket_error_handlers,
+                        "external_declares": module.analysis.external_declares,
+                        "uncalled_procedures": module.analysis.uncalled_procedures,
+                        "api_names": module.analysis.api_names,
+                        "standard_fingerprint": format!("{:032x}", module.fingerprint.combined),
+                        "findings": findings,
+                    })
+                })
+                .collect();
+            json!({
+                "path": report.path.to_string_lossy(),
+                "container_part": report.container_part,
+                "class": project_class(report).map(Class::as_str),
+                "needs_formula_engine": report.modules.iter().any(|module| module.analysis.needs_formula_engine),
+                "metrics": {
+                    "modules": report.modules.len(),
+                    "procedures": procedures,
+                    "statements": statements,
+                    "unparsed": unparsed,
+                },
+                "modules": modules,
+            })
+        })
+        .collect();
+    let duplicate_groups = duplicate_module_groups(&reports);
+    let related: Vec<_> = related_module_pairs(&reports)
+        .into_iter()
+        .map(|pair| {
+            json!({
+                "left": pair.left,
+                "right": pair.right,
+                "shared": pair.similarity.shared,
+                "only_left": pair.similarity.only_a,
+                "only_right": pair.similarity.only_b,
+                "jaccard": pair.similarity.jaccard,
+                "diverged": pair.similarity.diverged,
+            })
+        })
+        .collect();
+    let errors: Vec<_> = failures
+        .iter()
+        .map(|(path, error)| json!({ "path": path.to_string_lossy(), "error": error }))
+        .collect();
+    let output = json!({
+        "schema": "oxivba-inventory-v1",
+        "root": root.to_string_lossy(),
+        "projects": projects,
+        "duplicate_groups": duplicate_groups,
+        "related_modules": related,
+        "errors": errors,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output)
+            .map_err(|error| format!("cannot encode inventory JSON: {error}"))?
+    );
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} file(s) could not be analyzed", failures.len()))
+    }
+}
+
 fn inspect_project(path: &Path) -> Result<ProjectReport, String> {
     let data =
         fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
@@ -187,6 +312,19 @@ fn project_class(report: &ProjectReport) -> Option<Class> {
 }
 
 fn print_duplicate_modules(reports: &[ProjectReport]) {
+    let duplicates = duplicate_module_groups(reports);
+    if duplicates.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("Structurally identical modules (standard fingerprint):");
+    for members in duplicates {
+        println!("  {}", members.join(" = "));
+    }
+}
+
+fn duplicate_module_groups(reports: &[ProjectReport]) -> Vec<Vec<String>> {
     let mut groups: BTreeMap<u128, Vec<String>> = BTreeMap::new();
     for report in reports {
         for module in &report.modules {
@@ -200,22 +338,39 @@ fn print_duplicate_modules(reports: &[ProjectReport]) {
         }
     }
 
-    let duplicates: Vec<_> = groups
+    groups
         .into_values()
         .filter(|members| members.len() > 1)
-        .collect();
-    if duplicates.is_empty() {
+        .collect()
+}
+
+fn print_related_modules(reports: &[ProjectReport]) {
+    let related = related_module_pairs(reports);
+    if related.is_empty() {
         return;
     }
 
     println!();
-    println!("Structurally identical modules (standard fingerprint):");
-    for members in duplicates {
-        println!("  {}", members.join(" = "));
+    println!("Related modules (standard fingerprint):");
+    for pair in related {
+        let diverged = if pair.similarity.diverged.is_empty() {
+            String::new()
+        } else {
+            format!("; diverged: {}", pair.similarity.diverged.join(", "))
+        };
+        println!(
+            "  {} <> {}: {:.1}% (shared {}; only {}/{}{diverged})",
+            pair.left,
+            pair.right,
+            pair.similarity.jaccard * 100.0,
+            pair.similarity.shared,
+            pair.similarity.only_a,
+            pair.similarity.only_b
+        );
     }
 }
 
-fn print_related_modules(reports: &[ProjectReport]) {
+fn related_module_pairs(reports: &[ProjectReport]) -> Vec<RelatedModules> {
     let modules: Vec<_> = reports
         .iter()
         .flat_map(|report| {
@@ -258,39 +413,21 @@ fn print_related_modules(reports: &[ProjectReport]) {
         }
         let similarity = compare(&left_module.fingerprint, &right_module.fingerprint);
         if (similarity.shared > 0 && similarity.jaccard >= 0.5) || !similarity.diverged.is_empty() {
-            related.push((
+            related.push(RelatedModules {
+                left: format!("{}::{}", left_report.path.display(), left_module.name),
+                right: format!("{}::{}", right_report.path.display(), right_module.name),
                 similarity,
-                format!("{}::{}", left_report.path.display(), left_module.name),
-                format!("{}::{}", right_report.path.display(), right_module.name),
-            ));
+            });
         }
     }
     related.sort_by(|a, b| {
-        b.0.jaccard
-            .total_cmp(&a.0.jaccard)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.cmp(&b.2))
+        b.similarity
+            .jaccard
+            .total_cmp(&a.similarity.jaccard)
+            .then_with(|| a.left.cmp(&b.left))
+            .then_with(|| a.right.cmp(&b.right))
     });
-    if related.is_empty() {
-        return;
-    }
-
-    println!();
-    println!("Related modules (standard fingerprint):");
-    for (similarity, left, right) in related {
-        let diverged = if similarity.diverged.is_empty() {
-            String::new()
-        } else {
-            format!("; diverged: {}", similarity.diverged.join(", "))
-        };
-        println!(
-            "  {left} <> {right}: {:.1}% (shared {}; only {}/{}{diverged})",
-            similarity.jaccard * 100.0,
-            similarity.shared,
-            similarity.only_a,
-            similarity.only_b
-        );
-    }
+    related
 }
 
 fn collect_macro_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {

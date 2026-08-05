@@ -93,6 +93,32 @@ End Function
         }
     }
     $inventory.TrimEnd()
+
+    $jsonOutput = (& $cliPath vba-inventory-json $probeRoot | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "vba-inventory-json failed with exit code $LASTEXITCODE"
+    }
+    $jsonReport = $jsonOutput | ConvertFrom-Json
+    if ($jsonReport.schema -ne 'oxivba-inventory-v1') {
+        throw "Unexpected JSON schema: $($jsonReport.schema)"
+    }
+    if (@($jsonReport.projects).Count -ne 3) {
+        throw "Expected 3 JSON projects, got $(@($jsonReport.projects).Count)"
+    }
+    if (@($jsonReport.duplicate_groups).Count -ne 1) {
+        throw "Expected 1 JSON duplicate group, got $(@($jsonReport.duplicate_groups).Count)"
+    }
+    if (@($jsonReport.related_modules).Count -ne 2) {
+        throw "Expected 2 JSON related pairs, got $(@($jsonReport.related_modules).Count)"
+    }
+    $divergedNames = @($jsonReport.related_modules | ForEach-Object { $_.diverged })
+    if ($divergedNames -notcontains 'HiddenHelper') {
+        throw "JSON related pairs did not report HiddenHelper divergence"
+    }
+    if (@($jsonReport.errors).Count -ne 0) {
+        throw "JSON inventory reported unexpected errors"
+    }
+    Write-Output 'JSON inventory schema round-trip: PASS'
     Write-Output 'COM XLSM extraction and analysis probe: PASS'
 }
 finally {
