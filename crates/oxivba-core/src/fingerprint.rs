@@ -756,6 +756,9 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
         Expr::New { type_name, .. } => {
             let _ = write!(out, "new {}", type_name.to_ascii_lowercase());
         }
+        Expr::AddressOf { procedure, .. } => {
+            let _ = write!(out, "addressof {}", procedure.to_ascii_lowercase());
+        }
         Expr::Unary { op, operand, .. } => {
             let _ = write!(out, "{op:?}(");
             render_expr(operand, locals, out);
@@ -1117,6 +1120,19 @@ Sub D()\nx = 4\nEnd Sub";
             fp(get_at, Strength::Loosest).combined,
             fp(put_at, Strength::Loosest).combined
         );
+    }
+
+    #[test]
+    fn addressof_callback_name_is_fingerprinted() {
+        let a = fp(
+            "Sub Hook()\nx = SetTimer(0, 0, 1, AddressOf TimerA)\nEnd Sub",
+            Strength::Standard,
+        );
+        let b = fp(
+            "Sub Hook()\nx = SetTimer(0, 0, 1, AddressOf TimerB)\nEnd Sub",
+            Strength::Standard,
+        );
+        assert_ne!(a.combined, b.combined);
     }
 
     #[test]

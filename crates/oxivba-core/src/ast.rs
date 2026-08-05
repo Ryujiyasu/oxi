@@ -702,6 +702,11 @@ pub enum Expr {
         type_name: String,
         span: Span,
     },
+    /// `AddressOf WindowProc`, a procedure pointer passed to a native callback.
+    AddressOf {
+        procedure: String,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -739,6 +744,7 @@ impl Expr {
             | Expr::Index { span: s, .. }
             | Expr::Bang { span: s, .. }
             | Expr::New { span: s, .. }
+            | Expr::AddressOf { span: s, .. }
             | Expr::Unary { span: s, .. }
             | Expr::Binary { span: s, .. }
             | Expr::TypeOf { span: s, .. } => *s,
@@ -763,7 +769,11 @@ impl Expr {
                 lhs.visit(f);
                 rhs.visit(f);
             }
-            Expr::Literal(..) | Expr::Ident(..) | Expr::WithMember(..) | Expr::New { .. } => {}
+            Expr::Literal(..)
+            | Expr::Ident(..)
+            | Expr::WithMember(..)
+            | Expr::New { .. }
+            | Expr::AddressOf { .. } => {}
         }
     }
 

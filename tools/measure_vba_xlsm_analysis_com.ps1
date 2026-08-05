@@ -38,10 +38,11 @@ End Function
     $workbook.SaveAs($workbookPath, 52)
     $workbook.SaveCopyAs($workbookCopyPath)
     $module.CodeModule.ReplaceLine(11, '    HiddenHelper = value + 2')
+    $module.CodeModule.InsertLines(2, 'Private Declare PtrSafe Function SetTimer Lib "user32" (ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr')
     $module.CodeModule.AddFromString(@'
 
 Private Function VariantOnly(ByVal value As Long) As Long
-    VariantOnly = value * 2
+    VariantOnly = SetTimer(0, 0, value, AddressOf HiddenHelper)
 End Function
 '@)
     $workbook.SaveAs($workbookVariantPath, 52)
@@ -114,6 +115,14 @@ End Function
     $divergedNames = @($jsonReport.related_modules | ForEach-Object { $_.diverged })
     if ($divergedNames -notcontains 'HiddenHelper') {
         throw "JSON related pairs did not report HiddenHelper divergence"
+    }
+    $variantProject = @($jsonReport.projects | Where-Object { $_.path -like '*probe-variant.xlsm' })[0]
+    $variantModule = @($variantProject.modules | Where-Object { $_.name -eq 'AnalysisProbe' })[0]
+    if ($variantModule.metrics.unparsed -ne 0) {
+        throw "AddressOf variant produced unparsed source"
+    }
+    if (@($variantModule.external_declares) -notcontains 'SetTimer') {
+        throw "AddressOf variant did not report its SetTimer declaration"
     }
     if (@($jsonReport.errors).Count -ne 0) {
         throw "JSON inventory reported unexpected errors"

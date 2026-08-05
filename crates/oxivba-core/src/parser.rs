@@ -2206,6 +2206,11 @@ impl<'a> Parser<'a> {
                         let type_name = self.parse_qualified_name()?;
                         return Some(Expr::New { type_name, span });
                     }
+                    "addressof" => {
+                        self.pos += 1;
+                        let procedure = self.parse_qualified_name()?;
+                        return Some(Expr::AddressOf { procedure, span });
+                    }
                     "typeof" => {
                         self.pos += 1;
                         let operand = self.parse_postfix()?;
@@ -2495,6 +2500,27 @@ mod tests {
         assert!(matches!(
             &p.body[2],
             Statement::OnError(OnError::Disable { .. })
+        ));
+    }
+
+    #[test]
+    fn addressof_callback_is_a_structured_expression() {
+        let module = parse_module(
+            "Sub Hook()\n  timerId = SetTimer(0, 0, 1000, AddressOf TimerProc)\nEnd Sub",
+        )
+        .unwrap();
+        let ModuleItem::Procedure(procedure) = &module.items[0] else {
+            panic!("expected procedure")
+        };
+        let Statement::Assign { value, .. } = &procedure.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Index { args, .. } = value else {
+            panic!("expected SetTimer call")
+        };
+        assert!(matches!(
+            args[3].value.as_ref(),
+            Some(Expr::AddressOf { procedure, .. }) if procedure == "TimerProc"
         ));
     }
 

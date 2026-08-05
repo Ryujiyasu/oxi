@@ -1108,6 +1108,7 @@ fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
             collect_names(object, out);
         }
         Expr::New { type_name, span } => out.push((type_name.clone(), span.line)),
+        Expr::AddressOf { procedure, span } => out.push((procedure.clone(), span.line)),
         Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } => collect_names(operand, out),
         Expr::Binary { lhs, rhs, .. } => {
             collect_names(lhs, out);
@@ -1217,6 +1218,20 @@ mod tests {
         );
         assert_eq!(a.class, Some(Class::C));
         assert_eq!(a.external_declares, vec!["Sleep".to_string()]);
+    }
+
+    #[test]
+    fn addressof_callback_counts_as_a_procedure_reference() {
+        let a = analyse_src(
+            "Private Sub Hook()\n\
+               timerId = SetTimer(0, 0, 1000, AddressOf TimerProc)\n\
+             End Sub\n\
+             Private Sub TimerProc()\n\
+             End Sub",
+        );
+        assert!(a.uncalled_procedures.contains(&"Hook".to_string()));
+        assert!(!a.uncalled_procedures.contains(&"TimerProc".to_string()));
+        assert_eq!(a.metrics.unparsed, 0);
     }
 
     #[test]
