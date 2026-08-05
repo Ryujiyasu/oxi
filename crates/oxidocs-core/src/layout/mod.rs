@@ -10779,9 +10779,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let s816_section_2_plus = body_para_index.is_some()
             && std::env::var("OXI_S816_DISABLE").is_err()
             && S816_PAST_FIRST_SECTION.with(|c| c.get());
+        // S1072 (2026-08-05, opt-out OXI_S1072_DISABLE): an AUTO space-before
+        // (w:beforeAutospacing) collapses to ZERO at a page top even on PAGE 1,
+        // where an EXPLICIT w:before is kept (the COM confirmation above). HTML
+        // auto spacing is a margin-collapse behaviour: at the top of a page there
+        // is nothing to collapse against, so Word emits none.
+        // correspondence__00481561's title block is
+        // `before=100 beforeAutospacing=1 ... line=240 auto` and Word puts its
+        // first ink top at 71.58 against a 70.85 margin (= 0.7pt, i.e. none),
+        // while spacing the titles from each other by 34.80 = line 20.70 + the
+        // S901 auto 14.0. Oxi applied the 14.0 at the page top too, pushing the
+        // whole page down ~14.3pt and spilling its last list item.
+        // Latin scope — the JP autospacing calibration (S907) and JP page-top
+        // behaviour are measured under unconditional suppression.
+        let s1072_auto_top = para.style.before_autospacing
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1072_DISABLE").is_err();
         let is_page_2_plus =
             !pages.is_empty() || !current_elements.is_empty() || s816_section_2_plus;
-        if (cursor.cursor_y - page_top).abs() < 0.01 && is_page_2_plus {
+        if (cursor.cursor_y - page_top).abs() < 0.01 && (is_page_2_plus || s1072_auto_top) {
             // _pb_sbtop_gen (2026-07-13): a pageBreakBefore paragraph KEEPS its
             // space-before at the page top (probe pbb y=84.35 = margin+12);
             // natural and hard-break (<w:br type=page>) tops suppress
