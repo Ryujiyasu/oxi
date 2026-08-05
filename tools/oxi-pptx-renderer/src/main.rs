@@ -15,9 +15,11 @@
 //! measurement target for the pptx Ra loop (each shape's bbox/type/text is
 //! compared against the PowerPoint COM oracle's truth.json).
 //!
-//! Text rendering is deliberately minimal (one line per paragraph, no wrapping
-//! yet) — paragraph/line layout within a shape is the first spec target of the
-//! Ra loop and will replace this scaffold.
+//! Text rendering implements the measured text-frame layout (Spec #4):
+//! word-wrap within the effective width (shape width - 14.4pt insets),
+//! line advance = font_size x 1.2 x n (n = lnSpc multiple, 1.0 default),
+//! first-line baseline from the measured models (multi: +0.75 x advance /
+//! single: +A_font x fs), space_before / space_after added per paragraph.
 
 use oxislides_core::ir::{Presentation, Shape, ShapeContent, SlideAlignment};
 use serde_json::{json, Value};
@@ -60,9 +62,10 @@ fn main() {
     );
 
     if let Some(path) = dump_layout {
-        let json = dump_layout_json(&pres);
-        let text = serde_json::to_string_pretty(&json).expect("Cannot serialize layout");
-        std::fs::write(&path, text).expect("Cannot write layout JSON");
+        #[cfg(windows)]
+        dump_layout_json_gdi(&pres, &path);
+        #[cfg(not(windows))]
+        dump_layout_json_plain(&pres, &path);
         eprintln!("Layout dumped to {}", path);
         return;
     }
@@ -80,7 +83,9 @@ fn main() {
 }
 
 /// Slide-level layout JSON in points — the Oxi-side measurement target.
-fn dump_layout_json(pres: &Presentation) -> Value {
+/// Plain (no GDI): paragraphs carry only runs (no wrapped-line positions).
+#[cfg(not(windows))]
+fn dump_layout_json_plain(pres: &Presentation, path: &str) {
     let slides: Vec<Value> = pres
         .slides
         .iter()
@@ -95,13 +100,101 @@ fn dump_layout_json(pres: &Presentation) -> Value {
             })
         })
         .collect();
-    json!({
+    let json = json!({
         "presentation": {
             "width": pres.slide_width,
             "height": pres.slide_height,
         },
         "slides": slides,
-    })
+    });
+    let text = serde_json::to_string_pretty(&json).expect("Cannot serialize layout");
+    std::fs::write(path, text).expect("Cannot write layout JSON");
+}
+
+/// Slide-level layout JSON in points, computed with GDI font metrics so that
+/// each text paragraph also carries its wrapped line baselines (slide-absolute
+/// y in points) — the Oxi-side target for the text-frame layout spec.
+#[cfg(windows)]
+fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Graphics::Gdi::*;
+
+    let slides: Vec<Value> = pres
+        .slides
+        .iter()
+        .map(|slide| {
+            let shapes: Vec<Value> = slide
+                .shapes
+                .iter()
+                .map(|sh| {
+                    let mut v = shape_json(sh);
+                    // Attach wrapped-line baselines for text-bearing shapes.
+                    if let Some(p) = v.get_mut("content") {
+                        let text_shape = matches!(
+                            &sh.content,
+                            ShapeContent::TextBox { .. } | ShapeContent::AutoShape { .. }
+                        );
+                        if text_shape {
+                            let scale = 1.0; // points
+                            let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
+                            if let Some(paragraphs) = p.get_mut("paragraphs") {
+                                if let Some(arr) = paragraphs.as_array_mut() {
+                                    let mut cursor_pt = sh.y + MARGIN_TOP;
+                                    for (i, para_json) in arr.iter_mut().enumerate() {
+                                        if let Some(para) = sh_para(&sh.content, i) {
+                                            let bases = layout_paragraph_baselines(
+                                                dc,
+                                                para,
+                                                &mut cursor_pt,
+                                                sh.width,
+                                                scale,
+                                            );
+                                            para_json["line_baselines"] = json!(
+                                                bases
+                                                    .iter()
+                                                    .map(|(_, b)| (b * 100.0).round() / 100.0)
+                                                    .collect::<Vec<_>>()
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            unsafe {
+                                let _ = ReleaseDC(HWND(std::ptr::null_mut()), dc);
+                            }
+                        }
+                    }
+                    v
+                })
+                .collect();
+            json!({
+                "index": slide.index,
+                "width": pres.slide_width,
+                "height": pres.slide_height,
+                "background_color": slide.background_color,
+                "shapes": shapes,
+            })
+        })
+        .collect();
+    let json = json!({
+        "presentation": {
+            "width": pres.slide_width,
+            "height": pres.slide_height,
+        },
+        "slides": slides,
+    });
+    let text = serde_json::to_string_pretty(&json).expect("Cannot serialize layout");
+    std::fs::write(path, text).expect("Cannot write layout JSON");
+}
+
+/// Convenience: the i-th paragraph of a text shape, or None.
+fn sh_para(content: &ShapeContent, i: usize) -> Option<&oxislides_core::ir::SlideParagraph> {
+    match content {
+        ShapeContent::TextBox { paragraphs } | ShapeContent::AutoShape { paragraphs } => {
+            paragraphs.get(i)
+        }
+        _ => None,
+    }
 }
 
 fn alignment_str(a: SlideAlignment) -> &'static str {
@@ -130,6 +223,9 @@ fn paragraphs_json(paragraphs: &[oxislides_core::ir::SlideParagraph]) -> Value {
         .map(|p| {
             json!({
                 "alignment": alignment_str(p.alignment),
+                "line_spacing": p.line_spacing,
+                "space_before": p.space_before,
+                "space_after": p.space_after,
                 "runs": p
                     .runs
                     .iter()
@@ -290,32 +386,48 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                     let _ = DeleteObject(pen);
                 }
 
-                // Text (one line per paragraph, no wrapping yet — the first
-                // Ra-loop spec target will replace this scaffold). AutoShapes
+                // Text (Spec #4 layout: wrap at word boundaries within the
+                // effective width, place each line at its baseline). AutoShapes
                 // with a text body render their text too.
                 match &sh.content {
                     ShapeContent::TextBox { paragraphs }
                     | ShapeContent::AutoShape { paragraphs } => {
-                        let mut cursor_y = y;
+                        let left_x = x + (MARGIN_LEFT as f64 * scale).round() as i32;
+                        let mut cursor_pt = sh.y + MARGIN_TOP;
                         for p in paragraphs {
                             let fs = p
                                 .runs
                                 .iter()
                                 .filter_map(|r| r.font_size)
                                 .fold(18.0, f32::max);
-                            let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
-                            if text.trim().is_empty() {
-                                cursor_y += (fs as f64 * scale * 1.2).round() as i32;
-                                continue;
-                            }
                             let family = p
                                 .runs
                                 .iter()
                                 .find_map(|r| r.font_family.clone())
                                 .unwrap_or_else(|| "Calibri".to_string());
                             let color = p.runs.iter().find_map(|r| r.color.clone());
-                            draw_text_line(mem_dc, x, cursor_y, &text, fs, &family, color.as_deref(), scale);
-                            cursor_y += (fs as f64 * scale * 1.2).round() as i32;
+                            let lines = layout_paragraph_baselines(
+                                mem_dc,
+                                p,
+                                &mut cursor_pt,
+                                sh.width,
+                                scale,
+                            );
+                            for (line_text, baseline) in lines {
+                                if line_text.trim().is_empty() {
+                                    continue;
+                                }
+                                draw_text_baseline(
+                                    mem_dc,
+                                    left_x,
+                                    baseline,
+                                    &line_text,
+                                    fs,
+                                    &family,
+                                    color.as_deref(),
+                                    scale,
+                                );
+                            }
                         }
                     }
                     ShapeContent::Table { table } => {
@@ -507,6 +619,197 @@ fn draw_text_line(
         let _ = TextOutW(dc, x, y, &wtext);
     }
 
+    unsafe {
+        SelectObject(dc, old_font);
+        SetTextColor(dc, old_color);
+        let _ = DeleteObject(font);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Text-frame layout (Spec #4): wrapped lines + baseline positions, computed
+// with GDI font metrics so the wrapped line breaks and line advances match
+// PowerPoint. Used by BOTH the GDI renderer (draw) and --dump-layout (JSON).
+//
+// Measured models (Ra loop, spec4d/spec4e):
+//   * default line advance (no lnSpc)      = font_size x 1.2
+//   * explicit lnSpc n                     = font_size x 1.2 x n  (linear)
+//   * first-line baseline, n != 1 (multi)  = text_area_top + 0.75 x advance
+//   * first-line baseline, n == 1 (single) = text_area_top + A_font x fs
+//       A_font = hhea_asc + hhea_lineGap (font-dependent; table below)
+//   * space_before / space_after           = added around each paragraph
+//   * inner insets                         = top/bottom 3.6pt, left/right 7.2pt
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+const MARGIN_TOP: f32 = 3.6;
+#[cfg(windows)]
+const MARGIN_LEFT: f32 = 7.2;
+#[cfg(windows)]
+const MARGIN_RIGHT: f32 = 7.2;
+
+/// Create a GDI font for the given family/size (negative lfHeight = char height).
+#[cfg(windows)]
+fn create_font_for(
+    family: &str,
+    font_size: f32,
+    scale: f64,
+) -> windows::Win32::Graphics::Gdi::HFONT {
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
+    let height = (font_size as f64 * scale).round() as i32;
+    let wide: Vec<u16> = family.encode_utf16().collect();
+    let mut family_buf = vec![0u16; wide.len() + 1];
+    family_buf[..wide.len()].copy_from_slice(&wide);
+    unsafe {
+        CreateFontW(
+            -height, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
+            PCWSTR(family_buf.as_ptr()),
+        )
+    }
+}
+
+/// Measure the width of `text` in device pixels (font must be selected).
+#[cfg(windows)]
+fn gdi_measure_text_px(dc: windows::Win32::Graphics::Gdi::HDC, text: &str) -> i32 {
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Graphics::Gdi::*;
+    let wtext: Vec<u16> = text.encode_utf16().collect();
+    let mut size = SIZE::default();
+    unsafe {
+        let _ = GetTextExtentPoint32W(dc, &wtext, &mut size);
+    }
+    size.cx
+}
+
+/// Wrap `text` at word boundaries to fit `effective_width_pt`.
+#[cfg(windows)]
+fn gdi_wrap_lines(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    effective_width_pt: f32,
+    scale: f64,
+) -> Vec<String> {
+    let width_px = (effective_width_pt as f64 * scale).round().max(1.0) as i32;
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0i32;
+    for word in text.split_inclusive(' ') {
+        let w = gdi_measure_text_px(dc, word);
+        if !current.is_empty() && current_w + w > width_px {
+            lines.push(std::mem::take(&mut current));
+            current_w = 0;
+        }
+        current.push_str(word);
+        current_w += w;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// A_font = hhea_asc + hhea_lineGap (fontTools-measured), the first-line
+/// baseline offset factor for a single-spaced (n == 1) paragraph.
+#[cfg(windows)]
+fn font_baseline_offset_em(family: &str) -> f32 {
+    match family.to_ascii_lowercase().as_str() {
+        "calibri" => 0.9707,
+        "arial" => 0.9380,
+        "times new roman" => 0.9336,
+        _ => 0.9380, // Arial-like default
+    }
+}
+
+/// Lay out one paragraph: advance `cursor_pt` (text-area top) by space_before,
+/// wrap the run text, and return each line's (text, slide-absolute baseline in
+/// pt). Advances `cursor_pt` past the paragraph (incl. space_after).
+#[cfg(windows)]
+fn layout_paragraph_baselines(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    para: &oxislides_core::ir::SlideParagraph,
+    cursor_pt: &mut f32,
+    shape_width: f32,
+    scale: f64,
+) -> Vec<(String, f32)> {
+    use windows::Win32::Graphics::Gdi::*;
+    let fs = para
+        .runs
+        .iter()
+        .filter_map(|r| r.font_size)
+        .fold(18.0, f32::max);
+    let n = para.line_spacing.unwrap_or(1.0);
+    let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+    let family = para
+        .runs
+        .iter()
+        .find_map(|r| r.font_family.clone())
+        .unwrap_or_else(|| "Calibri".to_string());
+
+    if let Some(sb) = para.space_before {
+        *cursor_pt += sb;
+    }
+    let text_area_top = *cursor_pt;
+    let effective_width = (shape_width - MARGIN_LEFT - MARGIN_RIGHT).max(0.0);
+    // gdi_measure_text_px requires the target font to be selected into the DC;
+    // otherwise the wrap measures with the DC default font and packs far too
+    // many characters per line.
+    let font = create_font_for(&family, fs, scale);
+    let old_font = unsafe { SelectObject(dc, font) };
+    let lines = gdi_wrap_lines(dc, &text, effective_width, scale);
+    let _ = unsafe { SelectObject(dc, old_font) };
+    let adv = fs * 1.2 * n;
+    let first_off = if (n - 1.0).abs() > 1e-4 {
+        0.75 * adv
+    } else {
+        font_baseline_offset_em(&family) * fs
+    };
+    let mut out = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let baseline = text_area_top + first_off + i as f32 * adv;
+        out.push((line.clone(), baseline));
+    }
+    *cursor_pt = text_area_top + first_off + lines.len() as f32 * adv;
+    if let Some(sa) = para.space_after {
+        *cursor_pt += sa;
+    }
+    out
+}
+
+/// Draw text at a baseline position (converts baseline -> cell top via tmAscent).
+#[cfg(windows)]
+fn draw_text_baseline(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    baseline_pt: f32,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    color: Option<&str>,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Graphics::Gdi::*;
+    let font = create_font_for(family, font_size, scale);
+    if font.is_invalid() {
+        return;
+    }
+    let rgb = color.and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
+    let old_color = unsafe { SetTextColor(dc, COLORREF(colorref(rgb.0, rgb.1, rgb.2))) };
+    let old_font = unsafe { SelectObject(dc, font) };
+    let mut tm = TEXTMETRICW::default();
+    unsafe {
+        let _ = GetTextMetricsW(dc, &mut tm);
+    }
+    let ascent_px = tm.tmAscent as i32;
+    let y = (baseline_pt as f64 * scale).round() as i32 - ascent_px;
+    let wtext: Vec<u16> = text.encode_utf16().collect();
+    unsafe {
+        let _ = TextOutW(dc, x, y, &wtext);
+    }
     unsafe {
         SelectObject(dc, old_font);
         SetTextColor(dc, old_color);

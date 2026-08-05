@@ -162,6 +162,13 @@ fn parse_slide(
     let mut in_paragraph = false;
     let mut para_runs: Vec<SlideRun> = Vec::new();
     let mut para_alignment = SlideAlignment::default();
+    // Spec #4: paragraph spacing (a:pPr/a:lnSpc, a:spcBef, a:spcAft)
+    let mut para_line_spacing: Option<f32> = None;
+    let mut para_space_before: Option<f32> = None;
+    let mut para_space_after: Option<f32> = None;
+    let mut in_ln_spc = false;
+    let mut in_spc_bef = false;
+    let mut in_spc_aft = false;
 
     // Run state
     let mut in_run = false;
@@ -350,6 +357,12 @@ fn parse_slide(
                         in_paragraph = true;
                         para_runs.clear();
                         para_alignment = SlideAlignment::default();
+                        para_line_spacing = None;
+                        para_space_before = None;
+                        para_space_after = None;
+                        in_ln_spc = false;
+                        in_spc_bef = false;
+                        in_spc_aft = false;
                     }
                     "pPr" if in_paragraph => {
                         if let Some(algn) = get_attr(&e, "algn") {
@@ -360,6 +373,15 @@ fn parse_slide(
                                 _ => SlideAlignment::Left,
                             };
                         }
+                    }
+                    "lnSpc" if in_paragraph => {
+                        in_ln_spc = true;
+                    }
+                    "spcBef" if in_paragraph => {
+                        in_spc_bef = true;
+                    }
+                    "spcAft" if in_paragraph => {
+                        in_spc_aft = true;
                     }
                     "r" if in_paragraph => {
                         in_run = true;
@@ -526,6 +548,27 @@ fn parse_slide(
                             };
                         }
                     }
+                    "spcPct" if in_ln_spc => {
+                        // a:lnSpc/a:spcPct/@val is the multiple in 100000ths.
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(x) = v.parse::<f32>() {
+                                para_line_spacing = Some(x / 100000.0);
+                            }
+                        }
+                    }
+                    "spcPts" if in_spc_bef || in_spc_aft => {
+                        // a:spcBef/spcAft/a:spcPts/@val is in 100ths of a point.
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(x) = v.parse::<f32>() {
+                                let pt = x / 100.0;
+                                if in_spc_bef {
+                                    para_space_before = Some(pt);
+                                } else {
+                                    para_space_after = Some(pt);
+                                }
+                            }
+                        }
+                    }
                     "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
                             if in_bg_pr {
@@ -655,12 +698,24 @@ fn parse_slide(
                         let para = SlideParagraph {
                             runs: std::mem::take(&mut para_runs),
                             alignment: para_alignment,
+                            line_spacing: para_line_spacing,
+                            space_before: para_space_before,
+                            space_after: para_space_after,
                         };
                         if in_tbl_cell {
                             tbl_cur_cell_paragraphs.push(para);
                         } else {
                             shape_paragraphs.push(para);
                         }
+                    }
+                    "lnSpc" if in_ln_spc => {
+                        in_ln_spc = false;
+                    }
+                    "spcBef" if in_spc_bef => {
+                        in_spc_bef = false;
+                    }
+                    "spcAft" if in_spc_aft => {
+                        in_spc_aft = false;
                     }
                     "tc" if in_tbl_cell => {
                         in_tbl_cell = false;

@@ -79,6 +79,19 @@ pub struct TableCell {
 pub struct SlideParagraph {
     pub runs: Vec<SlideRun>,
     pub alignment: SlideAlignment,
+    /// Multiple line-spacing factor `n` from `a:lnSpc/a:spcPct` (val/100000).
+    /// None = no explicit lnSpc -> PowerPoint uses its default single line
+    /// (measured line advance = fs*1.2).  When Some(n), the measured line
+    /// advance = fs*1.2*n (linear over n in [0.5, 3.0], verified spec4d).
+    #[serde(default)]
+    pub line_spacing: Option<f32>,
+    /// Space before this paragraph, in points (`a:spcBef/a:spcPts` val/100).
+    /// Added on top of the line advance (wave-1 measurement).
+    #[serde(default)]
+    pub space_before: Option<f32>,
+    /// Space after this paragraph, in points (`a:spcAft/a:spcPts` val/100).
+    #[serde(default)]
+    pub space_after: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
