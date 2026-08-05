@@ -10776,8 +10776,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // before=240, render at y=72=margin). Body flow only.
         // Default ON (opt-out OXI_S816_DISABLE) since the Latin exact-cell
         // bundle (S815-S819) shipped together 2026-07-13.
+        // S1073 (2026-08-05, HELD OPT-IN `OXI_S1073=1`, default byte-identical):
+        // whether the first page of a NEW SECTION suppresses space-before is
+        // UNRESOLVED — a controlled probe and a frozen document disagree, and no
+        // discriminator has been found, so the S816 behaviour stands by default.
+        //   probe `scratchpad/a1c2f/sbsec_probe.py` (5 nextPage sections,
+        //     identical pgMar, NO header, one 16pt TNR heading each): Word KEEPS
+        //     the space-before at every section top, +14.04pt for before=280tw,
+        //     identically for all FOUR provenances (style / style+keepNext /
+        //     DIRECT pPr / basedOn-inherited); the before=0 control sits at the
+        //     margin, so the arms are not degenerate.
+        //   reference__0069c0f7 (ActHead2, style before=280, section top): Word
+        //     KEEPS it — its heading's glyph ink top is 131.0 against Oxi's
+        //     117.36 (both ink tops), i.e. +13.64. Suppressing it lifts the page
+        //     by one line and spills `(a) the pharmaceutical benefits` onto p5.
+        //   uk_local_spending (Heading1, before=240 inherited from Normal): Word
+        //     SUPPRESSES at its section tops — Annex I's box sits at 72.0 with a
+        //     header-driven body top of 72.099 — while KEEPING the full 12pt at a
+        //     non-section page top (Annex III, box 84.0). Its Annex II box lands
+        //     at 78.0, i.e. +5.9, which no reading explains yet.
+        // Enabling this outright takes uk_local_spending from PASS 1.0000 to
+        // 0.9979 {+1:2}, so it is held until the discriminator is derived. The
+        // probe and uk_local_spending differ in: a header part, `before`
+        // inherited from Normal vs declared on the style, Arial 18pt vs TNR 16pt,
+        // and Normal's `widowControl w:val="0"` — the next probe should carry
+        // uk_local_spending's shape verbatim.
         let s816_section_2_plus = body_para_index.is_some()
             && std::env::var("OXI_S816_DISABLE").is_err()
+            && std::env::var("OXI_S1073").is_err()
             && S816_PAST_FIRST_SECTION.with(|c| c.get());
         // S1072 (2026-08-05, opt-out OXI_S1072_DISABLE): an AUTO space-before
         // (w:beforeAutospacing) collapses to ZERO at a page top even on PAGE 1,
