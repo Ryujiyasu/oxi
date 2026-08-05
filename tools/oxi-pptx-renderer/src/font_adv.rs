@@ -67,6 +67,32 @@ pub fn hmtx_advance_em(family: &str, ch: char) -> Option<f32> {
     }
 }
 
+/// The hmtx design advance of a BULLET MARKER character, in EM units.
+/// These live OUTSIDE ASCII 32..=126 (so the table above never sees them),
+/// but PowerPoint still places the bullet glyph at its design advance.
+/// Measured via `tools/metrics/gen_pptx_font_adv.py`; identical for Arial
+/// and Arial Bold.
+fn bullet_hmtx_em(ch: char) -> Option<f32> {
+    match ch {
+        '•' => Some(0.35010), // U+2022 BULLET
+        '–' => Some(0.55615), // U+2013 EN DASH (level-2 marker)
+        '»' => Some(0.55615), // U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+        '●' => Some(0.60400), // U+25CF BLACK CIRCLE
+        _ => None,
+    }
+}
+
+/// The hmtx design advance of a bullet marker character for `family`, in EM
+/// units (None if the family is unsupported or the character is not a known
+/// bullet marker).
+pub fn bullet_advance_em(family: &str, ch: char) -> Option<f32> {
+    if family_supported(family) {
+        bullet_hmtx_em(ch)
+    } else {
+        None
+    }
+}
+
 /// Logical width of `line` in points: the hmtx advance sum of its VISIBLE
 /// characters (trailing spaces are excluded — PowerPoint does not include
 /// the trailing space of a wrapped line in its logical width). The final

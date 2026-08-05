@@ -13,8 +13,8 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    Presentation, Shape, ShapeContent, Slide, SlideAlignment, SlideParagraph, SlideRun, Table,
-    TableCell,
+    MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide, SlideAlignment,
+    SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
 };
 
 #[derive(Error, Debug)]
@@ -87,6 +87,169 @@ fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
     Ok((minor, major))
 }
 
+/// True for master outline-level property names: a:lvl1pPr .. a:lvl9pPr.
+fn is_master_lvl(name: &str) -> bool {
+    name.starts_with("lvl") && name.ends_with("pPr")
+}
+
+/// Parse slideMasterN.xml `p:txStyles` into the per-context, per-outline-level
+/// inherited marL / indent / bullet / spcBef (Spec #8).
+///
+/// PowerPoint slides inherit their list formatting from the master's text
+/// styles: placeholder BODY text uses `bodyStyle` levels, plain textboxes use
+/// `otherStyle`, title placeholders use `titleStyle`. Each Vec is indexed by
+/// the 0-based outline level (a:lvlNpPr with N = level+1). A level that is
+/// absent from the part stays an empty `MasterStyleLevel` (marL=0, indent=0,
+/// bullet=Inherit, spcBef=None), which reproduces a plain paragraph.
+fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut body: Vec<MasterStyleLevel> = Vec::new();
+    let mut other: Vec<MasterStyleLevel> = Vec::new();
+    let mut title: Vec<MasterStyleLevel> = Vec::new();
+    let mut in_title_style = false;
+    let mut in_body_style = false;
+    let mut in_other_style = false;
+    // Accumulation for the current a:lvlNpPr.
+    let mut cur_level = MasterStyleLevel::default();
+    let mut in_level = false;
+    let mut in_spc_bef = false;
+    let mut level_bullet_font: Option<String> = None;
+
+    // Push the just-finished level into the active context Vec.
+    macro_rules! push_level {
+        () => {
+            if in_body_style {
+                body.push(cur_level.clone());
+            } else if in_other_style {
+                other.push(cur_level.clone());
+            } else if in_title_style {
+                title.push(cur_level.clone());
+            }
+        };
+    }
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "titleStyle" => in_title_style = true,
+                    "bodyStyle" => in_body_style = true,
+                    "otherStyle" => in_other_style = true,
+                    n if is_master_lvl(n) => {
+                        if in_level {
+                            // Defensive: a new level opened before the previous
+                            // End (malformed) — close the prior one first.
+                            push_level!();
+                        }
+                        cur_level = MasterStyleLevel::default();
+                        level_bullet_font = None;
+                        if let Some(m) = get_attr(&e, "marL") {
+                            if let Ok(v) = m.parse::<f32>() {
+                                cur_level.mar_l = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(ix) = get_attr(&e, "indent") {
+                            if let Ok(v) = ix.parse::<f32>() {
+                                cur_level.indent = emu_to_pt(v);
+                            }
+                        }
+                        in_level = true;
+                        in_spc_bef = false;
+                    }
+                    "spcBef" if in_level => in_spc_bef = true,
+                    _ => {}
+                }
+            }
+            Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    // Self-closing level: parse and push immediately.
+                    n if is_master_lvl(n) => {
+                        let mut lvl = MasterStyleLevel::default();
+                        if let Some(m) = get_attr(&e, "marL") {
+                            if let Ok(v) = m.parse::<f32>() {
+                                lvl.mar_l = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(ix) = get_attr(&e, "indent") {
+                            if let Ok(v) = ix.parse::<f32>() {
+                                lvl.indent = emu_to_pt(v);
+                            }
+                        }
+                        if in_body_style {
+                            body.push(lvl);
+                        } else if in_other_style {
+                            other.push(lvl);
+                        } else if in_title_style {
+                            title.push(lvl);
+                        }
+                    }
+                    // Children of a non-self-closing level (Start form).
+                    "spcPct" if in_spc_bef => {
+                        // a:spcBef/a:spcPct/@val is the fraction in 100000ths.
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(x) = v.parse::<f32>() {
+                                cur_level.spc_bef_pct = Some(x / 100000.0);
+                            }
+                        }
+                    }
+                    "buFont" if in_level => {
+                        if let Some(tf) = get_attr(&e, "typeface") {
+                            if !tf.is_empty() {
+                                level_bullet_font = Some(tf);
+                            }
+                        }
+                    }
+                    "buChar" if in_level => {
+                        if let Some(ch) = get_attr(&e, "char") {
+                            if let Some(c) = ch.chars().next() {
+                                cur_level.bullet = SlideBullet::Char {
+                                    ch: c,
+                                    font: level_bullet_font.take(),
+                                };
+                            }
+                        }
+                    }
+                    "buNone" if in_level => {
+                        cur_level.bullet = SlideBullet::None;
+                    }
+                    "buAutoNum" if in_level => {
+                        let kind =
+                            get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
+                        cur_level.bullet = SlideBullet::AutoNum { kind };
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "titleStyle" => in_title_style = false,
+                    "bodyStyle" => in_body_style = false,
+                    "otherStyle" => in_other_style = false,
+                    "spcBef" => in_spc_bef = false,
+                    n if is_master_lvl(n) && in_level => {
+                        push_level!();
+                        cur_level = MasterStyleLevel::default();
+                        in_level = false;
+                        level_bullet_font = None;
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(MasterTxStyles {
+        body,
+        other,
+        title,
+    })
+}
+
 /// Parse presentation.xml to get slide relationship IDs (in order).
 fn parse_presentation_slides(xml: &str) -> Result<(Vec<SlideInfo>, f32, f32), PptxError> {
     let mut reader = Reader::from_str(xml);
@@ -150,6 +313,7 @@ fn parse_slide(
     slide_index: usize,
     archive: &mut OoxmlArchive,
     slide_rels_path: &str,
+    master_ph_geoms: &HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
 ) -> Result<Slide, PptxError> {
     // Parse slide relationships for image resolution
     let rels = if let Ok(Some(rels_xml)) = archive.try_read_part(slide_rels_path) {
@@ -160,7 +324,10 @@ fn parse_slide(
 
     // Spec #3: build a (ph_type, ph_idx) -> (x,y,w,h) geometry map from the
     // referenced slideLayout's placeholders. A slide placeholder with NO explicit
-    // xfrm in its spPr inherits the layout placeholder's geometry.
+    // xfrm in its spPr inherits the layout placeholder's geometry. Spec #8
+    // follow-up: when the layout placeholder also lacks an explicit xfrm, fall
+    // back to the slideMaster's placeholder geometry (the master ph carries the
+    // authoritative xfrm for layout-less placeholder slots).
     let layout_ph_geoms: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> = {
         let mut map = HashMap::new();
         for rel in rels.values() {
@@ -211,6 +378,14 @@ fn parse_slide(
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
     let mut in_ln = false;    // inside <a:ln> (line/border properties)
 
+    // Text-area insets (a:bodyPr lIns/rIns/tIns/bIns, EMU -> pt).
+    // Placeholder defaults: 7.2 / 7.2 / 3.6 / 3.6 (Spec #8 measurement).
+    let mut in_body_pr = false;
+    let mut shape_l_ins: f32 = 7.2;
+    let mut shape_r_ins: f32 = 7.2;
+    let mut shape_t_ins: f32 = 3.6;
+    let mut shape_b_ins: f32 = 3.6;
+
     // Paragraph state
     let mut in_paragraph = false;
     let mut para_runs: Vec<SlideRun> = Vec::new();
@@ -222,6 +397,12 @@ fn parse_slide(
     let mut in_ln_spc = false;
     let mut in_spc_bef = false;
     let mut in_spc_aft = false;
+    // Spec #8: bullet / indent (a:pPr/@lvl, @marL, @indent + a:buChar/buFont/buNone/buAutoNum)
+    let mut para_lvl: u32 = 0;
+    let mut para_mar_l: Option<f32> = None;
+    let mut para_indent: Option<f32> = None;
+    let mut para_bullet = SlideBullet::Inherit;
+    let mut para_bullet_font: Option<String> = None;
 
     // Run state
     let mut in_run = false;
@@ -278,6 +459,11 @@ fn parse_slide(
                         shape_ph_type = None;
                         shape_ph_idx = None;
                         shape_has_xfrm = false;
+                        in_body_pr = false;
+                        shape_l_ins = 7.2;
+                        shape_r_ins = 7.2;
+                        shape_t_ins = 3.6;
+                        shape_b_ins = 3.6;
                     }
                     "graphicFrame" if in_sp_tree => {
                         // A graphicFrame (table/chart/SmartArt). Reuse the shape
@@ -308,6 +494,11 @@ fn parse_slide(
                         shape_ph_type = None;
                         shape_ph_idx = None;
                         shape_has_xfrm = false;
+                        in_body_pr = false;
+                        shape_l_ins = 7.2;
+                        shape_r_ins = 7.2;
+                        shape_t_ins = 3.6;
+                        shape_b_ins = 3.6;
                     }
                     "tbl" if in_graphic_frame => {
                         in_table = true;
@@ -416,6 +607,34 @@ fn parse_slide(
                         in_ln_spc = false;
                         in_spc_bef = false;
                         in_spc_aft = false;
+                        para_lvl = 0;
+                        para_mar_l = None;
+                        para_indent = None;
+                        para_bullet = SlideBullet::Inherit;
+                        para_bullet_font = None;
+                    }
+                    "bodyPr" if in_shape => {
+                        in_body_pr = true;
+                        if let Some(v) = get_attr(&e, "lIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_l_ins = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "rIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_r_ins = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "tIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_t_ins = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "bIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_b_ins = emu_to_pt(v);
+                            }
+                        }
                     }
                     "pPr" if in_paragraph => {
                         if let Some(algn) = get_attr(&e, "algn") {
@@ -426,6 +645,22 @@ fn parse_slide(
                                 _ => SlideAlignment::Left,
                             };
                         }
+                        // Spec #8: outline level + indents (a:pPr/@lvl/@marL/@indent)
+                        if let Some(lvl) = get_attr(&e, "lvl") {
+                            if let Ok(v) = lvl.parse::<u32>() {
+                                para_lvl = v;
+                            }
+                        }
+                        if let Some(mar_l) = get_attr(&e, "marL") {
+                            if let Ok(v) = mar_l.parse::<f32>() {
+                                para_mar_l = Some(emu_to_pt(v));
+                            }
+                        }
+                        if let Some(indent) = get_attr(&e, "indent") {
+                            if let Ok(v) = indent.parse::<f32>() {
+                                para_indent = Some(emu_to_pt(v));
+                            }
+                        }
                     }
                     "lnSpc" if in_paragraph => {
                         in_ln_spc = true;
@@ -435,6 +670,32 @@ fn parse_slide(
                     }
                     "spcAft" if in_paragraph => {
                         in_spc_aft = true;
+                    }
+                    // Spec #8 bullet marker children of a:pPr (Start form).
+                    "buFont" if in_paragraph => {
+                        if let Some(tf) = get_attr(&e, "typeface") {
+                            if !tf.is_empty() {
+                                para_bullet_font = Some(tf);
+                            }
+                        }
+                    }
+                    "buChar" if in_paragraph => {
+                        if let Some(ch) = get_attr(&e, "char") {
+                            let mut chars = ch.chars();
+                            if let Some(c) = chars.next() {
+                                para_bullet = SlideBullet::Char {
+                                    ch: c,
+                                    font: para_bullet_font.take(),
+                                };
+                            }
+                        }
+                    }
+                    "buNone" if in_paragraph => {
+                        para_bullet = SlideBullet::None;
+                    }
+                    "buAutoNum" if in_paragraph => {
+                        let kind = get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
+                        para_bullet = SlideBullet::AutoNum { kind };
                     }
                     "r" if in_paragraph => {
                         in_run = true;
@@ -591,6 +852,29 @@ fn parse_slide(
                             }
                         }
                     }
+                    "bodyPr" if in_shape => {
+                        // Self-closing <p:bodyPr .../> with inset attributes.
+                        if let Some(v) = get_attr(&e, "lIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_l_ins = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "rIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_r_ins = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "tIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_t_ins = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "bIns") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                shape_b_ins = emu_to_pt(v);
+                            }
+                        }
+                    }
                     "pPr" if in_paragraph => {
                         if let Some(algn) = get_attr(&e, "algn") {
                             para_alignment = match algn.as_str() {
@@ -600,6 +884,47 @@ fn parse_slide(
                                 _ => SlideAlignment::Left,
                             };
                         }
+                        if let Some(lvl) = get_attr(&e, "lvl") {
+                            if let Ok(v) = lvl.parse::<u32>() {
+                                para_lvl = v;
+                            }
+                        }
+                        if let Some(mar_l) = get_attr(&e, "marL") {
+                            if let Ok(v) = mar_l.parse::<f32>() {
+                                para_mar_l = Some(emu_to_pt(v));
+                            }
+                        }
+                        if let Some(indent) = get_attr(&e, "indent") {
+                            if let Ok(v) = indent.parse::<f32>() {
+                                para_indent = Some(emu_to_pt(v));
+                            }
+                        }
+                    }
+                    // Spec #8 bullet marker children of a:pPr (self-closing form).
+                    "buFont" if in_paragraph => {
+                        if let Some(tf) = get_attr(&e, "typeface") {
+                            if !tf.is_empty() {
+                                para_bullet_font = Some(tf);
+                            }
+                        }
+                    }
+                    "buChar" if in_paragraph => {
+                        if let Some(ch) = get_attr(&e, "char") {
+                            let mut chars = ch.chars();
+                            if let Some(c) = chars.next() {
+                                para_bullet = SlideBullet::Char {
+                                    ch: c,
+                                    font: para_bullet_font.take(),
+                                };
+                            }
+                        }
+                    }
+                    "buNone" if in_paragraph => {
+                        para_bullet = SlideBullet::None;
+                    }
+                    "buAutoNum" if in_paragraph => {
+                        let kind = get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
+                        para_bullet = SlideBullet::AutoNum { kind };
                     }
                     "spcPct" if in_ln_spc => {
                         // a:lnSpc/a:spcPct/@val is the multiple in 100000ths.
@@ -714,17 +1039,20 @@ fn parse_slide(
                         };
 
                         // Spec #3: a placeholder without an explicit xfrm inherits
-                        // the geometry of the matching slideLayout placeholder.
+                        // the geometry of the matching slideLayout placeholder,
+                        // falling back to the slideMaster placeholder geometry.
+                        // The ph-key match normalizes type: a slide body placeholder
+                        // is written `<p:ph idx="1"/>` (type -> "obj") while the
+                        // master writes `<p:ph type="body" idx="1"/>`; "obj" and
+                        // "body" denote the same placeholder slot.
                         let (use_x, use_y, use_w, use_h) = if !shape_has_xfrm {
-                            if let Some(ph_type) = shape_ph_type.as_ref() {
-                                if let Some(&(lx, ly, lw, lh)) = layout_ph_geoms.get(&(
-                                    Some(ph_type.clone()),
-                                    shape_ph_idx.clone(),
-                                )) {
-                                    (lx, ly, lw, lh)
-                                } else {
-                                    (shape_x, shape_y, shape_w, shape_h)
-                                }
+                            if let Some((gx, gy, gw, gh)) = lookup_ph_geom(
+                                &layout_ph_geoms,
+                                master_ph_geoms,
+                                shape_ph_type.as_ref(),
+                                shape_ph_idx.as_ref(),
+                            ) {
+                                (gx, gy, gw, gh)
                             } else {
                                 (shape_x, shape_y, shape_w, shape_h)
                             }
@@ -744,6 +1072,10 @@ fn parse_slide(
                             fill_color: shape_fill_color.take(),
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
+                            l_ins: shape_l_ins,
+                            r_ins: shape_r_ins,
+                            t_ins: shape_t_ins,
+                            b_ins: shape_b_ins,
                         });
                         in_shape = false;
                     }
@@ -755,12 +1087,19 @@ fn parse_slide(
                             line_spacing: para_line_spacing,
                             space_before: para_space_before,
                             space_after: para_space_after,
+                            lvl: para_lvl,
+                            mar_l: para_mar_l,
+                            indent: para_indent,
+                            bullet: std::mem::take(&mut para_bullet),
                         };
                         if in_tbl_cell {
                             tbl_cur_cell_paragraphs.push(para);
                         } else {
                             shape_paragraphs.push(para);
                         }
+                    }
+                    "bodyPr" if in_body_pr => {
+                        in_body_pr = false;
                     }
                     "lnSpc" if in_ln_spc => {
                         in_ln_spc = false;
@@ -812,6 +1151,10 @@ fn parse_slide(
                             fill_color: shape_fill_color.take(),
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
+                            l_ins: shape_l_ins,
+                            r_ins: shape_r_ins,
+                            t_ins: shape_t_ins,
+                            b_ins: shape_b_ins,
                         });
                     }
                     "r" if in_run => {
@@ -996,6 +1339,45 @@ fn parse_layout_ph_geoms(
     Ok(map)
 }
 
+/// Look up a placeholder geometry with ph-key normalization, checking the
+/// slideLayout map first, then the slideMaster map.
+///
+/// A slide placeholder carries `(ph_type, ph_idx)`. The same placeholder slot
+/// can be written differently across slide / layout / master:
+///   - slide body:    `<p:ph idx="1"/>`              -> ("obj", Some("1"))
+///   - master body:   `<p:ph type="body" idx="1"/>`  -> ("body", Some("1"))
+/// So "obj" and "body" are treated as equivalent for a given idx, and an
+/// idx-only match is the final fallback.
+fn lookup_ph_geom(
+    layout: &HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
+    master: &HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
+    ph_type: Option<&String>,
+    ph_idx: Option<&String>,
+) -> Option<(f32, f32, f32, f32)> {
+    // Candidate keys in priority order: exact, then obj/body-equivalence, then
+    // idx-only. For a type-only placeholder (title: ("title", None)) the exact
+    // key is already the only sensible one.
+    let mut keys: Vec<(Option<String>, Option<String>)> = Vec::new();
+    keys.push((ph_type.cloned(), ph_idx.cloned()));
+    if let Some(idx) = ph_idx {
+        let idx = idx.clone();
+        keys.push((Some("body".to_string()), Some(idx.clone())));
+        keys.push((Some("obj".to_string()), Some(idx.clone())));
+        keys.push((None, Some(idx)));
+    } else if let Some(ty) = ph_type {
+        keys.push((Some(ty.clone()), None));
+    }
+    for k in &keys {
+        if let Some(&g) = layout.get(k) {
+            return Some(g);
+        }
+        if let Some(&g) = master.get(k) {
+            return Some(g);
+        }
+    }
+    None
+}
+
 /// Resolve a target path relative to the slide location.
 /// e.g., slide rels at "ppt/slides/_rels/slide1.xml.rels", target "../media/image1.png"
 ///   -> "ppt/media/image1.png"
@@ -1107,6 +1489,25 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         None => ("Calibri".to_string(), "Calibri".to_string()),
     };
 
+    // 2.7. Parse the slide master text styles (Spec #8): the inherited
+    // marL/indent/bullet/spcBef per outline level. Standard path is
+    // ppt/slideMasters/slideMaster1.xml; absent part -> empty styles.
+    let master_styles = match archive.try_read_part("ppt/slideMasters/slideMaster1.xml")? {
+        Some(master_xml) => parse_master_txstyles(&master_xml)?,
+        None => MasterTxStyles::default(),
+    };
+
+    // 2.8. Parse the slide master placeholder geometries (Spec #8 follow-up).
+    // A layout placeholder without an explicit xfrm inherits the master's ph
+    // geometry (the master ph carries the authoritative xfrm for placeholder
+    // slots the layout leaves bare). Same (ph_type, ph_idx) map shape as the
+    // layout map; the slide->layout->master chain resolves in parse_slide.
+    let master_ph_geoms: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> =
+        match archive.try_read_part("ppt/slideMasters/slideMaster1.xml")? {
+            Some(master_xml) => parse_layout_ph_geoms(&master_xml).unwrap_or_default(),
+            None => Default::default(),
+        };
+
     // 3. Parse each slide
     let mut slides = Vec::new();
     for (i, info) in slide_infos.iter().enumerate() {
@@ -1137,8 +1538,13 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
 
         match archive.try_read_part(&slide_target)? {
             Some(slide_xml) => {
-                let slide =
-                    parse_slide(&slide_xml, i + 1, &mut archive, &slide_rels_path)?;
+                let slide = parse_slide(
+                    &slide_xml,
+                    i + 1,
+                    &mut archive,
+                    &slide_rels_path,
+                    &master_ph_geoms,
+                )?;
                 slides.push(slide);
             }
             None => {
@@ -1153,6 +1559,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         slide_height,
         minor_font,
         major_font,
+        master_styles,
     })
 }
 

@@ -23,7 +23,9 @@
 
 mod font_adv;
 
-use oxislides_core::ir::{Presentation, Shape, ShapeContent, SlideAlignment};
+use oxislides_core::ir::{
+    MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment, SlideBullet,
+};
 use serde_json::{json, Value};
 
 fn main() {
@@ -141,11 +143,17 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                             let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
                             if let Some(paragraphs) = p.get_mut("paragraphs") {
                                 if let Some(arr) = paragraphs.as_array_mut() {
-                                    let mut cursor_pt = sh.y + MARGIN_TOP;
+                                    let mut cursor_pt = sh.y + sh.t_ins;
+                                    let master_ctx: &Vec<MasterStyleLevel> =
+                                        match sh.ph_type.as_deref() {
+                                            Some("title") => &pres.master_styles.title,
+                                            Some(_) => &pres.master_styles.body,
+                                            None => &pres.master_styles.other,
+                                        };
                                     for (i, para_json) in arr.iter_mut().enumerate() {
                                         if let Some(para) = sh_para(&sh.content, i) {
                                             let def_family = resolve_font(pres, sh);
-                                            let bases = layout_paragraph_baselines(
+                                            let (bases, _marker) = layout_paragraph_baselines(
                                                 dc,
                                                 para,
                                                 &mut cursor_pt,
@@ -153,6 +161,9 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 scale,
                                                 i == 0,
                                                 &def_family,
+                                                sh.l_ins,
+                                                sh.r_ins,
+                                                &master_ctx[..],
                                             );
                                             para_json["line_baselines"] = json!(
                                                 bases
@@ -419,10 +430,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 match &sh.content {
                     ShapeContent::TextBox { paragraphs }
                     | ShapeContent::AutoShape { paragraphs } => {
-                        let left_x = x + (MARGIN_LEFT as f64 * scale).round() as i32;
+                        let left_x = x + (sh.l_ins as f64 * scale).round() as i32;
                         let right_x = x
-                            + ((sh.width - MARGIN_RIGHT) as f64 * scale).round() as i32;
-                        let mut cursor_pt = sh.y + MARGIN_TOP;
+                            + ((sh.width - sh.r_ins) as f64 * scale).round() as i32;
+                        let mut cursor_pt = sh.y + sh.t_ins;
+                        let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
+                            Some("title") => &pres.master_styles.title,
+                            Some(_) => &pres.master_styles.body,
+                            None => &pres.master_styles.other,
+                        };
                         for (pi, p) in paragraphs.iter().enumerate() {
                             let fs = p
                                 .runs
@@ -435,7 +451,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .find_map(|r| r.font_family.clone())
                                 .unwrap_or_else(|| resolve_font(pres, sh));
                             let color = p.runs.iter().find_map(|r| r.color.clone());
-                            let lines = layout_paragraph_baselines(
+                            let (lines, marker) = layout_paragraph_baselines(
                                 mem_dc,
                                 p,
                                 &mut cursor_pt,
@@ -443,13 +459,31 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 scale,
                                 pi == 0,
                                 &family,
+                                sh.l_ins,
+                                sh.r_ins,
+                                &master_ctx[..],
                             );
+                            if let Some(m) = &marker {
+                                let marker_x =
+                                    left_x + (m.x_pt as f64 * scale).round() as i32;
+                                draw_text_baseline(
+                                    mem_dc,
+                                    marker_x,
+                                    m.baseline,
+                                    &m.ch.to_string(),
+                                    m.fs,
+                                    &m.font,
+                                    color.as_deref(),
+                                    scale,
+                                );
+                            }
                             let is_justify = matches!(
                                 p.alignment,
                                 oxislides_core::ir::SlideAlignment::Justify
                             );
                             let n_lines = lines.len();
-                            for (i, (line_text, baseline, x_off)) in lines.into_iter().enumerate()
+                            for (i, (line_text, baseline, x_off)) in
+                                lines.into_iter().enumerate()
                             {
                                 if line_text.trim().is_empty() {
                                     continue;
@@ -693,15 +727,9 @@ fn draw_text_line(
 //   * first-line baseline, n == 1 (single) = text_area_top + A_font x fs
 //       A_font = hhea_asc + hhea_lineGap (font-dependent; table below)
 //   * space_before / space_after           = added around each paragraph
-//   * inner insets                         = top/bottom 3.6pt, left/right 7.2pt
+//   * inner insets                         = shape l_ins/r_ins/t_ins/b_ins
+//       (a:bodyPr; placeholders default to top/bottom 3.6pt, left/right 7.2pt)
 // ---------------------------------------------------------------------------
-
-#[cfg(windows)]
-const MARGIN_TOP: f32 = 3.6;
-#[cfg(windows)]
-const MARGIN_LEFT: f32 = 7.2;
-#[cfg(windows)]
-const MARGIN_RIGHT: f32 = 7.2;
 
 /// Create a GDI font for the given family/size (negative lfHeight = char height).
 #[cfg(windows)]
@@ -792,10 +820,21 @@ fn font_baseline_offset_em(family: &str) -> f32 {
     }
 }
 
+/// Bullet marker to draw at the start of a paragraph's first line (Spec #8).
+/// `x_pt` is the marker's left edge in pt relative to P0 (the shape's left text
+/// inset); `baseline` is the slide-absolute baseline in pt (== line 0's).
+struct MarkerInfo {
+    ch: char,
+    font: String,
+    x_pt: f32,
+    baseline: f32,
+    fs: f32,
+}
+
 /// Lay out one paragraph: advance `cursor_pt` (text-area top) by space_before,
 /// wrap the run text, and return each line's (text, slide-absolute baseline in
-/// pt, x-offset from the left inset in pt). Advances `cursor_pt` past the
-/// paragraph (incl. space_after).
+/// pt, x-offset from the left inset in pt) plus an optional bullet marker.
+/// Advances `cursor_pt` past the paragraph (incl. space_after).
 ///
 /// Alignment model (Ra loop, spec5a/spec5b, PowerPoint PDF render-truth):
 ///   * Left      : every line starts at the left inset (x-offset 0).
@@ -808,6 +847,12 @@ fn font_baseline_offset_em(family: &str) -> f32 {
 /// `w` is the LOGICAL line width (GetTextExtentPoint32W advance sum, spaces
 /// included); the ink bbox centre/right edge is offset by side bearings, so the
 /// rule is anchored to the logical width (wave-1 finding).
+///
+/// Bullet / indent geometry (Spec #8, bulletph + bullet5 render-truth): the
+/// paragraph's own pPr (marL / indent / bullet / space_before) wins over the
+/// inherited master txStyles level. Master spcBef applies between paragraphs
+/// only (never on the first line). See the inline comment for the measured
+/// first-line / marker rule.
 #[cfg(windows)]
 fn layout_paragraph_baselines(
     dc: windows::Win32::Graphics::Gdi::HDC,
@@ -817,7 +862,10 @@ fn layout_paragraph_baselines(
     scale: f64,
     is_first: bool,
     default_family: &str,
-) -> Vec<(String, f32, f32)> {
+    l_ins: f32,
+    r_ins: f32,
+    master: &[MasterStyleLevel],
+) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     let fs = para
         .runs
@@ -832,11 +880,32 @@ fn layout_paragraph_baselines(
         .find_map(|r| r.font_family.clone())
         .unwrap_or_else(|| default_family.to_string());
 
+    // Master txStyles level for this paragraph's outline level (Spec #8).
+    let m = if master.is_empty() {
+        MasterStyleLevel::default()
+    } else {
+        let idx = (para.lvl as usize).min(master.len() - 1);
+        master[idx].clone()
+    };
+    let mar_l = para.mar_l.unwrap_or(m.mar_l);
+    let indent = para.indent.unwrap_or(m.indent);
+    let bullet = if matches!(para.bullet, SlideBullet::Inherit) {
+        m.bullet
+    } else {
+        para.bullet.clone()
+    };
+
     if let Some(sb) = para.space_before {
         *cursor_pt += sb;
+    } else if !is_first {
+        // Master spcBef (a:spcPct) — a fraction of the line advance, applied
+        // between paragraphs only (the first paragraph's first line gets none).
+        if let Some(pct) = m.spc_bef_pct {
+            *cursor_pt += pct * fs * 1.2 * n;
+        }
     }
     let text_area_top = *cursor_pt;
-    let effective_width = (shape_width - MARGIN_LEFT - MARGIN_RIGHT).max(0.0);
+    let effective_width = (shape_width - l_ins - r_ins).max(0.0);
     // gdi_measure_text_px requires the target font to be selected into the DC;
     // otherwise the wrap measures with the DC default font and packs far too
     // many characters per line.
@@ -860,6 +929,36 @@ fn layout_paragraph_baselines(
     if is_first {
         *cursor_pt += first_off;
     }
+
+    // Bullet / indent geometry, all offsets relative to P0 (Spec #8, measured):
+    //   para_left = P0 + marL;  indent > 0: text_1st = para_left + indent,
+    //       marker = para_left
+    //   indent <= 0: text_1st = max(para_left, P0 - indent),
+    //       marker = text_1st + indent
+    //   continuation lines = para_left;  render_x = max(text_1st, marker+bullet_w)
+    let para_left_rel = mar_l;
+    let (line0_x_off, marker_rel) = if indent > 0.0 {
+        (mar_l + indent, mar_l)
+    } else {
+        let t = mar_l.max(-indent);
+        (t, t + indent)
+    };
+    let mut line0_x_off = line0_x_off;
+    let mut marker: Option<MarkerInfo> = None;
+    if let SlideBullet::Char { ch, font } = &bullet {
+        let marker_family = font.clone().unwrap_or_else(|| family.clone());
+        let marker_w =
+            font_adv::bullet_advance_em(&marker_family, *ch).unwrap_or(0.0) * fs;
+        line0_x_off = line0_x_off.max(marker_rel + marker_w);
+        marker = Some(MarkerInfo {
+            ch: *ch,
+            font: marker_family,
+            x_pt: marker_rel,
+            baseline: 0.0, // line 0's baseline, filled in the line loop
+            fs,
+        });
+    }
+
     let mut out = Vec::with_capacity(n_lines);
     for (i, line) in lines.iter().enumerate() {
         let baseline = text_area_top + if is_first { first_off } else { 0.0 } + i as f32 * adv;
@@ -873,20 +972,26 @@ fn layout_paragraph_baselines(
         let is_justify_last =
             matches!(para.alignment, oxislides_core::ir::SlideAlignment::Justify)
                 && i + 1 == n_lines;
-        let x_off = match para.alignment {
+        let align_off = match para.alignment {
             oxislides_core::ir::SlideAlignment::Center => (area_w - line_w).max(0.0) / 2.0,
             oxislides_core::ir::SlideAlignment::Right => (area_w - line_w).max(0.0),
             oxislides_core::ir::SlideAlignment::Justify if is_justify_last => 0.0,
             _ => 0.0,
         };
-        out.push((line.clone(), baseline, x_off));
+        if i == 0 {
+            if let Some(mk) = marker.as_mut() {
+                mk.baseline = baseline;
+            }
+        }
+        let base_off = if i == 0 { line0_x_off } else { para_left_rel };
+        out.push((line.clone(), baseline, base_off + align_off));
     }
     let _ = unsafe { SelectObject(dc, old_font) };
     *cursor_pt = text_area_top + if is_first { first_off } else { 0.0 } + n_lines as f32 * adv;
     if let Some(sa) = para.space_after {
         *cursor_pt += sa;
     }
-    out
+    (out, marker)
 }
 
 /// Draw text at a baseline position (converts baseline -> cell top via tmAscent).

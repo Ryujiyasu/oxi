@@ -16,6 +16,55 @@ pub struct Presentation {
     /// Theme major-font latin typeface (title placeholders). Default "Calibri".
     #[serde(default = "default_theme_font")]
     pub major_font: String,
+    /// Slide master text styles (p:txStyles from slideMaster1.xml): the
+    /// inherited marL/indent/bullet/spcBef per outline level for body / other
+    /// (textbox) / title contexts (Spec #8). Placeholder body text uses
+    /// `body`, plain textboxes use `other`, title placeholders use `title`.
+    #[serde(default)]
+    pub master_styles: MasterTxStyles,
+}
+
+/// Slide master text styles (p:txStyles). Each Vec is indexed by outline level
+/// (0-based, a:lvlNpPr where N = level+1).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MasterTxStyles {
+    #[serde(default)]
+    pub body: Vec<MasterStyleLevel>,
+    #[serde(default)]
+    pub other: Vec<MasterStyleLevel>,
+    #[serde(default)]
+    pub title: Vec<MasterStyleLevel>,
+}
+
+/// One outline-level master text style (a:lvlNpPr).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MasterStyleLevel {
+    /// a:lvlNpPr/@marL in points (left indent of the paragraph; default 0).
+    #[serde(default)]
+    pub mar_l: f32,
+    /// a:lvlNpPr/@indent in points (first-line indent; negative = hanging).
+    #[serde(default)]
+    pub indent: f32,
+    /// Inherited bullet marker (default Inherit = none unless a bu* child).
+    #[serde(default)]
+    pub bullet: SlideBullet,
+    /// a:spcBef/a:spcPct val/100000 — space-before as a fraction of the line
+    /// advance (e.g. 0.2 = 20000). None = no spcBef on this level.
+    #[serde(default)]
+    pub spc_bef_pct: Option<f32>,
+}
+
+pub fn default_l_ins() -> f32 {
+    7.2
+}
+pub fn default_r_ins() -> f32 {
+    7.2
+}
+pub fn default_t_ins() -> f32 {
+    3.6
+}
+pub fn default_b_ins() -> f32 {
+    3.6
 }
 
 pub fn default_theme_font() -> String {
@@ -48,6 +97,18 @@ pub struct Shape {
     pub fill_color: Option<String>,   // hex color for solid fill
     pub border_color: Option<String>, // hex color for outline
     pub border_width: Option<f32>,    // border width in points
+    /// Text-area insets from a:bodyPr (lIns/rIns/tIns/bIns) in points.
+    /// A placeholder with no bodyPr inset uses 7.2 / 7.2 / 3.6 / 3.6; a textbox
+    /// carries its own insets (e.g. lIns=914400 EMU = 72pt). The left text
+    /// position P0 = shape.x + l_ins (Spec #8).
+    #[serde(default = "default_l_ins")]
+    pub l_ins: f32,
+    #[serde(default = "default_r_ins")]
+    pub r_ins: f32,
+    #[serde(default = "default_t_ins")]
+    pub t_ins: f32,
+    #[serde(default = "default_b_ins")]
+    pub b_ins: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +169,40 @@ pub struct SlideParagraph {
     /// Space after this paragraph, in points (`a:spcAft/a:spcPts` val/100).
     #[serde(default)]
     pub space_after: Option<f32>,
+    /// Outline level (a:pPr/@lvl, 0-based). Default 0.
+    #[serde(default)]
+    pub lvl: u32,
+    /// Left indent (a:pPr/@marL) in points. None = not specified (the master
+    /// txStyles level provides it).
+    #[serde(default)]
+    pub mar_l: Option<f32>,
+    /// First-line indent (a:pPr/@indent) in points. None = not specified.
+    #[serde(default)]
+    pub indent: Option<f32>,
+    /// Bullet marker spec (a:buChar / a:buNone / a:buAutoNum). Inherit = use
+    /// the master txStyles level's bullet.
+    #[serde(default)]
+    pub bullet: SlideBullet,
+}
+
+/// Bullet marker specification for a paragraph (Spec #8, measured model).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum SlideBullet {
+    /// No a:bu* child on the paragraph itself: inherit from the style chain
+    /// (the master txStyles level for the shape's context).
+    #[default]
+    Inherit,
+    /// a:buNone — no bullet marker is drawn (but indent geometry still applies).
+    None,
+    /// a:buChar — a literal character marker (e.g. "•", "–", "»").
+    Char {
+        ch: char,
+        font: Option<String>, // a:buFont/@typeface
+    },
+    /// a:buAutoNum — an automatically numbered marker (rendering: follow-up).
+    AutoNum {
+        kind: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
